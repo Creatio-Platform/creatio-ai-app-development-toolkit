@@ -1,5 +1,9 @@
 export const meta = {
-  name: 'freedom-build-executor',
+  // Namespaced because the installer mirrors this script into user scope
+  // (~/.claude/workflows/<name>.js), which is shared across every project and
+  // plugin. Keep `name` and that mirrored basename identical: named-workflow
+  // resolution may key on either.
+  name: 'creatio-freedom-build-executor',
   description:
     'Build an APPROVED Classic→Freedom migration plan on a live stand until the engine gate is green. Reconcile reads the queue file and runs `--units` + `--verify --verify-json` to learn what the stand already has, Preflight resolves the ⚠ worklist in parallel (read-only), Build runs SEQUENTIALLY leaf-first with one fresh-context agent per page, a SEPARATE read-only verifier assembles `--built` from get-page, a THIRD agent writes only `judge`, and repair rounds run until every unit closes or is parked. Every verdict is arithmetic over the engine\'s own numbers, never an agent\'s assertion.',
   phases: [
@@ -330,6 +334,17 @@ const RECONCILE_SCHEMA = {
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
+    // WHERE THE SECTION IS REGISTERED, as the approved plan decided it — `--units.sectionHost`, verbatim.
+    // NOT required: a plan written before placement was gated publishes none, and `null` must keep this run
+    // behaving exactly as it did then. What it changes when present: `new-app` over an EXISTING package is a
+    // stop (create-app cannot mint a package that is already there), and `pages-only-no-menu` means no section
+    // is registered at all — an executor that "helpfully" registers one has built what the plan dropped.
+    sectionHost: { type: ['string', 'null'], enum: ['existing-app', 'new-app', 'pages-only-no-menu', null] },
+    // The application the section belongs in — `--units.applicationCode`, verbatim. `null` under `new-app`
+    // (it does not exist yet) and `pages-only-no-menu` (nothing is registered). It exists so the unit doing the
+    // registration READS the approved app: in the run this field comes from, the agent had none in front of it,
+    // resolved one off the stand by name, and registered against an app that could not host a section at all.
+    applicationCode: { type: ['string', 'null'] },
     // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
     componentTypes: { type: 'array', items: { type: 'string' } },
@@ -702,11 +717,16 @@ function isOpenReach(unit, reachState, verify) {
 // every single unit was blocked on a precondition no unit was allowed to satisfy. This unit is that owner, and it
 // sorts at `-1` so it runs before any page. Modelled on the reachability units rather than the page ones: there is
 // no page body, so its openness comes from a recorded STATE, never from the gate's page map.
-function appUnitFor(targetPackage, packageState, mainEntity) {
+function appUnitFor(targetPackage, packageState, mainEntity, sectionHost) {
   if (!targetPackage || packageState === 'exists') return null
   // `entity` travels WITH the unit because the section this unit creates must be bound to the object being
   // migrated — the one fact that separates a migration from a new section that merely looks right.
-  return { key: 'app', kind: 'app', at: -1, package: targetPackage, entity: (typeof mainEntity === 'string' && mainEntity.trim()) ? mainEntity.trim() : null }
+  // `sectionHost` travels with it too: under `pages-only-no-menu` the plan decided NOT to register a section, so
+  // this unit still creates the application (it is the only route to the package) but must not create the
+  // section — otherwise the prerequisite step quietly builds the deliverable the plan dropped. The SCHEDULING
+  // condition is deliberately unchanged: it is still "the package is not on the stand", so `isOpenApp` — which
+  // decides when this unit is closed — keeps matching it exactly.
+  return { key: 'app', kind: 'app', at: -1, package: targetPackage, entity: (typeof mainEntity === 'string' && mainEntity.trim()) ? mainEntity.trim() : null, sectionHost: sectionHost || null }
 }
 const isOpenApp = (packageState) => packageState !== 'exists'
 
@@ -868,7 +888,15 @@ function shouldPauseAfter(mode, checkpointSet, unitKey) {
 // `create-app` over what may be an existing application; guessing "exists" puts every page unit back into the loop
 // that spent 12 agents and 1.9M tokens discovering the same blocker four times. And a package that is absent with
 // no NAME published cannot be created at all — there is nothing to pass to `create-app`.
-function packagePreconditionStop(targetPackage, packageState) {
+function packagePreconditionStop(targetPackage, packageState, sectionHost) {
+  // `new-app` over a package that ALREADY exists is unsatisfiable by construction, so it is a stop rather than a
+  // unit. `create-app` mints its OWN package, and the app unit's acceptance criterion is an exact equality with
+  // the planned package name — no `create-app` can produce a package that is already there. The only route to an
+  // application owning an existing package is attaching it and flipping the primary flag: a mutation of which
+  // package owns the app's identity, which is a user decision, never something a build round does on its own.
+  if (sectionHost === 'new-app' && packageState === 'exists') {
+    return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\`, but the target package \`${targetPackage || '(unnamed)'}\` is ALREADY on the stand — \`create-app\` always mints its own package, so it cannot produce one that exists, and the app unit would fail its name-equality check. Two ways out, both yours to pick: (a) re-plan against a package that does NOT exist yet, and this run's app unit creates the application, the package and the section in one go; or (b) attach the existing package to an application and make it primary BY HAND, then re-plan with \`sectionHost: existing-app\`. Nothing has been built` }
+  }
   // Anything that is not one of the three published states — absent, empty, misspelled — is UNKNOWN. The schema
   // requires the field; this is what makes a result that slipped through anyway stop the run instead of being read
   // as "go ahead and create it".
@@ -948,6 +976,10 @@ function runReturn(extra) {
     // the package question was even asked.
     targetPackage: null,
     packageState: null,
+    // The APPROVED section host, carried verbatim from `--units.sectionHost`. `null` = a plan written before
+    // placement was gated; every predicate below must then behave exactly as it did before this field existed.
+    sectionHost: null,
+    applicationCode: null,
     approval: null,
     planVersion: null,
     verdict: { missing: 0, unverified: 0, pages: {} },
@@ -1024,7 +1056,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\`, with the entry quoted verbatim and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that.
 
@@ -1120,7 +1152,7 @@ if ((state.planGaps || []).length) {
 // --- HARD STOP 3: the target package cannot be established or created -------
 // Deliberately NOT a stop for the common case: an absent package WITH a name is what the `app` unit exists to
 // build. What stops the run is a state it cannot act on — see `packagePreconditionStop`.
-const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState)
+const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
 if (stopOnPackage) {
   log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}`)
   return runReturn({
@@ -1201,7 +1233,7 @@ discrepancies = [...(state.discrepancies || [])]
 pageSchemas = { ...state.pageSchemas }
 
 packageState = state.packageState || null
-let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity))
+let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
 // Units a park has taken out of reach — an ancestor of a parked page, or a reachability key whose
 // rows read one. They are NOT built: spending a round on work that cannot close is how a run burns
 // its budget and still reports the same shortfall. They are reported instead, in `blockedByParked`.
@@ -1483,11 +1515,25 @@ The plan targets the package \`${unit.package}\`, and the stand does not have it
 1. Read the tool contracts before you call anything: \`get-tool-contract\` for \`create-app\` AND for \`create-app-section\`. Do not guess an argument shape.
 2. Create the application with template \`AppFreedomUI\` (do NOT substitute another template) and \`with-mobile-pages\` false unless the plan asks for mobile pages. Choose the \`code\` so that the package clio produces is EXACTLY \`${unit.package}\` — clio applies the environment's \`SchemaNamePrefix\` to \`code\`, so the code you pass and the package you get are usually NOT the same string. Read the prefix off the stand rather than assuming it.
 3. CONFIRM what you actually got: \`list-packages\` / \`find-app\`, and report the real \`packageName\`. **If it is not exactly \`${unit.package}\`, that is a \`blocked\`, not a near-enough.** Every page unit's placement row gates on the plan's package name: building into a substitute passes here and fails the whole tree later.
-4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits.
+${unit.sectionHost === 'pages-only-no-menu'
+  ? `4. **DO NOT CREATE A SECTION.** The approved plan's section host is \`pages-only-no-menu\`: it ships pages WITHOUT a menu entry, deliberately. You are creating this application only because it is the only route to the package \`${unit.package}\`. Registering a section here would build the exact deliverable the plan dropped — and the gate publishes no \`sectionRegistered\` row to catch it, because the plan says there is none. So: no \`create-app-section\`, and leave \`starterFormPage\` / \`starterListPage\` unset — \`main\` creates its own page in this package.
+5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the new app carries no orphan object of its own. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
+6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, and no stub section left behind.`
+  : `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits.
 5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
-6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, and no stub left behind.`
+6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, and no stub left behind.`}`
   } else if (unit.kind === 'reach') {
-    kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}. Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
+    // The app-menu registration is the ONE reachability key that needs a fact from outside the page graph: WHICH
+    // application to register into. `--units.applicationCode` carries the approved answer, so the agent reads it
+    // instead of resolving one by name off the stand — which is precisely what a real run did, landing on an
+    // install-time wrapper that had no primary package and could not host a section at all.
+    // Read off the run state (same closure `pageSchemas` comes from), not threaded through the unit: the value is
+    // per-RUN, not per-unit, and Reconcile is the only thing that sets it.
+    const appCode = state?.applicationCode || null
+    const appNote = unit.key !== 'sectionRegistered' ? '' : (appCode
+      ? ` REGISTER IT INTO THE APPROVED APPLICATION: \`${appCode}\` — that code comes from the approved plan's placement. Do NOT resolve an application by name/caption off the stand, and do NOT fall back to another one if this one errors: a \`create-app-section\` failure here is a REPORT (\`blocked\`), never a cue to pick a different app.`
+      : ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.')
+    kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
   } else {
     const schemaNote = known
       ? ` The queue records it as the Freedom schema \`${known}\` — work on THAT page.`
@@ -1622,9 +1668,16 @@ async function buildRound(open) {
       // and nothing blocked.
       const sectionPage = (res.starterFormPage || '').trim()
       const unitBlocked = (res.blocked || []).length
-      if (got && got === unit.package && sectionPage && !unitBlocked) {
+      // …EXCEPT under `pages-only-no-menu`, where the plan decided there is no section at all: this unit was told
+      // NOT to run `create-app-section`, so demanding a section page back would hold it open forever on a
+      // deliverable nobody asked for. The package (plus no blocker) IS the whole deliverable there, and `main`
+      // creates its own page in it — exactly as it does on any run with no app unit.
+      const needsSectionPage = unit.sectionHost !== 'pages-only-no-menu'
+      if (got && got === unit.package && (sectionPage || !needsSectionPage) && !unitBlocked) {
         packageState = 'exists'
-        log(`app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`)
+        log(sectionPage
+          ? `app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`
+          : `app unit: package \`${got}\` exists — no section was created (sectionHost: ${unit.sectionHost}), so \`main\` builds its own page in it`)
         // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
         // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
         // per-page recipe documents — instead of a second creation attempt that would collide.
@@ -1929,13 +1982,13 @@ function acceptReconciled(next, whereFrom) {
     log(`STOP after ${whereFrom} — the approval no longer authorises this plan (${stopApproval.stopped}): approved=${(state.approval || approval)?.version || '(none)'} plan=${state.planVersion || '(unversioned)'}`)
     return { ...stopApproval, approval: state.approval || approval, planVersion: state.planVersion || null }
   }
-  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState)
+  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
   if (stopPkg) {
     log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
     return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null }
   }
   packageState = state.packageState || packageState
-  schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity))
+  schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
   return null
 }
 

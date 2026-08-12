@@ -146,9 +146,70 @@ def _run_step(command: list[str]) -> None:
         raise RuntimeError(f"{' '.join(command)} failed: {detail}")
 
 
-def _update_native(target_id: str) -> None:
+def _version_sort_key(name: str) -> tuple[int, ...]:
+    """Dotted-int sort key; a non-numeric segment sorts as 0."""
+    return tuple(int(part) if part.isdigit() else 0 for part in name.split("."))
+
+
+def latest_plugin_cache_root(home: Path | None = None) -> Path | None:
+    """Newest installed plugin version dir, or None when nothing is cached.
+
+    Claude keeps each installed plugin version at
+    ``~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`` and several
+    versions coexist, so the highest one is what the CLI just updated to.
+    """
+    home = home or Path.home()
+    base = (
+        home
+        / ".claude"
+        / "plugins"
+        / "cache"
+        / agent_cli.MARKETPLACE_NAME
+        / agent_cli.PLUGIN_NAME
+    )
+    if not base.is_dir():
+        return None
+    versions = [entry for entry in base.iterdir() if entry.is_dir()]
+    if not versions:
+        return None
+    return max(versions, key=lambda entry: _version_sort_key(entry.name))
+
+
+def refresh_claude_named_workflows(home: Path | None = None) -> list[str]:
+    """Re-mirror the updated plugin's workflow scripts into user scope.
+
+    `~/.claude/workflows/` is user scope, so `claude plugin update` never
+    touches it: without this the mirror keeps running the version that was
+    current at install time against a newer skill. Sourced from the plugin cache
+    rather than a downloaded release because a Claude-only update deliberately
+    performs no download (``need_source`` is Cursor-only).
+
+    Never fails the update: a missing cache or an unreadable script leaves the
+    previous mirror in place, and both skills still document the `scriptPath`
+    fallback that resolves inside the plugin tree.
+
+    `install` is imported HERE, not at module scope: this script also runs from
+    contexts that carry no sibling install.py (the plugin runtime surface ships
+    `skills/`, `runtime/`, `context/`… while `installer/` is a release extra), and
+    a missing provisioner must cost the mirror only — not every agent's update.
+    """
+    home = home or Path.home()
+    cache_root = latest_plugin_cache_root(home)
+    if cache_root is None:
+        return []
+    try:
+        import install as install_module  # noqa: PLC0415  (deliberately lazy)
+
+        return install_module.provision_named_workflows(cache_root, home / ".claude")
+    except (ImportError, OSError, RuntimeError):
+        return []
+
+
+def _update_native(target_id: str, home: Path | None = None) -> None:
     for command in native_update_commands(target_id):
         _run_step(command)
+    if target_id == "claude":
+        refresh_claude_named_workflows(home)
 
 
 def _update_cursor(fresh_root: Path | None) -> None:
@@ -165,13 +226,15 @@ def _update_cursor(fresh_root: Path | None) -> None:
     _run_step([sys.executable, str(install_script), "--target", "cursor"])
 
 
-def _update_one_agent(target_id: str, fresh_root: Path | None) -> str | None:
+def _update_one_agent(
+    target_id: str, fresh_root: Path | None, home: Path | None = None
+) -> str | None:
     """Update a single agent. Return None on success, or an error message string."""
     try:
         if target_id in COPY_TARGETS:
             _update_cursor(fresh_root)
         else:
-            _update_native(target_id)
+            _update_native(target_id, home)
     except subprocess.TimeoutExpired:
         return f"timed out after {_STEP_TIMEOUT_SECONDS}s"
     except (RuntimeError, ValueError) as error:
@@ -188,18 +251,23 @@ def update_agents(
     *,
     fresh_root: Path | None = None,
     silent: bool = False,
+    home: Path | None = None,
 ) -> tuple[list[str], list[str]]:
     """Update each agent: native command in place, or Cursor file-copy reinstall.
 
     Updates every id in *target_ids*; the caller is responsible for scoping that
     list (e.g. for --target). A failure on one agent is recorded and the rest
     continue. Returns (updated, failed) lists of target IDs.
+
+    *home* overrides the home directory the Claude named-workflow refresh writes
+    into; it exists so a test can exercise the update without touching the real
+    ``~/.claude/workflows``.
     """
     updated: list[str] = []
     failed: list[str] = []
 
     for target_id in target_ids:
-        error = _update_one_agent(target_id, fresh_root)
+        error = _update_one_agent(target_id, fresh_root, home)
         if error is None:
             updated.append(target_id)
             if not silent:

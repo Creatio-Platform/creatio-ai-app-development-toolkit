@@ -213,6 +213,33 @@ properties make it honest:
 `packageState: 'unknown'` is a **stop**, not a default. Guessing `absent` runs `create-app` over what
 may be a live application; guessing `exists` restores exactly the loop that wasted the run.
 
+**The approved SECTION HOST travels with the queue.** `--units` publishes `sectionHost`
+(`existing-app` · `new-app` · `pages-only-no-menu`) and `applicationCode` — the plan's placement
+decision, gated by the migration skill's step 3.1. A build agent owns ONE unit and cannot see the
+plan's placement, so without these it improvises: in the run they come from, the agent registering
+the section resolved an application off the stand by name and hit an install-time wrapper that had no
+primary package and could not host a section at all. What each mode changes here:
+
+- **`existing-app`** — the `sectionRegistered` unit is told the approved `applicationCode` and must
+  use exactly it. No code published ⇒ report `blocked` and stop; resolving one off the stand is the
+  failure this field exists to prevent, and a `create-app-section` error is never a cue to try
+  another app.
+- **`new-app`** — the `app` unit already does the whole job (`create-app` → `create-app-section` on
+  the MIGRATED object → `delete-app-section` for the stub), provided the plan targets a package that
+  is not on the stand yet. `new-app` over a package that ALREADY exists is a **stop**
+  (`new-app-over-existing-package`): `create-app` mints its own package and can never produce one
+  that is already there, so the unit's name-equality could not pass. The two ways out — re-plan
+  against a package that does not exist yet, or attach the existing package to an application and
+  make it primary by hand, then re-plan as `existing-app` — are the user's to choose, because
+  changing which package owns an app's identity is not a build decision.
+- **`pages-only-no-menu`** — no section is registered anywhere. If a package still has to be created,
+  the `app` unit creates the application (the only route to a package) but is told NOT to call
+  `create-app-section`, and it closes on the package alone; `main` then builds its own page. The
+  engine publishes no `sectionRegistered` row for this mode, so nothing here is left silently open.
+
+A plan written before placement was gated publishes `sectionHost: null`, and every predicate keeps
+its pre-placement behaviour exactly.
+
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand
 all of it back to the fan-out — measured on a real folder, 107 evidence records were on file and every
@@ -320,16 +347,40 @@ Read the file that matches what you are doing. Do not read them all up front.
 The deliverables are the same whichever route runs (the queue file, the built file, the
 `--verify` table), so pick by what the host actually allows, and say in worklog.md which route
 ran. This is the same route list `../classic-to-freedom-migration/SKILL.md` uses for its step 5.1
-and names in its step 7, which is where this skill is invoked from.
+and names in its step 7, which is where this skill is invoked from — including its **ROUTE GATE**,
+which applies here in full and is stricter for a build than for an analysis.
+
+> **The gate, restated because this is the skill it protects.** A session may carry a host
+> instruction ("do not use workflows / do not call the Agent tool unless the user requested it")
+> that sits ABOVE this file; route 1's opt-in sentence cannot override it, and a real run read the
+> host rule as binding despite that sentence. When routes 1 and 2 look blocked, do **not** start
+> building inline. Ask ONE `AskUserQuestion` — grant `Workflow` for this skill, or build inline
+> knowing it cannot finish — and stop until it is answered. **Measured cost of getting this wrong:**
+> the inline route was taken twice in one session and ended both times with the context exhausted
+> and zero units built (~45 min); after the user granted `Workflow` in one turn, the same build ran
+> to a green gate. A build is many units in sequence — route 3 is a dead end here unless the user
+> chose it with that stated.
+>
+> **While the gate is open, do NOTHING this workflow's phases already own** — `Reconcile` ·
+> `Refs` · `Preflight` · `Build` · `Verify` · `Judge` · `Close`. That list IS the catalog of
+> forbidden inline work: every phase runs in its own fresh context, once per run, and re-does its
+> own reads by design, so hand-doing one spends the context the gate exists to protect and is
+> discarded minutes later. Measured: asked to continue, a run spent the last of its context reading
+> the `create-page` contract, `page-modification`, the field contract, invoking
+> `creatio-ui-guidelines` and writing a `refs/index.md` cache — that is `Refs`, verbatim, and the
+> `Refs` agent did it again from scratch when the workflow finally started. "Preparing while
+> blocked" is not progress; it is the same context spend with a different label. Ask the one
+> question and stop.
 
 1. **The `Workflow` tool (preferred on Claude Code).** Invoking this skill is the user's opt-in
    to the orchestration its own steps call for, so the workflow needs no separate permission —
    and, unlike the Agent tool, it is not subject to the host rule some sessions carry that
-   forbids launching a sub-agent unless the user asked for one in that turn. The script ships
-   beside this file, as `./freedom-build-executor.workflow.js`:
-   `Workflow({ scriptPath: "./freedom-build-executor.workflow.js", args: {
+   forbids launching a sub-agent unless the user asked for one in that turn. Call it **by name**:
+   `Workflow({ name: "creatio-freedom-build-executor", args: {
    manifest, environment, outDir, planFile, engine, customizations, behaviourIndex,
-   sectionSchema } })` — resolve `scriptPath` to its absolute path in the plugin dir, and resolve
+   sectionSchema } })`. The script also ships beside this file as
+   `./freedom-build-executor.workflow.js` — pass it as `scriptPath`, resolved to its absolute path
+   in the plugin dir, when the name does not resolve (see "Named-workflow availability" below). Resolve
    `engine` the same way: it is the absolute path to the migration skill's `engine/migrate.mjs`
    (or the `engine/` directory holding it), it is resolved ONCE and interpolated into every
    prompt, and the run refuses to start without it rather than sending a placeholder to an agent.
@@ -341,9 +392,22 @@ and names in its step 7, which is where this skill is invoked from.
 2. **The `Agent` tool.** One sub-agent per unit, driven from the calling session, with the same
    role separation. Correct where it is permitted; if the host refuses it without an explicit
    user request, do not stall — go to 1, or to 3 and say so.
-3. **Inline via the `Skill` tool.** The fallback for a host with no sub-agents at all. It costs
-   the session's context and it loses the role separation for the verifier and the judge, which
-   is a real weakening — say so in worklog.md, and prefer 1 or 2 whenever either can run.
+3. **Inline via the `Skill` tool.** The fallback for a host with no sub-agents at all, reachable
+   only **through the gate above** — never as a silent third choice. It costs the session's context
+   and it loses the role separation for the verifier and the judge, which is a real weakening; on a
+   multi-unit build it has not once reached a first closed unit before the context ended — say so in
+   worklog.md, and prefer 1 or 2 whenever either can run.
+
+**Named-workflow availability.** The toolkit's installer mirrors this script into user scope on
+install — under `~/.claude/workflows/` as `creatio-freedom-build-executor.js`, named after this
+script's own `meta.name` — and re-mirrors it from the updated plugin cache on every Claude update.
+The marketplace itself cannot register a named workflow. That is why `name:` is the normal call: no absolute path to resolve into a
+plugin-cache directory that moves with every version. `scriptPath` stays correct in two cases, and
+neither is an error: user-scope workflows are discovered at **session start**, so a freshly installed
+name only resolves in the next session, and a checkout the installer never ran against has no mirror.
+The in-tree script is the version-matched one by construction — if a `name:` run rejects an argument
+this file documents, the mirror is stale: use `scriptPath` and re-run the installer. **Neither form
+changes permission** — a named workflow is not pre-authorized, so the gate above applies to both.
 
 ## Scope
 

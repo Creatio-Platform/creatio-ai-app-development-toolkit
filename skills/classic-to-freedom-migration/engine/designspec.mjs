@@ -946,6 +946,8 @@ function renderPlanBanners(result, opts) {
     ". The plan's worklist carries page rows only, so these answers render in no table — carry each behaviour (and its card) into the List-page part of the plan by hand, and verify it at the list-page checkpoint.", "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
+  const placementBlockers = opts.placementBlockers || [];
+  if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (\`targetPackageEditable\` · \`application\` · \`primaryPackage\` · \`targetPackageInApplication\` · \`sectionHost\`), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable.`, "");
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
@@ -1348,7 +1350,16 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // so `reuseFreedomPage` cannot trade a false-red gate for a false-green close report.
   const reused = (result.childPages || []).filter((c) => typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage);
   if (reused.length) pages.push({ label: `Reused Freedom child pages bound (${reused.length}) — create the RelatedPage binding for each related list whose child already has a Freedom form (${reused.map((c) => "`" + esc(c.reuseFreedomPage) + "`").join(" · ")}); nothing is rebuilt, but an unbound list does not open the reused page.`, vk: { type: "onstand", evidence: "reuseBindings", what: "RelatedPage binding check per reused child list", miss: "a related list does not open the existing Freedom form" } });
-  if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it", vk: { type: "onstand", evidence: "sectionRegistered", what: "app-menu section-registration check", miss: "the section is not in the menu — its pages are unreachable" } });
+  // The navigable-section deliverable, gated on the DECIDED host mode. An approved `pages-only-no-menu` run
+  // ships pages without a menu entry ON PURPOSE, so emitting the row there would demand evidence for something
+  // the plan decided not to do — a permanent false red. It is replaced by an explicit dropped row rather than
+  // dropped silently: the reader must still see that the section is unreachable from the menu, and that this
+  // was chosen. Any other mode (including a plan that recorded no placement at all) keeps the gated row.
+  if (pm.sectionSchema || result.section) {
+    pages.push(opts.sectionHostMode === "pages-only-no-menu"
+      ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
+      : { label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it", vk: { type: "onstand", evidence: "sectionRegistered", what: "app-menu section-registration check", miss: "the section is not in the menu — its pages are unreachable" } });
+  }
   return pages;
 }
 // List-page contents checklist rows (columns / quick filters / section actions). Returns the rows. Extracted for CC.
@@ -1795,6 +1806,16 @@ export function pageUnits(result, opts = {}) {
     // operator recorded in decisions.md against THIS field. `null` when the caller built the result by hand.
     planVersion: typeof result.planVersion === "string" && result.planVersion.trim() ? result.planVersion.trim() : null,
     sectionSchema: opts.planMeta?.sectionSchema || null,
+    // The APPROVED section host. Published because a build agent owns ONE page and cannot see the placement
+    // decision otherwise — in the run this field exists for, an agent reached for `create-app-section` on its own
+    // against an app that could not host a section at all. `new-app` means the app must EXIST before the section
+    // unit runs (`create-app` gives it an editable primary package); `pages-only-no-menu` means no registration is
+    // planned at all, so an executor must not "helpfully" add one. `null` = a plan that recorded no placement.
+    sectionHost: opts.sectionHostMode || null,
+    // The application code the section belongs in — `null` under `new-app` (it does not exist yet) and under
+    // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
+    // approved app instead of resolving one off the stand.
+    applicationCode: opts.applicationCode || null,
     pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || null, r)),
     reachability: reachabilityUnits(rows),
     // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so
