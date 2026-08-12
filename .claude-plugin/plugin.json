@@ -6,7 +6,7 @@
     "name": "Creatio"
   },
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
         "matcher": "mcp__.*clio.*",
         "hooks": [
