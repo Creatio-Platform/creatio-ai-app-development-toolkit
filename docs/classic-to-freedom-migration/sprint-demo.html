@@ -194,6 +194,15 @@
   .approval-step b { display: block; color: var(--c); font-size: 18px; margin-bottom: 4px; }
   .approval-step span { color: var(--muted); font-size: 15px; line-height: 1.35; }
 
+  .build-live-stage { display: grid; grid-template-columns: 640px 1fr; gap: 34px; height: 402px; align-items: stretch; }
+  .build-live-shot { height: 402px; }
+  .build-live-shot img { object-fit: contain; object-position: center; }
+  .build-live-copy { display: grid; align-content: center; gap: 22px; }
+  .build-live-copy .headline { color: var(--ink); font-size: 25px; line-height: 1.23; font-weight: 800; }
+  .build-live-fact { padding-left: 16px; border-left: 3px solid var(--c); }
+  .build-live-fact b { display: block; color: var(--c); font-size: 21px; margin-bottom: 5px; }
+  .build-live-fact span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+
   .phases-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 9px; align-items: stretch; }
   .phase-mini { min-height: 232px; padding: 16px 13px; border-radius: 15px; background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; position: relative; }
   .phase-mini .n { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--c); color: #071017; font-size: 13px; font-weight: 900; }
@@ -246,7 +255,7 @@
       <div class="content hero">
         <h1>Classic <span class="accent">→</span> Freedom UI</h1>
         <p class="lead">Хто за що відповідає, які workflow запускаються і як система доходить до <span class="strong">перевіреного результату</span>.</p>
-        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">15 слайдів · ~10 хвилин</span></div>
+        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">16 слайдів · ~11 хвилин</span></div>
         <div class="hero-mark" aria-hidden="true"><div class="orbit"></div><div class="orbit"></div><div class="orbit"></div><div class="core"><span>UI</span></div></div>
       </div>
       <div class="footer"><span>Creatio AI App Development Toolkit</span><span class="status">PoC у поточній гілці</span></div>
@@ -436,13 +445,28 @@
       <aside class="notes"><b>Що сказати:</b> Після серії продуктових рішень система збирає їх в один план і ще раз показує реальний обсяг змін. Лише відповідь «Затверджую — будуй» запускає workflow побудови.</aside>
     </section>
 
+    <section class="slide" aria-label="Реальний запуск workflow побудови">
+      <div><div class="kicker">План погоджено · Build стартував</div><h2>Після approval роботу підхоплює окремий workflow побудови</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/build-workflow-running.png" alt="Реальний запуск freedom-build-executor workflow після погодження плану"></div>
+        <div class="build-live-copy">
+          <p class="headline">Погоджені рішення стають незмінним контрактом для build-команди.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>7 контрольованих фаз</b><span>Reconcile, Refs, Preflight, Build, Verify, Judge та Close.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Окремий фоновий workflow</b><span>Побудова має власний стан, агентів і журнал виконання.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Обсяг не губиться</b><span>Застосунок, список, форми, міністорінка та поведінка перенесені з approval.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>13 · Build workflow у роботі</span><span>Approved plan → controlled execution</span></div>
+      <aside class="notes"><b>Що сказати:</b> Після погодження головний skill не починає імпровізувати. Він запускає окремий build workflow, передає йому версію плану та повний обсяг. На скріншоті видно реальний запуск і першу фазу Reconcile.</aside>
+    </section>
+
     <section class="slide" aria-label="Фінальний результат">
       <div><div class="kicker">Фінал</div><h2>Готовність визначає engine, а не впевненість агента</h2></div>
       <div class="content final-layout">
         <article class="verdict"><div class="check">✓</div><h3>Plan vs Done</h3><p>Engine порівнює погоджений план із фактично створеними сторінками, компонентами та зв'язками. Відсутній або непідтверджений пункт блокує завершення.</p><a class="full-link" href="flow-as-built.html" target="_blank">Відкрити повну технічну діаграму ↗</a></article>
         <article class="demo-card"><h3>Що показати наживо</h3><ol class="demo-list"><li>Engine-written план</li><li>Картку складної Classic-поведінки</li><li>Сторінку на контрольній точці</li><li>Приклад повторного циклу виправлення</li><li>Фінальну таблицю Plan vs Done</li></ol></article>
       </div>
-      <div class="footer"><span>13 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
+      <div class="footer"><span>14 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
       <aside class="notes"><b>Завершальна фраза:</b> Результат цього спринту — керована система ролей і перевірок. Skill знає правила, workflow організовує роботу, а engine не дозволяє назвати міграцію завершеною без фактичного доказу.</aside>
     </section>
 
@@ -456,7 +480,7 @@
           <div class="lane" style="--c:#acc5ed"><div class="lane-name">Build workflow</div><div class="lane-track"><b>Будує по сторінці, застосовує UI Guidelines, перевіряє та виправляє.</b></div></div>
         </div>
       </div>
-      <div class="footer"><span>14 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
+      <div class="footer"><span>15 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
       <aside class="notes"><b>Що сказати:</b> Червоні пунктирні стрілки — це повернення користувача з перевірки. Звичайні зворотні стрілки — автоматичні цикли виправлення. Головне — не маршрут кожної стрілки, а розподіл відповідальності між доріжками.</aside>
     </section>
   </main>
