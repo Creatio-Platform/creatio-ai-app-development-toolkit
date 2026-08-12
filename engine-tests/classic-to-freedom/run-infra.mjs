@@ -975,10 +975,16 @@ try {
     cba.critiqueDeathLine(1, null, true).endsWith(" — retrying once") && !/retrying/.test(lineNull),
     () => JSON.stringify({ willRetry: cba.critiqueDeathLine(1, null, true), final: lineNull }));
 
-  check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a bare Error must not render as `undefined`",
-    !/undefined/.test(cba.critiqueDeathLine(1, new Error(), false))
+  // Deliberately degenerate input: an Error whose message is EMPTY, which is what exercises the fallback half of
+  // `error.message || String(error)`. Blanked after construction rather than written as `new Error("")` or
+  // `new Error()` — sonar S7722 ("built-in error objects should have meaningful messages") flags BOTH of those
+  // constructor forms, and it is right about production code; this is test input that must not carry a message.
+  const blankMessage = new Error("blanked on the next line");
+  blankMessage.message = "";
+  check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a message-less Error must not render as `undefined`",
+    !/undefined/.test(cba.critiqueDeathLine(1, blankMessage, false))
       && !/undefined/.test(cba.critiqueDeathLine(1, "boom", false)),
-    () => JSON.stringify([cba.critiqueDeathLine(1, new Error(), false), cba.critiqueDeathLine(1, "boom", false)]));
+    () => JSON.stringify([cba.critiqueDeathLine(1, blankMessage, false), cba.critiqueDeathLine(1, "boom", false)]));
 } catch (e) {
   check("cba workflow: the executable retry/message block ran to completion — a helper missing from the PURE DECISION HELPERS markers must be ONE red check, not an aborted runner with no summary",
     false, () => `${e?.name || "Error"}: ${e?.message || String(e)}`);
