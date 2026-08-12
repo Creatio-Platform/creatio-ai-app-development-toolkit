@@ -36,10 +36,10 @@ Use these values for CAADT product telemetry when calling clio telemetry tools:
 
 ## Product telemetry — the stage vocabulary plus your `workflow` value
 
-Read `../../context/product-telemetry.md`. Event names are **flow-agnostic stages**
-(`workflow_started`, `plan_presented`, `plan_approved`, `build_started`, `work_item_completed`,
-`workflow_completed`, `workflow_failed`, ...); which flow it was travels in the `workflow` field. Send the
-Analytics Context values above on every event.
+Read `../../context/product-telemetry.md` for which gate emits which stage. Event names are **flow-agnostic stages**; which flow it
+was travels in the `workflow` field. Read `get-guidance name=product-telemetry` for the vocabulary and
+the consent flow — clio owns both, along with the allow-list that validates them — and never spell a
+stage from memory. Send the Analytics Context values above on every event.
 
 - **Full app generation or business-shaped feature work** → `workflow: "app-creation"`. Map the stages onto
   this flow's gates: `plan_presented` when the BA-style Business Plan is shown in full, `plan_approved` at

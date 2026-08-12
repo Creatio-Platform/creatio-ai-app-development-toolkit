@@ -88,7 +88,8 @@ Before the Load order below, verify the converter is available: list the server 
 
 ## Product telemetry — emit the shared stages with `workflow: "mobile-page-conversion"`
 
-Read `../../context/product-telemetry.md` and emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow, and
+`../../context/product-telemetry.md` for this flow's emission points. Emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
 identified by the `workflow` field, so do not invent `mobile_*` event names — clio rejects them.
 
 | Send | With | At the point where you |

@@ -24,7 +24,8 @@ These eight rules are non-negotiable. Everything else in this skill serves them.
 
 ## Product telemetry — emit the shared stages with `workflow: "classic-to-freedom-migration"`
 
-Read `../../context/product-telemetry.md` and emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow, and
+`../../context/product-telemetry.md` for this flow's emission points. Emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
 identified by the `workflow` field, so do not invent `migration_*` event names — clio rejects them.
 
 Every stage lands on a point the Contract above **already** forces you to stop at:

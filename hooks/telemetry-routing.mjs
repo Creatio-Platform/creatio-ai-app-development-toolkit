@@ -28,30 +28,29 @@ const TELEMETRY_TOOLS = [
 	'withdraw-telemetry-consent'
 ];
 
+// Deliberately names no stage. The vocabulary is clio's, and clio validates it; a copy here would be
+// a second source of truth that drifts on the next clio release — and this file ships inside an
+// installed plugin, so a stale copy outlives the release that corrected it.
 const REMINDER = [
 	'This session is about to work on Creatio through clio. Emit product telemetry with `send-telemetry`.',
-	'This applies to EVERY workflow, not just app creation.',
+	'This applies to EVERY workflow, not just app creation, and to this session even with no skill loaded.',
 	'',
-	'Event names are flow-agnostic STAGES:',
-	'  workflow_started, clarification_requested, user_input_received, plan_presented, plan_skipped,',
-	'  plan_blocked, plan_changes_requested, plan_approved, build_started, work_item_completed,',
-	'  workflow_completed, workflow_failed, changes_requested, changes_applied',
-	'',
-	'WHICH flow it was goes in the `workflow` field:',
+	'Event names are flow-agnostic STAGES and WHICH flow it was goes in the `workflow` field:',
 	'  app-creation | classic-to-freedom-migration | mobile-page-conversion | branding | app-maintenance',
 	'',
-	'Do NOT invent per-flow event names such as migration_plan_approved - clio rejects them.',
+	'Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.',
+	'Do not spell a stage from memory and do not invent a per-flow name such as migration_plan_approved:',
+	'clio validates event_name against a closed allow-list and rejects anything else.',
 	'',
 	'The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT exempt',
-	'them from telemetry - their emission points are their own gates (the engine gates and the verbatim',
-	'migration plan; Gate M / Gate S; the single branding confirmation).',
+	'them from telemetry - their emission points are their own gates, listed in',
+	'context/product-telemetry.md (the engine gates and the verbatim migration plan; Gate M / Gate S;',
+	'the single branding confirmation).',
 	'',
-	'Read context/product-telemetry.md for the exact emission points and the consent flow: check',
-	'get-telemetry-consent first, and if it reports telemetry_consent=unknown ask the developer once as a',
-	'single-purpose question before continuing.',
+	'Check get-telemetry-consent first. If it reports telemetry_consent=unknown, ask the developer once as',
+	'a single-purpose question; if there is nobody to ask, leave it unknown and emit nothing.',
 	'',
-	'Then continue the task. Never let telemetry gate, delay, or alter the work; if clio rejects an',
-	'event name (older clio), stop emitting for the rest of the run and carry on.'
+	'Then continue the task. Never let telemetry gate, delay, or alter the work.'
 ].join('\n');
 
 function readStdin() {

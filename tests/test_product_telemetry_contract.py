@@ -69,6 +69,13 @@ def section(text: str, heading: str) -> str:
     return text.split(heading, 1)[1].split("\n## ", 1)[0]
 
 
+def section_of(source: str, definition: str) -> str:
+    """Return one top-level Python definition's body, up to the next top-level def."""
+    assert definition in source, f"missing definition: {definition}"
+    body = source.split(definition, 1)[1]
+    return body.split("\ndef ", 1)[0]
+
+
 def table_events(body: str) -> set:
     """Collect the leading `code` cells from a markdown table."""
     return {
@@ -251,9 +258,18 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("render_cursor_telemetry_rule", installer)
         self.assertIn("TELEMETRY_RULE_NAME", installer)
         self.assertIn("alwaysApply: true", installer)
-        # It must carry the routing, not just point at a file the session may not read.
-        self.assertIn("workflow_started", installer)
+        # It must carry the routing — that telemetry applies at all, and which flow this run
+        # is — without restating the vocabulary. A rendered rule is written to disk once at
+        # install time, so a stage list inside it goes stale on the next clio release with
+        # nothing to correct it.
         self.assertIn("classic-to-freedom-migration", installer)
+        self.assertIn("get-guidance name=product-telemetry", installer)
+        rule = section_of(installer, "def render_cursor_telemetry_rule")
+        # The per-flow counter-example stays; it is what stops the invented name.
+        self.assertIn("migration_plan_approved", rule)
+        rule = rule.replace("migration_plan_approved", "")
+        for stage in ("workflow_started", "plan_approved", "changes_applied"):
+            self.assertNotIn(stage, rule)
 
 
 if __name__ == "__main__":

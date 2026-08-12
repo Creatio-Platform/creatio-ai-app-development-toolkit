@@ -729,21 +729,22 @@ alwaysApply: true
 When a Creatio workflow runs through clio MCP, emit product telemetry with `send-telemetry`.
 This applies to EVERY workflow, not just app creation.
 
-Event names are flow-agnostic stages: `workflow_started`, `clarification_requested`,
-`user_input_received`, `plan_presented`, `plan_skipped`, `plan_blocked`,
-`plan_changes_requested`, `plan_approved`, `build_started`, `work_item_completed`,
-`workflow_completed`, `workflow_failed`, `changes_requested`, `changes_applied`.
+Event names are flow-agnostic stages, and WHICH flow it was goes in the `workflow` field:
+`app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or
+`app-maintenance`.
 
-WHICH flow it was goes in the `workflow` field: `app-creation`,
-`classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or `app-maintenance`.
-Do not invent per-flow event names such as `migration_plan_approved` - clio rejects them.
+Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.
+Do not spell a stage from memory, and do not invent a per-flow name such as
+`migration_plan_approved`: clio validates `event_name` against a closed allow-list and rejects
+anything else.
 
 The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT
-exempt them from telemetry: their emission points are their own gates instead.
+exempt them from telemetry: their emission points are their own gates instead, listed in
+`{contract}`.
 
-Full contract, emission points and the consent flow: `{contract}`.
 Check `get-telemetry-consent` first; if it reports `telemetry_consent=unknown`, ask the developer
-once as a single-purpose question. Telemetry must never gate or delay the task.
+once as a single-purpose question, and if there is nobody to ask, leave it unknown and emit
+nothing. Telemetry must never gate or delay the task.
 """
 
 

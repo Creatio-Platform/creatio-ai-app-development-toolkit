@@ -78,16 +78,23 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(payload["hookEventName"], "PreToolUse")
         self.assertEqual(payload["permissionDecision"], "allow")
         context = payload["additionalContext"]
-        # It must route to the shared stages plus the workflow field, and say that
-        # a Gate P/R exemption is not a telemetry exemption — the defect in one line.
-        for stage in ("workflow_started", "plan_approved", "workflow_completed"):
-            self.assertIn(stage, context)
+        # It must route to the workflow field and say that a Gate P/R exemption is not a
+        # telemetry exemption — the defect in one line.
         for workflow in ("classic-to-freedom-migration", "branding", "app-maintenance"):
             self.assertIn(workflow, context)
         self.assertIn("EVERY workflow", context)
         self.assertIn("does NOT exempt", context)
-        # And it must warn off the per-flow names clio rejects.
-        self.assertIn("Do NOT invent per-flow event names", context)
+        self.assertIn("no skill loaded", context)
+        # It routes to the vocabulary instead of restating it. This file ships inside an
+        # installed plugin, so a copied stage list would outlive the clio release that
+        # corrected it — the reminder must name the article, not the stages.
+        self.assertIn("get-guidance name=product-telemetry", context)
+        self.assertIn("Do not spell a stage from memory", context)
+        # The per-flow counter-example must survive; it is what stops the invented name.
+        self.assertIn("migration_plan_approved", context)
+        without_counter_example = context.replace("migration_plan_approved", "")
+        for stage in ("workflow_started", "plan_approved", "workflow_completed", "changes_applied"):
+            self.assertNotIn(stage, without_counter_example)
 
     def test_stays_silent_on_later_calls_in_the_same_session(self):
         # Repeating the reminder on every clio call would turn it into noise the
