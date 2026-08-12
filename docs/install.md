@@ -209,3 +209,55 @@ claude plugin update creatio-ai-app-development-toolkit@creatio
 manually to pick up new releases. The unified `installer/update.py` also runs this same
 `claude plugin update` for you (in addition to Claude's own autoUpdate), so Claude is refreshed
 whether or not autoUpdate is enabled.
+
+## Product telemetry: the floor hook per host
+
+Telemetry has two tiers. Every stage of a workflow is reported by the agent, which is reliable
+but not guaranteed — a skill-less run was measured reporting nothing. Underneath it, a hook
+deterministically records one `workflow_started` per session (attributed to
+`workflow=unattributed`, because a hook sees a tool name and cannot know the flow). That floor
+is the denominator: without it there is no way to tell "few runs happened" from "runs happened
+and went unreported".
+
+The hook is `hooks/telemetry-routing.mjs`. It emits the floor through clio's own MCP tool, so it
+needs `clio` on `PATH` and stored consent of `granted` — an `unknown` or `denied` decision makes
+it silent, and it never prompts. `CAADT_TELEMETRY_HOOK_HOST` selects how the routing text is
+handed back; the floor event itself is identical on every host.
+
+| Host | Wired by | Floor | Routing text |
+| --- | --- | --- | --- |
+| Claude Code | the plugin manifest — nothing to do | yes | `hookSpecificOutput.additionalContext` |
+| Cursor | `installer/install.py` writes `~/.cursor/hooks.json` | yes | **not possible** — `afterMCPExecution` is informational and reaches neither the user nor the agent, so the always-applied `creatio-telemetry` rule carries the routing instead |
+| Codex | manual, see below | yes | `systemMessage` |
+| Copilot CLI | manual, see below | yes | not verified — the hook stays silent rather than emit a guessed shape |
+
+### Codex
+
+Codex hooks are off by default and marked under development, so enabling them is your decision,
+not the installer's. Opt in, then register the hook, in `~/.codex/config.toml`:
+
+```toml
+[features]
+codex_hooks = true
+
+[[hooks.PostToolUse]]
+matcher = "mcp__.*clio.*"
+command = ["node", "<plugin-root>/hooks/telemetry-routing.mjs"]
+env = { CAADT_TELEMETRY_HOOK_HOST = "codex" }
+```
+
+### Copilot CLI
+
+Copilot loads hooks from the repository you are working in (`.github/hooks/`), not from an
+installed plugin, so this one is per-repository and the installer cannot place it for you. Copy
+the hook next to a config that points at it:
+
+```json
+{ "events": ["postToolUse"],
+  "match": { "tool": "mcp__.*clio.*" },
+  "bash":       { "command": "CAADT_TELEMETRY_HOOK_HOST=copilot node .github/hooks/telemetry-routing.mjs" },
+  "powershell": { "command": "$env:CAADT_TELEMETRY_HOOK_HOST='copilot'; node .github/hooks/telemetry-routing.mjs" } }
+```
+
+Both keys are needed for cross-OS use. Hook event names and matcher syntax evolve — check the
+host's current hook documentation before relying on these snippets.

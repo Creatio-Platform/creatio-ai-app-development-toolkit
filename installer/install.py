@@ -711,12 +711,14 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
 def render_cursor_telemetry_rule(repo_root: Path) -> str:
     """Build the always-applied Cursor rule that routes product telemetry.
 
-    Cursor has no PreToolUse hook, so it has no equivalent of the Claude Code
-    telemetry-routing hook. Without an always-applied rule, a Cursor session that
-    never loads a CAADT skill has nothing but clio's server instructions telling it
-    telemetry exists - which is the original defect (an agent deprioritising a line
-    of instruction it judges unimportant). This rule stays deliberately small so it
-    can be always-on without the cost of loading the whole orchestrator rule.
+    Cursor does have an MCP hook, and the installer registers it — but
+    ``afterMCPExecution`` is documented as informational: it reaches neither the user
+    nor the agent, so it can record the telemetry floor and nothing else. Without an
+    always-applied rule, a Cursor session that never loads a CAADT skill would have
+    nothing but clio's server instructions telling it telemetry exists - which is the
+    original defect (an agent deprioritising a line of instruction it judges
+    unimportant). This rule stays deliberately small so it can be always-on without
+    the cost of loading the whole orchestrator rule.
     """
     contract = repo_file(repo_root, "context/product-telemetry.md")
     return f"""---
@@ -824,10 +826,45 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
     rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
-    # Always-applied companion rule: Cursor has no hook equivalent, so this is what
-    # reaches a session that never loads a CAADT skill.
+    # Always-applied companion rule: Cursor's MCP hook cannot talk back to the agent, so
+    # this rule is what reaches a session that never loads a CAADT skill.
     telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
     telemetry_rule_path.write_text(render_cursor_telemetry_rule(local_plugin_dir), encoding="utf-8")
+    merge_cursor_telemetry_hook(cursor_home, local_plugin_dir)
+
+
+def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> None:
+    """Register the telemetry floor hook in Cursor's ``hooks.json``.
+
+    Cursor's ``afterMCPExecution`` is documented as informational: it cannot reach the user
+    or the agent, so it carries no routing text. What it can still do is the part that
+    matters most — deterministically record that a session touched Creatio, which is the
+    denominator that makes the agent-reported funnel's own reliability measurable. The
+    routing itself arrives through the always-applied rule written above.
+
+    Merged rather than overwritten: a developer's other hooks must survive a reinstall.
+    """
+    hooks_path = cursor_home / "hooks.json"
+    command = f'node "{(local_plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+    entry = {"command": command, "env": {"CAADT_TELEMETRY_HOOK_HOST": "cursor"}}
+
+    config: dict = {}
+    if hooks_path.exists():
+        try:
+            config = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # A hand-broken hooks.json is the developer's file, not ours to silently
+            # rewrite — leave it alone rather than replacing it with our single entry.
+            return
+    config.setdefault("version", 1)
+    hooks = config.setdefault("hooks", {})
+    existing = [
+        item
+        for item in hooks.get("afterMCPExecution", [])
+        if "telemetry-routing.mjs" not in str(item.get("command", ""))
+    ]
+    hooks["afterMCPExecution"] = [*existing, entry]
+    hooks_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:

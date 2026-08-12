@@ -29,7 +29,13 @@ def _base_env() -> dict:
     }
 
 
-def run_hook(payload: dict, *, telemetry_home: str, clio: str = "caadt-no-such-clio"):
+def run_hook(
+    payload: dict,
+    *,
+    telemetry_home: str,
+    clio: str = "caadt-no-such-clio",
+    host: str | None = None,
+):
     """Invoke the hook exactly as Claude Code does: JSON on stdin, JSON on stdout.
 
     `telemetry_home` redirects clio's telemetry storage, so a test controls the consent
@@ -52,6 +58,7 @@ def run_hook(payload: dict, *, telemetry_home: str, clio: str = "caadt-no-such-c
             "TEMP": _TMP,
             "CLIO_TELEMETRY_HOME": telemetry_home,
             "CAADT_TELEMETRY_CLIO": clio,
+            **({"CAADT_TELEMETRY_HOOK_HOST": host} if host else {}),
         },
     )
 
@@ -232,6 +239,38 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "")
 
+    def test_shapes_the_routing_per_host_and_stays_silent_where_it_cannot_speak(self):
+        # Only the routing text is host-specific; the floor event is a side effect and
+        # therefore identical everywhere. Cursor's afterMCPExecution is documented as
+        # informational — it reaches neither the user nor the agent — so emitting anything
+        # there would be stdout the host cannot use, and an unknown host gets silence rather
+        # than a guessed shape.
+        cases = {
+            "claude": lambda out: json.loads(out)["hookSpecificOutput"]["additionalContext"],
+            "codex": lambda out: json.loads(out)["systemMessage"],
+        }
+        for host, extract in cases.items():
+            with self.subTest(host=host):
+                result = run_hook(
+                    {"session_id": str(uuid.uuid4()), "tool_name": "mcp__clio__clio-run"},
+                    telemetry_home=telemetry_home("granted"),
+                    host=host,
+                )
+
+                self.assertEqual(result.returncode, 0)
+                self.assertIn("get-guidance name=product-telemetry", extract(result.stdout))
+
+        for host in ("cursor", "some-future-host"):
+            with self.subTest(host=host):
+                result = run_hook(
+                    {"session_id": str(uuid.uuid4()), "tool_name": "mcp__clio__clio-run"},
+                    telemetry_home=telemetry_home("granted"),
+                    host=host,
+                )
+
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout.strip(), "")
+
     def test_never_fails_the_tool_call_on_malformed_input(self):
         result = subprocess.run(
             [NODE, str(HOOK)],
@@ -243,6 +282,68 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "")
+
+
+class CursorTelemetryHookWiringTests(unittest.TestCase):
+    """Cursor is the one host whose hook config the installer can write itself."""
+
+    def setUp(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "caadt_installer", ROOT / "installer" / "install.py"
+        )
+        self.installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.installer)
+
+    def test_registers_the_floor_hook_on_after_mcp_execution(self):
+        cursor_home = Path(tempfile.mkdtemp(prefix="caadt-cursor-", dir=_TMP))
+        plugin_dir = cursor_home / "plugins" / "local" / "toolkit"
+
+        self.installer.merge_cursor_telemetry_hook(cursor_home, plugin_dir)
+
+        config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+        entries = config["hooks"]["afterMCPExecution"]
+        self.assertEqual(len(entries), 1)
+        self.assertIn("telemetry-routing.mjs", entries[0]["command"])
+        # The host must be declared, or the hook would emit Claude-shaped stdout into a
+        # host that cannot read it.
+        self.assertEqual(entries[0]["env"]["CAADT_TELEMETRY_HOOK_HOST"], "cursor")
+
+    def test_preserves_other_hooks_and_does_not_duplicate_itself(self):
+        # A reinstall must not stack copies of our entry, and must never drop a hook the
+        # developer added themselves.
+        cursor_home = Path(tempfile.mkdtemp(prefix="caadt-cursor-", dir=_TMP))
+        (cursor_home / "hooks.json").write_text(
+            json.dumps({
+                "version": 1,
+                "hooks": {
+                    "afterMCPExecution": [{"command": "node ./their-own-audit.js"}],
+                    "beforeShellExecution": [{"command": "node ./their-guard.js"}],
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        self.installer.merge_cursor_telemetry_hook(cursor_home, cursor_home / "plugin")
+        self.installer.merge_cursor_telemetry_hook(cursor_home, cursor_home / "plugin")
+
+        config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+        commands = [entry["command"] for entry in config["hooks"]["afterMCPExecution"]]
+        self.assertEqual(sum("telemetry-routing.mjs" in c for c in commands), 1)
+        self.assertIn("node ./their-own-audit.js", commands)
+        self.assertIn("beforeShellExecution", config["hooks"])
+
+    def test_leaves_a_broken_hooks_file_untouched(self):
+        # A hand-broken hooks.json is the developer's file. Replacing it with our single
+        # entry would delete configuration we cannot read but they can still fix.
+        cursor_home = Path(tempfile.mkdtemp(prefix="caadt-cursor-", dir=_TMP))
+        broken = '{"hooks": {"afterMCPExecution": [  // trailing comment\n'
+        (cursor_home / "hooks.json").write_text(broken, encoding="utf-8")
+
+        self.installer.merge_cursor_telemetry_hook(cursor_home, cursor_home / "plugin")
+
+        self.assertEqual((cursor_home / "hooks.json").read_text(encoding="utf-8"), broken)
 
 
 @unittest.skipIf(NODE is None or CLIO is None, "node and clio are both required")

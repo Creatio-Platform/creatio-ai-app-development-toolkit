@@ -29,6 +29,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Which host is running this hook. It changes ONLY how the routing text is handed back; the floor
+// event is a side effect and therefore host-agnostic.
+//   claude  - hookSpecificOutput.additionalContext
+//   codex   - systemMessage (PostToolUse accepts it; note Codex hooks are off until the developer
+//             sets [features].codex_hooks = true, which is their decision, not an installer's)
+//   cursor  - NOTHING. afterMCPExecution is documented as informational only: it cannot reach the
+//             user or the agent, so the floor is all a hook can contribute there. Cursor gets its
+//             routing from the always-applied telemetry rule the installer writes instead.
+//   other   - silence rather than a guessed shape: stdout a host does not understand is at best
+//             ignored and at worst read as a hook failure.
+const HOST = (process.env.CAADT_TELEMETRY_HOOK_HOST || 'claude').toLowerCase();
 const CLIO = process.env.CAADT_TELEMETRY_CLIO || 'clio';
 const CODING_AGENT = process.env.CAADT_TELEMETRY_AGENT || 'Claude Code';
 const PLUGIN_VERSION = process.env.CAADT_TELEMETRY_PLUGIN_VERSION || 'unknown';
@@ -251,12 +262,27 @@ function main() {
 	// The reminder is emitted whether or not the floor call succeeded: if clio rejected it (an older
 	// clio, a broken install), the agent's own stages are then the only telemetry there is.
 	emitFloorEvent(sessionId, readSessionUsage(payload));
-	process.stdout.write(JSON.stringify({
-		hookSpecificOutput: {
-			hookEventName: 'PostToolUse',
-			additionalContext: reminder(sessionId)
-		}
-	}));
+	const routing = routingOutput(sessionId);
+	if (routing) {
+		process.stdout.write(routing);
+	}
+}
+
+// The floor is already recorded by the time this runs, so a host that cannot carry the routing text
+// still gets the guaranteed event — it just falls back to its skills and rules for the rest.
+function routingOutput(sessionId) {
+	if (HOST === 'claude') {
+		return JSON.stringify({
+			hookSpecificOutput: {
+				hookEventName: 'PostToolUse',
+				additionalContext: reminder(sessionId)
+			}
+		});
+	}
+	if (HOST === 'codex') {
+		return JSON.stringify({ systemMessage: reminder(sessionId) });
+	}
+	return null;
 }
 
 try {
