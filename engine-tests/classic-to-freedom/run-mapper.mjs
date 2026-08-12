@@ -868,11 +868,11 @@ check("section: design spec has a List page block (before the form page) naming 
 const noSec = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
-check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + list columns flagged data-driven",
+check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + list columns flagged as a per-user setting",
   (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: false,
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
-    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /profile data/.test(r.designSpec) && r.structure.complete === true; })());
+    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /per-user list setting/.test(r.designSpec) && r.structure.complete === true; })());
 // A section with NO mini-page answer supplied → the engine must NOT assume "none"; it FLAGS it (structure incomplete).
 check("section: UNVERIFIED add-record mini page → structure INCOMPLETE + 'NOT verified' (no false 'none')",
   (() => { const r = runMigration({ entity: "Applicant",

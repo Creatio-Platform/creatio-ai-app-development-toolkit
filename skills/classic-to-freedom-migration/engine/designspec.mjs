@@ -349,7 +349,10 @@ function renderListPageBlock(result, section) {
   if (!section) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **list columns / quick filters / section actions were NOT analyzed**. `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns";
+    // The ⚠ text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
+    // product — the Classic list and its columns. The mechanism (Classic stores the visible set as per-user profile
+    // data, not in the page schema) stays in this comment and in `engine.mjs`; it must not reach the rendered cell.
+    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not part of the page — Classic remembers the visible columns as a per-user list setting, so confirm which columns the Freedom list should show";
     L.push(`- **List columns:** ${listCols}`);
     if ((section.quickFilters || []).length) {
       const f = section.quickFilters.map((q) => {

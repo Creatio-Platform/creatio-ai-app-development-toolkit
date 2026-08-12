@@ -159,6 +159,41 @@
   .expert-step p { color: var(--muted); font-size: 16px; line-height: 1.4; }
   .no-workflow { margin-top: 18px; padding: 13px 17px; border-radius: 12px; background: rgba(93,228,212,.08); border: 1px solid rgba(93,228,212,.25); color: var(--cyan); font-size: 15px; font-weight: 720; }
 
+  .evidence-stage { display: grid; grid-template-columns: 440px 1fr; gap: 34px; align-items: stretch; }
+  .shot-frame { position: relative; min-width: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: #111; box-shadow: 0 18px 42px rgba(0,0,0,.32); }
+  .shot-frame img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .workflow-shot { height: 412px; }
+  .workflow-shot img { object-fit: contain; object-position: center; }
+  .evidence-points { display: grid; align-content: center; gap: 22px; }
+  .evidence-point { padding-left: 16px; border-left: 3px solid var(--c); }
+  .evidence-point b { display: block; color: var(--c); font-size: 23px; margin-bottom: 5px; }
+  .evidence-point span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+  .shot-source { color: #77879a; font-size: 12px; }
+
+  .run-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; height: 404px; }
+  .run-card { display: grid; grid-template-columns: 250px 1fr; gap: 20px; min-width: 0; align-items: center; padding: 14px 20px 14px 14px; border: 1px solid var(--line); border-radius: 19px; background: rgba(255,255,255,.025); }
+  .run-card .shot-frame { height: 374px; }
+  .run-card h3 { margin: 0 0 10px; font-size: 25px; line-height: 1.08; }
+  .run-card p { color: var(--muted); font-size: 15px; line-height: 1.38; }
+  .run-card .run-fact { display: block; margin-top: 18px; color: var(--lime); font-size: 16px; font-weight: 820; }
+
+  .decision-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; height: 394px; }
+  .decision-shot { display: grid; grid-template-rows: 1fr auto; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 19px; background: rgba(255,255,255,.025); }
+  .decision-shot .image-wrap { min-height: 0; background: #111; }
+  .decision-shot img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .decision-shot figcaption { padding: 13px 17px 14px; color: var(--muted); font-size: 14px; line-height: 1.3; border-top: 1px solid var(--line); }
+  .decision-shot figcaption b { color: var(--cyan); }
+
+  .approval-stage { display: grid; grid-template-columns: 540px 1fr; gap: 34px; height: 402px; align-items: stretch; }
+  .approval-shot { height: 402px; }
+  .approval-shot img { object-fit: cover; object-position: center 30%; }
+  .approval-copy { display: grid; align-content: center; gap: 23px; }
+  .approval-copy .approval-lead { color: var(--ink); font-size: 25px; line-height: 1.25; font-weight: 790; }
+  .approval-step { display: grid; grid-template-columns: 39px 1fr; gap: 13px; align-items: start; }
+  .approval-step .n { width: 39px; height: 39px; border-radius: 12px; display: grid; place-items: center; background: var(--c); color: #071017; font-weight: 900; }
+  .approval-step b { display: block; color: var(--c); font-size: 18px; margin-bottom: 4px; }
+  .approval-step span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+
   .phases-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 9px; align-items: stretch; }
   .phase-mini { min-height: 232px; padding: 16px 13px; border-radius: 15px; background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; position: relative; }
   .phase-mini .n { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--c); color: #071017; font-size: 13px; font-weight: 900; }
@@ -211,7 +246,7 @@
       <div class="content hero">
         <h1>Classic <span class="accent">→</span> Freedom UI</h1>
         <p class="lead">Хто за що відповідає, які workflow запускаються і як система доходить до <span class="strong">перевіреного результату</span>.</p>
-        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">11 слайдів · ~8 хвилин</span></div>
+        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">15 слайдів · ~10 хвилин</span></div>
         <div class="hero-mark" aria-hidden="true"><div class="orbit"></div><div class="orbit"></div><div class="orbit"></div><div class="core"><span>UI</span></div></div>
       </div>
       <div class="footer"><span>Creatio AI App Development Toolkit</span><span class="status">PoC у поточній гілці</span></div>
@@ -272,6 +307,41 @@
       <aside class="notes"><b>Що сказати:</b> Уявіть групову роботу студентів: спочатку викладач ділить тему, потім групи описують свої частини, рецензент знаходить пропуски, а редактор збирає один узгоджений документ.</aside>
     </section>
 
+    <section class="slide" aria-label="Реальний запуск workflow аналізу">
+      <div><div class="kicker">Реальний прогін · 12 серпня</div><h2>Workflow працює у фоні, а основний діалог не блокується</h2></div>
+      <div class="content evidence-stage">
+        <div class="shot-frame workflow-shot">
+          <img src="assets/real-run/workflow-running.png" alt="Реальний запуск classic-behaviour-analysis workflow у фонових задачах Codex">
+        </div>
+        <div class="evidence-points">
+          <div class="evidence-point" style="--c:var(--cyan)"><b>4 фази</b><span>Context, Describe, Critique та Merge видно під час виконання.</span></div>
+          <div class="evidence-point" style="--c:var(--amber)"><b>Паралельна робота</b><span>Агенти стартують лише тоді, коли для них готовий контекст.</span></div>
+          <div class="evidence-point" style="--c:var(--lime)"><b>Прозорий стан</b><span>Користувач бачить активний workflow та його прогрес.</span></div>
+          <span class="shot-source">Джерело: реальний прогін PoC</span>
+        </div>
+      </div>
+      <div class="footer"><span>05 · Workflow у роботі</span><span>Фонове виконання без «чорної скриньки»</span></div>
+      <aside class="notes"><b>Що сказати:</b> Це не схема, а реальний запуск. Workflow працює як фонова задача, показує поточні фази та не забирає основний діалог у користувача. Для презентації залишено лише безпечну область панелі workflow.</aside>
+    </section>
+
+    <section class="slide" aria-label="Два завершені прогони workflow аналізу">
+      <div><div class="kicker">Доказ виконання</div><h2>Два різні об’єкти пройшли той самий контрольований цикл</h2></div>
+      <div class="content">
+        <div class="run-pair">
+          <article class="run-card">
+            <div class="shot-frame"><img src="assets/real-run/analysis-complete-section.png" alt="Завершений workflow аналізу для Classic-секції"></div>
+            <div><h3>Classic-секція</h3><p>Context, Describe, Critique та Merge завершені окремими агентами.</p><span class="run-fact">4 агенти · 34 хв</span></div>
+          </article>
+          <article class="run-card">
+            <div class="shot-frame"><img src="assets/real-run/analysis-complete-page.png" alt="Завершений workflow аналізу для Classic-сторінки"></div>
+            <div><h3>Classic-сторінка</h3><p>Той самий контракт фаз повторено для іншої поверхні міграції.</p><span class="run-fact">4 агенти · 37 хв</span></div>
+          </article>
+        </div>
+      </div>
+      <div class="footer"><span>06 · Повторюваний процес</span><span>Структура workflow не залежить від конкретної сторінки</span></div>
+      <aside class="notes"><b>Що сказати:</b> Тут два окремі завершені запуски. Час і кількість токенів різняться, але контракт однаковий: чотири фази, чотири незалежні ролі та один зібраний результат.</aside>
+    </section>
+
     <section class="slide" aria-label="Classic UI Expert skill">
       <div><div class="kicker">Skill 2</div><h2>classic-ui-expert — перекладач із коду на бізнес-поведінку</h2></div>
       <div class="content">
@@ -282,7 +352,7 @@
         </div>
         <div class="no-workflow">Важливо: цей skill не запускає окремий workflow. Його викликають агенти всередині workflow аналізу.</div>
       </div>
-      <div class="footer"><span>05 · Код → зрозуміла поведінка</span><span>Якщо доказу немає — чесно фіксує невідоме</span></div>
+      <div class="footer"><span>07 · Код → зрозуміла поведінка</span><span>Якщо доказу немає — чесно фіксує невідоме</span></div>
       <aside class="notes"><b>Що сказати:</b> Classic UI Expert — як аналітик, який читає програму й пише інструкцію для майбутнього розробника. Він не вигадує відповідь: невідому поведінку фіксує як прогалину з поясненням, що треба перевірити.</aside>
     </section>
 
@@ -301,7 +371,7 @@
         </div>
         <div class="statement"><b>Якщо сторінка не пройшла перевірку, цикл повторюється саме для неї. Після трьох невдалих спроб її не ховають — її «паркують» із чіткою причиною.</b></div>
       </div>
-      <div class="footer"><span>06 · Одна сторінка за раз</span><span>Builder ≠ Verifier ≠ Judge</span></div>
+      <div class="footer"><span>08 · Одна сторінка за раз</span><span>Builder ≠ Verifier ≠ Judge</span></div>
       <aside class="notes"><b>Що сказати:</b> Це як виробнича лінія з незалежним контролем. Той, хто зібрав деталь, не ставить собі оцінку. Інший перевіряє факт, третій — чи достатній доказ. Невдалий результат повертається на ремонт.</aside>
     </section>
 
@@ -315,7 +385,7 @@
         </div>
         <div class="no-workflow">Цей skill також не запускає власний workflow. Його двічі викликає кожен Build-агент усередині workflow побудови.</div>
       </div>
-      <div class="footer"><span>07 · Design → Build → Review</span><span>Сторінка має не лише працювати, а й бути зручною</span></div>
+      <div class="footer"><span>09 · Design → Build → Review</span><span>Сторінка має не лише працювати, а й бути зручною</span></div>
       <aside class="notes"><b>Що сказати:</b> UI Guidelines — це дизайнер і рев'юер в одній ролі. Перший виклик допомагає одразу зробити правильно, другий перевіряє вже збережену сторінку проти нативного прикладу Creatio.</aside>
     </section>
 
@@ -329,8 +399,41 @@
         </div>
         <div class="feedback"><span>Зауваження користувача</span><b>→ повторно відкриває саме цю сторінку</b></div>
       </div>
-      <div class="footer"><span>08 · Auto · Checkpoints · Guided</span><span>Для спринт-демо рекомендовані контрольні точки</span></div>
+      <div class="footer"><span>10 · Auto · Checkpoints · Guided</span><span>Для спринт-демо рекомендовані контрольні точки</span></div>
       <aside class="notes"><b>Що сказати:</b> Workflow може працювати сам, але це вибір користувача. Для демонстрації найкраще зупинитися після ключової сторінки, пройти конкретні критерії та повернути зауваження в наступний цикл.</aside>
+    </section>
+
+    <section class="slide" aria-label="Реальні рішення користувача під час міграції">
+      <div><div class="kicker">Людина в контурі</div><h2>Workflow зупиняється лише там, де потрібне продуктове рішення</h2></div>
+      <div class="content">
+        <div class="decision-grid">
+          <figure class="decision-shot">
+            <div class="image-wrap"><img src="assets/real-run/decision-app-placement.png" alt="Питання користувачу про місце реєстрації Freedom-секції"></div>
+            <figcaption><b>Розміщення секції:</b> створити застосунок або залишити сторінки без пункту меню.</figcaption>
+          </figure>
+          <figure class="decision-shot">
+            <div class="image-wrap"><img src="assets/real-run/decision-new-record-behavior.png" alt="Питання користувачу про поведінку кнопки створення нового запису"></div>
+            <figcaption><b>Поведінка «+ New»:</b> нативна маршрутизація, точне відтворення Classic або свідома зміна.</figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="footer"><span>11 · Product decisions</span><span>Технічні деталі вирішуються автоматично</span></div>
+      <aside class="notes"><b>Що сказати:</b> Система не перекладає на користувача кожну технічну дрібницю. Вона ставить питання лише тоді, коли є кілька коректних продуктових варіантів із різною поведінкою або навігацією.</aside>
+    </section>
+
+    <section class="slide" aria-label="Погодження плану перед побудовою">
+      <div><div class="kicker">Межа відповідальності</div><h2>Усі рішення зібрані в план — побудова стартує лише після погодження</h2></div>
+      <div class="content approval-stage">
+        <div class="shot-frame approval-shot"><img src="assets/real-run/plan-approval.png" alt="Реальний запит на погодження плану міграції перед запуском побудови"></div>
+        <div class="approval-copy">
+          <p class="approval-lead">Користувач бачить наслідки рішення до будь-яких змін у середовищі.</p>
+          <div class="approval-step" style="--c:var(--cyan)"><div class="n">1</div><div><b>Рішення зафіксовані</b><span>Застосунок, маршрутизація, колонки та дрібні кастомізації вже записані в план.</span></div></div>
+          <div class="approval-step" style="--c:var(--amber)"><div class="n">2</div><div><b>Обсяг названо явно</b><span>Новий застосунок, список, чотири форми та міністорінки.</span></div></div>
+          <div class="approval-step" style="--c:var(--lime)"><div class="n">3</div><div><b>Build workflow чекає</b><span>Погодження — явна межа між аналізом і змінами в Creatio.</span></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>12 · Approval gate</span><span>Plan first · Build after approval</span></div>
+      <aside class="notes"><b>Що сказати:</b> Після серії продуктових рішень система збирає їх в один план і ще раз показує реальний обсяг змін. Лише відповідь «Затверджую — будуй» запускає workflow побудови.</aside>
     </section>
 
     <section class="slide" aria-label="Фінальний результат">
@@ -339,7 +442,7 @@
         <article class="verdict"><div class="check">✓</div><h3>Plan vs Done</h3><p>Engine порівнює погоджений план із фактично створеними сторінками, компонентами та зв'язками. Відсутній або непідтверджений пункт блокує завершення.</p><a class="full-link" href="flow-as-built.html" target="_blank">Відкрити повну технічну діаграму ↗</a></article>
         <article class="demo-card"><h3>Що показати наживо</h3><ol class="demo-list"><li>Engine-written план</li><li>Картку складної Classic-поведінки</li><li>Сторінку на контрольній точці</li><li>Приклад повторного циклу виправлення</li><li>Фінальну таблицю Plan vs Done</li></ol></article>
       </div>
-      <div class="footer"><span>09 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
+      <div class="footer"><span>13 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
       <aside class="notes"><b>Завершальна фраза:</b> Результат цього спринту — керована система ролей і перевірок. Skill знає правила, workflow організовує роботу, а engine не дозволяє назвати міграцію завершеною без фактичного доказу.</aside>
     </section>
 
@@ -353,7 +456,7 @@
           <div class="lane" style="--c:#acc5ed"><div class="lane-name">Build workflow</div><div class="lane-track"><b>Будує по сторінці, застосовує UI Guidelines, перевіряє та виправляє.</b></div></div>
         </div>
       </div>
-      <div class="footer"><span>10 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
+      <div class="footer"><span>14 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
       <aside class="notes"><b>Що сказати:</b> Червоні пунктирні стрілки — це повернення користувача з перевірки. Звичайні зворотні стрілки — автоматичні цикли виправлення. Головне — не маршрут кожної стрілки, а розподіл відповідальності між доріжками.</aside>
     </section>
   </main>
