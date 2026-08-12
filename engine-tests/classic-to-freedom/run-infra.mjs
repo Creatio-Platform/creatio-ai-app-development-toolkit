@@ -963,7 +963,7 @@ try {
   const lineRejected = cba.critiqueDeathLine(1, new TypeError("529 overloaded"), true);
   check("critiqueDeathLine: a REJECTION names the attempt, the error TYPE and its message, and announces the retry — a `critiqueRan:false` run must carry the reason, not only the fact",
     /attempt 1/.test(lineRejected) && /TypeError/.test(lineRejected) && /529 overloaded/.test(lineRejected)
-      && / — retrying once$/.test(lineRejected),
+      && lineRejected.endsWith(" — retrying once"),
     () => lineRejected);
 
   const lineNull = cba.critiqueDeathLine(2, null, false);
@@ -972,13 +972,13 @@ try {
     () => lineNull);
 
   check("critiqueDeathLine: only a NON-FINAL attempt advertises the retry — the last failure promising a retry that never comes is exactly the misreport this log exists to prevent",
-    / — retrying once$/.test(cba.critiqueDeathLine(1, null, true)) && !/retrying/.test(lineNull),
+    cba.critiqueDeathLine(1, null, true).endsWith(" — retrying once") && !/retrying/.test(lineNull),
     () => JSON.stringify({ willRetry: cba.critiqueDeathLine(1, null, true), final: lineNull }));
 
   check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a bare Error must not render as `undefined`",
-    !/undefined/.test(cba.critiqueDeathLine(1, new Error(""), false))
+    !/undefined/.test(cba.critiqueDeathLine(1, new Error(), false))
       && !/undefined/.test(cba.critiqueDeathLine(1, "boom", false)),
-    () => JSON.stringify([cba.critiqueDeathLine(1, new Error(""), false), cba.critiqueDeathLine(1, "boom", false)]));
+    () => JSON.stringify([cba.critiqueDeathLine(1, new Error(), false), cba.critiqueDeathLine(1, "boom", false)]));
 } catch (e) {
   check("cba workflow: the executable retry/message block ran to completion — a helper missing from the PURE DECISION HELPERS markers must be ONE red check, not an aborted runner with no summary",
     false, () => `${e?.name || "Error"}: ${e?.message || String(e)}`);
