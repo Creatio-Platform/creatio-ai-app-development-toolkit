@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SKILL = ROOT / "skills/creatio-branding-orchestrator/SKILL.md"
 ASSETS = ROOT / "skills/creatio-branding-orchestrator/references/branding-assets.md"
+AGENTS = ROOT / "AGENTS.md"
 
 
 def read_text(path):
@@ -65,7 +66,20 @@ class BrandingFaviconSkillTests(unittest.TestCase):
     def test_recap_and_closing_summary_name_the_favicon(self):
         content = prose(SKILL)
         self.assertIn("naming the favicon that goes with them", content)
-        self.assertIn("the logos and favicon and/or the background", content)
+        self.assertIn("the logos with their favicon, the favicon on its own", content)
+
+    def test_neither_confirmation_forces_the_logos_and_favicon_to_move_together(self):
+        # Both the recap and the environment-wide apply gate script what the agent says out loud. A
+        # fixed "logos and favicon" pair there makes an icon-only run announce logo changes that
+        # are not happening.
+        content = prose(SKILL)
+        self.assertIn("or the favicon by itself when it is the whole request", content)
+        self.assertNotIn("the logos and favicon and/or the background", content)
+
+    def test_the_branding_trigger_advertises_the_favicon(self):
+        # This is the line that routes "change my tab icon" into the skill at all; losing it makes
+        # the favicon-only path unreachable no matter what the skill says.
+        self.assertIn("browser-tab favicon", prose(AGENTS))
 
     def test_favicon_visibility_caveat_is_a_sign_out_not_a_refresh(self):
         content = prose(SKILL)
@@ -83,6 +97,26 @@ class BrandingFaviconSourceTests(unittest.TestCase):
         content = prose(SKILL)
         self.assertIn("Use an icon that is already at hand", content)
         self.assertIn("Do not start a search for one", content)
+        self.assertIn("a file the user attached first, then", content)
+
+    def test_an_svg_icon_is_sanitized_whatever_supplied_it(self):
+        # An icon taken from a brandbook or a site is untrusted content, and it reaches upload
+        # through the "already at hand" path — so the sanitize rule cannot sit in the derive branch
+        # alone, where only a logo-derived icon would read it.
+        content = prose(SKILL)
+        self.assertIn(
+            "an SVG icon is sanitized per the logo rules above before it is uploaded, "
+            "whatever its source",
+            content,
+        )
+
+    def test_the_terminal_no_icon_rule_cannot_swallow_the_icon_only_ask(self):
+        # Two rules matched a favicon-only request with nothing attached: ask for a file, and move
+        # on without asking. The general one comes later in the list, so it has to name its scope.
+        content = prose(SKILL)
+        self.assertIn("either way while the logos are being applied", content)
+        self.assertIn("When the icon is the whole request, asking for a file is the request itself",
+                      content)
 
     def test_deriving_states_the_outcome_and_leaves_the_means_open(self):
         # The requirement is the square icon-only image; prescribing one file format would tie the
