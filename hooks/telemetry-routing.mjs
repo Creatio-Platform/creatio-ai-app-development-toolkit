@@ -68,6 +68,10 @@ const reminder = sessionId => [
 	'    without a start of its own is recorded as a build with no beginning, which no funnel can read;',
 	'  - send your real `workflow` on each stage you emit from now on:',
 	'    app-creation | classic-to-freedom-migration | mobile-page-conversion | branding | app-maintenance',
+	'  - one run is one request. If you already reported a run in this session and the developer has',
+	'    since asked for something else, that is a NEW run: close the previous one with its terminal',
+	'    stage first, then open this one. A measured session let a second request close the first one,',
+	'    so a task that actually succeeded was recorded as blocked;',
 	'  - send `model` with your own model id, lowercased, on every stage;',
 	'  - send `input_tokens` / `output_tokens` / `cached_input_tokens` as running session totals when',
 	'    you can see them, and omit them when you cannot rather than guessing a number.',
@@ -170,18 +174,49 @@ function consentGranted() {
 	}
 }
 
-// One marker per host session, claimed with 'wx' so two hook processes racing on parallel tool calls
-// cannot both emit the floor.
-function claimSessionOnce(sessionId) {
+function stateDir() {
+	const dir = path.join(os.tmpdir(), 'caadt-telemetry-routing');
+	fs.mkdirSync(dir, { recursive: true });
+	return dir;
+}
+
+function markerPath(sessionId, suffix) {
+	const safeId = String(sessionId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 128) || 'unknown';
+	return path.join(stateDir(), `${safeId}.${suffix}`);
+}
+
+// Claimed with 'wx' so two hook processes racing on parallel tool calls cannot both act.
+function claimOnce(sessionId, suffix) {
 	try {
-		const stateDir = path.join(os.tmpdir(), 'caadt-telemetry-routing');
-		fs.mkdirSync(stateDir, { recursive: true });
-		const safeId = String(sessionId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 128) || 'unknown';
-		fs.writeFileSync(path.join(stateDir, `${safeId}.claimed`), '', { flag: 'wx' });
+		fs.writeFileSync(markerPath(sessionId, suffix), '', { flag: 'wx' });
 		return true;
 	} catch {
 		return false;
 	}
+}
+
+function releaseClaim(sessionId, suffix) {
+	try {
+		fs.rmSync(markerPath(sessionId, suffix), { force: true });
+	} catch {
+		// A marker we cannot clear only costs one skipped reminder.
+	}
+}
+
+// Tools that CHANGE the environment, by verb. A list of names would go stale against a clio release
+// that adds tools; the verb is the part of the naming convention that does not move.
+//
+// `clio-run` is deliberately NOT here: it is the generic executor, used for reads as often as writes,
+// so counting it as a write would spend the write reminder on an inspection. `clio-run-destructive`
+// is unambiguous and is included.
+const WRITE_VERBS = [
+	'create-', 'update-', 'delete-', 'remove-', 'add-', 'set-', 'install-', 'uninstall-',
+	'push-', 'sync-', 'compile-', 'restart', 'apply-', 'clio-run-destructive'
+];
+
+function isWriteTool(toolName) {
+	const bare = String(toolName).split('__').pop() ?? '';
+	return WRITE_VERBS.some(verb => bare.startsWith(verb));
 }
 
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
@@ -243,6 +278,18 @@ function emitFloorEvent(sessionId, usage) {
 
 function main() {
 	const payload = readStdin();
+	const sessionId = payload?.session_id;
+	if (!sessionId) {
+		return;
+	}
+	// A new user request is plausibly a new run, so the next clio call is allowed to route again.
+	// Nothing is emitted or said here: at prompt time there is no way to know the turn will touch
+	// Creatio at all, and telemetry routing injected into unrelated work is noise the model learns
+	// to skip. Clearing a claim is cheap; a reminder nobody needed is not.
+	if ((payload?.hook_event_name ?? '') === 'UserPromptSubmit') {
+		releaseClaim(sessionId, 'turn');
+		return;
+	}
 	const toolName = payload?.tool_name ?? '';
 	if (!toolName.includes('clio')) {
 		return;
@@ -250,10 +297,19 @@ function main() {
 	if (TELEMETRY_TOOLS.some(tool => toolName.endsWith(tool))) {
 		return;
 	}
-	// A random id is deliberately NOT generated here: the agent's later stages must land in the same
-	// session as this floor event, and the host session id is the one identifier both sides can see.
-	const sessionId = payload?.session_id;
-	if (!sessionId || !claimSessionOnce(sessionId)) {
+	// Two independent claims, because the floor and the routing answer different questions.
+	//
+	// The floor is once per host session: a second one would inflate the session count, which is the
+	// denominator the floor exists to provide.
+	//
+	// The routing recurs, because a single reminder per session was measured landing in the wrong
+	// place. One run's first clio call was `list-environments` — a read-only inspection that correctly
+	// reports nothing — so the session spent its only reminder there, and the mutating work that
+	// followed got none. Hence also once on the first WRITE of the session, even if this turn was
+	// already reminded.
+	const floorClaimed = claimOnce(sessionId, 'claimed');
+	const remind = claimOnce(sessionId, 'turn') || (isWriteTool(toolName) && claimOnce(sessionId, 'write'));
+	if (!floorClaimed && !remind) {
 		return;
 	}
 	if (!consentGranted()) {
@@ -261,9 +317,14 @@ function main() {
 		// hook would interrupt the developer's task with a question they did not ask for.
 		return;
 	}
-	// The reminder is emitted whether or not the floor call succeeded: if clio rejected it (an older
-	// clio, a broken install), the agent's own stages are then the only telemetry there is.
-	emitFloorEvent(sessionId, readSessionUsage(payload));
+	if (floorClaimed) {
+		// The reminder is emitted whether or not the floor call succeeded: if clio rejected it (an
+		// older clio, a broken install), the agent's own stages are then the only telemetry there is.
+		emitFloorEvent(sessionId, readSessionUsage(payload));
+	}
+	if (!remind) {
+		return;
+	}
 	const routing = routingOutput(sessionId);
 	if (routing) {
 		process.stdout.write(routing);

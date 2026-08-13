@@ -117,6 +117,16 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
             "the hook must be scoped to clio MCP tool calls",
         )
 
+        # Also on UserPromptSubmit, which is how one session's several runs each get routed: a
+        # new request reopens the per-turn claim. It takes NO matcher — the event carries no
+        # tool name — and the hook only clears state there, never speaks.
+        prompt_entries = manifest["hooks"]["UserPromptSubmit"]
+        prompt_commands = [hook["command"] for entry in prompt_entries for hook in entry["hooks"]]
+        self.assertTrue(
+            any("telemetry-routing.mjs" in command for command in prompt_commands),
+            "the hook must be wired into UserPromptSubmit so a later run in the session is routed too",
+        )
+
     def test_hook_directory_ships_with_the_plugin(self):
         # Hooks live in the plugin manifest, so ${CLAUDE_PLUGIN_ROOT}/hooks must be part of
         # the released payload. Without this entry the manifest would point at a file that
@@ -152,6 +162,10 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # the agent to skip it produced a real run recorded as a build with no start.
         self.assertIn("DO emit your own `workflow_started`", context)
         self.assertNotIn("do NOT emit workflow_started", context)
+        # One session carries several requests, and the routing now recurs across them — so it must
+        # also say where one run ends. Without this a second request closed the first one's funnel:
+        # a task that succeeded was recorded as blocked by the task that followed it.
+        self.assertIn("one run is one request", context)
         for workflow in ("classic-to-freedom-migration", "branding", "app-maintenance"):
             self.assertIn(workflow, context)
         self.assertIn("EVERY workflow", context)
@@ -170,19 +184,68 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         for stage in ("plan_approved", "workflow_completed", "changes_applied"):
             self.assertNotIn(stage, residue)
 
-    def test_stays_silent_on_later_calls_in_the_same_session(self):
-        # The floor is one event per session. Repeating it would inflate the session count
-        # and turn the reminder into noise the model learns to skip.
+    def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
+        # Repeating the routing on every clio call would turn it into noise the model learns
+        # to skip, and the floor is one event per session because it is the denominator.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
 
         run_hook({"session_id": session, "tool_name": "mcp__clio__clio-run"}, telemetry_home=home)
         second = run_hook(
-            {"session_id": session, "tool_name": "mcp__clio__update-page"}, telemetry_home=home
+            {"session_id": session, "tool_name": "mcp__clio__list-environments"},
+            telemetry_home=home,
         )
 
         self.assertEqual(second.returncode, 0)
         self.assertEqual(second.stdout.strip(), "")
+
+    def test_routes_again_on_the_first_write_of_the_session(self):
+        # A measured run began with `list-environments` — a read-only inspection that
+        # correctly reports nothing — so the session spent its only reminder there and the
+        # mutating work that followed reported nothing at all. The first write gets its own
+        # reminder even when this turn was already reminded.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-environments"},
+            telemetry_home=home,
+        )
+        write = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__update-entity-schema"},
+            telemetry_home=home,
+        )
+
+        self.assertEqual(write.returncode, 0)
+        self.assertIn(session, json.loads(write.stdout)["hookSpecificOutput"]["additionalContext"])
+
+        # ...but only the FIRST write. A reminder per write would be noise again.
+        second_write = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__update-page"}, telemetry_home=home
+        )
+        self.assertEqual(second_write.stdout.strip(), "")
+
+    def test_routes_again_after_a_new_user_prompt(self):
+        # One session carries several runs. The routing is per turn, because the run it
+        # describes is per request: a session whose reminder was spent on an earlier task left
+        # the next task with neither a floor nor a reminder, and that task reported nothing.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__clio-run"}, telemetry_home=home)
+        prompt = run_hook(
+            {"session_id": session, "hook_event_name": "UserPromptSubmit"}, telemetry_home=home
+        )
+        after = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__clio-run"}, telemetry_home=home
+        )
+
+        # The prompt hook itself says nothing: at prompt time there is no way to know the turn
+        # will touch Creatio, and routing injected into unrelated work is the noise above.
+        self.assertEqual(prompt.returncode, 0)
+        self.assertEqual(prompt.stdout.strip(), "")
+        self.assertEqual(after.returncode, 0)
+        self.assertIn(session, json.loads(after.stdout)["hookSpecificOutput"]["additionalContext"])
 
     def test_emits_nothing_at_all_without_stored_consent(self):
         # The decision is stored per installation, so a hook answering on the developer's
@@ -391,6 +454,28 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
         # workflow, so a real-looking value would be a guess presented as data — and an
         # omitted one would break the contract's own "always send workflow" rule.
         self.assertEqual(attributes["workflow"], "unattributed")
+
+        # The routing recurs (per turn, and on the first write) but the floor must NOT. A second
+        # floor event would inflate the very session count the floor exists to provide, so these
+        # later calls may speak and must not emit.
+        for later in ("mcp__clio__update-entity-schema", "mcp__clio__update-page"):
+            run_hook(
+                {"session_id": session, "tool_name": later, "transcript_path": write_transcript()},
+                telemetry_home=home,
+                clio=CLIO,
+            )
+        run_hook({"session_id": session, "hook_event_name": "UserPromptSubmit"}, telemetry_home=home)
+        run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "transcript_path": write_transcript(),
+            },
+            telemetry_home=home,
+            clio=CLIO,
+        )
+        events = glob.glob(os.path.join(home, "events", "*.json"))
+        self.assertEqual(len(events), 1, f"floor must stay once per session, got {events}")
 
 
 if __name__ == "__main__":
