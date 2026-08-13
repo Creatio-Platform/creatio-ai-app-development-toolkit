@@ -62,6 +62,10 @@ const reminder = sessionId => [
 	`A session start is ALREADY recorded for session_id="${sessionId}" (as workflow=${FLOOR_WORKFLOW},`,
 	'because a hook cannot know which flow a run is). From here:',
 	`  - reuse session_id="${sessionId}" for every telemetry event of this run;`,
+	'  - EXCEPT if you have already emitted stages for this run under a different session_id: keep that',
+	'    one to the end. Switching mid-run splits one run across two ids, and a measured run did exactly',
+	'    that — it left an abandoned start under the first id and a start-plus-completed under this one,',
+	'    so the funnel counted the run twice and one copy as never finished;',
 	'  - DO emit your own `workflow_started` under your real `workflow` as the first stage of the run.',
 	'    That is not a duplicate of the floor above: the unit of a run is the (session_id, workflow)',
 	'    pair, so each flow keeps its own start and its own elapsed-time measurements. A stage sent',
@@ -209,14 +213,43 @@ function releaseClaim(sessionId, suffix) {
 // `clio-run` is deliberately NOT here: it is the generic executor, used for reads as often as writes,
 // so counting it as a write would spend the write reminder on an inspection. `clio-run-destructive`
 // is unambiguous and is included.
+// Over-inclusion is the safe direction here and the list leans that way deliberately: a verb that is
+// not really a write costs one extra reminder per session, while a missing write costs a whole run's
+// telemetry. That is not hypothetical — `modify-` was absent from the first version of this list, so
+// `modify-entity-schema-column`, the most ordinary write in Creatio, did not count as one.
 const WRITE_VERBS = [
-	'create-', 'update-', 'delete-', 'remove-', 'add-', 'set-', 'install-', 'uninstall-',
-	'push-', 'sync-', 'compile-', 'restart', 'apply-', 'clio-run-destructive'
+	'create-', 'update-', 'modify-', 'delete-', 'remove-', 'add-', 'set-', 'install-', 'uninstall-',
+	'deploy-', 'push-', 'sync-', 'link-', 'unlink-', 'upload-', 'generate-', 'compile-', 'build-',
+	'apply-', 'enable-', 'disable-', 'clear-', 'restore-', 'start-', 'stop-', 'restart',
+	'clio-run-destructive'
 ];
 
-function isWriteTool(toolName) {
-	const bare = String(toolName).split('__').pop() ?? '';
-	return WRITE_VERBS.some(verb => bare.startsWith(verb));
+function bareTool(toolName) {
+	return String(toolName ?? '').split('__').pop() ?? '';
+}
+
+// The verb to judge is the one that actually runs, and on this server that is usually NOT the tool
+// name: clio advertises two executors (`clio-run`, `clio-run-destructive`) plus read-only tools, and
+// every mutation travels as the executor's `command` argument. Matching the tool name alone therefore
+// classified a schema edit as a read — measured, with `modify-entity-schema-column` arriving inside
+// `clio-run` and the write reminder never firing.
+function writeVerbSubject(payload) {
+	const bare = bareTool(payload?.tool_name);
+	if (bare === 'clio-run' || bare === 'clio-run-destructive') {
+		// The host passes the executor's own parameters, where `command` sits at the TOP level next to
+		// the command's `args` — captured from real payloads: {"command":"get-user-culture","args":{…}}.
+		// The nested form is accepted too, because the tool's schema wraps parameters in `args` and both
+		// shapes appear in practice; reading only the nested one classified every real write as a read.
+		const command = payload?.tool_input?.command ?? payload?.tool_input?.args?.command;
+		// A destructive executor with no readable command is still a write: that is what its name says.
+		return typeof command === 'string' && command ? command : bare;
+	}
+	return bare;
+}
+
+function isWriteCall(payload) {
+	const subject = writeVerbSubject(payload);
+	return WRITE_VERBS.some(verb => subject.startsWith(verb));
 }
 
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
@@ -308,7 +341,7 @@ function main() {
 	// followed got none. Hence also once on the first WRITE of the session, even if this turn was
 	// already reminded.
 	const floorClaimed = claimOnce(sessionId, 'claimed');
-	const remind = claimOnce(sessionId, 'turn') || (isWriteTool(toolName) && claimOnce(sessionId, 'write'));
+	const remind = claimOnce(sessionId, 'turn') || (isWriteCall(payload) && claimOnce(sessionId, 'write'));
 	if (!floorClaimed && !remind) {
 		return;
 	}

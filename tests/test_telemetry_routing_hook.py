@@ -166,6 +166,10 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # also say where one run ends. Without this a second request closed the first one's funnel:
         # a task that succeeded was recorded as blocked by the task that followed it.
         self.assertIn("one run is one request", context)
+        # And it must not provoke an id switch mid-run. The write reminder can only arrive after the
+        # agent has already opened its run, and a measured run obeyed a plain "reuse this id": it left
+        # an abandoned start under its own id plus a second start here, counting one run twice.
+        self.assertIn("keep that", context)
         for workflow in ("classic-to-freedom-migration", "branding", "app-maintenance"):
             self.assertIn(workflow, context)
         self.assertIn("EVERY workflow", context)
@@ -211,8 +215,19 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
             {"session_id": session, "tool_name": "mcp__clio__list-environments"},
             telemetry_home=home,
         )
+        # Through the EXECUTOR, which is how clio mutations actually arrive: the server advertises
+        # `clio-run`, `clio-run-destructive` and read-only tools, so the write verb is the `command`
+        # argument, never the tool name. Judging the tool name alone classified a live column edit as
+        # a read and the reminder never fired.
         write = run_hook(
-            {"session_id": session, "tool_name": "mcp__clio__update-entity-schema"},
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                # Real host shape, captured from a live payload: `command` at the TOP level beside
+                # the command's own `args`. Reading only the nested form classified every genuine
+                # write as a read, so no write reminder ever fired.
+                "tool_input": {"command": "modify-entity-schema-column", "args": {"environment-name": "x"}},
+            },
             telemetry_home=home,
         )
 
@@ -221,9 +236,46 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         # ...but only the FIRST write. A reminder per write would be noise again.
         second_write = run_hook(
-            {"session_id": session, "tool_name": "mcp__clio__update-page"}, telemetry_home=home
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "tool_input": {"args": {"command": "update-page"}},
+            },
+            telemetry_home=home,
         )
         self.assertEqual(second_write.stdout.strip(), "")
+
+    def test_a_read_through_the_executor_is_not_a_write(self):
+        # The executor carries reads too — that is exactly why `clio-run` itself cannot be treated as
+        # a write. A `get-` command must not consume the session's write reminder.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-environments"},
+            telemetry_home=home,
+        )
+        read = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "tool_input": {"command": "get-entity-schema-properties", "args": {}},
+            },
+            telemetry_home=home,
+        )
+
+        self.assertEqual(read.stdout.strip(), "")
+
+        # ...and the write that follows it still gets the reminder.
+        write = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "tool_input": {"args": {"command": "create-page"}},
+            },
+            telemetry_home=home,
+        )
+        self.assertIn(session, json.loads(write.stdout)["hookSpecificOutput"]["additionalContext"])
 
     def test_routes_again_after_a_new_user_prompt(self):
         # One session carries several runs. The routing is per turn, because the run it
