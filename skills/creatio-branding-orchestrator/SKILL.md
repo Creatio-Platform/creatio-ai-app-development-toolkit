@@ -107,23 +107,21 @@ the hex.
 Logos are optional but always offered, right after the palette is settled. Fetch
 `get-guidance name="branding"` from clio MCP and follow it — it owns the logo slots and where
 each one shows, the variant routing, the splash-screen handling, and the apply mechanics. Your
-job is the conversation: tell the user briefly that the product shows a logo in three places on
-a white background and one place on a dark top panel, so the ideal input is a main logo plus a
-white/light variant.
+job is the conversation: name the slots the way that guidance describes them, so the user knows
+the ideal input is a main logo plus a white/light variant for the dark top panel.
 
 - If the brand intake found a logo in the brandbook or on the site, offer to take it from there —
   ask for confirmation before extracting. On agreement, try to get an SVG logo with a transparent
   background: the main logo and, when it exists, its white/light variant. At least the main logo
   must come out of this path; if extraction fails, fall through to asking for files.
-- For the dark top panel, when the brand offers several variants, pick the white one (or a
-  white-filled one). If none exists, use the main logo and warn about low contrast.
+- When the brand offers several variants, take the white (or white-filled) one for the dark top
+  panel. If none exists, clio's branding guidance owns what happens next — follow it.
 - Sanitize every SVG before it is uploaded, whatever its source — files the user provides as
   well as logos taken from the web: strip scripts, event-handler attributes, and references to
   external resources, then check the cleaned file still renders the same logo. Nothing is
   uploaded as-is.
-- Otherwise ask the user to provide the files. SVG is recommended (raster formats also work); if
-  possible two variants — one for white backgrounds and one for the dark top panel. At least one
-  file must be provided for logos to be included.
+- Otherwise ask the user to provide the files. SVG is recommended (raster formats also work),
+  ideally both variants. At least one file must be provided for logos to be included.
 - The user can skip this step entirely — "no logos" is a valid outcome. Record the choice; the
   final summary must say whether logos will be changed or not.
 - If clio refuses an upload (the size cap and file-security policy live in clio's guidance),
@@ -185,10 +183,8 @@ hard limit and returns a clear error if the name is too long, which you relay.
   and background questions are in-flow choices like any color choice; there is one confirmation
   before building the theme (see below). That build confirmation covers the theme, which is a
   per-user change — it does **not** stand in for the environment-wide apply gate below.
-- Logo and background writes are environment-wide (they change the look for every user, including
-  pre-login surfaces), so they get their own explicit confirmation, distinct from the per-user
-  theme build. Do not fold them into the theme's single pre-build confirmation. See the
-  environment-wide apply gate in Build and apply.
+- Logo and background writes need their own explicit confirmation, separate from the theme build —
+  see the environment-wide apply gate in Build and apply.
 - Out of scope — advanced design tokens (borders, icons, states) and typography
   beyond font-family (font-weight, letter-spacing, font-size, line-height).
 
@@ -199,10 +195,12 @@ base (-500) colors (primary, secondary, accent, success, error) — each rendere
 swatch, not bare hex — any non-default font(s), and the theme name, plus a brief reminder of any
 color the user chose to keep despite a low-contrast warning. The recap must also state plainly
 whether the logos will be changed (and from which files) or left as they are, and whether a
-palette-matched background will be generated or not;
-show full stops or other detail only if asked. If the user wants to change something, return to
-the relevant block (primary / secondary / accent / success / error / logo / background / font /
-name) and re-present the summary.
+palette-matched background will be generated or not, and name the package the new branding data
+will be added to — choosing that package, checking it can take the data, and passing it to every
+apply is owned by clio's branding guidance (`get-guidance name="branding"`); follow it before
+presenting the recap and state the name it settles on. Show full stops or other detail only if
+asked. If the user wants to change something, return to the relevant block (primary / secondary /
+accent / success / error / logo / background / font / name / package) and re-present the summary.
 
 After the single final confirmation, follow clio's theming guidance to build the theme CSS from
 the collected inputs and create the theme on the environment. The build, the exact tool
@@ -219,6 +217,10 @@ assets unchanged and say so. The concrete tool mechanics live in clio's branding
 (`get-guidance name="branding"`) — follow it to write the logos and to set the recolored SVG as
 the shell background. Skipped logos or a declined background mean the corresponding apply simply
 does not happen.
+
+Close the flow by telling the user which package the branding data was added to — the package the
+recap named, since the same one goes to the theme, the logos, and the background. The logo and
+background applies name it in their own results; relay that and their warnings.
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
 other:
