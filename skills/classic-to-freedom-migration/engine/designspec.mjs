@@ -353,6 +353,12 @@ function listColumnLine(section) {
   const notes = (section.listColumnNotes || []).filter((n) => typeof n === "string" && n);
   const why = notes.length ? ` (${notes.map(esc).join("; ")})` : "";
   const cols = section.listColumns || [];
+  // An empty set has TWO distinct causes and the data already tells them apart: `null` means no resolver ever ran
+  // (nothing was parsed and no on-stand read was supplied), `"none"` means the resolver ran and found nothing.
+  // Rendering the second wording for the first asserts a resolution that never happened and names no remedy.
+  if (!cols.length && section.listColumnSource == null) {
+    return `- **List columns:** ⚠ NOT resolved — the section chain declared none and no on-stand read was supplied${why}, so the Classic column set is unknown (Classic also keeps each user's visible set as per-user list/profile data). Record a \`get-classic-list-columns\` response under \`manifest.section.listColumns\`, or bundle the \`*Section\` chain into \`manifest.section\`, then confirm which columns the Freedom list should show`;
+  }
   if (!cols.length) return `- **List columns:** ⚠ no default column set was resolved${why} — confirm which columns the Freedom list should show`;
   const rendered = cols.map(esc).join(" · ");
   if (section.listColumnSource === "entity-default") {

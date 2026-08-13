@@ -896,7 +896,9 @@ const RESOLVED_COLUMN_SOURCES = ["schema-default", "entity-default", "none"];
 // `success:false` for schema-not-found, incomplete metadata, an empty hierarchy, and any application-client
 // exception (network / auth / unreachable stand), i.e. environment and staleness conditions — exactly what a gate
 // is for. Throwing here would abort before any gate is computed and yield no plan at all. Only a manifest
-// AUTHORING error (a missing provenance anchor here; a missing `listColumns` key in `sectionInput`) stays loud.
+// AUTHORING error (a missing `listColumns` key in `sectionInput`) stays loud — a missing PROVENANCE anchor does
+// not, because `planMeta` is declared optional in the manifest header and SKILL.md's Known-Traps entry tells the
+// agent to add `section.listColumns` without mentioning `planMeta`, so following the docs must still yield a plan.
 // SHAPE + PROVENANCE: is this a well-formed response, and is it evidence for the section we are migrating?
 // Returns the gate reason, or null. Own fn so `normalizeResolvedListColumns` stays under Sonar CC 15 (S3776) and
 // each rejection is a separately named check rather than one condition guarding several distinct cases.
@@ -909,42 +911,59 @@ function resolvedColumnProvenanceIssue(value, expectedEntity, expectedSectionSch
   // hierarchy case-insensitively (`OrdinalIgnoreCase`), so `--schema-name applicant1section` legitimately returns
   // lowercase. Compare the way the producer resolves, or a casing difference reads as evidence for another section.
   const sameName = (a, b) => typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
-  if (!sameName(value.entity, expectedEntity) || !sameName(value.sectionSchema, expectedSectionSchema)) {
-    return `list-column evidence belongs to another section — expected ${expectedSectionSchema}/${expectedEntity}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}; re-run \`get-classic-list-columns\` for ${expectedSectionSchema}`;
+  // `manifest.entity` is the SECOND half of the anchor and is skipped when it is the parser's `"?"` stub: comparing
+  // good evidence against a stub would gate it as "belongs to another section". `sectionSchema` is what clio was
+  // actually asked for, so it always carries the comparison.
+  const anchoredEntity = typeof expectedEntity === "string" && expectedEntity.trim() && expectedEntity.trim() !== "?"
+    ? expectedEntity : null;
+  if ((anchoredEntity && !sameName(value.entity, anchoredEntity)) || !sameName(value.sectionSchema, expectedSectionSchema)) {
+    return `list-column evidence belongs to another section — expected ${expectedSectionSchema}/${anchoredEntity ?? "any entity"}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}; re-run \`get-classic-list-columns\` for ${expectedSectionSchema}`;
   }
   return null;
 }
 
-// The COLUMN SET itself: every path usable, and the count consistent with the DECLARED source (`none` ⇒ empty,
-// anything else ⇒ non-empty). Three separate checks, each naming what it received. Returns the gate reason, or null.
-function resolvedColumnSetIssue(source, columns) {
-  const bad = columns.findIndex((name) => typeof name !== "string" || !RESOLVED_COLUMN_PATH.test(name));
-  if (bad !== -1) {
-    return `list-column evidence carries an unusable column path at index ${bad}: ${JSON.stringify(columns[bad] ?? null)} — re-run \`get-classic-list-columns\``;
+// The COLUMN SET itself: every entry usable, and the count consistent with the DECLARED source (`none` ⇒ empty,
+// anything else ⇒ non-empty). Returns `{ error }` or the deduped `{ columns }`.
+// Entries are validated in the RESPONSE's OWN order and reported with the RESPONSE's OWN index, because the message
+// is a gate reason rendered into `plan.md` that tells the user to re-read `columns` — an index into a deduped,
+// name-mapped array would point at a different entry. A SHAPE defect (neither a string nor an object carrying
+// `name`) gets its own message: reporting it as an unusable *path* describes the wrong defect.
+function resolvedColumnSet(source, entries) {
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const name = typeof entry === "string" ? entry : entry?.name;
+    if (typeof name !== "string") {
+      return { error: `list-column evidence carries a malformed entry at index ${i}: ${JSON.stringify(entry ?? null)} — every entry must be a column-path string or an object carrying \`name\` — re-run \`get-classic-list-columns\`` };
+    }
+    if (!RESOLVED_COLUMN_PATH.test(name)) {
+      return { error: `list-column evidence carries an unusable column path at index ${i}: ${JSON.stringify(name)} — re-run \`get-classic-list-columns\`` };
+    }
   }
+  // Dedupe AFTER the per-entry checks, so repeats never read as rejected entries and never shift a reported index.
+  const columns = [...new Set(entries.map((entry) => typeof entry === "string" ? entry : entry.name))];
   if (source !== "none" && !columns.length) {
-    return `list-column evidence declares source '${source}' but carries no columns — re-run \`get-classic-list-columns\``;
+    return { error: `list-column evidence declares source '${source}' but carries no columns — re-run \`get-classic-list-columns\`` };
   }
   if (source === "none" && columns.length) {
-    return `list-column evidence declares source 'none' but carries ${columns.length} column(s): ${columns.join(", ")} — re-run \`get-classic-list-columns\``;
+    return { error: `list-column evidence declares source 'none' but carries ${columns.length} column(s): ${columns.join(", ")} — re-run \`get-classic-list-columns\`` };
   }
-  return null;
+  return { columns };
 }
 
 function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSchema) {
+  // The ANCHOR is checked FIRST, before `success`, so how the failure is classified never depends on whether the
+  // stand happened to be reachable.
+  if (typeof expectedSectionSchema !== "string" || !expectedSectionSchema.trim()) {
+    return { error: "list-column evidence cannot be verified: `planMeta.sectionSchema` is not set, so there is nothing to check its provenance against — set `planMeta.sectionSchema` to the section schema the evidence was read for, or drop `section.listColumns` to fall back to the section-chain parse" };
+  }
   if (value?.success !== true) {
     return { error: `list-column read failed: ${value?.error || "get-classic-list-columns did not return success:true"} — fix the cause and re-run \`get-classic-list-columns\`, or drop \`section.listColumns\` to fall back to the section-chain parse` };
   }
-  if (typeof expectedEntity !== "string" || !expectedEntity
-    || typeof expectedSectionSchema !== "string" || !expectedSectionSchema) {
-    throw new Error("section.listColumns requires manifest.entity and planMeta.sectionSchema to verify its provenance");
-  }
   const provenance = resolvedColumnProvenanceIssue(value, expectedEntity, expectedSectionSchema);
   if (provenance) return { error: provenance };
-  // Dedupe BEFORE the count checks, so repeats never read as rejected entries.
-  const columns = [...new Set(value.columns.map((column) => typeof column === "string" ? column : column?.name))];
-  const set = resolvedColumnSetIssue(value.source, columns);
-  if (set) return { error: set };
+  const set = resolvedColumnSet(value.source, value.columns);
+  if (set.error) return { error: set.error };
+  const columns = set.columns;
   return {
     source: value.source,
     columns,
@@ -990,12 +1009,24 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
   }
   const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
   // `[]` is not nullish, so `??` would let an EMPTY resolved set silently discard a chain parse that did find
-  // columns. Prefer the resolved set only when it actually carries columns; when the two DISAGREE (clio resolved
-  // `none` while the chain declares columns) keep the parsed set and say so, rather than dropping either side.
-  const useResolved = (resolvedListColumns?.columns || []).length > 0;
+  // columns. Prefer the resolved set only when it actually carries columns — AND only when it is not the
+  // `entity-default` fallback while the chain found something. clio returns `entity-default` (the entity's primary
+  // display column, exactly one) precisely BECAUSE the section schema declared none; when our own parse of that
+  // chain did find columns, the fallback is the weaker evidence, and preferring it would make the rendered line
+  // state the Classic section declares no list columns while this run holds a parse that says otherwise.
+  const resolvedColumns = resolvedListColumns?.columns || [];
+  const useResolved = resolvedColumns.length > 0
+    && !(resolvedListColumns.source === "entity-default" && chainColumns.length > 0);
   const notes = [...(resolvedListColumns?.notes || [])];
-  if (resolvedListColumns && !useResolved && chainColumns.length) {
-    notes.push(`the on-stand read resolved no default column set (source: ${resolvedListColumns.source}) while the section schema chain declares ${chainColumns.join(", ")} — the parsed set is shown; confirm on-stand which columns the list really shows`);
+  // The disagreement note is SYMMETRIC — whichever side ends up shown, the other side's finding is reported rather
+  // than dropped, so the plan never asserts one reading while the run holds contrary evidence.
+  const sameColumns = resolvedColumns.length === chainColumns.length
+    && resolvedColumns.every((column, i) => column === chainColumns[i]);
+  if (resolvedListColumns && chainColumns.length && !sameColumns) {
+    const onStand = resolvedColumns.length
+      ? `${resolvedColumns.join(", ")} (source: ${resolvedListColumns.source})`
+      : `no default column set (source: ${resolvedListColumns.source})`;
+    notes.push(`the on-stand read resolved ${onStand} while the section schema chain declares ${chainColumns.join(", ")} — ${useResolved ? "the on-stand" : "the parsed"} set is shown; confirm on-stand which columns the list really shows`);
   }
   return {
     schemaGathered: sectionSchemas.length > 0,

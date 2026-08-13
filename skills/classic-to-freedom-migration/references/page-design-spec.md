@@ -38,7 +38,7 @@ HTML or a rendered artifact.
 
 ### List page
 - **Add record:** via mini page `<MiniPage>` (folded under `### Add mini-page mapping`) / full edit page — verified / ⚠ NOT verified (resolve from `list-entity-client-schemas` `miniPageSchema`; the engine never assumes "none")
-- **List columns:** <col> · <col> · … — the wording follows the resolved PROVENANCE: a `schema-default` set narrows the question ("the Classic list shows these columns; confirm this set is kept in Freedom"), an `entity-default` set is prefixed ⚠ and qualified as a single fallback column the Classic section never declared (with the resolver's own note in parentheses), and no resolved set keeps the open ⚠ question
+- **List columns:** <col> · <col> · … — the wording follows the resolved PROVENANCE: a `schema-default` set narrows the question ("the Classic list shows these columns; confirm this set is kept in Freedom"), an `entity-default` set is prefixed ⚠ and qualified as a single fallback column the Classic section never declared (with the resolver's own note in parentheses), and an empty set keeps the ⚠ question, distinguishing "the resolver ran and found nothing" (`none`) from "no resolver ran at all" (⚠ NOT resolved — which also names the remedy)
 - **Quick filters:** `<FilterName>` (<column>, <TYPE>) · … — rebuild as the Freedom list-page filter / quick-filter controls (from the section's `initFixedFiltersConfig`; omitted when the section defines none)
 - **Section actions:** `<action>` · … — migrate as Freedom list-page actions
 
