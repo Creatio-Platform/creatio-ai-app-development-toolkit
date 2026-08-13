@@ -146,10 +146,12 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # The session id must be handed over: the agent's stages have to land in the same
         # telemetry session as the floor event, or the two cannot be joined.
         self.assertIn(session, context)
-        # And the agent must be told NOT to re-send the start. clio keeps the session start
-        # in a map keyed by event name, so a second one overwrites the anchor and every
-        # elapsed-time measurement in the session shifts with it.
-        self.assertIn("do NOT emit workflow_started again", context)
+        # And the agent must be told TO open its own start under its real workflow. clio keys
+        # session state by the (session_id, workflow) pair, so that start is not a duplicate of
+        # the floor's `unattributed` one — it is what gives the run a beginning at all. Telling
+        # the agent to skip it produced a real run recorded as a build with no start.
+        self.assertIn("DO emit your own `workflow_started`", context)
+        self.assertNotIn("do NOT emit workflow_started", context)
         for workflow in ("classic-to-freedom-migration", "branding", "app-maintenance"):
             self.assertIn(workflow, context)
         self.assertIn("EVERY workflow", context)
@@ -163,7 +165,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # The per-flow counter-example must survive; it is what stops the invented name.
         self.assertIn("migration_plan_approved", context)
         residue = context.replace("migration_plan_approved", "").replace(
-            "do NOT emit workflow_started again", ""
+            "DO emit your own `workflow_started`", ""
         )
         for stage in ("plan_approved", "workflow_completed", "changes_applied"):
             self.assertNotIn(stage, residue)

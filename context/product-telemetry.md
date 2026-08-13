@@ -49,6 +49,13 @@ Two rules that decide *when*, and that this table depends on:
 
 - **Emit at the point named, not batched at the end.** A stage recorded after the fact cannot show
   where a run stopped, which is the whole point of a funnel.
+- **`work_item_completed` is per unit, and a run that changed anything sends at least one.** One event
+  per created or applied unit — a schema, a column, a page, a section, a mobile page, a registration —
+  each with its own `variant`, at the moment that unit is verified. Not one summary event, and never
+  zero. Measured runs skipped it exactly when there was most to report: runs that applied two, three
+  and seven units sent none, so their terminal stage claims a finished workflow with no evidence of
+  what it produced. `workflow_completed` says a run ended; only `work_item_completed` says how much
+  it delivered, and per-unit counts are what separate a real build from a one-line edit.
 - **`workflow_started` goes at the first user input of the flow**, and it is also the call that
   persists a first-run consent decision — see the guidance article for that interaction.
 

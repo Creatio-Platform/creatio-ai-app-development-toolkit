@@ -44,8 +44,9 @@ stage from memory. Send the Analytics Context values above on every event.
 - **Full app generation or business-shaped feature work** → `workflow: "app-creation"`. Map the stages onto
   this flow's gates: `plan_presented` when the BA-style Business Plan is shown in full, `plan_approved` at
   Gate R, `build_started` once runtime context is available, `work_item_completed` per created
-  section/page. The legacy `session_started` / `business_plan_*` / `implementation_*` names still work but
-  are deprecated — prefer the stages.
+  section/page. Do NOT send the legacy `session_started` / `business_plan_*` / `implementation_*` names:
+  clio still accepts them so an older installed toolkit keeps reporting, but a run that sends them is
+  invisible to every funnel built on the stages — it has no `workflow_started` to be counted from.
 - **A targeted, implementation-ready change** to an existing app → `workflow: "app-maintenance"`, with
   `plan_skipped` at the start to make the skipped planning explicit. These runs skip Gate P/R, so they have
   no approval stage — but they are not exempt from telemetry, which is exactly the gap this closes.
