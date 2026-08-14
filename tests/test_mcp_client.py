@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from runtime.scripts import mcp_client
 from runtime.scripts.mcp_client import (
     PersistentMcpClient,
     USAGE,
@@ -140,6 +141,22 @@ class McpClientTests(unittest.TestCase):
         cache_patcher = patch("runtime.scripts.mcp_client._TOOL_CONTRACT_CACHE", {"key": None, "contracts": None})
         self.addCleanup(cache_patcher.stop)
         cache_patcher.start()
+
+    def test_resolve_clio_cmd_keeps_a_path_with_spaces_whole(self):
+        # Windows' default install location contains a space, and CLIO_CMD is commonly a bare path.
+        # Splitting the value first turned `C:\Program Files\...\clio.exe` into `C:\Program` plus a
+        # stray argument, and clio was then reported as not installed on a machine where it was.
+        # `sys.executable` is a real file with a space in its path on this machine.
+        with patch.dict(os.environ, {"CLIO_CMD": sys.executable}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), [sys.executable])
+        with patch.dict(os.environ, {"CLIO_CMD": f'"{sys.executable}"'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), [sys.executable])
+
+    def test_resolve_clio_cmd_still_splits_the_documented_two_token_form(self):
+        # `dotnet /path/to/clio.dll` must keep splitting: that string is not itself a file, so the
+        # whole-path shortcut above must not swallow it.
+        with patch.dict(os.environ, {"CLIO_CMD": "dotnet C:/nowhere/clio.dll"}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/nowhere/clio.dll"])
 
     def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
         client = PersistentMcpClient()

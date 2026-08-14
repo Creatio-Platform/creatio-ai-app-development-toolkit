@@ -61,6 +61,16 @@ class _HelpRequested(Exception):
 def _resolve_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
     if env_cmd:
+        # A bare path to the executable, spaces and all, is ONE token — checked before any splitting.
+        # Windows' default install location contains a space, so splitting first turned
+        # `C:\Program Files\...\clio.exe` into `C:\Program` plus a stray argument and reported clio as
+        # not installed. The multi-token form (`dotnet /path/to/clio.dll`) is unaffected: that string is
+        # not itself a file, so it falls through to the split below.
+        bare = env_cmd
+        if len(bare) > 1 and bare[0] == bare[-1] and bare[0] in "\"'":
+            bare = bare[1:-1]
+        if bare and Path(bare).exists():
+            return [bare]
         if sys.platform == "win32":
             parts = shlex.split(env_cmd, posix=False)
             parts = [p[1:-1] if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")) else p for p in parts]
