@@ -127,6 +127,16 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
             "the hook must be wired into UserPromptSubmit so a later run in the session is routed too",
         )
 
+        # And on Stop, which is the only point where a true consumption total exists. Without this
+        # registration the token counters are reported once per session at its very first clio call,
+        # when consumption is near zero — technically true and analytically useless.
+        stop_entries = manifest["hooks"]["Stop"]
+        stop_commands = [hook["command"] for entry in stop_entries for hook in entry["hooks"]]
+        self.assertTrue(
+            any("telemetry-routing.mjs" in command for command in stop_commands),
+            "the hook must be wired into Stop so the session's consumption is reported",
+        )
+
     def test_hook_directory_ships_with_the_plugin(self):
         # Hooks live in the plugin manifest, so ${CLAUDE_PLUGIN_ROOT}/hooks must be part of
         # the released payload. Without this entry the manifest would point at a file that
@@ -281,6 +291,67 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
             telemetry_home=home,
         )
         self.assertIn(session, json.loads(write.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    def test_says_nothing_on_stop(self):
+        # Stop reports consumption as a side effect; it must not inject routing into a session that
+        # is already finishing, and it must not speak to the user.
+        session = str(uuid.uuid4())
+
+        stop = run_hook(
+            {
+                "session_id": session,
+                "hook_event_name": "Stop",
+                "transcript_path": write_transcript(),
+            },
+            telemetry_home=telemetry_home("granted"),
+        )
+
+        self.assertEqual(stop.returncode, 0)
+        self.assertEqual(stop.stdout.strip(), "")
+
+    def test_reports_session_usage_once_and_not_when_re_entered(self):
+        # The measurement is once per host session. `stop_hook_active` means the host re-entered its
+        # own Stop, which would otherwise double-report the same totals.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        first = run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": write_transcript()},
+            telemetry_home=home,
+        )
+        reentered = run_hook(
+            {
+                "session_id": session,
+                "hook_event_name": "Stop",
+                "stop_hook_active": True,
+                "transcript_path": write_transcript(),
+            },
+            telemetry_home=home,
+        )
+
+        self.assertEqual(first.returncode, 0)
+        self.assertEqual(reentered.returncode, 0)
+        markers = glob.glob(os.path.join(_TMP, "caadt-telemetry-routing", f"{session}.usage"))
+        self.assertEqual(len(markers), 1, "the session measurement must be claimed exactly once")
+
+    def test_reports_no_session_usage_without_a_readable_transcript(self):
+        # A row of zeroes is indistinguishable from a session that genuinely spent nothing, and this
+        # event exists only to carry the numbers — so with no transcript there is nothing to report.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "hook_event_name": "Stop",
+                "transcript_path": os.path.join(_TMP, "caadt-no-such-transcript.jsonl"),
+                "cwd": _TMP,
+            },
+            telemetry_home=home,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(glob.glob(os.path.join(home, "events", "*.json")), [])
 
     def test_routes_again_after_a_new_user_prompt(self):
         # One session carries several runs. The routing is per turn, because the run it
@@ -533,6 +604,40 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
         )
         events = glob.glob(os.path.join(home, "events", "*.json"))
         self.assertEqual(len(events), 1, f"floor must stay once per session, got {events}")
+
+    def test_records_the_sessions_consumption_through_clio(self):
+        # End to end against the real clio: `session_usage` must be in its allow-list, or the one event
+        # that carries real token totals is rejected and the numbers exist nowhere. Measured: across 52
+        # agent-emitted events, zero carried a counter — an agent cannot see its own running totals.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "hook_event_name": "Stop",
+                "transcript_path": write_transcript(),
+            },
+            telemetry_home=home,
+            clio=CLIO,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        events = glob.glob(os.path.join(home, "events", "*.json"))
+        self.assertEqual(len(events), 1, f"expected exactly one session measurement, got {events}")
+        stored = json.loads(Path(events[0]).read_text(encoding="utf-8-sig"))
+        attributes = {
+            item["key"]: next(iter(item["value"].values())) for item in stored["attributes"]
+        }
+        self.assertEqual(stored["event_name"], "session_usage")
+        # Summed across the session's assistant turns, not just the latest one.
+        self.assertEqual(int(attributes["input_tokens"]), 30)
+        self.assertEqual(int(attributes["output_tokens"]), 7)
+        self.assertEqual(int(attributes["cached_input_tokens"]), 1200)
+        self.assertEqual(attributes["model"], "claude-opus-5")
+        # Session-scoped, so it carries the same reserved value as the floor: it reports on the whole
+        # session and belongs to no single flow.
+        self.assertEqual(attributes["workflow"], "unattributed")
 
 
 if __name__ == "__main__":

@@ -260,7 +260,7 @@ function isWriteCall(payload) {
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
 // line-oriented and processes the messages in order, so the whole exchange fits in a single
 // spawnSync without an async client.
-function emitFloorEvent(sessionId, usage) {
+function emitEvent(sessionId, usage, eventName) {
 	const request = [
 		{
 			jsonrpc: '2.0',
@@ -286,7 +286,7 @@ function emitFloorEvent(sessionId, usage) {
 						command: 'send-telemetry',
 						args: {
 							session_id: sessionId,
-							event_name: 'workflow_started',
+							event_name: eventName,
 							workflow: FLOOR_WORKFLOW,
 							coding_agent: CODING_AGENT,
 							plugin_version: PLUGIN_VERSION,
@@ -318,6 +318,27 @@ function main() {
 	const payload = readStdin();
 	const sessionId = payload?.session_id;
 	if (!sessionId) {
+		return;
+	}
+	// End of the host session: report what it consumed. This is the ONLY place a true total exists —
+	// measured, across 52 agent-emitted events not one carried a token counter, because an agent cannot
+	// see its own running totals. The host's transcript can, and at Stop it is complete.
+	//
+	// Emitted as `session_usage`, a measurement rather than a funnel stage: it marks no progress, it
+	// belongs to the session and not to any one flow, and it must never be counted as a run.
+	//
+	// Guarded by `stop_hook_active` so a Stop that the host itself re-entered cannot double-report, and
+	// by its own once-per-session claim.
+	if ((payload?.hook_event_name ?? '') === 'Stop') {
+		if (payload?.stop_hook_active || !claimOnce(sessionId, 'usage') || !consentGranted()) {
+			return;
+		}
+		const usage = readSessionUsage(payload);
+		// Nothing worth reporting if the transcript was unreadable: a row of zeroes is indistinguishable
+		// from a session that genuinely spent nothing, and this event exists only to carry the numbers.
+		if (usage.output_tokens > 0 || usage.input_tokens > 0) {
+			emitEvent(sessionId, usage, 'session_usage');
+		}
 		return;
 	}
 	// A new user request is plausibly a new run, so the next clio call is allowed to route again.
@@ -358,7 +379,7 @@ function main() {
 	if (floorClaimed) {
 		// The reminder is emitted whether or not the floor call succeeded: if clio rejected it (an
 		// older clio, a broken install), the agent's own stages are then the only telemetry there is.
-		emitFloorEvent(sessionId, readSessionUsage(payload));
+		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started');
 	}
 	if (!remind) {
 		return;
