@@ -129,6 +129,20 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      list-row, tabbed-page ordering, adaptive-layout, tab-body/Area, normalization, and data-section-diff
      details all live in the article. Persist the body and data sections with `update-page` (always with
      `target-schema-uid=<create-page schemaUId>`, per the create-page step).
+     - **The FAB entries are SYNTHESIZED — they carry no `webName`.** The header-button → FAB pass
+       (`guide.fabConversion`) adds them, so a loop keyed on `webName` skips them silently. Read
+       `guide.fabConversion.emission` to know which shape the map contains and apply exactly that shape
+       verbatim: `insert` — one entry per converted item into `targetName`'s `menuItems`, where the
+       template's own items (Copy/Delete) are INHERITED and come first, so never re-emit them; `merge` —
+       ONE entry carrying the complete `floatAction` onto the Scaffold (`targetName`), emitted only for a
+       template with no targetable FAB of its own. **Never author a `floatAction` merge yourself:** when
+       the template already owns `floatAction`, the platform diff applier silently drops the merged
+       property and the items never reach the compiled page (the symptom is orphaned `*FabMenuItem_caption`
+       resource strings with no menu items). `targetAssumed: true` means the template's own FAB could not
+       be resolved and the inserts target the standard FAB name — they stay additive, but say so in the
+       report and verify the menu at runtime. When `fabConversion` is present with `emission: null` and no
+       FAB entry in the map, EVERY candidate was dropped: there is nothing to apply (a guide constraint
+       says so) — report `droppedItems` anyway. The per-field mechanics live in the guidance article.
    - Run `validate-page` and resolve findings before treating the page as done (undeclared bindings, a
      lookup-path attribute missing its `type`, a field missing its caption `label`). It is the backstop
      that blocks the save when a required property was dropped — the article details what it enforces.
@@ -230,6 +244,24 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   (`guide.tabAreaLayers`) or normalized properties (`guide.normalizations`), state each as ONE aggregated
   plain-language line. Per the guidance article these are FACTS to report at the gate, not decisions — never
   offer to skip them. Omit when the field is absent.
+- **Header buttons → FAB** (`guide.fabConversion`, when present) — state as a fact: *"MainHeader buttons →
+  FAB menu items (N), appended after the template's own items; the rest of the web header is not supported
+  by the mobile layout"*, and list `guide.fabConversion.droppedItems` with their reasons. Note the FAB is
+  metadata-only (`Scaffold.floatAction`) and is NOT visible in Mobile Designer — expected, not a defect.
+  When `items` is empty and `emission` is null, say plainly that the header contributed NO FAB item and
+  what was lost with it (each `droppedItems` reason). When `targetAssumed` is true, say the template's own
+  FAB could not be read, so the items target the standard FAB and the menu needs a runtime check.
+  Like `tabAreaLayers` this is a FACT, not a decision — never offer to skip it. Omit when the field is
+  absent.
+- **Header/template chrome excluded** (`guide.excludedComponents`, when present) — state as a fact: the
+  mobile template already provides equivalent header/scaffold chrome, so source header content that did
+  NOT become a FAB item is not carried over. Split by `isContainer`/`container`: entries that are the web
+  template's own chrome (page title, back button) are replaced by the mobile template, not a loss —
+  report those separately from page-added components (e.g. an unconverted print/order button) that are
+  genuinely dropped, per HARD MOBILE RULES as *"the Creatio Mobile app does not support this layout."*
+  Cross-reference `guide.fabConversion.items` — a button that became a FAB item is deliberately absent
+  here, already accounted for in the FAB fact above. Like `tabAreaLayers` this is a FACT, not a decision
+  — never offer to skip it. Omit when the field is absent.
 - **Manual follow-ups** — page-level business rules are converted in `guide.pageBusinessRules` and
   re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests: supported ones are baked
   into `mobileValues` (`guide.requestConversions`); components whose request the mobile app does not support are
@@ -260,6 +292,22 @@ After `validate-page`, deliver a report:
   (`convertedRequests`, remapped where the mobile name differs). Components whose request the mobile app does
   NOT support were **dropped entirely** (their `elementMap` entry is `drop`, reason names the request) — list
   those removed action components for the developer.
+- **Header buttons → FAB:** from `guide.fabConversion` — which header buttons became FAB menu items
+  (`items[]`, with their web→mobile requests and flattened-menu origins), where they landed (`emission`
+  `insert`/`merge` on `targetName`, plus the runtime-check note when `targetAssumed` is true), and which
+  candidates were dropped (`droppedItems[]` with reasons — a dead menu item is not shipped, and neither is
+  one whose web visibility condition could not be reproduced; those actions stay manual). Remind that the
+  FAB config lives only in `Scaffold.floatAction` metadata and is not visible in Mobile Designer
+  (expected). A converted button is deliberately ABSENT from `guide.excludedComponents` — this section is
+  where it is accounted for, so report both lists or a button looks unreported; the header's non-button
+  content is reported with the exclusions ("the Creatio Mobile app does not support this layout").
+- **Header/template chrome excluded:** from `guide.excludedComponents` — which components were dropped
+  because they live inside the web template's non-converting container(s), split by `isContainer`/
+  `container` into template chrome the mobile template already replaces (page title, back button — not
+  a loss) versus page-added components genuinely lost (e.g. an unconverted print/order button), reported
+  as *"the Creatio Mobile app does not support this layout."* Report this list together with
+  `guide.fabConversion.droppedItems`/`items` — a converted FAB button is deliberately absent from
+  `excludedComponents`, so reporting only one list leaves the other's components looking unaccounted for.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet), and whether the developer adjusted or declined it (both sides were applied
   via the pasted `mobileValues` — nothing separate).
@@ -281,10 +329,20 @@ live in the `freedom-page-web-to-mobile-conversion` guidance article — do not 
 - **Page-level business rules ARE converted** in `guide.pageBusinessRules`; recreate each
   `convertedRules[].rule` verbatim with `create-page-business-rule` on the mobile page (step 7c).
   **Object-/entity-level business rules are shared** across web and mobile — do NOT touch them.
-- **Requests, adaptive layout, tab bodies, and normalized properties are handled by the converter** and
-  baked into `guide.elementMap` / `mobileValues`; the advisory summaries live on the guide
-  (`guide.requestConversions`, `guide.adaptiveLayout`, `guide.tabAreaLayers`, `guide.normalizations`).
-  Present the proposals/facts at the gate (see "Conversion plan"); the article owns how they apply.
+- **Requests, adaptive layout, tab bodies, header-button FAB items, excluded header chrome, and
+  normalized properties are handled by the converter** and baked into `guide.elementMap` /
+  `mobileValues`; the advisory summaries live on the guide (`guide.requestConversions`,
+  `guide.adaptiveLayout`, `guide.tabAreaLayers`, `guide.fabConversion`, `guide.excludedComponents`,
+  `guide.normalizations`). Present the proposals/facts at the gate (see "Conversion plan"); the article
+  owns how they apply.
+- **Header/template chrome dropped via `guide.excludedComponents` stays dropped** — never re-add header
+  content to the markup and never touch the FAB's own `visible`; the mobile template already provides
+  the equivalent chrome. A component in this list is expected exclusion, not a bug to fix.
+- **The FAB is applied only in the shape the element map already carries** (`emission` = `insert` into the
+  template FAB's `menuItems`, or `merge` onto the Scaffold). Never hand-author a `floatAction` merge and
+  never re-emit the template's own menu items — when the template owns `floatAction`, the platform diff
+  applier silently drops a merged one and the converted items never reach the compiled page. The FAB is
+  page metadata, so it is invisible in Mobile Designer — expected, not a defect.
 - One data source per page. If the web page used several (see `guide.dataSources`), keep only the primary one.
 - Apply the data sections by pasting `guide.modelConfigDiff` / `guide.viewModelConfigDiff` verbatim — never
   reconstruct attributes by hand and never source them from a pre-existing body (the article explains why).
