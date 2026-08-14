@@ -313,6 +313,21 @@ function buildLogicRows(cs) {
   return logic;
 }
 
+// The `#### Logic` section. Rendered whenever the page has rules OR methods: a missing section reads as "the engine
+// dropped the rules", not as "there are none", so an all-imperative page states the absence and points at the method
+// worklist instead. Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
+function renderLogicSection(cs) {
+  const logic = buildLogicRows(cs);
+  const stubCount = (cs.handlerStubs || []).length;
+  if (!logic.length && !stubCount) return [];
+  const table = logic.length
+    ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
+      ...logic.map((row) => `| ${row.join(" | ")} |`)]
+    : ["> No declarative business rules or lookup filters on this page."];
+  const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Imperative logic** below.`] : [];
+  return ["#### Logic", ...table, ...pointer, ""];
+}
+
 // The "Add record" line: which mini page (folded / cyclic / not-folded), a verified full edit page, or unverified.
 function addRecordDescription(result) {
   const mp = result.miniPage;
@@ -571,22 +586,7 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
   }
 
-  // ---- Logic (behaviour): declarative business rules FIRST, then entity filters, process launch ----
-  // Renders whenever the page has rules OR methods: a missing section reads as "the engine dropped the rules", not
-  // as "there are none", so an all-imperative page states the absence and points at the method worklist.
-  const logic = buildLogicRows(cs);
-  const stubCount = (cs.handlerStubs || []).length;
-  if (logic.length || stubCount) {
-    L.push("#### Logic");
-    if (logic.length) {
-      L.push("| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |");
-      for (const row of logic) L.push(`| ${row.join(" | ")} |`);
-    } else {
-      L.push("> No declarative business rules or lookup filters on this page.");
-    }
-    if (stubCount) L.push("", `> ${stubCount} custom method(s) — see **⚠ Imperative logic** below.`);
-    L.push("");
-  }
+  L.push(...renderLogicSection(cs));
 
   // ---- Base-field overrides — base fields the Freedom template already provides, that a CLIENT schema
   // reconfigured (hid / moved). The parallel-analog build does NOT re-create base fields, so these are CONCRETE

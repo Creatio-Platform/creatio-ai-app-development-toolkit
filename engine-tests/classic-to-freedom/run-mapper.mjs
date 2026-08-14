@@ -3067,7 +3067,7 @@ const evid = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: EVID_BOD
 const evStub = (m) => evid.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
 const evPlan = renderPlan(evid, {});
 // the Method cell may carry a `↳` fold marker, so match on the cell's CONTENT, not on the raw line prefix
-const evCell = (m) => (evPlan.split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replace(/↳/g, "").trim() === m) || "").split("|")[4]?.trim();
+const evCell = (m) => (evPlan.split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
 
 check("category: a suggestive method name (on…Changed / init…) derives no category — `unclassified`",
   evStub("onThingChanged").category === "unclassified" && evStub("initSomething").category === "unclassified",
@@ -3090,7 +3090,7 @@ const nsRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
   { baseDir: FIX });
 const nsPlan = renderPlan(nsRun, {});
-const nsCell = (m) => (nsPlan.split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replace(/↳/g, "").trim() === m) || "").split("|")[4]?.trim();
+const nsCell = (m) => (nsPlan.split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
 check("body does: `Terrasoft.*` predicates are noise too, not only their `Ext.*` twins",
   nsCell("tsPredicates") === "⚠ nothing recognised", () => nsCell("tsPredicates"));
 check("body does: a call that gates on the USER is not noise — it stays visible as unclassified",
@@ -3103,7 +3103,7 @@ const capRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
   { baseDir: FIX });
 // Match the Method CELL exactly, like evCell/nsCell — `includes` would take the first line anywhere naming it.
-const capCell = (renderPlan(capRun, {}).split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replace(/↳/g, "").trim() === "manyUnknowns") || "").split("|")[4]?.trim();
+const capCell = (renderPlan(capRun, {}).split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replaceAll("↳", "").trim() === "manyUnknowns") || "").split("|")[4]?.trim();
 check("body does: the unclassified list states its overflow instead of truncating silently",
   /…and 2 more/.test(capCell || "") && (capCell || "").split(",").length === 5,
   () => capCell);
@@ -3119,7 +3119,7 @@ const capAt = (n) => {
 check("body does: exactly at the cap there is no overflow marker (a `>=` drift would print `…and 0 more`)",
   !/…and/.test(capAt(4) || "") && (capAt(4) || "").split(",").length === 4, () => capAt(4));
 check("body does: one past the cap states `…and 1 more`",
-  /…and 1 more$/.test(capAt(5) || ""), () => capAt(5));
+  (capAt(5) || "").endsWith("…and 1 more"), () => capAt(5));
 // The PARSER's own cap counts too: a body with more callee paths than it forwards must not read as if the
 // forwarded slice were the whole list.
 const cappedEvidence = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "dense",
@@ -3162,7 +3162,7 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
 check("empty state: a page with methods but no rules says so, and still points at the worklist",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
   && /> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /^> /.test(l)).slice(0, 4));
+  () => evPlan.split("\n").filter((l) => l.startsWith("> ")).slice(0, 4));
 check("preamble: the worklist names WHERE the ported/dropped/blocked mark is recorded",
   /Plan-vs-Done checklist row/.test(evPlan),
   () => evPlan.split("\n").filter((l) => /ported/.test(l)).slice(0, 2));
@@ -3648,7 +3648,7 @@ const ck = ckRun.checklist || "";
   check("Logic (canonical): the rules table comes first and the method-count line closes the section",
     /#### Logic/.test(ckRun.plan)
     && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
-    && lines.some((l) => /\| page business rule \|$/.test(l))
+    && lines.some((l) => l.endsWith("| page business rule |"))
     && /^> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\.$/.test(lines[lines.length - 1] || "")
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),
     () => lines);
@@ -4427,7 +4427,7 @@ check("chain roots: every caller still travels with the row, so the reader sees 
 // so the other multi-caller assertion (a row with no inherited root) takes a different code path and would not
 // notice `(+N more caller)` being dropped here.
 const multiCell = (renderPlan(multiRun, {}).split("\n").find((l) => l.startsWith("|")
-  && l.split("|")[1]?.replace(/↳/g, "").trim() === "sharedHelper") || "").split("|")[3]?.trim();
+  && l.split("|")[1]?.replaceAll("↳", "").trim() === "sharedHelper") || "").split("|")[3]?.trim();
 check("chain roots: a composed trigger still renders the multi-caller provenance `(+N more caller)`",
   /\+1 more caller/.test(multiCell || "") && /— reported → zAnsweredOne \(internal call\)/.test(multiCell || ""),
   () => multiCell);

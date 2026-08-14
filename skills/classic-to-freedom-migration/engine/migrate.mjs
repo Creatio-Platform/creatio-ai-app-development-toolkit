@@ -508,7 +508,7 @@ function propagateChainRoots(changeSet) {
   // whatever order the schema declares its methods in, and keeps `rootTrigger` a real origin instead of another
   // composed `internal` trigger nested inside itself.
   const before = new Map(stubs.map((h) => [h.sourceMethod, (h.triggers || [])[0]]));
-  const weak = (t) => t && t.kind === "internal" && !t.rootTrigger && !t.lifecycle;
+  const weak = (t) => t?.kind === "internal" && !t.rootTrigger && !t.lifecycle;
   // Walk up from one caller until something answers. `seen` breaks the mutual-recursion cycles classic helpers are
   // full of, exactly as resolveInternalTrigger does.
   const originFrom = (start, seen) => {
@@ -529,7 +529,8 @@ function propagateChainRoots(changeSet) {
     // returns on the first caller yielding anything at all, a weak partial included: here a weak ancestor is not an
     // answer, so the walk moves on to the next caller. Following `from` alone left a helper unanswered whenever its
     // first caller happened to be the open one.
-    const callers = t.callers?.length ? [...t.callers].sort() : [t.from];
+    // Sorted with an explicit comparator so the pick is stable and never depends on the default's coercion.
+    const callers = t.callers?.length ? [...t.callers].sort((a, b) => a.localeCompare(b)) : [t.from];
     let found = null;
     for (const c of callers) { found = originFrom(c, new Set([h.sourceMethod])); if (found) break; }
     if (!found) continue;
