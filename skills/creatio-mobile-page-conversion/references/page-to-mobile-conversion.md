@@ -135,10 +135,11 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        verbatim: `insert` — one entry per converted item into `targetName`'s `menuItems`, where the
        template's own items (Copy/Delete) are INHERITED and come first, so never re-emit them; `merge` —
        ONE entry carrying the complete `floatAction` onto the Scaffold (`targetName`), emitted only for a
-       template with no targetable FAB of its own. **Never author a `floatAction` merge yourself:** when
-       the template already owns `floatAction`, the platform diff applier silently drops the merged
-       property and the items never reach the compiled page (the symptom is orphaned `*FabMenuItem_caption`
-       resource strings with no menu items). `targetAssumed: true` means the template's own FAB could not
+       template with no targetable FAB of its own. **Never author a `floatAction` merge yourself** — the
+       engine already emits the correct shape in the map. When the template already owns `floatAction`,
+       the platform diff applier silently drops a hand-authored merge and the items never reach the
+       compiled page (the symptom is orphaned `*FabMenuItem_caption` resource strings with no menu items).
+       `targetAssumed: true` means the template's own FAB could not
        be resolved and the inserts target the standard FAB name — they stay additive, but say so in the
        report and verify the menu at runtime. When `fabConversion` is present with `emission: null` and no
        FAB entry in the map, EVERY candidate was dropped: there is nothing to apply (a guide constraint
