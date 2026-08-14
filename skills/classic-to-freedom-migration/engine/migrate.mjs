@@ -489,7 +489,55 @@ function applyBehaviourIndex(changeSet, index, scopeSchema) {
     const d = describedInOf(entry);
     if (d) { n.describedIn = d; described.push(`${n.kind}:${n.item}`); }
   }
+  // Called from HERE, so it runs only when an index was supplied — which is exactly when it can pay off: without a
+  // reported trigger every chain was already resolved (or left open) by resolveInternalTrigger during mapping.
+  propagateChainRoots(changeSet);
   return { triggersFilled, described };
+}
+
+// A helper resolved only to its CALLER (`internal call from X`, no root, no lifecycle) is the weakest trigger the
+// engine emits, and the header counts it as still open. The chain resolution runs during mapping, off the TRACED
+// triggers, so a caller answered by the behaviour index never reaches the rows below it — this walks the chain
+// again after the fill. It only ADDS a root to a row that has none, so a traced root is never overwritten, and
+// `triggerText` renders the root recursively, so a described origin still prints `— reported` in the composed cell.
+function propagateChainRoots(changeSet) {
+  const stubs = changeSet?.handlerStubs || [];
+  // SNAPSHOT the triggers this pass starts from. Walking the live stubs would let a row this same pass already
+  // rewrote answer for the one below it, so a helper's root would be the nearest REWRITTEN ancestor rather than the
+  // chain's origin — which of the two you get depends on stub order alone. The snapshot makes the result the same
+  // whatever order the schema declares its methods in, and keeps `rootTrigger` a real origin instead of another
+  // composed `internal` trigger nested inside itself.
+  const before = new Map(stubs.map((h) => [h.sourceMethod, (h.triggers || [])[0]]));
+  const weak = (t) => t && t.kind === "internal" && !t.rootTrigger && !t.lifecycle;
+  // Walk up from one caller until something answers. `seen` breaks the mutual-recursion cycles classic helpers are
+  // full of, exactly as resolveInternalTrigger does.
+  const originFrom = (start, seen) => {
+    let cur = start;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const up = before.get(cur);
+      if (!up) return null;                 // that caller is unresolved — this branch of the chain is still open
+      if (!weak(up)) return { root: cur, rootTrigger: up };
+      cur = up.from;
+    }
+    return null;
+  };
+  for (const h of stubs) {
+    const t = (h.triggers || [])[0];
+    if (!weak(t) || (h.triggers || []).length !== 1) continue;
+    // EVERY caller is tried, sorted, first ANSWER wins. Deliberately stricter than resolveInternalTrigger, which
+    // returns on the first caller yielding anything at all, a weak partial included: here a weak ancestor is not an
+    // answer, so the walk moves on to the next caller. Following `from` alone left a helper unanswered whenever its
+    // first caller happened to be the open one.
+    const callers = t.callers?.length ? [...t.callers].sort() : [t.from];
+    let found = null;
+    for (const c of callers) { found = originFrom(c, new Set([h.sourceMethod])); if (found) break; }
+    if (!found) continue;
+    // `root` + `rootTrigger` only: a `via` carried over from the unresolved walk lists hops this trigger now
+    // names itself, and rendered as "→ X via X".
+    const { via, ...rest } = t;             // eslint-disable-line no-unused-vars -- dropped on purpose
+    h.triggers = [{ ...rest, ...found }];
+  }
 }
 
 // Which `behaviourIndex` keys reached no row, across EVERY scope of this run. Computed from the assembled index

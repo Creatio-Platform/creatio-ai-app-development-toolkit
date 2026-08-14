@@ -130,13 +130,6 @@ function regionResolver(viewConfigDiff, resources = {}) {
 // entity column — Major 4), else the column code.
 const dispLabel = (o) => o.values?.titleText || strip(o.values?.control);
 const humanizeAction = (a) => ({ "make-required": "required", "make-optional": "optional", "make-read-only": "read-only", "make-editable": "editable", "show-element": "visible", "hide-element": "hidden" }[a] || a);
-const triggerOf = (m) => {
-  const mt = /^on(.+?)Chang/.exec(m);
-  if (mt) return `${mt[1]} changes`;
-  if (/init/i.test(m)) return "on load";
-  if (/save/i.test(m)) return "on save";
-  return "—";
-};
 // demote a nested design spec's Markdown headings two levels (## → ####, ### → #####, capped at ######)
 // so a child page's spec reads as a subsection under the parent plan's `#### Child page:` heading.
 const demoteHeadings = (md, shift = 2) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + Math.max(0, shift))) + " ");
@@ -307,24 +300,12 @@ function entityFilterRows(cs) {
     return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
   });
 }
-// handlers — fold set<X>Info / clear<X>Info helpers into their on<X>Change trigger row. Extracted for Sonar CC 15.
-function handlerRows(cs) {
-  const stubs = cs.handlerStubs || [];
-  const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
-  const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
-  const helpersByBase = {};
-  for (const h of stubs) { const b = helperBase(h.sourceMethod); if (b) { helpersByBase[b] ||= []; helpersByBase[b].push(h.sourceMethod); } }
-  return stubs.filter((h) => !helperBase(h.sourceMethod)).map((h) => { // helpers shown folded into their trigger row
-    const b = triggerBase(h.sourceMethod);
-    const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].map(esc).join(", ")})` : ""; // esc each helper name at the sink (untrusted body)
-    return [esc(h.sourceMethod), esc(triggerOf(h.sourceMethod)), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"];
-  });
-}
-
-// Build the Logic-table rows (declarative page rules → entity/lookup filters → handlers → process launch).
+// Build the Logic-table rows (declarative page rules → entity/lookup filters → process launch).
+// Logic carries what the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the
+// table that carries the port obligation and traces the trigger from the data.
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
 function buildLogicRows(cs) {
-  const logic = [...pageRuleRows(cs), ...entityFilterRows(cs), ...handlerRows(cs)];
+  const logic = [...pageRuleRows(cs), ...entityFilterRows(cs)];
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
     logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
@@ -469,12 +450,14 @@ function headerTemplateRecommendation(cs, opts) {
   return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 
-// Decision kinds ALREADY surfaced in their own Layout / Logic / Child-page section, so re-listing them in the
-// "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist" checklist group (below) would double-report them. ONE
-// const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
+// Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
+// ⚠ Imperative logic worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
+// checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
+// appears in the Logic table: it does not. Removing it from this Set puts every method in two worklists at once.
+// ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
-// The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds already surfaced in Layout /
-// Logic / Child-pages are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines. Extracted for CC.
+// The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
+// or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
 function renderConfirmWorklist(cs) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -588,15 +571,20 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
   }
 
-  // ---- Logic (behaviour): declarative business rules FIRST, then entity filters, handlers, process launch ----
+  // ---- Logic (behaviour): declarative business rules FIRST, then entity filters, process launch ----
+  // Renders whenever the page has rules OR methods: a missing section reads as "the engine dropped the rules", not
+  // as "there are none", so an all-imperative page states the absence and points at the method worklist.
   const logic = buildLogicRows(cs);
-  if (logic.length) {
-    L.push(
-      "#### Logic",
-      "| Behaviour | Trigger | Effect | Freedom target |",
-      "| --- | --- | --- | --- |",
-    );
-    for (const row of logic) L.push(`| ${row.join(" | ")} |`);
+  const stubCount = (cs.handlerStubs || []).length;
+  if (logic.length || stubCount) {
+    L.push("#### Logic");
+    if (logic.length) {
+      L.push("| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |");
+      for (const row of logic) L.push(`| ${row.join(" | ")} |`);
+    } else {
+      L.push("> No declarative business rules or lookup filters on this page.");
+    }
+    if (stubCount) L.push("", `> ${stubCount} custom method(s) — see **⚠ Imperative logic** below.`);
     L.push("");
   }
 
@@ -615,19 +603,19 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("");
   }
 
+  // ---- ⚠ Imperative logic: the METHOD worklist, and a BINDING one ----
+  // Directly under Logic: the two are one subject split in two — what the engine mapped, then what it could not.
+  // Methods stay out of the ⚠ Confirm list (that one holds open questions needing an on-stand answer); this is
+  // where each method gets its ported / dropped / blocked mark, with the evidence the engine read from the body.
+  // Both sections together are "the ⚠ worklist" the SKILL's rules refer to.
+  L.push(...renderImperativeLogic(cs));
+
   // ---- Child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist (GENUINE open
   // decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed) ----
   L.push(...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs));
 
-  // ---- ⚠ Imperative logic: the METHOD worklist, and a BINDING one ----
-  // Methods stay out of the ⚠ Confirm list above (that list holds open questions needing an on-stand answer),
-  // but they were previously in NO binding list at all: `method` is in SHOWN_ELSEWHERE, so the only place a
-  // method surfaced was a Logic row reading "review". Contract rule 7 and the step-8 Plan-vs-Done table are
-  // scoped to the ⚠ worklist, so nothing forced an account of a single line of imperative logic. This section
-  // is that worklist — one row per method, with the evidence the engine read from the body, so it can be worked
-  // rather than skimmed. Both sections together are "the ⚠ worklist" the SKILL's rules refer to.
   // ---- Member ledger: the completeness proof ----
-  L.push(...renderImperativeLogic(cs), ...renderMemberLedger(result.coverage));
+  L.push(...renderMemberLedger(result.coverage));
 
 
   return L.join("\n");
@@ -698,14 +686,64 @@ function sourceText(h) {
   return h.lines ? `L${h.lines.start}-${h.lines.end}` : DASH;
 }
 
-// What the body does, from evidence. Three distinct states, kept apart on purpose: body elsewhere · nothing of its
-// own · recognised calls · nothing recognised (which is a ⚠, not a blank).
-function bodyDoesText(h) {
+// Calls that say nothing about what a body DOES: the base call, attribute access (already rendered in
+// `Reads → writes`), and plain JS/utility helpers. Listing them as "unclassified" would bury the one call that
+// actually matters under noise. A Set rather than one alternation — exact names, and no regex complexity to carry.
+// Both namespaces carry the same predicates, so an entry added on one side needs its twin on the other — filtering
+// `Ext.isEmpty` but not `Terrasoft.isEmpty` (which real bodies use) leaves a warning pointing at nothing.
+// A call that says something about the RECORD or the USER is not noise: `Terrasoft.isCurrentUserSsp` is a real
+// condition and stays visible.
+const BODY_CALL_NOISE = new Set([
+  "callParent", "get", "set", "log",
+  ...["isEmpty", "isObject", "isFunction", "isString", "isNumber", "isArray", "isDate"]
+    .flatMap((p) => [`Ext.${p}`, `Terrasoft.${p}`]),
+  "Ext.String.format", "Terrasoft.each", "Terrasoft.findItem", "Terrasoft.chain",
+  "Terrasoft.clearTime", "Terrasoft.dateDiffDays", "Terrasoft.getFormattedNumberValue",
+  "Boolean", "Number", "String", "Date", "Array", "Object",
+]);
+// whole namespaces that are computation, whatever member is called on them
+const BODY_CALL_NOISE_NS = new Set(["JSON", "Math"]);
+const bareCall = (c) => c.replace(/^this\./, "");
+
+// The framework calls a body makes that the classifier did NOT recognise, minus noise and minus calls to sibling
+// rows (an internal call is the call graph's business, not this cell's). Named rather than counted, so the cell
+// says WHICH call it could not read — an actionable gap instead of a dead end.
+// Rendered as WRITTEN in the body (`this.` kept), so a reader can search the source for it; the tests below are
+// on the bare name.
+const UNCLASSIFIED_SHOWN = 4;
+function unclassifiedCalls(h, siblings) {
+  const drop = (c) => {
+    const b = bareCall(c);
+    return BODY_CALL_NOISE.has(b) || BODY_CALL_NOISE_NS.has(b.split(".")[0])
+      || siblings.has(b) || siblings.has(b.split(".")[0]);
+  };
+  const kept = h.evidence?.calls || [];
+  const open = kept.filter((c) => !drop(c));
+  // The cap keeps the cell readable, but a silent truncation is the failure this column exists to prevent — the
+  // reader would take four names for the whole list. Same `…and N more` overflow the CLI's gap lines use.
+  // TWO things can be hidden, and both are counted: the open calls past the cap, and the calls the PARSER never
+  // handed over — it keeps the first N callee paths in locale order, and every noise namespace (`Boolean`, `Ext.`,
+  // `Math.`, `Terrasoft.`) sorts ahead of `this.`, so a call-dense body can arrive here as nothing but noise.
+  const shown = open.slice(0, UNCLASSIFIED_SHOWN).map(esc);
+  const unsent = Math.max(0, (h.evidence?.callsTotal ?? kept.length) - kept.length);
+  const overflow = Math.max(0, open.length - UNCLASSIFIED_SHOWN) + unsent;
+  if (overflow) shown.push(`…and ${overflow} more`);
+  return shown;
+}
+
+// What the body does, from evidence. Distinct states, kept apart on purpose: body elsewhere · nothing of its own ·
+// recognised calls · writes but no recognised call · nothing recognised (a ⚠, and it names what it could not read).
+// `callParent` is NOT recognition — it is the base call, present in most overrides, and counting it would report a
+// method whose real work went unread as "it just calls the base".
+function bodyDoesText(h, siblings = new Set()) {
   if (h.externalRef) return "defined in another module";
   if (h.trivial) return "passthrough (base only)";
-  const kinds = h.evidence?.kinds || [];
+  const kinds = (h.evidence?.kinds || []).filter((k) => k !== "callParent");
   if (kinds.length) return kinds.map(esc).join(", ");
-  return `⚠ no call recognised (${esc(h.category)})`;
+  // Attribute writes ARE evidence — the same evidence `categorize` promotes to `set-values`, so this row is not a ⚠.
+  if ((h.evidence?.writesAttrs || []).length) return "sets values";
+  const open = unclassifiedCalls(h, siblings);   // already escaped at the sink, plus an overflow marker
+  return open.length ? `⚠ unclassified: ${open.join(", ")}` : "⚠ nothing recognised";
 }
 
 function readsWritesText(ev) {
@@ -722,10 +760,13 @@ function targetText(h) {
 }
 
 const IMPERATIVE_LOGIC_PREAMBLE = [
-  "> Each row is a method the classic page defines. Mark it **ported** (name the Freedom handler / converter /",
-  "> virtual attribute you built), **dropped** (with the reason), or **blocked** — the same standard as an",
-  "> ⚠ Confirm item. `Trigger: unresolved` means nothing in this schema calls it and no declaration binds it — trace",
-  "> it from the control / hook / message, never from the method's name. An `internal call` trigger means the engine",
+  "> Each row is a method the classic page defines, and each must end up **ported** (naming the Freedom handler /",
+  "> converter / virtual attribute you built), **dropped** (with the reason) or **blocked** — recorded on this page's",
+  "> Plan-vs-Done checklist row, to the same standard as an ⚠ Confirm item.",
+  "> `⚠ unresolved` means the engine found nothing in this schema that calls it and no declaration that binds it.",
+  "> Resolve it from the control / hook / message — never from the method's name; a row still unresolved after the",
+  "> static pass is what the step-5.1 `classic-ui-expert` run answers, and its reported trigger replaces this cell on",
+  "> the next `--plan`. An `internal call` trigger means the engine",
   "> found the CALLING method, and where the chain reaches one, the declaration or platform lifecycle hook that starts",
   "> it. A row marked **`↳`** is a helper the engine traced to the single row above it: port it WITH that caller as one",
   "> unit — it still needs its own ported / dropped / blocked mark, but not a Freedom artifact of its own. A helper with",
@@ -789,10 +830,13 @@ function foldByCaller(stubs) {
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
-  // Counted, not just listed: how many rows still have no traced trigger, and how many carry a behaviour card. The
+  // Counted, not just listed: how many rows still have no trigger, and how many carry a behaviour card. The
   // pair is the honest state of the worklist — "51 unresolved, 0 described" and "51 unresolved, 51 described" are
   // very different plans, and the row-by-row table alone made them look identical.
+  // The count is of EMPTY cells, so it must not claim "no TRACED trigger": a row the behaviour run answered leaves
+  // this count while nothing was traced for it. Those are counted on their own, next to it.
   const unresolved = stubs.filter((h) => !(h.triggers || []).length).length;
+  const reported = stubs.filter((h) => (h.triggers || []).some((t) => t.kind === "reported")).length;
   // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
   // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
   const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
@@ -802,19 +846,23 @@ function renderImperativeLogic(cs) {
   // that are really 39 things to build reads very differently from 63 independent handlers.
   const units = stubs.length - folded;
   const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
-    `> ${unresolved} row(s) have no traced trigger` +
+    `> ${unresolved} row(s) have no trigger yet` +
+    (reported ? ` · ${reported} answered by the behaviour run` : "") +
     (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
     (folded ? ` · ${folded} are helpers folded under their caller (\`↳\`) → **${units} port unit(s)**` : "") +
     ` · ${described} of ${stubs.length} carry a behaviour card` +
     (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
   L.push(...IMPERATIVE_LOGIC_PREAMBLE);
+  // A call to another row of this table is an INTERNAL call — the fold column already carries it, so it must not
+  // also print as an unclassified framework call.
+  const siblings = new Set(stubs.map((h) => h.sourceMethod));
   for (const { stub: h, depth, parent } of ordered) {
     const triggers = h.triggers || [];
     const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const target = parent ? `port with \`${esc(parent)}\`` : targetText(h);
-    const cells = [name, sourceText(h), trigger, bodyDoesText(h), readsWritesText(h.evidence),
+    const cells = [name, sourceText(h), trigger, bodyDoesText(h, siblings), readsWritesText(h.evidence),
       target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
@@ -840,10 +888,11 @@ const FREEDOM_TARGET = {
   "filter-build": "data-source filter (built in a handler when it is dynamic)",
   "sys-setting": "read the system setting on the Freedom side — do not inline its current value",
   refresh: "`crt.LoadDataRequest` / data-source reload from a handler",
-  "attribute-change": "on-change request handler",
-  init: "page-init request handler",
   passthrough: "confirm template provides it",
 };
+// Every key above is a category `categorize` can actually return, i.e. one backed by body evidence. Do NOT add an
+// entry for a category only a method's NAME could produce — the map would then need a name-based producer, which is
+// the guessing this table exists without.
 const freedomTargetFor = (cat) => FREEDOM_TARGET[cat] || "request handler / converter / virtual attribute";
 
 // The member ledger — the completeness proof, per `03-member-ledger.md`: every member of every layer is
@@ -1418,7 +1467,7 @@ export const EVIDENCE_REQUIRES = ["referencePage", "components"];
 function evidenceRow(id, label, extra = {}) {
   return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES } };
 }
-// The ⚠ Confirm worklist — the same items as the Confirm section (kinds not shown elsewhere). Removals are not
+// The ⚠ Confirm worklist — the same items as the Confirm section (kinds without a section of their own). Removals are not
 // decisions. Own fn so `checklistGroups` gains no branch of its own (Sonar CC 15).
 // The RAW `kind`/`item` ride on the ROW (not on the `vk`, which is the resolvers' input): `--units.preflight`
 // republishes them next to the id so the executor reads the decision it must resolve without re-parsing an id —

@@ -20,9 +20,13 @@ HTML or a rendered artifact.
   islands, tabs, card actions) and REPEATS down its rows (Markdown can't merge cells). Every field,
   related list, native component and card action is ONE row — nothing is listed twice.
 - **`Logic` is where the business rules live** — the declarative page rules (required / read-only /
-  visible-when, each with its condition) render here, together with entity/lookup filters,
-  handlers/converters, and process launch. The Layout `Rule` column carries only intrinsic field state
+  visible-when, each with its condition) render here, together with entity/lookup filters and
+  process launch. The Layout `Rule` column carries only intrinsic field state
   (e.g. a read-only mirror), never a business rule — a reader finds all the rules in ONE place.
+- **Custom METHODS are not in `Logic`** — each is a row in `⚠ Imperative logic`, with its trigger traced
+  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Logic` = what the
+  engine MAPPED; `⚠ Imperative logic` = the methods it could not, each carrying a ported/dropped/blocked
+  obligation. `Logic` closes with a pointer line naming how many methods the page has.
 - **`⚠ Confirm before I build`** collects everything needing a human answer (the engine's ⚠ worklist plus
   any discovery risks/gaps you append).
 - Feed the resolution inputs so names are real, not codes: `resources` (captions), `columnTitles` (field
@@ -58,15 +62,22 @@ HTML or a rendered artifact.
 | --- | --- | --- | --- |
 | <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
-| <handler method> | <trigger> | imperative (<category>) — review | request handler / converter / virtual attr |
 | Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
+
+> <N> custom method(s) — see **⚠ Imperative logic** below.
+
+#### ⚠ Imperative logic — account for EVERY row (<N>)
+| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- | --- |
+| <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values / ⚠ unclassified: <call> | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
+| ↳ <helper> | L<from>-<to> | internal call from <caller> | … | … | port with `<caller>` | <card> <AC…> |
 
 #### ⚠ Confirm before I build
 - **[<kind>]** <item> — <what to confirm / resolve>
 - **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
-Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → Confirm), then each child page under **Child page mappings**.
+Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Imperative logic → ⚠ Confirm), then each child page under **Child page mappings**.
 
 ## Worked example (single-section, abbreviated)
 
@@ -106,8 +117,14 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Request | when Stage | required (else optional) | page business rule |
 | Reject reason | when Stage | required (else optional) | page business rule |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
-| onContactChanged | Contact changes | imperative — fill Mobile phone / Email / Skype | request handler + virtual attrs |
-| onInternalRequestChanged | Request changes | imperative — fill Department / Staff unit | request handler + virtual attrs |
+
+> 2 custom method(s) — see **⚠ Imperative logic** below.
+
+#### ⚠ Imperative logic — account for EVERY row (2)
+| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- | --- |
+| onContactChange | L247-250 | attribute-onchange (from Contact attribute onChange) — reported | refresh | — | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
+| ↳ setContactInfo | L429-433 | internal call from onContactChange | sets values | Email, MobilePhone, Skype → Email, MobilePhone, Skype | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
 
 #### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.

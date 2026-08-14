@@ -531,10 +531,10 @@ function referencedUiModules(deps) {
 
 // ---- Per-method BODY FACTS (read the AST, never execute it) ---------------------------------------------
 // The engine deliberately does not run schema bodies (see the SECURITY note on the parser). It does not have to:
-// acorn already built the AST for every method, and the previous code threw it away at the AST_FN placeholder,
-// leaving `categorize()` to guess a method's purpose from substrings of its NAME. These facts replace guessing
-// with evidence — which framework calls the method makes, which attributes it reads and writes, which sandbox
-// messages it publishes/subscribes — so the plan can state a method's behaviour instead of labelling it "review".
+// acorn already built the AST for every method, so the facts below come from reading it — which framework calls the
+// method makes, which attributes it reads and writes, which sandbox messages it publishes/subscribes. They are what
+// `categorize()` classifies a method from, and the only thing it may classify from: the plan states a method's
+// behaviour from its body, never from its name.
 //
 // Bounded on purpose: the body is UNTRUSTED, so the walk carries a node budget and a depth cap, and a method that
 // exceeds either is reported `truncated: true` (fail-loud) rather than silently half-analysed.
@@ -570,7 +570,9 @@ const firstStringArg = (call) => {
 const CALL_KIND_RX = [
   ["callParent", /(?:^|\.)callParent$/],
   ["esq", /EntitySchemaQuery|getEntityCollection|createEntitySchemaQuery|EntitySchemaManager/],
-  ["publish", /(?:^|\.)sandbox\.publish$/],
+  // `sendSaveCardModuleResponse` IS a sandbox publish — its base body (CrtUIPlatform7x) builds the info object and
+  // calls `sandbox.publish("CardModuleResponse", …)`. Classified from that definition, not from its name.
+  ["publish", /(?:^|\.)sandbox\.publish$|(?:^|\.)sendSaveCardModuleResponse$/],
   ["subscribe", /(?:^|\.)sandbox\.subscribe$/],
   ["sandbox-load", /(?:^|\.)sandbox\.(?:load|unload)$/],
   ["process-launch", /ProcessModuleUtilities|executeProcess|RunProcessRequest|(?:^|\.)runProcess$|showProcessPage|openProcessByRecord/],
@@ -588,7 +590,7 @@ const CALL_KIND_RX = [
   // a system-setting read gates behaviour by configuration — it must be re-read on the Freedom side, not inlined
   ["sys-setting", /SysSettings/],
   // reloading fields / a detail after a change → a Freedom data-source reload request, not a no-op
-  ["refresh", /(?:^|\.)refreshFields$|(?:^|\.)updateDetail(?:s)?$|(?:^|\.)reloadEntity$|(?:^|\.)reloadGridData$/],
+  ["refresh", /(?:^|\.)refreshFields$|(?:^|\.)updateDetail(?:s)?$|(?:^|\.)reloadEntity$|(?:^|\.)reloadGridData$|(?:^|\.)loadEntity$/],
   ["feature-toggle", /getIsFeatureEnabled/],
   ["mixin-call", /(?:^|\.)mixins\./],
 ];
@@ -603,6 +605,11 @@ const ARG_SINKS = [
   [/(?:^|\.)sandbox\.subscribe$/, "subscribes"],
 ];
 
+// A factory names the class it builds in a STRING argument — `Ext.create("Terrasoft.EntitySchemaQuery", …)` is the
+// standard classic way to open a query, and classifying only the callee path sees `Ext.create` and nothing else. So
+// the constructed class name is classified too: the evidence is in the argument, not in the call.
+const CLASS_FACTORY_RX = /(?:^|\.)Ext\.create$|(?:^|\.)Terrasoft\.create$/;
+
 // record ONE call/new expression into the fact sinks
 function recordCall(node, sinks) {
   const p = calleePath(node.callee);
@@ -611,6 +618,7 @@ function recordCall(node, sinks) {
   for (const k of classifyCall(p)) sinks.kinds.add(k);
   const arg = firstStringArg(node);
   if (!arg) return;
+  if (CLASS_FACTORY_RX.test(p)) for (const k of classifyCall(arg)) sinks.kinds.add(k);
   const hit = ARG_SINKS.find(([rx]) => rx.test(p));
   if (hit) sinks[hit[1]].add(arg);
 }

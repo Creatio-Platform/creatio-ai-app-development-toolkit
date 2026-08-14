@@ -1257,9 +1257,9 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 
   // methods -> handler stubs. Each stub carries the BODY EVIDENCE the engine read (which framework calls it makes,
   // which attributes it reads/writes, which messages it moves, its line span) and its RESOLVED trigger, so the plan
-  // states what a method does instead of labelling every one of them "review". `category` keeps the name heuristic
-  // — it is what makes the Logic table's trigger column readable — with the evidence ON TOP of it.
-  // STANDARD framework/scaffolding methods are excluded first: only CUSTOM business methods reach the Logic table,
+  // states what a method does instead of labelling every one of them "review". `category` is derived from that same
+  // evidence and never from the method's name.
+  // STANDARD framework/scaffolding methods are excluded first: only CUSTOM business methods reach
   // the ⚠ Imperative logic worklist and the `method` decisions, so the plan stops listing init/onSaved/validator
   // config as "imperative → review" on every page. They remain MEMBERS — the coverage ledger counts them as
   // `context` via `STANDARD_CLASSIC_METHODS` (same treatment as an inert module dep), never as a silent drop.
@@ -1273,7 +1273,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
     const f = m.facts || null;
     return {
       sourceMethod: m.name,
-      category: categorize(m.name, f),
+      category: categorize(f),
       // a pure `callParent(arguments)` passthrough / an empty body declares no behaviour of its own: it is a
       // member (it stays in the ledger) but it is NOT work to port, and listing it as such buries the real logic.
       trivial: !!(f && (f.callParentOnly || f.isEmpty)),
@@ -1281,7 +1281,9 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
       // the method is assigned from another module (`x: VisaHelper.Method`) — its behaviour is defined outside
       // this page body, so the port target is that module, not a body the reader can look up in this schema
       externalRef: f?.externalRef || null,
-      evidence: f ? { kinds: f.kinds, calls: f.calls.slice(0, 12), readsAttrs: f.readsAttrs, writesAttrs: f.writesAttrs,
+      // `calls` is capped for payload size; `callsTotal` is what the body actually made, so a renderer can say how
+      // much the cap hid instead of presenting the retained slice as the whole list.
+      evidence: f ? { kinds: f.kinds, calls: f.calls.slice(0, 12), callsTotal: f.calls.length, readsAttrs: f.readsAttrs, writesAttrs: f.writesAttrs,
         publishes: f.publishes, subscribes: f.subscribes, readsResources: f.readsResources, truncated: f.truncated } : null,
       triggers: m.triggers || [],
       draft: true,
@@ -1722,11 +1724,8 @@ function mapWidgets(eff, opts = {}) {
   return { widgets, chromeWidgets, needsDecision, accountedFor };
 }
 
-// A method's category. BODY EVIDENCE wins when there is any: `kinds` comes from the calls the method actually
-// makes, so it is a fact, whereas the name test below is a guess (it read `initSaveFilters` as "init" and a
-// method that loads a value with an ESQ as "set-values?"). The name heuristic is kept — it still produces the
-// readable label for a method whose body was not statically readable, and it is what the Logic table renders.
-// The `?` suffixes are retained on name-derived categories precisely to mark them as unconfirmed.
+// kind → category, ORDERED: the first match wins, so the more specific behaviour sits ahead of the more general
+// one (a method that opens a query AND builds filters is a query).
 const KIND_CATEGORY = [
   ["validator", "validator"], ["esq", "query/filter"], ["filter-build", "filter-build"], ["service", "service-call"],
   ["sys-setting", "sys-setting"], ["refresh", "refresh"],
@@ -1734,19 +1733,15 @@ const KIND_CATEGORY = [
   ["dialog", "dialog"], ["lookup", "lookup"], ["save", "save"], ["feature-toggle", "feature-gate"],
   ["mixin-call", "mixin-call"],
 ];
-function categorize(name, facts) {
+// A method's category, from EVIDENCE ONLY: the calls its body makes, then the attributes it writes. Never from the
+// method's name — a name-derived category picks a Freedom target nothing in the body supports, and reads exactly
+// like a derived one. A body neither test can classify is `unclassified`, whose target is the generic wording.
+function categorize(facts) {
   const kinds = new Set(facts?.kinds || []);
-  // A pure passthrough is not a behaviour category at all — say so rather than mislabelling it "helper".
+  // A pure passthrough declares no behaviour of its own, so it gets no behaviour category.
   if (facts && (facts.callParentOnly || facts.isEmpty)) return "passthrough";
   for (const [kind, cat] of KIND_CATEGORY) if (kinds.has(kind)) return cat;
   // writes attributes but makes no notable call → it sets view-model state, CONFIRMED by the writes
   if (facts?.writesAttrs.length) return "set-values";
-  const n = name.toLowerCase();
-  if (n.startsWith("on") && n.endsWith("changed")) return "attribute-change";
-  if (n.includes("init")) return "init";
-  if (n.includes("save")) return "save";
-  if (n.startsWith("validate")) return "validator?";
-  if (n.includes("esq") || n.includes("filter")) return "query/filter";
-  if (n.startsWith("set")) return "set-values?";
-  return "helper";
+  return "unclassified";
 }
