@@ -170,6 +170,11 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # agent has already opened its run, and a measured run obeyed a plain "reuse this id": it left
         # an abandoned start under its own id plus a second start here, counting one run twice.
         self.assertIn("keep that", context)
+        # The identity fields are handed over resolved. The hook knows the installed values; the agent
+        # was measured guessing them — five versions for one installation, four invented — so it is
+        # told what to send rather than asked to find out.
+        self.assertIn('plugin_version="', context)
+        self.assertIn('coding_agent="', context)
         for workflow in ("classic-to-freedom-migration", "branding", "app-maintenance"):
             self.assertIn(workflow, context)
         self.assertIn("EVERY workflow", context)
