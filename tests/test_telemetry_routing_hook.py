@@ -309,14 +309,20 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(stop.returncode, 0)
         self.assertEqual(stop.stdout.strip(), "")
 
-    def test_reports_session_usage_once_and_not_when_re_entered(self):
-        # The measurement is once per host session. `stop_hook_active` means the host re-entered its
-        # own Stop, which would otherwise double-report the same totals.
+    def test_does_not_repeat_the_same_totals(self):
+        # Stop fires per RESPONSE, not per session, so it is reached many times. A turn that spent
+        # nothing, or a Stop the host repeated, must not re-send an identical row into a series whose
+        # only meaning is that it grows. `stop_hook_active` marks the host re-entering its own Stop.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
+        transcript = write_transcript()
 
         first = run_hook(
-            {"session_id": session, "hook_event_name": "Stop", "transcript_path": write_transcript()},
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
+            telemetry_home=home,
+        )
+        again = run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
             telemetry_home=home,
         )
         reentered = run_hook(
@@ -329,10 +335,43 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
             telemetry_home=home,
         )
 
-        self.assertEqual(first.returncode, 0)
-        self.assertEqual(reentered.returncode, 0)
-        markers = glob.glob(os.path.join(_TMP, "caadt-telemetry-routing", f"{session}.usage"))
-        self.assertEqual(len(markers), 1, "the session measurement must be claimed exactly once")
+        for result in (first, again, reentered):
+            self.assertEqual(result.returncode, 0)
+        # The marker carries the last reported figure, so an unchanged total is skipped rather than
+        # re-sent. The transcript fixture totals 7 output tokens.
+        marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "7")
+
+    def test_reports_again_once_the_session_has_spent_more(self):
+        # The point of the series: a live session was measured freezing its total at the end of the
+        # FIRST turn, because Stop was claimed once per session. Every later turn spent tokens that
+        # nothing recorded. A grown total must produce a new reading.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": write_transcript()},
+            telemetry_home=home,
+        )
+        # A later turn: the transcript has grown by one more assistant reply.
+        grown = Path(tempfile.mkdtemp(prefix="caadt-hook-grown-", dir=_TMP), "session.jsonl")
+        grown.write_text(
+            Path(write_transcript()).read_text(encoding="utf-8")
+            + "\n"
+            + json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": 5, "output_tokens": 11, "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0}}}),
+            encoding="utf-8",
+        )
+        later = run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": str(grown)},
+            telemetry_home=home,
+        )
+
+        self.assertEqual(later.returncode, 0)
+        marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "18",
+                         "a grown total must be reported, or every turn after the first goes unmeasured")
 
     def test_reports_no_session_usage_without_a_readable_transcript(self):
         # A row of zeroes is indistinguishable from a session that genuinely spent nothing, and this

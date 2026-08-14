@@ -204,6 +204,25 @@ function claimOnce(sessionId, suffix) {
 	}
 }
 
+// How much output the session had already reported. A turn that spent nothing — the developer typed
+// something the agent answered from context, or a Stop the host repeated — would otherwise re-send an
+// identical row, which is noise in a series whose whole meaning is that it grows.
+function lastReportedOutputTokens(sessionId) {
+	try {
+		return Number.parseInt(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'), 10) || 0;
+	} catch {
+		return 0;
+	}
+}
+
+function rememberReportedOutputTokens(sessionId, outputTokens) {
+	try {
+		fs.writeFileSync(markerPath(sessionId, 'usage'), String(outputTokens));
+	} catch {
+		// A marker we cannot write costs one duplicate reading, never a lost one.
+	}
+}
+
 function releaseClaim(sessionId, suffix) {
 	try {
 		fs.rmSync(markerPath(sessionId, suffix), { force: true });
@@ -330,14 +349,23 @@ function main() {
 	// Guarded by `stop_hook_active` so a Stop that the host itself re-entered cannot double-report, and
 	// by its own once-per-session claim.
 	if ((payload?.hook_event_name ?? '') === 'Stop') {
-		if (payload?.stop_hook_active || !claimOnce(sessionId, 'usage') || !consentGranted()) {
+		if (payload?.stop_hook_active || !consentGranted()) {
 			return;
 		}
 		const usage = readSessionUsage(payload);
 		// Nothing worth reporting if the transcript was unreadable: a row of zeroes is indistinguishable
 		// from a session that genuinely spent nothing, and this event exists only to carry the numbers.
-		if (usage.output_tokens > 0 || usage.input_tokens > 0) {
+		//
+		// Reported on EVERY Stop, not once, because Stop fires when the agent finishes a RESPONSE — it is
+		// per turn, not per session. Claiming it once froze the measurement at the end of the first turn:
+		// verified on a live session, where the recorded total went stale while the session kept running.
+		// Since the counters are running totals the series is monotonic, so the session's real
+		// consumption is the MAXIMUM, and the difference between two readings is what one request cost.
+		// This also survives a session that is killed rather than closed, which a session-end signal
+		// would not.
+		if (usage.output_tokens > lastReportedOutputTokens(sessionId)) {
 			emitEvent(sessionId, usage, 'session_usage');
+			rememberReportedOutputTokens(sessionId, usage.output_tokens);
 		}
 		return;
 	}
