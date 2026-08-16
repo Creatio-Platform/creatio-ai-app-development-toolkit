@@ -1017,7 +1017,14 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
   const resolvedColumns = resolvedListColumns?.columns || [];
   const useResolved = resolvedColumns.length > 0
     && !(resolvedListColumns.source === "entity-default" && chainColumns.length > 0);
-  const notes = [...(resolvedListColumns?.notes || [])];
+  // The resolver's notes explain ITS answer. Carrying them unconditionally means that when the resolved set
+  // loses, the losing side's justification ("the section declares no static list columns…") lands in the same
+  // parenthetical as the winning side's confident clause, with nothing saying which side produced it. Seed them
+  // plainly only when the resolved set is what we show; otherwise attribute them to the on-stand read.
+  const resolverNotes = resolvedListColumns?.notes || [];
+  const notes = useResolved
+    ? [...resolverNotes]
+    : resolverNotes.map((note) => `the on-stand read reported: ${note}`);
   // The disagreement note is SYMMETRIC — whichever side ends up shown, the other side's finding is reported rather
   // than dropped, so the plan never asserts one reading while the run holds contrary evidence.
   const sameColumns = resolvedColumns.length === chainColumns.length

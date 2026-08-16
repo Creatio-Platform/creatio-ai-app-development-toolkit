@@ -1033,14 +1033,53 @@ check("ENG-95229: an entity-default fallback does not replace a chain parse that
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
       listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "entity-default",
-        columns: [{ name: "Name" }] } },
+        columns: [{ name: "Name" }],
+        // A realistic entity-default response carries the resolver's own justification. Wording is illustrative;
+        // the assertions below stay wording-independent so a clio rephrasing does not break this golden.
+        notes: ["The section schema does not define static list columns; using the entity primary display column."] } },
   }, { baseDir: FIX });
     return (r.section?.listColumns || []).join(",") === "Name,Stage"
       && r.section?.listColumnSource === "schema-default"
       && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name \(source: entity-default\) while the section schema chain declares Name, Stage — the parsed set is shown/.test(n))
+      // The losing side's explanation may still be reported, but never unattributed — otherwise it reads as a
+      // statement about the set actually shown.
+      && (r.section?.listColumnNotes || []).every((n) => !/does not define static list columns/.test(n) || /^the on-stand read reported: /.test(n))
       && !/declares NO list columns/.test(r.designSpec)
-      && /\*\*List columns:\*\* Name · Stage/.test(r.designSpec); },
+      && /\*\*List columns:\*\* Name · Stage/.test(r.designSpec)
+      && /the on-stand read reported: The section schema does not define static list columns/.test(r.designSpec)
+      // Producers own their own punctuation, so the join must not emit `.; `.
+      && !/\.; /.test(r.designSpec); },
   () => "see section.listColumnNotes / the rendered List columns line");
+// The mirror arm of the symmetric note, and the PR's own intended primary path: on-stand evidence supersedes the
+// static parse. Nothing pinned it, so a flipped ternary arm would have shipped green.
+check("ENG-95229: a schema-default on-stand read wins over a differing chain parse — the note names both sets and the on-stand set is rendered",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "schema-default",
+        columns: ["Name", "Priority"], notes: ["Resolved from the section schema hierarchy."] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Name,Priority"
+      && r.section?.listColumnSource === "schema-default"
+      && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name, Priority \(source: schema-default\) while the section schema chain declares Name, Stage — the on-stand set is shown/.test(n))
+      // The winning side's own notes are carried plainly, without the losing-side attribution prefix.
+      && (r.section?.listColumnNotes || []).some((n) => n === "Resolved from the section schema hierarchy.")
+      && /\*\*List columns:\*\* Name · Priority/.test(r.designSpec)
+      && /Name, Stage/.test(r.designSpec); },
+  () => "see section.listColumnNotes / the rendered List columns line");
+// `sameColumns` compares element-by-element, so a reordered but identical set counts as a disagreement. That is
+// deliberate: Classic list column ORDER is user-visible, so a reorder is worth confirming on-stand, not silently
+// normalized away. Pinned here so the comparison cannot be loosened to a set comparison by accident.
+check("ENG-95229: the same column set in a different order still raises the disagreement note",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "schema-default",
+        columns: ["Stage", "Name"] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Stage,Name"
+      && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Stage, Name .* while the section schema chain declares Name, Stage — the on-stand set is shown/.test(n)); },
+  () => "see section.listColumnNotes");
 // A section chain that declares no columns and no on-stand read is NOT the same state as a resolver that ran and
 // found nothing — the plan must say which one happened and what to do about it.
 check("ENG-95229: an unresolved column set (no resolver ran) renders its own cause + remedy, distinct from source=none",

@@ -350,7 +350,12 @@ function addRecordDescription(result) {
 // The text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
 // product. Tool/storage details stay in the discovery instructions and must not reach the rendered plan.
 function listColumnLine(section) {
-  const notes = (section.listColumnNotes || []).filter((n) => typeof n === "string" && n);
+  // Notes arrive from several producers (the on-stand resolver, the disagreement note), so their trailing
+  // punctuation is not ours to assume — strip it before joining, or a note ending in `.` renders as `.; `.
+  const notes = (section.listColumnNotes || [])
+    .filter((n) => typeof n === "string" && n)
+    .map((n) => n.replace(/[.;\s]+$/, ""))
+    .filter(Boolean);
   const why = notes.length ? ` (${notes.map(esc).join("; ")})` : "";
   const cols = section.listColumns || [];
   // An empty set has TWO distinct causes and the data already tells them apart: `null` means no resolver ever ran
