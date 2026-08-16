@@ -749,6 +749,75 @@ class DefaultContractDocsTests(unittest.TestCase):
         validator = read_text(ROOT / "runtime/scripts/workflow_validators.py")
         self.assertRegex(validator, r"DASHBOARD_ACCESS_RIGHTS_RE\s*=.*All Employees")
 
+    def test_cli_first_transport_rule_is_consistent_across_its_three_mirrors(self):
+        # ENG-95262 states the shell-CLI-first read rule in three places: the RULES
+        # constant inlined into every agent prompt, and the two reference docs an agent
+        # reads off disk. Nothing but this test keeps them saying the same thing, and a
+        # mirror that drifts is worse than a missing one — an agent gets two rules and
+        # no tie-breaker. Same drift-guard rationale as the section-count test above.
+        workflow = read_text(
+            ROOT / "skills/freedom-build-executor/freedom-build-executor.workflow.js")
+        recipe = read_text(
+            ROOT / "skills/freedom-build-executor/references/04-per-page-build-recipe.md")
+        policy = read_text(
+            ROOT / "skills/freedom-build-executor/references/03-failure-and-park-policy.md")
+        agents = read_text(ROOT / "AGENTS.md")
+
+        # 1. The routed set is EXACTLY these five reads, named in both mirrors. The list
+        #    is the scope of the AGENTS.md carve-out, so a sixth command added to one
+        #    mirror alone would silently widen an exception the repository ratified.
+        routed = ["get-page", "list-pages", "list-app-sections", "get-schema",
+                  "get-related-page-addon"]
+        for command in routed:
+            for name, doc in (("workflow", workflow), ("04-recipe", recipe),
+                              ("AGENTS.md", agents)):
+                self.assertIn(command, doc,
+                              f"{name} must name the CLI-first read '{command}'")
+
+        # 2. SQL/OData must NOT be routed to the CLI in either mirror. This is the
+        #    blocker the review caught: SQL travels to clio as a shell argument, so
+        #    routing free-form query text there is an execution sink for untrusted
+        #    stand-derived text.
+        for name, doc in (("workflow", workflow), ("04-recipe", recipe)):
+            self.assertNotIn("and any SQL/OData read", doc,
+                             f"{name} must not route SQL/OData reads onto a command line")
+            self.assertRegex(doc, r"(?i)SQL\s+and\s+OData\s+reads\s+stay\s+on\s+MCP",
+                             f"{name} must say SQL/OData reads stay on MCP")
+
+        # 3. Writes stay on MCP unconditionally in both mirrors — no CLI escape hatch,
+        #    because this run writes to a live customer stand.
+        for name, doc in (("workflow", workflow), ("04-recipe", recipe)):
+            self.assertRegex(doc, r"(?i)writes?[\s\S]{0,80}(stay on MCP|no CLI escape)",
+                             f"{name} must keep writes on MCP")
+        self.assertNotIn("stay on MCP unless MCP is the transport that is failing", workflow,
+                         "the write escape clause must be gone, not merely narrowed")
+
+        # 4. The probe tokens are stated in the RULES constant, since that is what an
+        #    agent reads before it relies on the CLI at all.
+        for token in ("clio --version", "clio ping", "PROBE ONCE", "cli-usage.md"):
+            self.assertIn(token, workflow, f"the RULES preamble must state '{token}'")
+
+        # 5. The 1800 s signature is excluded from the retry allowance in BOTH the
+        #    preamble and the policy doc — the two artifacts previously gave different
+        #    budgets for the same fault.
+        for name, doc in (("workflow", workflow), ("03-policy", policy)):
+            self.assertIn("sent no response or progress", doc,
+                          f"{name} must name the no-progress signature")
+        self.assertRegex(
+            workflow,
+            r"sent no response or progress[\s\S]{0,200}NO retry",
+            "the preamble must exclude the no-progress signature from retry-once")
+
+        # 6. AGENTS.md carries the scoped carve-out, with its delete-when-fixed
+        #    condition, and the preamble points at it by name rather than contradicting
+        #    the canonical guidance silently.
+        self.assertIn("Scoped exception: freedom-build-executor heavy stand reads (ENG-95262)",
+                      agents, "AGENTS.md must carry the named carve-out")
+        self.assertRegex(agents, r"(?i)delete this exception when ENG-95262 is fixed",
+                         "the carve-out must state when it is removed")
+        self.assertIn("Scoped exception: freedom-build-executor heavy stand reads (ENG-95262)",
+                      workflow, "the RULES preamble must cite the carve-out by name")
+
 
 if __name__ == "__main__":
     unittest.main()
