@@ -324,6 +324,14 @@ Tool surface preference (clio MCP vs CLI):
 - After any MCP or environment failure has been resolved, return to MCP-first on the next call — do not stay on CLI fallback by default.
 - Do not parse CLI text output as a substitute for an MCP tool that returns the same data as structured fields. If parsing CLI output is required, that is a signal to switch back to the MCP equivalent.
 
+Scoped exception: freedom-build-executor heavy stand reads (ENG-95262):
+
+- The `freedom-build-executor` skill makes the shell `clio` binary the **standing default** for exactly five read commands — `get-page`, `list-pages`, `list-app-sections`, `get-schema`, `get-related-page-addon` — rather than a post-failure fallback. This is the one carve-out from the MCP-first rule above; nothing else in the repository may claim it, and no other skill may widen it.
+- Why: over one real build run, `get-page` through MCP `clio-run` averaged 90 s with 11 timeouts while the same reads through the shell `clio` averaged 2.3 s with none, and one `get-schema` through `clio-run` hung for 1800 s. All five commands take identifier-shaped arguments, so routing them to a command line is bounded.
+- What the exception does **not** cover: SQL and OData reads stay on MCP, where the query travels as a JSON field instead of onto a shell command line. Writes (`create-page`, `update-page`, `create-app`, `create-app-section`) stay on MCP unconditionally — a failed MCP write is parked as an environment fault, never re-issued over the shell.
+- The "do not parse CLI text" rule above still binds inside the exception. `references/02-queue-and-built-files.md` requires `bundle.viewConfig` / `bundle.viewModelConfig` copied verbatim out of `get-page`; if the CLI response does not carry them as structured fields, that read goes back to MCP rather than being transcribed into a plausible-looking equivalent. The skill's Refs step records the answer for the current host in `refs/cli-usage.md`.
+- **Delete this exception when ENG-95262 is fixed** — once `clio-run` no longer wedges on these reads, the skill returns to MCP-first with the rest of the repository.
+
 clio MCP availability preflight (fail fast on missing prerequisites):
 
 - Before the first clio operation of a task, run a clio MCP **availability preflight** — once, up front; never discover a missing or dead server mid-run. It resolves into three states, and the STOP decision is a **deterministic gate**, not a judgement call the agent can reason its way past:
