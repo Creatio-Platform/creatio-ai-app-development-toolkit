@@ -961,30 +961,26 @@ check("ENG-95229: object-shaped section without listColumns fails loudly instead
 // `planMeta` is OPTIONAL in the manifest header and SKILL.md's Known-Traps entry never tells the agent to fill
 // `planMeta.sectionSchema`, so a missing anchor must degrade like every other unusable-evidence condition —
 // otherwise following the documented flow yields no plan and no spec at all.
+// Hoisted so the diagnostic reports the state that actually failed. Rebuilding the manifest inline in the
+// diagnostic lets the two copies drift, and a diagnostic that describes a different manifest is worse than none.
+const missingAnchorRun = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX })
 check("ENG-95229: a missing provenance anchor is gated (the plan still renders) rather than thrown",
-  () => { const r = runMigration({ entity: "Applicant",
-    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
-    section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-      source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
-    return gatedOn(r, /`planMeta\.sectionSchema` is not set/) && /planMeta\.sectionSchema. is not set/.test(r.designSpec); },
-  () => { try { return runMigration({ entity: "Applicant",
-    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
-    section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-      source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX }).structure?.issues;
-  } catch (e) { return String(e); } });
+  () => gatedOn(missingAnchorRun, /`planMeta\.sectionSchema` is not set/)
+    && /planMeta\.sectionSchema. is not set/.test(missingAnchorRun.designSpec),
+  () => missingAnchorRun.structure?.issues);
 // `"?"` is the parser's stub for an entity it could not derive. Comparing good evidence against a stub would gate
 // it as "belongs to another section"; the `sectionSchema` half still carries the comparison.
+const entityStubRun = runMigration({ entity: "?", planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX })
 check("ENG-95229: an entity stub ('?') skips the entity half of the provenance check instead of gating good evidence",
-  () => { const r = runMigration({ entity: "?", planMeta: { sectionSchema: "Applicant1Section" },
-    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
-    section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-      source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
-    return !(r.structure?.issues || []).some((i) => /belongs to another section/.test(i))
-      && (r.section?.listColumns || []).join(",") === "Name"; },
-  () => runMigration({ entity: "?", planMeta: { sectionSchema: "Applicant1Section" },
-    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
-    section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-      source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX }).structure?.issues);
+  () => !(entityStubRun.structure?.issues || []).some((i) => /belongs to another section/.test(i))
+    && (entityStubRun.section?.listColumns || []).join(",") === "Name",
+  () => entityStubRun.structure?.issues);
 // The two entry SHAPES clio's contract allows (a bare path string, or an object carrying `name`) and the one it
 // does not (a keyed map). clio#1035 is still open, so the shape can still move — these pin what we accept.
 check("ENG-95229: object-shaped column entries are accepted and rendered",
