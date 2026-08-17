@@ -5,8 +5,8 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -366,6 +366,18 @@ check("entity-filter: dynamic filter → incomplete + folded into ONE concrete e
   lk?.complete === false
   && efcs.needsDecision.filter(n => n.kind === "entity-filter").length === 1
   && efcs.needsDecision.some(n => n.kind === "entity-filter" && /Lk by OtherCol/.test(n.reason)));
+// The row is folded FROM `entityBusinessRules`, so the rule EXISTS with its target + column. Telling the reader to
+// "reproduce" it sends them to rebuild what the ChangeSet already carries; the row must say what is missing instead.
+{
+  const ef = efcs.needsDecision.find((n) => n.kind === "entity-filter");
+  check("entity-filter: the row says the rule is ALREADY emitted and only the comparison is missing — not 'reproduce it'",
+    () => /ALREADY in this ChangeSet/.test(ef.reason) && /COMPLETE the emitted rule/.test(ef.reason)
+      && !/reproduce each as a Freedom lookup filter/.test(ef.reason),
+    () => ef.reason);
+  check("entity-filter: the emitted rule really does carry the target + filter column the row promises",
+    () => lk?.filter?.columnPath === "OtherCol" && lk?.targetAttribute === "Lk" && lk?.filter?.comparisonType == null,
+    () => JSON.stringify(lk));
+}
 check("entity-filter: static filter marked complete + NOT in the folded line",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && /\bSt by\b/.test(n.reason)));
 
@@ -458,6 +470,20 @@ check("unmapped-component: a container wrapping a MAPPED field (InfoBlock) is NO
   !contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "InfoBlock"));
 check("unmapped-component: a container whose WHOLE subtree maps to nothing (SlaWrap) IS still surfaced",
   contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaWrap"));
+// The mirror of the hasMappedDesc rule. An item INSIDE a mapped CONTROL (an image's tip) is part of that control's
+// own rendering — the plan already ships it, so asking for a manual port is a false drop. An item inside a mapped
+// CONTAINER is NOT: a container is a layout box whose children each still have to be built.
+const insideCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "Photo", parentName: "Header", propertyName: "items", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
+  di({ name: "PhotoTip", parentName: "Photo", propertyName: "items", caption: "getPhotoTip" }),   // inside a mapped CONTROL
+  di({ name: "IslandBlock", parentName: "Header", propertyName: "items" }),                        // becomes a real container
+  di({ name: "IslandFld", parentName: "IslandBlock", propertyName: "items", bindTo: "IslandCol" }),
+  di({ name: "StrayLabel", parentName: "IslandBlock", propertyName: "items", caption: "getStray" })] })])); // inside a CONTAINER
+const insideUn = insideCs.needsDecision.filter((n) => n.kind === "unmapped-component").map((n) => n.item);
+check("unmapped-component: an item INSIDE a mapped control (an image's tip) is NOT flagged — the control already renders it",
+  () => !insideUn.includes("PhotoTip"), () => insideUn);
+check("unmapped-component: an unmapped item inside a mapped CONTAINER is STILL flagged — a container does not render its children for you",
+  () => insideUn.includes("StrayLabel"), () => insideUn);
 // review (s-vanislemarina #2): a primary-display label (caption getPrimaryDisplayColumnValue) = the record title,
 // provided NATIVELY by the Freedom page title → NOT an unmapped micro-widget, and no ⚠ message. Its container
 // (HeaderColumnContainer) is spared too.
@@ -469,6 +495,153 @@ const umTpl = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di(
   { seedTemplate: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
 check("unmapped-component: template-owned items are NOT flagged (payload = client content only, F9)",
   !umTpl.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "BaseLabel"));
+
+/* ---- a mixin is declared TWICE — in `mixins` and as a define() dependency — and the ledger tracks both members.
+   The aggregated module-dep row omits mixin modules (the mixin row already names them), so the mixin decision must
+   COVER its dep or that member drops to `unaccounted` and the coverage gate blocks a plan that is actually decided.
+   The local name and the module name differ here on purpose: that is the case a bare-name match does NOT catch. ---- */
+{
+  const mxSrc = 'define("P",["TooltipUtilities"],function(){return{entitySchemaName:"X",'
+    + 'mixins:{TooltipUtilitiesMixin:"Terrasoft.TooltipUtilities"},'
+    + 'diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});';
+  const mxEff = mergeHierarchy([parseSchema(mxSrc, "P")]);
+  const mxCs = mapToFreedom(mxEff, { entityColumns: { F: "Text" } });
+  const mxCov = buildCoverage({ eff: mxEff, changeSet: mxCs, manifest: {} });
+  check("coverage: a mixin's define() dependency stays ACCOUNTED once the aggregate stops listing it (the mixin row covers it)",
+    () => mxCov.complete === true && !(mxCov.issues || []).some((i) => /TooltipUtilities/.test(i)),
+    () => mxCov.issues);
+  check("module-dep aggregate: a module that already has its own mixin row is NOT listed again",
+    () => !mxCs.needsDecision.some((n) => n.kind === "module-dep" && /TooltipUtilities/.test(String(n.item))),
+    () => mxCs.needsDecision.filter((n) => n.kind === "module-dep").map((n) => n.item));
+}
+{
+  const mxSrc = 'define("P",["ConfigurationConstants","Terrasoft.ConfigurationConstants"],function(){return{entitySchemaName:"X",'
+    + 'mixins:{ConfigurationConstantsMixin:"Terrasoft.ConfigurationConstants"},'
+    + 'diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});';
+  const mxEff = mergeHierarchy([parseSchema(mxSrc, "P")]);
+  const mxCs = mapToFreedom(mxEff, { entityColumns: { F: "Text" } });
+  const depRow = mxCs.needsDecision.find((n) => n.kind === "module-dep");
+  check("module-dep aggregate: a bare-name collision with a mixin module stays LOUD as its own dependency row",
+    () => /\bConfigurationConstants\b/.test(depRow?.item || "") && !/Terrasoft\.ConfigurationConstants/.test(depRow?.item || ""),
+    () => mxCs.needsDecision.map((n) => ({ kind: n.kind, item: n.item, covers: n.covers })));
+  check("coverage: the exact mixin dep and the colliding bare dep are decided by DIFFERENT rows, never one bare cover",
+    () => buildCoverage({ eff: mxEff, changeSet: mxCs, manifest: {} }).complete === true
+      && (mxCs.needsDecision.find((n) => n.kind === "mixin")?.covers || []).includes("Terrasoft.ConfigurationConstants")
+      && !(mxCs.needsDecision.find((n) => n.kind === "mixin")?.covers || []).includes("ConfigurationConstants"),
+    () => mxCs.needsDecision.map((n) => ({ kind: n.kind, item: n.item, covers: n.covers })));
+}
+
+/* ---- detail-add-mechanism: the row must not instruct an add flow the mode forbids, and must be identifiable ---- */
+{
+  const dam = (addMode, d = {}) => {
+    const cs = { details: [{ detailSchema: "S", caption: "Базовая схема детали с реестром", entity: "OpportunityContact", ...d }], needsDecision: [] };
+    attachDetailAddModes(cs, { S: { addMode } });
+    return cs.needsDecision[0];
+  };
+  const disabled = dam({ addDisabled: true });
+  check("detail-add-mechanism: an add-DISABLED detail is NOT told to build a custom add request-handler (that contradicts its own text)",
+    () => !/CUSTOM add request-handler/.test(disabled.reason) && /no add flow to reproduce/.test(disabled.reason),
+    () => disabled.reason);
+  const viaLookup = dam({ lookup: true });
+  check("detail-add-mechanism: a lookup-add detail IS told to build the custom add request-handler",
+    () => /CUSTOM add request-handler/.test(viaLookup.reason), () => viaLookup.reason);
+  const openCard = dam({ openCardOverridden: true });
+  check("detail-add-mechanism: an openCardByMode-only override IS told what custom add handler to build",
+    () => /CUSTOM add request-handler/.test(openCard.reason) && /overridden add-card flow/.test(openCard.reason),
+    () => openCard.reason);
+  const svc = dam({ service: "SomeSvc" });
+  check("detail-add-mechanism: the service check appears only when a service is actually called",
+    () => /VERIFY that service is deployed/.test(svc.reason) && !/VERIFY that service is deployed/.test(disabled.reason),
+    () => [svc.reason, disabled.reason]);
+  check("detail-add-mechanism: the inline-edit check appears only for an editable grid",
+    () => /supports inline edit/.test(dam({ editableGrid: true }).reason) && !/supports inline edit/.test(disabled.reason));
+  // A custom grid action already carries its own instruction — the guidance must not state a second, conflicting one.
+  const custom = dam({ addDisabled: true, customAction: true });
+  check("detail-add-mechanism: an add-DISABLED detail with a CUSTOM grid action keeps only that action's instruction",
+    () => /custom detail action/.test(custom.reason) && !/CUSTOM add request-handler/.test(custom.reason) && !/no add flow to reproduce/.test(custom.reason),
+    () => custom.reason);
+  // `openCardByMode` is a FALLBACK: on the stage-history shape (read-only detail that ALSO overrides the open) it is
+  // not the thing to build. Both flags come off the same body independently, so the pairing is reachable — and the
+  // description suppresses the override phrase there, so guidance naming it would cite something never shown.
+  const roOpenCard = dam({ addDisabled: true, openCardOverridden: true });
+  check("detail-add-mechanism: add-DISABLED + openCardOverridden is NOT told to build an add flow its own text forbids",
+    () => !/CUSTOM add request-handler/.test(roOpenCard.reason) && /no add flow to reproduce/.test(roOpenCard.reason),
+    () => roOpenCard.reason);
+  check("detail-add-mechanism: guidance never cites a mode the description suppressed (openCard phrase and its instruction appear together or not at all)",
+    () => [{ openCardOverridden: true }, { addDisabled: true, openCardOverridden: true },
+      { openCardOverridden: true, lookup: true }, { openCardOverridden: true, fixedFilters: true }]
+      .every((m) => /overrides the default add-card open/.test(dam(m).reason) === /overridden add-card flow/.test(dam(m).reason)),
+    () => [{ openCardOverridden: true }, { addDisabled: true, openCardOverridden: true },
+      { openCardOverridden: true, lookup: true }, { openCardOverridden: true, fixedFilters: true }].map((m) => dam(m).reason));
+  // The stock caption is shared by every detail built on that base schema — three on one page produced three
+  // identical rows. The child entity is what tells them apart, and it is the pair the Layout table uses.
+  const a = dam({ addDisabled: true }), b = dam({ addDisabled: true }, { entity: "OpportunityInStage" });
+  check("detail-add-mechanism: two details sharing the stock caption get DISTINCT items (qualified by child entity)",
+    () => a.item !== b.item && a.item.endsWith("· OpportunityContact") && b.item.endsWith("· OpportunityInStage"),
+    () => [a.item, b.item]);
+}
+
+/* ---- NAME-BOUND field inserts: `{ name: "Amount", values: { layout } }` with no `bindTo` is a field on the
+   entity's `Amount` column. Left unpromoted it is neither field nor structure, so it surfaces as an
+   `unmapped-component` "port manually or confirm drop" and its column never reaches the Layout table. ---- */
+const NB_COLS = { Amount: "Decimal", Owner: "Lookup", IsPrimary: "Boolean", Notes: "Text", Tactic: "Text",
+  Contact: "Lookup", GeneratedField: "Text", TabColumn: "Text" };
+const nbCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "GeneralBlock", parentName: "Header", propertyName: "items" }),
+  di({ name: "Amount", parentName: "GeneralBlock", propertyName: "items", layout: { column: 0, row: 3, colSpan: 12 } }), // name-bound → field
+  di({ name: "Owner", parentName: "GeneralBlock", propertyName: "items", bindTo: "Owner" }),          // explicit bindTo → field (control)
+  di({ name: "IsPrimary", parentName: "GeneralBlock", propertyName: "items" }),                       // column NAME but PARENTS items → container
+  di({ name: "FirstOption", parentName: "IsPrimary", propertyName: "items", caption: "x" }),
+  di({ name: "Tactic", parentName: "GeneralBlock", propertyName: "items", caption: "getTactic" }),    // column NAME but captioned → not a field
+  di({ name: "Contact", parentName: "GeneralBlock", propertyName: "items", itemType: 2 }),             // detail-shaped → not a field
+  di({ name: "GeneratedField", parentName: "GeneralBlock", propertyName: "items", generator: "makeField" }), // generated → not a field
+  di({ name: "TabColumn", parentName: "Tabs", propertyName: "tabs", isTab: true }),                    // tab-shaped → not a field
+  di({ name: "NotesWrap", parentName: "Header", propertyName: "items" }),                             // holds ONLY a name-bound field
+  di({ name: "Notes", parentName: "NotesWrap", propertyName: "items" }),
+  di({ name: "SlaTimer", parentName: "Header", propertyName: "items" })] })]),                        // not a column → stays unmapped
+  { entityColumns: NB_COLS });
+const nbEl = (n) => nbCs.viewConfigDiff.find((op) => op.name === n);
+const nbPds = Object.keys(nbCs.modelConfigDiff[0].values);
+const nbUnmapped = nbCs.needsDecision.filter((n) => n.kind === "unmapped-component").map((n) => n.item);
+check("name-bound: an item named for an entity column becomes a real FIELD element",
+  () => !!nbEl("Amount"), () => nbCs.viewConfigDiff.map((op) => op.name));
+check("name-bound: the promoted field carries its PDS column, so the page actually reads/writes it",
+  () => nbPds.includes("Amount"), () => nbPds);
+check("name-bound: the column TYPE drives the control (Decimal → crt.NumberInput) — a real field, not a placeholder",
+  () => nbEl("Amount")?.values?.type === "crt.NumberInput", () => nbEl("Amount")?.values?.type);
+check("name-bound: the promoted field is NOT also reported as unmapped-component",
+  () => !nbUnmapped.includes("Amount"), () => nbUnmapped);
+check("name-bound: an explicit `bindTo` field still maps as before",
+  () => nbEl("Owner")?.values?.type === "crt.ComboBox", () => nbEl("Owner")?.values?.type);
+check("name-bound GUARD: an item matching a column name but PARENTING other items is NOT promoted — its children would be lost",
+  () => nbUnmapped.includes("IsPrimary") && !nbEl("IsPrimary"), () => nbUnmapped);
+check("name-bound GUARD: a CAPTIONED item matching a column name is NOT promoted",
+  () => nbUnmapped.includes("Tactic") && !nbEl("Tactic"), () => nbUnmapped);
+check("name-bound GUARD: an itemType detail matching a column name is NOT promoted into a field",
+  () => !nbPds.includes("Contact") && !nbEl("Contact"), () => ({ pds: nbPds, el: nbEl("Contact") }));
+check("name-bound GUARD: a generated item matching a column name is NOT promoted into a field",
+  () => !nbPds.includes("GeneratedField") && !nbEl("GeneratedField"), () => ({ pds: nbPds, el: nbEl("GeneratedField") }));
+check("name-bound GUARD: a tab item matching a column name is NOT promoted into a field",
+  () => !nbPds.includes("TabColumn")
+    && !nbCs.viewConfigDiff.some((op) => op.name === "TabColumn" && op.values?.control === "$TabColumn"),
+  () => ({ pds: nbPds, el: nbEl("TabColumn") }));
+check("name-bound: an item whose name is NOT an entity column is still surfaced (no over-promotion)",
+  () => nbUnmapped.includes("SlaTimer"), () => nbUnmapped);
+check("name-bound CASCADE: a container holding only a name-bound field stops reading as an unmapped block",
+  () => !nbUnmapped.includes("NotesWrap") && !!nbEl("NotesWrap"), () => nbUnmapped);
+// Template-owned base content stays context. Asserted on a CHILD page: there `isContentField` admits a
+// template-owned field that HAS a `bindTo`, so promoting one (which stamps `bindTo`) would silently add base
+// template content to the child's own payload. On a main page F9 drops it anyway, which would hide the guard.
+const nbTpl = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "Owner", parentName: "Header", propertyName: "items", bindTo: "Owner" })] })],
+  { seedTemplate: [L("Base", { entity: "X", diff: [di({ name: "Amount", parentName: "Header", propertyName: "items" })] })] }),
+  { entityColumns: NB_COLS, isChildPage: true });
+check("name-bound GUARD: a TEMPLATE-OWNED item named for a column is not promoted, so base content cannot leak into a CHILD page's payload",
+  () => !nbTpl.viewConfigDiff.some((op) => op.name === "Amount"), () => nbTpl.viewConfigDiff.map((op) => op.name));
+// Most call sites pass no entityColumns: with no column list there is nothing to match a name against.
+const nbNoCols = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "Amount", parentName: "Header", propertyName: "items" })] })]));
+check("name-bound: with no entityColumns supplied nothing is promoted (the match has no source of truth)",
+  () => nbNoCols.needsDecision.some((n) => n.kind === "unmapped-component" && n.item === "Amount"));
 
 /* ---- Fix 3: referenced UI modules (define() deps) surfaced + exposed on the ChangeSet ---- */
 check("referenced-module: define()-dep UI module flagged (outside the page-schema migration unit)",
@@ -1794,8 +1967,20 @@ const imgBound = runMigration({ entity: "X", entityColumns: { Photo: { type: "Im
 check("#1 image concrete: sole IMAGELOOKUP column → crt.ImageInput value bound to it, attribute declared, no image-column ⚠",
   imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.value === "$Photo"
   && imgBound.changeSet.viewModelConfigDiff?.[0]?.values?.Photo?.modelConfig?.path === "PDS.Photo"
+  && imgBound.changeSet.images.some((i) => i.classic === "Photo" && i.column === "Photo" && i.filled === false)
+  && imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.size === "large"
+  && imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.borderRadius === "medium"
   && !imgBound.changeSet.needsDecision.some((n) => n.kind === "image-column"),
-  () => JSON.stringify(imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values));
+  () => JSON.stringify({ values: imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values, images: imgBound.changeSet.images }));
+{
+  const imgNameCollide = runMigration({ entity: "X", entityColumns: { Photo: { type: "ImageLookup" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"Logo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+  check("#1 image concrete: name-detected Photo reserves the sole IMAGELOOKUP so a second name-detected image raises a collision",
+    () => imgNameCollide.changeSet.images.find((i) => i.classic === "Photo")?.column === "Photo"
+      && imgNameCollide.changeSet.images.find((i) => i.classic === "Logo")?.filled === true
+      && imgNameCollide.changeSet.needsDecision.some((n) => n.kind === "image-column" && n.item === "Logo"),
+    () => JSON.stringify({ images: imgNameCollide.changeSet.images, decisions: imgNameCollide.changeSet.needsDecision.filter((n) => n.kind === "image-column") }));
+}
 // review (round-5 Minor #4) — a VALUE-bound crt.ImageInput emitted via the FIELD path (an entity IMAGELOOKUP column
 // laid out as a normal field, name NOT Photo/Logo, no generator) is neither `isField` (binds via value) nor in
 // cs.images — it must STILL get a Layout row so the plan-reader sees every emitted control.
@@ -3314,6 +3499,57 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   impRun.changeSet.needsDecision.filter((n) => n.kind === "module-dep").length === 1
   && /ConfigurationConstants/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "module-dep").item)
   && impLedger("module-dep").find((r) => r.name === "terrasoft")?.disposition === "context");
+{
+  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows.map((r) => r.label) || [];
+  const impPlan = renderPlan(impRun, {});
+  check("⚠ Imperative members worklist: checklist carries every member kind, including module-dep and all attribute rows",
+    () => ["[attribute-lookup-filter] Owner", "[attribute-dependency] Amount ← Quantity, Price", "[attribute-virtual] CanEdit",
+      "[attribute-imperative] Computed", "[message] CalcTotal", "[mixin] PrintUtils", "[module-dep] ConfigurationConstants, VisaHelper"]
+      .every((label) => memberRows.includes(label)),
+    () => memberRows);
+  check("⚠ Imperative members table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
+    () => /^\| Owner \| attribute-lookup-filter \| 1 filter\(s\), keys: ownerFilter on Contact \|/m.test(impPlan)
+      && /^\| CanEdit \| attribute-virtual \| \(dataValueType 12\) · default false \|/m.test(impPlan)
+      && /^\| Computed \| attribute-imperative \| function key\(s\): value \|/m.test(impPlan)
+      && /^\| ConfigurationConstants, VisaHelper \| module-dep \| — \|/m.test(impPlan),
+    () => impPlan.split("\n").filter((l) => /Owner|CanEdit|Computed|ConfigurationConstants/.test(l)));
+  check("⚠ Imperative members table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
+    () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
+    () => impPlan.split("\n").filter((l) => /Amount ← Quantity, Price|attribute-dependency/.test(l)));
+  // `referenced-module` was the one member kind pinned nowhere on the ARRIVAL side — breaking its emission would
+  // drop it from Confirm AND from the table, leaving the suite green. `umCs` already carries CasesEstimateLabel.
+  const refRun = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+    schemas: [{ pkg: "P", body: `define("XPage",["CasesEstimateLabel","css!CasesEstimateLabel"],function(){return{entitySchemaName:"X",
+      diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+  const refPlan = renderPlan(refRun, {});
+  check("⚠ Imperative members: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
+    () => /^\| CasesEstimateLabel \| referenced-module \|/m.test(refPlan)
+      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || [])
+        .some((r) => r.label === "[referenced-module] CasesEstimateLabel"),
+    () => ({ rows: refPlan.split("\n").filter((l) => /CasesEstimateLabel/.test(l)),
+      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || []).map((r) => r.label) }));
+  // Every kind the members table can render must also be requested in the step-5.1 digest, or its row prints a
+  // `⚠ not described` cell no run can fill. Pinned as a set relation so a new kind cannot satisfy one and not the other.
+  check("⚠ Imperative members: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
+    () => [...IMPERATIVE_MEMBER_KINDS].every((k) => HANDOFF_MEMBER_KINDS.has(k)),
+    () => ({ renderable: [...IMPERATIVE_MEMBER_KINDS], handoff: [...HANDOFF_MEMBER_KINDS] }));
+}
+{
+  const orphanDepRun = runMigration({ entity: "X", entityColumns: { Amount: "Decimal", Quantity: "Decimal", Price: "Decimal" },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",
+      attributes:{Amount:{dependencies:[{columns:["Quantity","Price"],methodName:"missingHandler"}]}},
+      diff:[{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Amount"}}]};});` }] }, { baseDir: FIX });
+  const orphanPlan = renderPlan(orphanDepRun, {});
+  check("⚠ Imperative members table: an attribute-dependency with no parsed handler row is visible in the approval plan",
+    () => orphanDepRun.changeSet.handlerStubs.length === 0
+      && orphanDepRun.changeSet.needsDecision.some((n) => n.kind === "attribute-dependency" && n.item === "Amount ← Quantity, Price")
+      && /^\| Amount ← Quantity, Price \| attribute-dependency \| — \| ⚠ not described \|$/m.test(orphanPlan),
+    () => ({ stubs: orphanDepRun.changeSet.handlerStubs, decisions: orphanDepRun.changeSet.needsDecision, lines: orphanPlan.split("\n").filter((l) => /Amount ←|attribute-dependency|Imperative members/.test(l)) }));
+  check("⚠ Confirm: orphan attribute-dependency still does NOT fall back to Confirm once rendered as an imperative member",
+    () => !/^- \*\*\[attribute-dependency\]\*\*/m.test(orphanPlan),
+    () => orphanPlan.split("\n").filter((l) => /attribute-dependency/.test(l)));
+}
 
 // ---- method body EVIDENCE replaces name-guessing ----
 const stubOf = (n) => impRun.changeSet.handlerStubs.find((h) => h.sourceMethod === n);
@@ -4320,6 +4556,17 @@ check("#11 detail add-mechanism: add-disabled + custom grid action (attachReques
   () => vacDetail?.addMode);
 check("#11 detail add-mechanism: rendered as a decision — add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns",
   /add-new DISABLED/.test(attachRun.plan) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(attachRun.plan) && /FIXED list filters on Category, Type, Status/.test(attachRun.plan));
+const openCardOnlyRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"OpenCardDetail",entitySchemaName:"OpenChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  detailSchemas: { OpenCardDetail: { body: `define("OpenCardDetail",[],function(){return{entitySchemaName:"OpenChild",methods:{openCardByMode:function(){this.openCardInChain();}}};});`, editPage: false } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("detail add-mechanism: openCardByMode-only detail gets end-to-end custom add-handler guidance in the plan",
+  () => /overrides the default add-card open/.test(openCardOnlyRun.plan)
+    && /CUSTOM add request-handler/.test(openCardOnlyRun.plan)
+    && /overridden add-card flow/.test(openCardOnlyRun.plan),
+  () => openCardOnlyRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism")?.reason);
 // review (Applicant #12, verified on-stand): a system-maintained detail (stage history) is read-only via
 // `getAddRecordButtonVisible: return false` — declared in the BASE replacing layer (HRApplicant), NOT the client
 // top override (WorkHrBase). Supplying the detail's full replacing CHAIN (bodies:[base→top]) lets the engine scan
@@ -4959,8 +5206,9 @@ check("handoff BACK: a member described ONLY by a body card still counts as desc
 const hoBodyPlan = renderPlan(hoBody, {});
 check("handoff BACK: the plan prints BOTH cards, so the guards in the body card are named",
   /C01 AC-1 · body shared\/C09 AC-51, AC-53/.test(hoBodyPlan));
-check("handoff BACK: a ⚠ Confirm member described ONLY by a body card cites it instead of reading ⚠ not described",
-  /message.*RefreshThing[\s\S]*?described in\*\* body shared\/C09 AC-56/.test(hoBodyPlan));
+check("handoff BACK: an ⚠ Imperative members row described ONLY by a body card cites it instead of reading ⚠ not described",
+  () => /^\| RefreshThing \| message \|.*\| body shared\/C09 AC-56 \|$/m.test(hoBodyPlan),
+  () => hoBodyPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
 
 // The COMPUTED floor under the two-card rule: a row whose body is PROVABLY in another schema — a `mixin:` member,
 // an `externalRef` method — described by a wiring card alone is flagged (`behaviourIndex.wiringOnly` + ⚠ plan
@@ -5029,9 +5277,9 @@ for (const [label, blank] of [["empty string", ""], ["whitespace only", "   "]])
     /only a wiring card/.test(blankPlan),
     () => hoBlank.behaviourIndex.wiringOnly);
   // Asserted on THAT row, ending where it ends: a plan-wide match would be satisfied by any other clean row.
-  const blankRow = (blankPlan.split("\n").find((l) => /\bLeadMixin\b/.test(l) && /described in/.test(l)) || "").trim();
+  const blankRow = (blankPlan.split("\n").find((l) => /^\| LeadMixin \| mixin \|/.test(l)) || "").trim();
   check(`wiringOnly: a ${label} bodyCard renders NOTHING — never a dangling \` · body\` with no card behind it`,
-    blankRow.endsWith("**described in** main/C28 AC-200"), () => blankRow || "(no described-in row found)");
+    () => blankRow.endsWith("| main/C28 AC-200 |"), () => blankRow || "(no LeadMixin members row found)");
 }
 check("wiringOnly: a blank `card` is not a wiring card either — the row is UNDESCRIBED, and telling the reader to add a bodyCard would name the wrong gap",
   (() => {
@@ -5061,14 +5309,23 @@ check("handoff OUT: a TYPED page gets its own scope in stubIndex (it renders its
 check("handoff BACK: a `<typedSchema>::<method>` key that matched inside the typed fold is NOT reported unmatched",
   !hoTyped.behaviourIndex.unmatched.includes("DealTypedPage::typedHelper"));
 
-// ⚠ Confirm carries the same visible-gap rule as the imperative table: an undescribed message/mixin is not a blank.
+// ⚠ Imperative members carries the same visible-gap rule as the method table: an undescribed member is not a blank.
+// Members live there, NOT in ⚠ Confirm: they are work to port, not questions needing an on-stand answer.
 const hoConfirm = renderPlan(ho, {});
-check("⚠ Confirm: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
-  /\*\*\[message\]\*\*.*described in.*⚠ not described/.test(hoConfirm));
-check("⚠ Confirm: the header counts how many behaviour-analysis rows carry a card",
-  /behaviour-analysis row\(s\).*carry a card/.test(hoConfirm));
-check("⚠ Confirm: a described member row names its card + AC",
-  /\*\*\[message\]\*\*.*described in.*C02 AC-1/.test(renderPlan(hoBack, {})));
+check("⚠ Imperative members: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
+  () => /^\| \S+ \| (message|mixin) \|.*\| ⚠ not described \|$/m.test(hoConfirm),
+  () => hoConfirm.split("\n").filter((l) => /^\| \S+ \| (message|mixin) \|/.test(l)));
+check("⚠ Imperative members: the header counts how many rows carry a card",
+  () => /#### ⚠ Imperative members — account for EVERY row \(\d+\)/.test(hoConfirm)
+    && /> \d+ of \d+ carry a behaviour card/.test(hoConfirm),
+  () => hoConfirm.split("\n").filter((l) => /Imperative members|carry a behaviour card/.test(l)));
+check("⚠ Imperative members: a described member row names its card + AC",
+  () => /^\| \S+ \| message \|.*\| .*C02 AC-1.*\|$/m.test(renderPlan(hoBack, {})),
+  () => renderPlan(hoBack, {}).split("\n").filter((l) => /^\| \S+ \| message \|/.test(l)));
+// The members must NOT also appear as ⚠ Confirm bullets — that double-listing is what moving them fixed.
+check("⚠ Confirm: no `message` / `mixin` / `module-dep` / `attribute-*` bullet remains in the Confirm worklist",
+  () => !/^- \*\*\[(message|mixin|module-dep|attribute-virtual|attribute-imperative|attribute-dependency|attribute-lookup-filter|referenced-module)\]/m.test(hoConfirm),
+  () => hoConfirm.split("\n").filter((l) => /^- \*\*\[/.test(l)));
 
 // `--stubs` is a separate CLI artifact on purpose: the full result JSON carries megabytes the analysis run never reads.
 const stubsCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--stubs"],

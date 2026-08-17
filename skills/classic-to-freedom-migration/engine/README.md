@@ -102,7 +102,7 @@ result JSON — `evidence` is dropped, because the analysis run reads bodies fro
 The answers come back as `manifest.behaviourIndex`: `{ "<method>" | "<schema>::<method>" | "<kind>:<name>":
 { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? } }`. On the next run the engine folds each entry
 into the GENERATED tables — a **Described in** cell naming the card + AC on the `⚠ Imperative logic` row, the same
-reference on a described `⚠ Confirm` member row, and a reported trigger where the engine traced none (marked
+reference on a described `⚠ Imperative members` row, and a reported trigger where the engine traced none (marked
 `reported`; an engine-traced trigger is never overwritten).
 
 **Two cards, when the body lives elsewhere.** Any row whose behaviour is defined outside the scope that owns it is

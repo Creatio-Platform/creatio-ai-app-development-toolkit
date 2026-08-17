@@ -510,7 +510,35 @@ function headerTemplateRecommendation(cs, opts) {
 // checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
 // appears in the Logic table: it does not. Removing it from this Set puts every method in two worklists at once.
 // ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
-const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
+// The ⚠ Imperative members worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
+// methods: each is a port unit that must end up ported / dropped / blocked, not a question with an on-stand answer.
+// `attribute-dependency` is deliberately absent — it is the trigger of a method that already has its own row.
+// What each kind IS, stated ONCE above the table instead of repeated verbatim on every row of that kind.
+const MEMBER_KIND_NOTE = {
+  mixin: "**mixin** — members defined in ANOTHER schema, so none of the behaviour is in this page body. Port what it contributes (an entity-parameterized mixin can also carry actions and messages); check whether the Freedom template already provides an equivalent.",
+  message: "**message** — sandbox wiring whose counterpart lives in another schema. Find the counterpart, then rebuild it as a handler-mediated request, a shared service or an explicit event. A subscribe with no publisher found is an unresolved thread, not \"no behaviour\".",
+  "attribute-virtual": "**attribute-virtual** — page UI state with NO entity column behind it, so no field insert carries it. Create it as a Freedom view-model attribute (with its default) and re-wire whatever read it.",
+  "attribute-imperative": "**attribute-imperative** — a sub-key defined as a FUNCTION: a computed value the engine reads as present but cannot evaluate. Implement as a converter, virtual attribute or handler.",
+  "attribute-lookup-filter": "**attribute-lookup-filter** — the lookup is filtered IMPERATIVELY via `lookupListConfig.filters`, which does NOT come across as a declarative FILTRATION rule. Rebuild as a Freedom lookup-filter handler (or an entity business rule when the filter is static).",
+  "module-dep": "**module-dep** — `define()` dependencies with no row of their own: constants/enum modules hold the lookup GUIDs the rules compare against, utility modules hold logic the page calls.",
+  "referenced-module": "**referenced-module** — renders UI OUTSIDE this page's diff, so its controls are not in the ChangeSet. Port it manually, or confirm the target template provides it.",
+};
+// Exported so the golden can pin the set relation against HANDOFF_MEMBER_KINDS: a kind that renders in the table
+// but is missing from the digest prints a `⚠ not described` cell no step-5.1 run can fill.
+export const IMPERATIVE_MEMBER_KINDS = Object.keys(MEMBER_KIND_NOTE);
+const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change trigger whose handler row was not found in this schema. Rebuild the on-change behaviour, or resolve the missing/external handler before marking it done.";
+// The CHECKLIST group is broader than the plan table: it also carries `attribute-dependency`, whose row the plan
+// omits (the handler method carries it there). The checklist proves completeness member by member, and the
+// attribute is its own member — dropping its row would report the method while the attribute went untracked.
+const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
+const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
+  // Imperative MEMBERS have their own worklist (⚠ Imperative members), for the same reason methods do: they are work
+  // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
+  ...IMPERATIVE_MEMBER_KINDS,
+  // `attribute-dependency` is normally the trigger of a handler method, and that method already has an ⚠ Imperative
+  // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Imperative members
+  // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
+  "attribute-dependency"]);
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
 function renderConfirmWorklist(cs) {
@@ -519,28 +547,18 @@ function renderConfirmWorklist(cs) {
   // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
+  // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
+  // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  // A `message` / `mixin` / `module-dep` / `attribute-*` row is unanswerable from this page body by definition, so
-  // it goes through the same step-5.1 run as an unresolved method — and carries the same card + AC reference once
-  // described. Appended to the row rather than replacing the reason: the reason says what is open, the card says
-  // where the behaviour is written down. An UNdescribed one of those kinds prints `⚠ not described` for the same
-  // reason the method rows do — a blank reads as "nothing expected here", which is how these rows got skipped.
   const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-    (d.describedIn || HANDOFF_MEMBER_KINDS.has(d.kind) ? ` · **described in** ${describedInText(d)}` : ""));
-  const scoped = nd.filter((d) => HANDOFF_MEMBER_KINDS.has(d.kind));
-  const describedCount = scoped.filter((d) => d.describedIn).length;
+    (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
   // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
     confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
-  // Counted where it is invisible otherwise: "7 messages, 0 described" and "7 messages, 7 described" read the same
-  // in a bullet list, and only one of them is an approvable plan.
-  const head = [`#### ⚠ Confirm before I build (${confirm.length})`];
-  if (scoped.length) head.push("", `> ${describedCount} of ${scoped.length} behaviour-analysis row(s) (\`message\` / \`mixin\` / \`module-dep\` / \`attribute-*\`) carry a card` +
-    (describedCount < scoped.length ? " — run step 5.1 for the rest." : "."), "");
-  return [...head, ...confirm, ""];
+  return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
 }
 
 export function renderDesignSpec(result, opts = {}) {
@@ -650,6 +668,10 @@ export function renderDesignSpec(result, opts = {}) {
   // Both sections together are "the ⚠ worklist" the SKILL's rules refer to.
   L.push(...renderImperativeLogic(cs));
 
+  // ---- ⚠ Imperative members: the same worklist contract for the NON-method imperative members. Beside the method
+  // worklist because they are the same kind of thing — declared here, defined elsewhere, each a port unit.
+  L.push(...renderImperativeMembers(cs));
+
   // ---- Child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist (GENUINE open
   // decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed) ----
   L.push(...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs));
@@ -698,8 +720,11 @@ function triggerText(t) {
 // type from prose instead of from the engine's own output. `attribute-*` joins them for the same reason: the
 // declaration is here, the behaviour it drives is not. Lives here (not in migrate.mjs) because both the renderer and
 // the handoff digest key off it, and migrate.mjs already imports this module.
-export const HANDOFF_MEMBER_KINDS = new Set(["message", "mixin", "module-dep", "attribute-virtual",
-  "attribute-imperative", "attribute-dependency", "attribute-lookup-filter", "referenced-module"]);
+// DERIVED, not re-spelled: every kind the ⚠ Imperative members worklist renders must also be requested in the
+// step-5.1 handoff digest. Hand-keeping a second identical list means a kind added to `MEMBER_KIND_NOTE` reaches the
+// table and prints a `⚠ not described` cell that no run can ever fill, because the digest never asked for it.
+export const HANDOFF_MEMBER_KINDS = MEMBER_WORKLIST_KINDS;
+
 
 // The behaviour card + acceptance criteria that DESCRIBE this row, once a step-5.1 run has indexed it. This is what
 // makes *ported* checkable against a described behaviour instead of against the method's name (Contract rule 7);
@@ -717,6 +742,31 @@ function describedInText(h) {
   if (d.card || (d.ac || []).length) parts.push(cite(d.card, d.ac));
   if (d.bodyCard) parts.push(`body ${cite(d.bodyCard, d.bodyAc)}`);
   return parts.join(" · ");
+}
+
+const attrDependencyItemFromTrigger = (t) =>
+  t?.kind === "attribute-dependency"
+    ? `${t.attribute} ← ${(t.columns || []).join(", ") || "?"}`
+    : null;
+
+function coveredAttributeDependencyItems(stubs) {
+  const covered = new Set();
+  const visit = (t) => {
+    const item = attrDependencyItemFromTrigger(t);
+    if (item) covered.add(item);
+    if (t?.rootTrigger) visit(t.rootTrigger);
+  };
+  for (const h of stubs || []) for (const t of h.triggers || []) visit(t);
+  return covered;
+}
+
+function imperativeMemberRows(cs) {
+  const order = new Map(IMPERATIVE_MEMBER_KINDS.map((k, i) => [k, i]));
+  const orphanOrder = IMPERATIVE_MEMBER_KINDS.length;
+  const coveredDependencies = coveredAttributeDependencyItems(cs.handlerStubs || []);
+  const rows = (cs.needsDecision || []).filter((n) =>
+    order.has(n.kind) || (n.kind === "attribute-dependency" && !coveredDependencies.has(n.item)));
+  return { order: new Map([...order, ["attribute-dependency", orphanOrder]]), rows };
 }
 
 // Where the method's body lives. An externally-assigned method has none HERE — naming the module beats leaving a
@@ -876,6 +926,31 @@ function foldByCaller(stubs) {
   for (const h of stubs) if (!parentOf.has(h.sourceMethod)) walk(h, 0);
   for (const h of stubs) walk(h, 0); // safety net: a row no walk reached is still emitted, never dropped
   return { ordered, folded: parentOf.size };
+}
+
+// The ⚠ Imperative members worklist. Mirrors ⚠ Imperative logic: a table of port units, with each row's unresolved
+// aspect stated IN ITS OWN CELL rather than escalated to ⚠ Confirm — a bullet list can only say "this row is open",
+// it cannot say "we know what it is, we do not know whether the template already provides it".
+function renderImperativeMembers(cs) {
+  const { order, rows: rawRows } = imperativeMemberRows(cs);
+  const rows = rawRows
+    .sort((a, b) => order.get(a.kind) - order.get(b.kind) || String(a.item).localeCompare(String(b.item)));
+  if (!rows.length) return [];
+  const described = rows.filter((d) => d.describedIn).length;
+  const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, "",
+    `> ${described} of ${rows.length} carry a behaviour card` +
+    (described < rows.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), "",
+    "> Each row is declared on this page, but its behaviour lives OUTSIDE the page body. Mark each **ported** (naming",
+    "> the Freedom artifact you built), **dropped** (with the reason) or **blocked** — the same standard as a method row.",
+    "> **Described in** names the behaviour card and acceptance criteria a step-5.1 run established: port against those,",
+    "> not against the member's name. `⚠ not described` means no run has covered it yet.", ""];
+  // One explanation per kind PRESENT, above the table — a per-row reason repeats the same paragraph on every row.
+  for (const k of order.keys()) if (rows.some((r) => r.kind === k)) L.push("> " + (MEMBER_KIND_NOTE[k] || ATTRIBUTE_DEPENDENCY_NOTE));
+  L.push("", "| Member | Kind | Detail | Described in |", "| --- | --- | --- | --- |");
+  for (const d of rows)
+    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${d.detail ? esc(d.detail) : "—"} | ${describedInText(d)} |`);
+  L.push("");
+  return L;
 }
 
 function renderImperativeLogic(cs) {
@@ -1338,7 +1413,7 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
 
@@ -1750,6 +1825,14 @@ export function checklistGroups(result, opts = {}) {
   const natives = acts.filter((a) => !/process|print/i.test(a));
   if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
   G("Card actions", actItems);
+  // ⚠ Imperative members worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
+  // like the `Handler — …` rows above and unlike the evidence rows below: work to record, not open questions closed
+  // by a filed record. Without this group these members have no row anywhere in the control table.
+  // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
+  // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
+  G("⚠ Imperative members worklist", (cs.needsDecision || [])
+    .filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
+    .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", confirmWorklistRows(pageKey, cs));
