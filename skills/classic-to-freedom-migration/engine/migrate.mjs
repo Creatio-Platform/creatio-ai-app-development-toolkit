@@ -1000,23 +1000,22 @@ function resolvedColumnSource(useResolved, resolvedListColumns, chainColumns) {
 
 // Union the *Section chain's list-page signals (add-record mini page, section actions, list columns, quick
 // filters, process launch) into one section object — null only when NEITHER section schemas nor resolved list
-// columns were supplied. Extracted to keep runMigration under CC 15.
-function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
-  if (!sectionSchemas.length && !resolvedListColumns) return null;
+// columns were supplied AND no on-stand read was rejected. A REJECTED read is evidence too: it is the difference
+// between "nobody ever asked" and "we asked and the answer was unusable", and dropping it here is what let the
+// rendered line ask for a recording that had already been supplied. Extracted to keep runMigration under CC 15.
+// Union the chain's quick filters, first-wins by name. Own fn so analyzeSectionChain stays under Sonar CC 15.
+function unionQuickFilters(sectionSchemas) {
   const seen = new Set(), quickFilters = [];
   for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
     if (f?.name && !seen.has(f.name)) { seen.add(f.name); quickFilters.push(f); }
   }
-  const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
-  // `[]` is not nullish, so `??` would let an EMPTY resolved set silently discard a chain parse that did find
-  // columns. Prefer the resolved set only when it actually carries columns — AND only when it is not the
-  // `entity-default` fallback while the chain found something. clio returns `entity-default` (the entity's primary
-  // display column, exactly one) precisely BECAUSE the section schema declared none; when our own parse of that
-  // chain did find columns, the fallback is the weaker evidence, and preferring it would make the rendered line
-  // state the Classic section declares no list columns while this run holds a parse that says otherwise.
-  const resolvedColumns = resolvedListColumns?.columns || [];
-  const useResolved = resolvedColumns.length > 0
-    && !(resolvedListColumns.source === "entity-default" && chainColumns.length > 0);
+  return quickFilters;
+}
+
+// The `- **List columns:**` parenthetical: the resolver's own notes (attributed when its set is NOT the one shown),
+// the symmetric disagreement note, and the rejected-read disclosure. Own fn so analyzeSectionChain stays under
+// Sonar CC 15 (S3776) — the wording rules live together here rather than inline in the union.
+function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns, useResolved, listColumnReadRejected }) {
   // The resolver's notes explain ITS answer. Carrying them unconditionally means that when the resolved set
   // loses, the losing side's justification ("the section declares no static list columns…") lands in the same
   // parenthetical as the winning side's confident clause, with nothing saying which side produced it. Seed them
@@ -1035,8 +1034,32 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
       : `no default column set (source: ${resolvedListColumns.source})`;
     notes.push(`the on-stand read resolved ${onStand} while the section schema chain declares ${chainColumns.join(", ")} — ${useResolved ? "the on-stand" : "the parsed"} set is shown; confirm on-stand which columns the list really shows`);
   }
+  // A rejected read never reaches `resolvedListColumns`, so without this the chain parse would be rendered with the
+  // same confident wording as an UNCONTESTED one — the supplied read silently discarded. It is not a disagreement
+  // (there is no usable other set to name), just a disclosure pointing at the structure issue that holds the cause.
+  if (listColumnReadRejected && chainColumns.length) {
+    notes.push("an on-stand list-column read was supplied but could not be used, so this set comes from the section schema chain alone — the cause is named in the list-column issue above");
+  }
+  return notes;
+}
+
+function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false) {
+  if (!sectionSchemas.length && !resolvedListColumns && !listColumnReadRejected) return null;
+  const quickFilters = unionQuickFilters(sectionSchemas);
+  const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
+  // `[]` is not nullish, so `??` would let an EMPTY resolved set silently discard a chain parse that did find
+  // columns. Prefer the resolved set only when it actually carries columns — AND only when it is not the
+  // `entity-default` fallback while the chain found something. clio returns `entity-default` (the entity's primary
+  // display column, exactly one) precisely BECAUSE the section schema declared none; when our own parse of that
+  // chain did find columns, the fallback is the weaker evidence, and preferring it would make the rendered line
+  // state the Classic section declares no list columns while this run holds a parse that says otherwise.
+  const resolvedColumns = resolvedListColumns?.columns || [];
+  const useResolved = resolvedColumns.length > 0
+    && !(resolvedListColumns.source === "entity-default" && chainColumns.length > 0);
+  const notes = listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns, useResolved, listColumnReadRejected });
   return {
     schemaGathered: sectionSchemas.length > 0,
+    listColumnReadRejected,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
     listColumns: useResolved ? resolvedListColumns.columns : chainColumns,
@@ -1561,7 +1584,7 @@ export function runMigration(manifest, opts = {}) {
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
   reportDynamicMappingProps(schemas, changeSet);
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
-  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns);
+  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null);
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them

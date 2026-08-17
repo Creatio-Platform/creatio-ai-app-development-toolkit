@@ -1039,7 +1039,7 @@ check("ENG-95229: an entity-default fallback does not replace a chain parse that
       && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name \(source: entity-default\) while the section schema chain declares Name, Stage — the parsed set is shown/.test(n))
       // The losing side's explanation may still be reported, but never unattributed — otherwise it reads as a
       // statement about the set actually shown.
-      && (r.section?.listColumnNotes || []).every((n) => !/does not define static list columns/.test(n) || /^the on-stand read reported: /.test(n))
+      && (r.section?.listColumnNotes || []).every((n) => !/does not define static list columns/.test(n) || n.startsWith("the on-stand read reported: "))
       && !/declares NO list columns/.test(r.designSpec)
       && /\*\*List columns:\*\* Name · Stage/.test(r.designSpec)
       && /the on-stand read reported: The section schema does not define static list columns/.test(r.designSpec)
@@ -1059,7 +1059,7 @@ check("ENG-95229: a schema-default on-stand read wins over a differing chain par
       && r.section?.listColumnSource === "schema-default"
       && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name, Priority \(source: schema-default\) while the section schema chain declares Name, Stage — the on-stand set is shown/.test(n))
       // The winning side's own notes are carried plainly, without the losing-side attribution prefix.
-      && (r.section?.listColumnNotes || []).some((n) => n === "Resolved from the section schema hierarchy.")
+      && (r.section?.listColumnNotes || []).includes("Resolved from the section schema hierarchy.")
       && /\*\*List columns:\*\* Name · Priority/.test(r.designSpec)
       && /Name, Stage/.test(r.designSpec); },
   () => "see section.listColumnNotes / the rendered List columns line");
@@ -1117,6 +1117,37 @@ check("ENG-95229: resolved columns do not mask a missing section schema chain",
       && /Section schema not gathered/.test(r.designSpec)
       && /\*\*List columns:\*\* ⚠ Name/.test(r.designSpec);
   });
+// A REJECTED on-stand read + a GATHERED chain is the state every gate golden above missed: `listColumnGateRun`
+// defaults `section.schemas` to `[]`, so `analyzeSectionChain` returned null and no List-columns line rendered at
+// all. Both arms are pinned here, with REAL array-shaped chain layers — a keyed-map `schemas` is coerced to `[]`
+// by `sectionInput` and would reproduce the same vacuous coverage.
+const rejectedChainNoColumns = listColumnGateRun({ success: false, error: "stand unreachable" },
+  { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] });
+check("ENG-95229: a rejected read + a chain declaring no columns does NOT claim no read was supplied",
+  () => rejectedChainNoColumns.section?.schemaGathered === true
+    && rejectedChainNoColumns.section?.listColumnReadRejected === true
+    && /\*\*List columns:\*\* ⚠ NOT resolved — an on-stand list-column read was supplied but could not be used/.test(rejectedChainNoColumns.designSpec)
+    // The defect: the old branch printed a remedy already performed in full — never re-prescribe recording it.
+    && !/no on-stand read was supplied/.test(rejectedChainNoColumns.designSpec)
+    && !/Record a `get-classic-list-columns` response/.test(rejectedChainNoColumns.designSpec)
+    // The real cause stays where it belongs — the structure gate — and the line points at it.
+    && gatedOn(rejectedChainNoColumns, /list-column read failed: stand unreachable/),
+  () => rejectedChainNoColumns.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+const rejectedChainWithColumns = listColumnGateRun({ success: false, error: "stand unreachable" },
+  { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }] });
+check("ENG-95229: a rejected read is disclosed, not silently discarded, when the chain parse did find columns",
+  () => (rejectedChainWithColumns.section?.listColumns || []).join(",") === "Name,Stage"
+    && (rejectedChainWithColumns.section?.listColumnNotes || []).some((n) => /an on-stand list-column read was supplied but could not be used/.test(n))
+    && /\*\*List columns:\*\* Name · Stage \(an on-stand list-column read was supplied but could not be used/.test(rejectedChainWithColumns.designSpec),
+  () => rejectedChainWithColumns.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+// The third arm of the same guard: with NO chain either, `analyzeSectionChain` used to return null and the plan
+// rendered no List-columns line whatsoever — the rejection erased entirely. A rejected read is evidence, so the
+// line renders and says the read could not be used.
+check("ENG-95229: a rejected read with no chain at all still renders a List columns line",
+  () => { const r = listColumnGateRun({ success: false, error: "stand unreachable" });
+    return r.section?.listColumnReadRejected === true && r.section?.schemaGathered === false
+      && /\*\*List columns:\*\* ⚠ NOT resolved — an on-stand list-column read was supplied but could not be used/.test(r.designSpec); },
+  () => listColumnGateRun({ success: false, error: "stand unreachable" }).designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
 check("section: design spec has a List page block (before the form page) naming the mini page",
   /### List page/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec)
   && secRun.designSpec.indexOf("### List page") < secRun.designSpec.indexOf(" form page"));

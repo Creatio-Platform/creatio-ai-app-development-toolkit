@@ -349,18 +349,33 @@ function addRecordDescription(result) {
 // explanation itself comes from `listColumnNotes` (the resolver's own wording) rather than being re-invented here.
 // The text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
 // product. Tool/storage details stay in the discovery instructions and must not reach the rendered plan.
+// Strip a note's trailing sentence punctuation / whitespace. A single-pass scan rather than `/[.;\s]+$/` — an
+// anchored one-or-more character class backtracks super-linearly on a long non-matching tail (Sonar S8786), and
+// these notes come from clio's response, not from us.
+function stripNoteTail(note) {
+  let end = note.length;
+  while (end > 0 && (note[end - 1] === "." || note[end - 1] === ";" || /\s/.test(note[end - 1]))) end--;
+  return note.slice(0, end);
+}
 function listColumnLine(section) {
   // Notes arrive from several producers (the on-stand resolver, the disagreement note), so their trailing
   // punctuation is not ours to assume — strip it before joining, or a note ending in `.` renders as `.; `.
   const notes = (section.listColumnNotes || [])
     .filter((n) => typeof n === "string" && n)
-    .map((n) => n.replace(/[.;\s]+$/, ""))
+    .map(stripNoteTail)
     .filter(Boolean);
   const why = notes.length ? ` (${notes.map(esc).join("; ")})` : "";
   const cols = section.listColumns || [];
   // An empty set has TWO distinct causes and the data already tells them apart: `null` means no resolver ever ran
   // (nothing was parsed and no on-stand read was supplied), `"none"` means the resolver ran and found nothing.
   // Rendering the second wording for the first asserts a resolution that never happened and names no remedy.
+  // A REJECTED on-stand read also leaves `listColumnSource == null`, and the branch below would then print the one
+  // remedy that is already done — record a response / bundle the chain — costing the reader a wasted round. The
+  // rejection is the cause, it is already named as a structure issue, and re-supplying the same response fixes
+  // nothing; point at that issue instead. Must precede the `listColumnSource == null` branch.
+  if (!cols.length && section.listColumnReadRejected) {
+    return `- **List columns:** ⚠ NOT resolved — an on-stand list-column read was supplied but could not be used, and the section chain declares none${why}, so the Classic column set is unknown (Classic also keeps each user's visible set as per-user list/profile data). Fix the cause named in the list-column issue above and re-run — re-recording the same response will not resolve it`;
+  }
   if (!cols.length && section.listColumnSource == null) {
     return `- **List columns:** ⚠ NOT resolved — the section chain declared none and no on-stand read was supplied${why}, so the Classic column set is unknown (Classic also keeps each user's visible set as per-user list/profile data). Record a \`get-classic-list-columns\` response under \`manifest.section.listColumns\`, or bundle the \`*Section\` chain into \`manifest.section\`, then confirm which columns the Freedom list should show`;
   }
