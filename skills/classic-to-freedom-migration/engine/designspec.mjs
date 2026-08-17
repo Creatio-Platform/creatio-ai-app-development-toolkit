@@ -342,18 +342,58 @@ function addRecordDescription(result) {
   if (!result.miniPageVerified) return "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
   return "full edit page (no add-record mini page)";
 }
+// The `- **List columns:**` line. PROVENANCE decides the wording, and it is load-bearing: `schema-default` is what
+// the Classic list actually declares, so the open question NARROWS to "keep this set in Freedom?"; `entity-default`
+// is a single-column fallback (the entity's primary display column) that the Classic section never declared, so
+// rendering it bare would present a fallback as the analyzed Classic list; `none` keeps the question open. The
+// explanation itself comes from `listColumnNotes` (the resolver's own wording) rather than being re-invented here.
+// The text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
+// product. Tool/storage details stay in the discovery instructions and must not reach the rendered plan.
+// Strip a note's trailing sentence punctuation / whitespace. A single-pass scan rather than `/[.;\s]+$/` — an
+// anchored one-or-more character class backtracks super-linearly on a long non-matching tail (Sonar S8786), and
+// these notes come from clio's response, not from us.
+function stripNoteTail(note) {
+  let end = note.length;
+  while (end > 0 && (note[end - 1] === "." || note[end - 1] === ";" || /\s/.test(note[end - 1]))) end--;
+  return note.slice(0, end);
+}
+function listColumnLine(section) {
+  // Notes arrive from several producers (the on-stand resolver, the disagreement note), so their trailing
+  // punctuation is not ours to assume — strip it before joining, or a note ending in `.` renders as `.; `.
+  const notes = (section.listColumnNotes || [])
+    .filter((n) => typeof n === "string" && n)
+    .map(stripNoteTail)
+    .filter(Boolean);
+  const why = notes.length ? ` (${notes.map(esc).join("; ")})` : "";
+  const cols = section.listColumns || [];
+  // An empty set has TWO distinct causes and the data already tells them apart: `null` means no resolver ever ran
+  // (nothing was parsed and no on-stand read was supplied), `"none"` means the resolver ran and found nothing.
+  // Rendering the second wording for the first asserts a resolution that never happened and names no remedy.
+  // A REJECTED on-stand read also leaves `listColumnSource == null`, and the branch below would then print the one
+  // remedy that is already done — record a response / bundle the chain — costing the reader a wasted round. The
+  // rejection is the cause, it is already named as a structure issue, and re-supplying the same response fixes
+  // nothing; point at that issue instead. Must precede the `listColumnSource == null` branch.
+  if (!cols.length && section.listColumnReadRejected) {
+    return `- **List columns:** ⚠ NOT resolved — an on-stand list-column read was supplied but could not be used, and the section chain declares none${why}, so the Classic column set is unknown (Classic also keeps each user's visible set as per-user list/profile data). Fix the cause named in the list-column issue above and re-run — re-recording the same response will not resolve it`;
+  }
+  if (!cols.length && section.listColumnSource == null) {
+    return `- **List columns:** ⚠ NOT resolved — the section chain declared none and no on-stand read was supplied${why}, so the Classic column set is unknown (Classic also keeps each user's visible set as per-user list/profile data). Record a \`get-classic-list-columns\` response under \`manifest.section.listColumns\`, or bundle the \`*Section\` chain into \`manifest.section\`, then confirm which columns the Freedom list should show`;
+  }
+  if (!cols.length) return `- **List columns:** ⚠ no default column set was resolved${why} — confirm which columns the Freedom list should show`;
+  const rendered = cols.map(esc).join(" · ");
+  if (section.listColumnSource === "entity-default") {
+    return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
+  }
+  return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
+}
 // The `### List page` block (section concerns: add-record, columns, quick filters, section actions, process).
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderListPageBlock(result, section) {
   const L = ["### List page"];
-  if (!section) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **list columns / quick filters / section actions were NOT analyzed**. `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
+  if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-    // The ⚠ text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
-    // product — the Classic list and its columns. The mechanism (Classic stores the visible set as per-user profile
-    // data, not in the page schema) stays in this comment and in `engine.mjs`; it must not reach the rendered cell.
-    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not part of the page — Classic remembers the visible columns as a per-user list setting, so confirm which columns the Freedom list should show";
-    L.push(`- **List columns:** ${listCols}`);
+    L.push(listColumnLine(section));
     if ((section.quickFilters || []).length) {
       const f = section.quickFilters.map((q) => {
         let s = `\`${esc(q.name)}\``;

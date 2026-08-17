@@ -862,17 +862,304 @@ const secRun = runMigration({ entity: "Applicant",
 check("section: add-record mini page detected (name)", secRun.section?.addRecordMiniPage === "ApplicantMiniPage");
 check("section: getSectionActions hint captured (#8b)", secRun.section?.sectionActions.includes("runBulkAssign"));
 check("section: list columns from getGridDataColumns (#2)", (secRun.section?.listColumns || []).join(",") === "Name,Stage");
+const resolvedColumnsRun = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "entity-default",
+      columns: [{ name: "Name", caption: "Name" }], notes: ["entity fallback"] },
+  },
+}, { baseDir: FIX });
+check("ENG-95229: enriched section manifest consumes resolved entity-default columns",
+  resolvedColumnsRun.section?.listColumnSource === "entity-default"
+  && (resolvedColumnsRun.section?.listColumns || []).join(",") === "Name"
+  && /\*\*List columns:\*\* ⚠ Name/.test(resolvedColumnsRun.designSpec));
+check("ENG-95229: an entity-default plan qualifies the fallback, carries the resolver's note and keeps the question",
+  () => /\*\*List columns:\*\* ⚠ Name — the Classic section declares NO list columns/.test(resolvedColumnsRun.designSpec)
+    && /\(entity fallback\)/.test(resolvedColumnsRun.designSpec)
+    && /confirm which columns the Freedom list should show/.test(resolvedColumnsRun.designSpec),
+  () => resolvedColumnsRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+const resolvedSchemaDefaultRun = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "applicant1section", entity: "Applicant", source: "schema-default",
+      columns: [{ name: "Name" }, { name: "Stage.Name" }, { name: "Name" }], notes: [] },
+  },
+}, { baseDir: FIX });
+check("ENG-95229: enriched schema-default columns are consumed, deduped and rendered with the NARROWED question",
+  () => resolvedSchemaDefaultRun.section?.listColumnSource === "schema-default"
+    && (resolvedSchemaDefaultRun.section?.listColumns || []).join(",") === "Name,Stage.Name"
+    && /\*\*List columns:\*\* Name · Stage\.Name — the Classic list shows these columns; confirm this set is kept in Freedom/.test(resolvedSchemaDefaultRun.designSpec)
+    && !/\*\*List columns:\*\* ⚠/.test(resolvedSchemaDefaultRun.designSpec),
+  () => resolvedSchemaDefaultRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+check("ENG-95229: provenance is compared the way clio resolves it (trim + case-insensitive), not byte-for-byte",
+  () => !(resolvedSchemaDefaultRun.structure?.issues || []).some((i) => /list-column/.test(i)),
+  () => resolvedSchemaDefaultRun.structure?.issues);
+const resolvedNoneRun = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "none",
+      columns: [], notes: ["no default"] },
+  },
+}, { baseDir: FIX });
+check("ENG-95229: source=none remains a successful section analysis but keeps the user-visible column question",
+  resolvedNoneRun.section?.listColumnSource === "none"
+  && resolvedNoneRun.section?.listColumns.length === 0
+  && /no default column set was resolved/.test(resolvedNoneRun.designSpec));
+// A recoverable list-column failure must DEGRADE (structure gate + a plan that names the cause), never abort the
+// run: clio returns `success:false` for network / auth / stale-metadata conditions, and an environment hiccup that
+// yields no `plan.md` at all is strictly worse than one that yields a plan saying why the read failed.
+const listColumnGateRun = (listColumns, section = {}) => runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: { schemas: [], ...section, listColumns },
+}, { baseDir: FIX });
+const gatedOn = (run, re) => run.structure?.complete === false && (run.structure?.issues || []).some((i) => re.test(i));
+check("ENG-95229: a failed list-column read degrades into the structure gate (plan still renders) instead of aborting",
+  () => { const r = listColumnGateRun({ success: false, error: "stand unreachable" });
+    return gatedOn(r, /list-column read failed: stand unreachable/) && /list-column read failed: stand unreachable/.test(r.designSpec); },
+  () => listColumnGateRun({ success: false, error: "stand unreachable" }).structure?.issues);
+check("ENG-95229: list-column evidence from another section is gated, not thrown",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
+    source: "entity-default", columns: [{ name: "Name" }] }), /belongs to another section/),
+  () => listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
+    source: "entity-default", columns: [{ name: "Name" }] }).structure?.issues);
+check("ENG-95229: an unknown source is gated with the received value named",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "profile", columns: [{ name: "Name" }] }), /malformed: source "profile"/),
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "profile", columns: [{ name: "Name" }] }).structure?.issues);
+check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
+check("ENG-95229: source=none carrying columns is gated by its own named check",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "none", columns: [{ name: "Name" }] }), /declares source 'none' but carries 1 column\(s\): Name/));
+check("ENG-95229: an unusable column path is gated with its index and value, not a bare 'inconsistent' abort",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ name: "Name" }, { name: "1Bad Path" }] }),
+  /unusable column path at index 1: "1Bad Path"/));
+check("ENG-95229: a non-ASCII column path clio legitimately returns is accepted (clio validates Unicode letters)",
+  () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ name: "Прізвище" }] });
+    return !(r.structure?.issues || []).some((i) => /list-column/.test(i))
+      && (r.section?.listColumns || []).join(",") === "Прізвище"; },
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ name: "Прізвище" }] }).structure?.issues);
+check("ENG-95229: object-shaped section without listColumns fails loudly instead of downgrading to legacy parsing",
+  (() => { try {
+    runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+      section: { schemas: [] } }, { baseDir: FIX });
+    return false;
+  } catch (e) { return /object-shaped section requires listColumns evidence/.test(String(e)); } })());
+// `planMeta` is OPTIONAL in the manifest header and SKILL.md's Known-Traps entry never tells the agent to fill
+// `planMeta.sectionSchema`, so a missing anchor must degrade like every other unusable-evidence condition —
+// otherwise following the documented flow yields no plan and no spec at all.
+// Hoisted so the diagnostic reports the state that actually failed. Rebuilding the manifest inline in the
+// diagnostic lets the two copies drift, and a diagnostic that describes a different manifest is worse than none.
+const missingAnchorRun = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX })
+check("ENG-95229: a missing provenance anchor is gated (the plan still renders) rather than thrown",
+  () => gatedOn(missingAnchorRun, /`planMeta\.sectionSchema` is not set/)
+    && /planMeta\.sectionSchema. is not set/.test(missingAnchorRun.designSpec),
+  () => missingAnchorRun.structure?.issues);
+// `"?"` is the parser's stub for an entity it could not derive. Comparing good evidence against a stub would gate
+// it as "belongs to another section"; the `sectionSchema` half still carries the comparison.
+const entityStubRun = runMigration({ entity: "?", planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX })
+check("ENG-95229: an entity stub ('?') skips the entity half of the provenance check instead of gating good evidence",
+  () => !(entityStubRun.structure?.issues || []).some((i) => /belongs to another section/.test(i))
+    && (entityStubRun.section?.listColumns || []).join(",") === "Name",
+  () => entityStubRun.structure?.issues);
+// The two entry SHAPES clio's contract allows (a bare path string, or an object carrying `name`) and the one it
+// does not (a keyed map). clio#1035 is still open, so the shape can still move — these pin what we accept.
+check("ENG-95229: object-shaped column entries are accepted and rendered",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+      source: "schema-default", columns: [{ name: "Name" }, { name: "Stage.Name" }] } } }, { baseDir: FIX });
+    return /\*\*List columns:\*\* Name · Stage\.Name — the Classic list shows these columns/.test(r.designSpec); },
+  () => "see rendered List columns line");
+check("ENG-95229: a column entry carrying no `name` is gated as a SHAPE defect, not as an unusable path",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ caption: "Name" }] }),
+  /malformed entry at index 0: \{"caption":"Name"\} — every entry must be a column-path string or an object carrying `name`/),
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ caption: "Name" }] }).structure?.issues);
+check("ENG-95229: a keyed-map `columns` (the shape getGridDataColumns itself uses) is gated as a non-array field",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: { Name: { path: "Name" } } }), /a non-array `columns` field/),
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: { Name: { path: "Name" } } }).structure?.issues);
+// The index in the message is an index into the RESPONSE the same message tells the user to re-read, so it must
+// survive duplicates ahead of the bad entry — validating a deduped array would report 1 here instead of 2.
+check("ENG-95229: the reported index is the RESPONSE's own index, unshifted by duplicates ahead of the bad entry",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: ["Name", "Name", "1Bad"] }), /unusable column path at index 2: "1Bad"/),
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: ["Name", "Name", "1Bad"] }).structure?.issues);
+check("ENG-95229: a non-array section.schemas is coerced (the structure gate reports it) rather than thrown",
+  () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] }, { schemas: { pkg: "HRApplicant" } });
+    return r.section?.schemaGathered === false && /Section schema not gathered/.test(r.designSpec); });
+check("ENG-95229: a resolved 'none' does not discard a chain parse that found columns — both sides are reported",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "none", columns: [] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Name"
+      && (r.section?.listColumnNotes || []).some((n) => /resolved no default column set/.test(n))
+      && /resolved no default column set/.test(r.designSpec); });
+// The reverse direction of the same disagreement: `entity-default` is clio's ONE-column fallback, returned because
+// the section schema declared none. When our own parse of that chain DID find columns, letting the fallback win
+// would render "the Classic section declares NO list columns" over evidence saying otherwise.
+check("ENG-95229: an entity-default fallback does not replace a chain parse that found columns — the chain wins and the disagreement is noted",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "entity-default",
+        columns: [{ name: "Name" }],
+        // A realistic entity-default response carries the resolver's own justification. Wording is illustrative;
+        // the assertions below stay wording-independent so a clio rephrasing does not break this golden.
+        notes: ["The section schema does not define static list columns; using the entity primary display column."] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Name,Stage"
+      && r.section?.listColumnSource === "schema-default"
+      && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name \(source: entity-default\) while the section schema chain declares Name, Stage — the parsed set is shown/.test(n))
+      // The losing side's explanation may still be reported, but never unattributed — otherwise it reads as a
+      // statement about the set actually shown.
+      && (r.section?.listColumnNotes || []).every((n) => !/does not define static list columns/.test(n) || n.startsWith("the on-stand read reported: "))
+      && !/declares NO list columns/.test(r.designSpec)
+      && /\*\*List columns:\*\* Name · Stage/.test(r.designSpec)
+      && /the on-stand read reported: The section schema does not define static list columns/.test(r.designSpec)
+      // Producers own their own punctuation, so the join must not emit `.; `.
+      && !/\.; /.test(r.designSpec); },
+  () => "see section.listColumnNotes / the rendered List columns line");
+// The mirror arm of the symmetric note, and the PR's own intended primary path: on-stand evidence supersedes the
+// static parse. Nothing pinned it, so a flipped ternary arm would have shipped green.
+check("ENG-95229: a schema-default on-stand read wins over a differing chain parse — the note names both sets and the on-stand set is rendered",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "schema-default",
+        columns: ["Name", "Priority"], notes: ["Resolved from the section schema hierarchy."] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Name,Priority"
+      && r.section?.listColumnSource === "schema-default"
+      && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name, Priority \(source: schema-default\) while the section schema chain declares Name, Stage — the on-stand set is shown/.test(n))
+      // The winning side's own notes are carried plainly, without the losing-side attribution prefix.
+      && (r.section?.listColumnNotes || []).includes("Resolved from the section schema hierarchy.")
+      && /\*\*List columns:\*\* Name · Priority/.test(r.designSpec)
+      && /Name, Stage/.test(r.designSpec); },
+  () => "see section.listColumnNotes / the rendered List columns line");
+// `sameColumns` compares element-by-element, so a reordered but identical set counts as a disagreement. That is
+// deliberate: Classic list column ORDER is user-visible, so a reorder is worth confirming on-stand, not silently
+// normalized away. Pinned here so the comparison cannot be loosened to a set comparison by accident.
+check("ENG-95229: the same column set in a different order still raises the disagreement note",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "schema-default",
+        columns: ["Stage", "Name"] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Stage,Name"
+      && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Stage, Name .* while the section schema chain declares Name, Stage — the on-stand set is shown/.test(n)); },
+  () => "see section.listColumnNotes");
+// A section chain that declares no columns and no on-stand read is NOT the same state as a resolver that ran and
+// found nothing — the plan must say which one happened and what to do about it.
+check("ENG-95229: an unresolved column set (no resolver ran) renders its own cause + remedy, distinct from source=none",
+  () => { const r = runMigration({ entity: "Applicant",
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+  }, { baseDir: FIX });
+    return r.section?.listColumnSource == null
+      && /\*\*List columns:\*\* ⚠ NOT resolved/.test(r.designSpec)
+      && /get-classic-list-columns/.test(r.designSpec)
+      && !/no default column set was resolved/.test(r.designSpec); },
+  () => "see the rendered List columns line");
+check("ENG-95229: bare section array remains the accepted legacy manifest shape",
+  secRun.section?.listColumnSource === "schema-default"
+  && (secRun.section?.listColumns || []).join(",") === "Name,Stage");
+// The DOMINANT path: every pre-existing manifest is a bare array whose columns come from the static parse. The
+// rendered wording changed on it, and `plan.md` is the verbatim deliverable — assert the text, not just the field.
+check("ENG-95229: the legacy bare-array path renders the narrowed question, not just the internal source field",
+  () => /\*\*List columns:\*\* Name · Stage — the Classic list shows these columns; confirm this set is kept in Freedom/.test(secRun.designSpec)
+    && !/\*\*List columns:\*\* ⚠/.test(secRun.designSpec),
+  () => secRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+// Loosening `analyzeSectionChain`'s guard makes `section` non-null for a resolved-only manifest, and `buildListItems`
+// keys off it — pin the checklist shape in a state that could not occur before this PR.
+check("ENG-95229: a resolved-only manifest (no section chain) publishes exactly one `List columns` checklist row",
+  () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] });
+    const rows = checklistGroups(r, checklistOpts(r)).flatMap((g) => g.rows).filter((x) => /^List columns$/.test(x.label));
+    return rows.length === 1 && rows[0].pageKey === "main"
+      && /\| List columns \| ☐ pending \|/.test(renderChecklist(r, checklistOpts(r))); },
+  () => checklistGroups(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] }), {}).map((g) => ({ t: g.title, r: g.rows.map((x) => x.label) })));
+check("ENG-95229: resolved columns do not mask a missing section schema chain",
+  () => {
+    const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+      source: "entity-default", columns: [{ name: "Name" }] });
+    return r.section?.schemaGathered === false
+      && r.structure?.complete === false          // the load-bearing half: a missing chain BLOCKS, it isn't cosmetic
+      && r.gate?.blocked === true
+      && /Section schema not gathered/.test(r.designSpec)
+      && /\*\*List columns:\*\* ⚠ Name/.test(r.designSpec);
+  });
+// A REJECTED on-stand read + a GATHERED chain is the state every gate golden above missed: `listColumnGateRun`
+// defaults `section.schemas` to `[]`, so `analyzeSectionChain` returned null and no List-columns line rendered at
+// all. Both arms are pinned here, with REAL array-shaped chain layers — a keyed-map `schemas` is coerced to `[]`
+// by `sectionInput` and would reproduce the same vacuous coverage.
+const rejectedChainNoColumns = listColumnGateRun({ success: false, error: "stand unreachable" },
+  { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] });
+check("ENG-95229: a rejected read + a chain declaring no columns does NOT claim no read was supplied",
+  () => rejectedChainNoColumns.section?.schemaGathered === true
+    && rejectedChainNoColumns.section?.listColumnReadRejected === true
+    && /\*\*List columns:\*\* ⚠ NOT resolved — an on-stand list-column read was supplied but could not be used/.test(rejectedChainNoColumns.designSpec)
+    // The defect: the old branch printed a remedy already performed in full — never re-prescribe recording it.
+    && !/no on-stand read was supplied/.test(rejectedChainNoColumns.designSpec)
+    && !/Record a `get-classic-list-columns` response/.test(rejectedChainNoColumns.designSpec)
+    // The real cause stays where it belongs — the structure gate — and the line points at it.
+    && gatedOn(rejectedChainNoColumns, /list-column read failed: stand unreachable/),
+  () => rejectedChainNoColumns.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+const rejectedChainWithColumns = listColumnGateRun({ success: false, error: "stand unreachable" },
+  { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }] });
+check("ENG-95229: a rejected read is disclosed, not silently discarded, when the chain parse did find columns",
+  () => (rejectedChainWithColumns.section?.listColumns || []).join(",") === "Name,Stage"
+    && (rejectedChainWithColumns.section?.listColumnNotes || []).some((n) => /an on-stand list-column read was supplied but could not be used/.test(n))
+    && /\*\*List columns:\*\* Name · Stage \(an on-stand list-column read was supplied but could not be used/.test(rejectedChainWithColumns.designSpec),
+  () => rejectedChainWithColumns.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+// The third arm of the same guard: with NO chain either, `analyzeSectionChain` used to return null and the plan
+// rendered no List-columns line whatsoever — the rejection erased entirely. A rejected read is evidence, so the
+// line renders and says the read could not be used.
+check("ENG-95229: a rejected read with no chain at all still renders a List columns line",
+  () => { const r = listColumnGateRun({ success: false, error: "stand unreachable" });
+    return r.section?.listColumnReadRejected === true && r.section?.schemaGathered === false
+      && /\*\*List columns:\*\* ⚠ NOT resolved — an on-stand list-column read was supplied but could not be used/.test(r.designSpec); },
+  () => listColumnGateRun({ success: false, error: "stand unreachable" }).designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
 check("section: design spec has a List page block (before the form page) naming the mini page",
   /### List page/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec)
   && secRun.designSpec.indexOf("### List page") < secRun.designSpec.indexOf(" form page"));
 const noSec = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
-check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + list columns flagged as a per-user setting",
+check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + unresolved list columns remain explicit",
   (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: false,
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
-    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /per-user list setting/.test(r.designSpec) && r.structure.complete === true; })());
+    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec)
+      && /\*\*List columns:\*\* ⚠ NOT resolved/.test(r.designSpec) && r.structure.complete === true; })());
 // A section with NO mini-page answer supplied → the engine must NOT assume "none"; it FLAGS it (structure incomplete).
 check("section: UNVERIFIED add-record mini page → structure INCOMPLETE + 'NOT verified' (no false 'none')",
   (() => { const r = runMigration({ entity: "Applicant",
