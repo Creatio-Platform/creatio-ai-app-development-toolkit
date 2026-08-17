@@ -749,8 +749,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         validator = read_text(ROOT / "runtime/scripts/workflow_validators.py")
         self.assertRegex(validator, r"DASHBOARD_ACCESS_RIGHTS_RE\s*=.*All Employees")
 
-    def test_cli_first_transport_rule_is_consistent_across_its_three_mirrors(self):
-        # ENG-95262 states the shell-CLI-first read rule in three places: the RULES
+    def test_cli_first_transport_rule_is_consistent_across_its_four_documents(self):
+        # ENG-95262 states the shell-CLI-first read rule in four documents: the RULES
         # constant inlined into every agent prompt, and the two reference docs an agent
         # reads off disk. Nothing but this test keeps them saying the same thing, and a
         # mirror that drifts is worse than a missing one — an agent gets two rules and
@@ -763,14 +763,45 @@ class DefaultContractDocsTests(unittest.TestCase):
             ROOT / "skills/freedom-build-executor/references/03-failure-and-park-policy.md")
         agents = read_text(ROOT / "AGENTS.md")
 
-        # 1. The routed set is EXACTLY these five reads, named in both mirrors. The list
-        #    is the scope of the AGENTS.md carve-out, so a sixth command added to one
-        #    mirror alone would silently widen an exception the repository ratified.
-        routed = ["get-page", "list-pages", "list-app-sections", "get-schema",
-                  "get-related-page-addon"]
+        # 1. The routed set is EXACTLY these five reads. `assertIn` per command over a
+        #    whole file cannot detect a SIXTH being added — which is the widening this
+        #    group exists to catch — and the routed names already occur throughout
+        #    workflow.js and 04-recipe for other reasons, so two of the legs would pass
+        #    even with the CLI-first bullet deleted outright. Assert set EQUALITY instead,
+        #    over the narrowest slice that carries the rule in each document. Same
+        #    index-slicing idiom as the preflight-section test above, for the same reason.
+        routed = {"get-page", "list-pages", "list-app-sections", "get-schema",
+                  "get-related-page-addon"}
+
+        # 1a. REFS_CLI_HELP is the array the Refs step probes; it was previously unbound
+        #     by any test, so re-adding `update-page` to it — the object of a Blocker last
+        #     round — passed the whole suite. Parse the literal and pin it exactly.
+        refs_cli_help = re.search(
+            r"const REFS_CLI_HELP\s*=\s*\[([^\]]*)\]", workflow)
+        self.assertIsNotNone(
+            refs_cli_help, "workflow.js must declare REFS_CLI_HELP as an array literal")
+        self.assertEqual(
+            set(re.findall(r"'([^']+)'", refs_cli_help.group(1))), routed,
+            "REFS_CLI_HELP must be exactly the five routed reads — a sixth entry "
+            "provisions a CLI path the preamble does not sanction, and a list that "
+            "disagrees with the rule gives a fresh-context sub-agent a tiebreaker")
+
+        # 1b. The CLI-first bullet itself, sliced from its marker to the next top-level
+        #     bullet, must name exactly the five and nothing else.
+        #     Sliced to the ENUMERATING sentence, not the whole bullet: the bullet also
+        #     names the write commands in its writes-stay-on-MCP clause, so a set equality
+        #     over the whole bullet would fail for a correct document.
+        start = workflow.index("HOW YOU REACH clio")
+        end = workflow.index("\n- ", start)
+        bullet = workflow[start:end]
+        enumeration = bullet[bullet.index("for exactly these five heavy stand reads"):]
+        enumeration = enumeration[:enumeration.index(".")]
+        self.assertEqual(
+            set(re.findall(r"\\?`([a-z][a-z-]+)\\?`", enumeration)), routed,
+            "the CLI-first bullet must enumerate exactly the five routed reads — a sixth "
+            "name here silently widens the exception AGENTS.md ratified")
         for command in routed:
-            for name, doc in (("workflow", workflow), ("04-recipe", recipe),
-                              ("AGENTS.md", agents)):
+            for name, doc in (("04-recipe", recipe), ("AGENTS.md", agents)):
                 self.assertIn(command, doc,
                               f"{name} must name the CLI-first read '{command}'")
 
@@ -797,16 +828,52 @@ class DefaultContractDocsTests(unittest.TestCase):
         for token in ("clio --version", "clio ping", "PROBE ONCE", "cli-usage.md"):
             self.assertIn(token, workflow, f"the RULES preamble must state '{token}'")
 
-        # 5. The 1800 s signature is excluded from the retry allowance in BOTH the
-        #    preamble and the policy doc — the two artifacts previously gave different
-        #    budgets for the same fault.
+        # 5. BOTH timeout signatures get the SAME budget in BOTH artifacts. The previous
+        #    version of this group pinned only the 1800 s half in the preamble and left
+        #    the 120 s class — the one actually in dispute — asserted nowhere, so it went
+        #    green against a live contradiction: 03-policy resolved the 120 s message with
+        #    "Retry once at most" while the preamble said that message gets no retry. A
+        #    drift guard that green-lights the divergence it was written for is worse than
+        #    no guard, so this now inspects the resolution CELLS rather than proximity.
         for name, doc in (("workflow", workflow), ("03-policy", policy)):
             self.assertIn("sent no response or progress", doc,
                           f"{name} must name the no-progress signature")
-        self.assertRegex(
-            workflow,
-            r"sent no response or progress[\s\S]{0,200}NO retry",
-            "the preamble must exclude the no-progress signature from retry-once")
+
+        def policy_row(signature):
+            rows = [line for line in policy.splitlines()
+                    if line.startswith("|") and signature in line]
+            self.assertEqual(len(rows), 1,
+                             f"03-policy must carry exactly one row for '{signature}'")
+            return rows[0].split("|")[-2]
+
+        wedge = policy_row("sent no response or progress")
+        timeout_120 = policy_row("error-class=creatio-timeout")
+
+        # 5a. Neither row may inherit its budget from the row above: "Same as above" made
+        #     the 1800 s wedge silently pick up the 120 s row's retry-once, which is the
+        #     half hour this rule exists to save.
+        self.assertNotIn("Same as above", wedge,
+                         "the 1800 s row must spell out its own resolution, not inherit one")
+
+        # 5b. Both rows resolve to switch-transport-on-first-occurrence, in the policy doc
+        #     and in the preamble alike. `error-class=creatio-timeout` is a TOKEN inside
+        #     the 120 s message, not a fault class of its own, so a retry allowance scoped
+        #     to "the 120 s class" and a no-retry rule naming that token describe one
+        #     message twice, in opposite directions.
+        for name, cell in (("1800 s row", wedge), ("120 s row", timeout_120)):
+            self.assertRegex(cell, r"(?i)no retry",
+                             f"03-policy's {name} must state that there is no retry")
+            self.assertNotRegex(cell, r"(?i)retry once",
+                                f"03-policy's {name} must not allow a retry")
+        start = workflow.index("A TIMED-OUT CALL MEANS SWITCH TRANSPORT")
+        retry_bullet = workflow[start:workflow.index("\n- ", start)]
+        self.assertRegex(retry_bullet, r"BOTH timeout signatures get NO retry",
+                         "the preamble must give both signatures the same budget")
+        self.assertNotRegex(
+            retry_bullet, r"(?i)a single retry is allowed",
+            "the preamble must not re-admit a retry for either timeout signature — the "
+            "120 s message carries both tokens, so a class-scoped allowance contradicts "
+            "the no-retry rule in the same bullet")
 
         # 6. AGENTS.md carries the scoped carve-out, with its delete-when-fixed
         #    condition, and the preamble points at it by name rather than contradicting
