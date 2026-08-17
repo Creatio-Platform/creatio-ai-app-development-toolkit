@@ -113,6 +113,22 @@ the verifier files that page's contents as this unit's evidence.
 
 ## Tool safety — always the narrowest operation that does the job
 
+- **Read through the shell CLI, by default.** Exactly these five reads go through
+  `clio <command> -e <env>`: `get-page`, `list-pages`, `list-app-sections`, `get-schema`,
+  `get-related-page-addon`. All five take identifier-shaped arguments, which is what makes routing
+  them to a command line bounded. **SQL and OData reads stay on MCP**, where the query travels as a
+  JSON field — composing free-form query text into a shell command line would make an execution sink
+  out of text the RULES preamble classifies as untrusted.
+  Everything else is unchanged: resident tools (`resident=true` in the `get-tool-contract` index —
+  `get-guidance` and `get-tool-contract` among them) are called NATIVELY by their own tool name and
+  never wrapped in `clio-run`; non-resident tools and writes go through `clio-run` as always, and
+  writes have no CLI escape at all — an MCP write that fails is parked as an environment fault
+  (`./03-failure-and-park-policy.md`), never re-issued over the shell.
+  Measured: the same `get-page` is 2.3 s on the CLI and 90 s
+  (11 timeouts) through `clio-run`. The two take DIFFERENT argument shapes — `get-tool-contract`
+  documents the MCP one, `clio help <command>` the CLI one — so read the right source before
+  invoking, and never hand-roll an MCP client to work around a slow call
+  (`./03-failure-and-park-policy.md`).
 - `create-page` **only** when the page does not exist; otherwise `get-page` first, then
   `update-page`. `validate-page` before saving.
 - Use the business-rule creators for supported rules rather than writing rule JSON by hand.
