@@ -337,6 +337,8 @@ export function mapToFreedom(eff, opts = {}) {
   // lookup's referenced object "Lookup (Contact)".
   const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
   const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
+  // Name-bound field inserts → fields. Here, not in `mergeHierarchy`: that never receives `entityColumns`.
+  eff = promoteNameBoundFields(eff, cols);
   const needsDecision = [];
   const accountedFor = new Set();
 
@@ -1029,12 +1031,47 @@ function mapCardActions(eff) {
 // real dependency (constants modules hold the lookup GUIDs a rule compares against, utility modules hold logic)
 // and is surfaced. Kept deliberately SHORT — a module wrongly called inert is a silently dropped member.
 const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
+// A module's bare name. The `mixins` map holds the NAMESPACED id (`Terrasoft.X`, `Usr.X`) while `define()` lists the
+// bare one, so the two must be compared on the last segment — matching a fixed `Terrasoft.` prefix would miss every
+// mixin from a custom package.
+const bareModule = (n) => String(n ?? "").split(".").pop();
+
+// Classic binds a field explicitly (`bindTo`) OR by NAME — an insert named for an entity column IS a field on it.
+// Both forms must be promoted: a name-bound insert left alone is neither field nor structure, so it falls out as an
+// `unmapped-component` "port manually or confirm drop" and its column never reaches the Layout table at all.
+// GUARDS — a matching name alone is not enough: an item named for a column can still be a container carrying its
+// own sub-items, and promoting it would drop those children. Skip structure, captioned/generator items, and
+// anything that PARENTS another item. Stamp `bindTo` on the ITEM too, else `mapUnmappedDrop` still reports it and the
+// container holding these fields still reads as an unmapped block. Client-authored only — template-owned base
+// fields are context (F9).
+function promoteNameBoundFields(eff, cols) {
+  const items = eff.items || [];
+  if (!items.length || !cols || !Object.keys(cols).length) return eff;
+  const parents = new Set(items.map((i) => i.parent).filter(Boolean));
+  const STRUCTURAL = new Set([VIEW_ITEM_TYPE.CONTROL_GROUP, VIEW_ITEM_TYPE.DETAIL, VIEW_ITEM_TYPE.GRID_LAYOUT]);
+  const promoted = items.filter((i) =>
+    !i.templateOwned && !i.bindTo && Object.hasOwn(cols, i.name)
+    && !isImageItem(i)
+    && !i.isTab && !i.caption && !i.generator
+    && !STRUCTURAL.has(i.itemType) && !parents.has(i.name));
+  if (!promoted.length) return eff;
+  const names = new Set(promoted.map((i) => i.name));
+  return { ...eff,
+    items: items.map((i) => (names.has(i.name) ? { ...i, bindTo: i.name } : i)),
+    // Keep this projection aligned with engine.mjs effective field rows; promoted fields are synthetic entries for
+    // name-bound diff items that did not pass through that engine projection.
+    fields: [...eff.fields, ...promoted.map((i) => ({ name: i.name, bindTo: i.name, parent: i.parent,
+      contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null,
+      hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance,
+      templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched }))] };
+}
 
 // (a) an imperatively filtered lookup — the imperative twin of a FILTRATION business rule
 function lookupFilterDecision(a) {
   const keys = a.lookupFilterKeys.length ? ", keys: " + a.lookupFilterKeys.join(", ") : "";
   const on = a.referenceSchema ? " on " + a.referenceSchema : "";
   return { kind: "attribute-lookup-filter", item: a.name,
+    detail: `${a.lookupFilters} filter(s)${keys}${on}`,
     reason: `attribute '${a.name}' filters its lookup IMPERATIVELY via lookupListConfig.filters (${a.lookupFilters} filter(s)${keys})${on} — this is NOT a declarative businessRules FILTRATION and does NOT come across as one. Rebuild it as a Freedom lookup filter handler (or an entity business rule when the filter is static); resolve any lookup-record GUID in the filter to its display name on-stand first` };
 }
 
@@ -1055,13 +1092,16 @@ function virtualAttributeDecision(a) {
   const def = a.value == null ? "" : `, default ${JSON.stringify(a.value)}`;
   const coll = a.isCollection ? ", a COLLECTION" : "";
   return { kind: "attribute-virtual", item: a.name,
+    // `detail` = what differs BETWEEN rows of this kind. The ⚠ Imperative members table prints it per row and states
+    // the shared explanation once, so the same paragraph is not repeated on every row of the kind.
+    detail: [dvt.trim(), def.replace(/^, /, ""), coll.replace(/^, /, "")].filter(Boolean).join(" · ") || null,
     reason: `virtual view-model attribute '${a.name}'${dvt}${def}${coll} — declared on the classic view model with NO entity column behind it, so no field insert carries it. It is page UI state (an editability/mode flag, a collection backing a menu or list): create it as a Freedom view-model attribute (with its default) and re-wire whatever read it — a binding, a business rule condition, or a handler. Confirm what reads it before deciding it is unused` };
 }
 
 function messageDecision(m) {
   const dir = m.direction == null ? "direction unresolved" : String(m.direction);
   const mode = m.mode == null ? "" : ", " + m.mode;
-  return { kind: "message", item: m.name,
+  return { kind: "message", item: m.name, detail: `${dir}${mode}`,
     reason: `sandbox message '${m.name}' (${dir}${mode}) — cross-surface wiring whose counterpart lives in ANOTHER schema (a detail, a module, a section), OUTSIDE this page's migration unit. Find the counterpart before building: in Freedom this becomes a handler-mediated request, a shared service, or an explicit event replacement — never a silent drop. A subscribe with no publisher found is an unresolved thread, not "no behaviour"` };
 }
 
@@ -1072,6 +1112,7 @@ function attributeDecisions(a, hasColumn) {
   for (const d of a.dependencies) out.push(dependencyDecision(a, d));
   // (c) a function-valued sub-key (a computed default, a dynamic caption) is imperative logic on the attribute
   if (a.fnKeys.length) out.push({ kind: "attribute-imperative", item: a.name,
+    detail: `function key(s): ${a.fnKeys.join(", ")}`,
     reason: `attribute '${a.name}' defines ${a.fnKeys.join(", ")} as a FUNCTION — a computed value/state the engine reads as present but cannot evaluate; implement it as a Freedom converter, virtual attribute or handler and confirm the computed result` });
   if (!a.lookupFilters && !a.dependencies.length && !a.fnKeys.length && !hasColumn(a.name))
     out.push(virtualAttributeDecision(a));
@@ -1117,17 +1158,33 @@ function mapImperativeMembers(eff, cols) {
   const needsDecision = [];
   const client = (xs) => (xs || []).filter((x) => !x.fromTemplate);
   const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n));
+  const moduleDeps = client(eff.moduleDeps).map((d) => d.name);
+  const mixinCovers = (m) => {
+    const module = m.module || m.name;
+    const exact = moduleDeps.filter((d) => d === module);
+    if (exact.length) return exact;
+    const sameBare = moduleDeps.filter((d) => bareModule(d) === bareModule(module));
+    return sameBare.length === 1 ? sameBare : [];
+  };
 
   for (const a of client(eff.attributes)) needsDecision.push(...attributeDecisions(a, hasColumn));
   for (const m of client(eff.messages)) needsDecision.push(messageDecision(m));
-  for (const m of client(eff.mixins)) needsDecision.push({ kind: "mixin", item: m.name,
+  // `covers` — the other member ids this one decision accounts for. A mixin is declared twice (in `mixins` and as a
+  // `define()` dependency) and the ledger tracks both; the aggregate below no longer lists mixin modules, so without
+  // this the dep member has no route to `decision` and the coverage gate blocks. Bare-name fallback is allowed only
+  // when it resolves to a single actual define() dep; otherwise two modules with the same last segment must stay loud.
+  for (const m of client(eff.mixins)) needsDecision.push({ kind: "mixin", item: m.name, detail: m.module || null,
+    covers: mixinCovers(m),
     reason: `the page mixes in '${m.module || m.name}' — its members are defined in ANOTHER schema, so none of its behaviour appears in this page body. Read the mixin and port what it contributes to THIS page (an entity-parameterized mixin can also carry actions and messages); confirm whether the Freedom template already provides an equivalent` });
 
   // module deps: ONE aggregated decision (the per-module rows live in the member ledger, which is where
   // completeness is proven) — a decision per dep would bury the worklist in framework noise.
-  const deps = client(eff.moduleDeps).map((d) => d.name).filter((n) => !INERT_MODULE_RX.test(n));
+  // A module that already has a row of its own (a mixin, a referenced UI module) is excluded: the aggregate carries
+  // what nothing else does, and listing it here as well states the same member twice.
+  const ownRow = new Set([...client(eff.mixins).flatMap(mixinCovers), ...(eff.referencedModules || [])]);
+  const deps = moduleDeps.filter((n) => !INERT_MODULE_RX.test(n) && !ownRow.has(n));
   if (deps.length) needsDecision.push({ kind: "module-dep", item: deps.join(", "),
-    reason: `the page declares ${deps.length} non-framework define() dependenc(ies) — constants/enum modules hold the lookup GUIDs its rules compare against, utility modules hold logic it calls, and mixin modules hold behaviour it mixes in. Confirm what each contributes to the page and where it goes in Freedom; a dependency whose contribution you cannot name is an unresolved thread` });
+    reason: `the page declares ${deps.length} further define() dependenc(ies) with no row of their own — constants/enum modules hold the lookup GUIDs its rules compare against, and utility modules hold logic it calls. Confirm what each contributes to the page and where it goes in Freedom; a dependency whose contribution you cannot name is an unresolved thread` });
 
   return { needsDecision };
 }
@@ -1360,28 +1417,49 @@ function mapUnmappedDrop(eff, accountedFor) {
     return marked;
   };
   const hasMappedDesc = markMappedAncestors();
-  // Collect the alive CLIENT-authored items the mapper produced nothing for (skip template chrome, mapped
-  // containers and structural scaffolding). Own fn for Sonar CC 15.
+  // The mirror of `hasMappedDesc`. A LEAF CONTROL renders its own internals — an image's tip, a control's parts —
+  // so an item inside one is already built and must not be flagged for a manual port. Test the ancestor for being a
+  // bound field or an image, NOT for `accountedFor`: regions and anchors are accounted for too, and keying on that
+  // suppresses every item on the page. A container is only a layout box, so its children stay in the sweep.
+  const insideMappedControl = (i) => {
+    for (let p = i.parent, guard = 0; p && guard < 64; guard++) {
+      const a = byName.get(p);
+      if (a && (a.bindTo || isImageItem(a))) return true;
+      p = a?.parent;
+    }
+    return false;
+  };
+  // One alive item's verdict: `skip` (already resolved elsewhere), `structural` (accounted for, just not here) or
+  // `dropped` (the mapper produced nothing for it). Its own fn so the guard chain sits at nesting level 0 — inside
+  // the collect loop each guard also carried the loop's nesting weight, which is what pushed that function over the
+  // Sonar cognitive-complexity budget (S3776).
   //
-  // It ALSO collects `structural` — the elements this function deliberately skips because they ARE accounted for,
-  // just not by THIS function: a tab / control group / detail (the container + detail builders emit those), pure
-  // scaffolding the mapper rebuilds, the primary-display title (native Freedom page title), and a real layout
-  // container whose subtree produced Freedom elements. Without that set the member ledger reads every one of them
-  // as a silent drop and flags MAPPED elements as gaps — a gate that cries wolf teaches the reader to ignore it.
-  // `templateOwned` / `bindTo` are excluded from it on purpose: the ledger already resolves those to `context`
+  // `structural` matters as much as `dropped`: it is what this deliberately skips because the elements ARE
+  // accounted for, just not by THIS function — a tab / control group / detail (the container + detail builders emit
+  // those), pure scaffolding the mapper rebuilds, the primary-display title (native Freedom page title), and a real
+  // layout container whose subtree produced Freedom elements. Without that set the member ledger reads every one of
+  // them as a silent drop and flags MAPPED elements as gaps — a gate that cries wolf teaches the reader to ignore
+  // it. `templateOwned` / `bindTo` return `skip` on purpose: the ledger already resolves those to `context`
   // (inherited) and to the bound column's own `mapped` row.
+  const dropVerdict = (i) => {
+    if (i.templateOwned || i.bindTo) return "skip";
+    if (i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) return "structural";
+    if (accountedFor.has(i.name)) return "skip";
+    if (insideMappedControl(i)) return "structural";      // part of a control the mapper already built
+    if (HARD_SCAFFOLD_RX.test(i.name)) return "structural";
+    if (isPrimaryDisplay(i)) return "structural";         // record title → native Freedom page title; nothing to port, no ⚠
+    if (hasMappedDesc.has(i.name)) return "structural";   // real layout container — its subtree produced Freedom elements
+    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) return "structural"; // structural container (has children)
+    return "dropped";
+  };
+  // Sort every alive item into the two sets by its verdict; the classification itself lives in `dropVerdict`.
   const collectDropped = () => {
     const dropped = new Set();
     const structural = new Set();
     for (const i of (eff.items || [])) {
-      if (i.templateOwned || i.bindTo) continue;
-      if (i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) { structural.add(i.name); continue; }
-      if (accountedFor.has(i.name)) continue;
-      if (HARD_SCAFFOLD_RX.test(i.name)) { structural.add(i.name); continue; }
-      if (isPrimaryDisplay(i)) { structural.add(i.name); continue; } // record title → native Freedom page title; nothing to port, no ⚠
-      if (hasMappedDesc.has(i.name)) { structural.add(i.name); continue; } // real layout container — its subtree produced Freedom elements
-      if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) { structural.add(i.name); continue; } // structural container (has children)
-      dropped.add(i.name);
+      const verdict = dropVerdict(i);
+      if (verdict === "structural") structural.add(i.name);
+      else if (verdict === "dropped") dropped.add(i.name);
     }
     return { dropped, structural };
   };
@@ -1464,8 +1542,11 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
       if (r.filter?.columnPath) byTarget.get(r.targetAttribute).add(r.filter.columnPath);
     }
     const parts = [...byTarget.entries()].map(([t, cols]) => cols.size ? `${t} by ${[...cols].join("/")}` : `${t} (filter column unresolved)`);
+    // State what is already built and what is missing from it: these rows are folded FROM `entityBusinessRules`, so
+    // the rule exists with its target and filter column. Telling the reader to "reproduce" it sends them to rebuild
+    // what the ChangeSet already carries; only the comparison (and any constant) failed to resolve statically.
     needsDecision.push({ kind: "entity-filter", item: `(${byTarget.size} lookup${byTarget.size === 1 ? "" : "s"})`,
-      reason: `${byTarget.size} lookup field(s) carry a DYNAMIC / column-reference classic filter (restrict the dropdown by a related column, no static constant) — reproduce each as a Freedom lookup filter (filter the lookup by the named column via a business rule / data-source filter): ${parts.join(", ")}. Confirm each comparison.` });
+      reason: `${byTarget.size} lookup field(s) carry a DYNAMIC / column-reference classic filter (restrict the dropdown by a related column, no static constant): ${parts.join(", ")}. The entity business rule for each is ALREADY in this ChangeSet, carrying the target lookup and the column to filter by — what it does NOT carry is the comparison, which could not be read statically. COMPLETE the emitted rule with the comparison (and any constant it compares against); do not rebuild it from scratch.` });
   }
 }
 

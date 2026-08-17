@@ -27,8 +27,13 @@ HTML or a rendered artifact.
   from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Logic` = what the
   engine MAPPED; `⚠ Imperative logic` = the methods it could not, each carrying a ported/dropped/blocked
   obligation. `Logic` closes with a pointer line naming how many methods the page has.
-- **`⚠ Confirm before I build`** collects everything needing a human answer (the engine's ⚠ worklist plus
-  any discovery risks/gaps you append).
+- **`⚠ Imperative members`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
+  `module-dep`, `referenced-module`) — declared on this page, defined elsewhere. Same contract as
+  `⚠ Imperative logic`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
+  is, is stated once above the table; the row carries only what differs.
+- **`⚠ Confirm before I build`** collects only what needs a human ON-STAND answer (plus any discovery
+  risks/gaps you append). A member explained by a step-5.1 card is NOT a confirm item — it is work, and it
+  lives in `⚠ Imperative members`.
 - Feed the resolution inputs so names are real, not codes: `resources` (captions), `columnTitles` (field
   labels), `detailSchemas` (detail entity/columns/title). Separate confirmed facts from inferences.
 
@@ -72,12 +77,18 @@ HTML or a rendered artifact.
 | <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values[; ⚠ also calls: <call>] / ⚠ unclassified: <call> / ⚠ nothing recognised [(+<N> call(s) the parser did not forward)] | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
 | ↳ <helper> | L<from>-<to> | internal call from <caller> | … | … | port with `<caller>` | <card> <AC…> |
 
+#### ⚠ Imperative members — account for EVERY row (<N>)
+> what each KIND is, one line per kind present — stated here, not repeated on every row
+| Member | Kind | Detail | Described in |
+| --- | --- | --- | --- |
+| <name> | mixin / message / attribute-* / module-dep / referenced-module | <what differs for this row> | <card> <AC…> / ⚠ not described |
+
 #### ⚠ Confirm before I build
 - **[<kind>]** <item> — <what to confirm / resolve>
 - **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
-Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Imperative logic → ⚠ Confirm), then each child page under **Child page mappings**.
+Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm), then each child page under **Child page mappings**.
 
 ## Worked example (single-section, abbreviated)
 

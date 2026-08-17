@@ -21,7 +21,7 @@
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
-//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Confirm rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
+//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
@@ -900,18 +900,53 @@ function describeAddMode(am) {
   if (am.service) parts.push(`calls service \`${am.service}${serviceMethod}\` to link/insert`);
   if (am.editableGrid) parts.push(`is an INLINE-EDITABLE grid${editableCols}`);
   if (am.fixedFilters) parts.push(`applies FIXED list filters${filterOnCols} — reproduce as a Freedom data-source / business-rule filter`);
-  if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
+  if (openCardIsTheWholeStory(am)) parts.push("overrides the default add-card open (custom add flow)");
   return parts;
 }
 
-function attachDetailAddModes(changeSet, detailSchemas) {
+// `openCardByMode` is a FALLBACK signal: it is described only when no other mode was, because on a detail that also
+// disables add-new (the stage-history shape) the override is not the thing to build. ONE predicate for the
+// description and the guidance — split across two conditions they drift, and the guidance then cites a mode the
+// description suppressed while telling the reader to build an add flow the same row forbids.
+const openCardIsTheWholeStory = (am) => !!am.openCardOverridden
+  && !(am.addDisabled || am.customAction || am.lookup || am.service || am.editableGrid || am.fixedFilters);
+
+// What to BUILD for this add mode, as opposed to what it IS (`describeAddMode`). Conditional: one unconditional
+// instruction contradicts the modes it does not fit — "build a CUSTOM add request-handler" on a detail whose own
+// text says "add-new DISABLED" asks for an add flow that must not exist. Modes whose `describeAddMode` phrase
+// already carries its instruction (customAction, fixedFilters) add nothing here, or it is stated twice.
+function addModeGuidance(am) {
+  const g = [];
+  if (am.lookup || am.service) g.push("Reproduce the add flow with a CUSTOM add request-handler (open the lookup, then create the link records / call the service) — not a default add-new.");
+  else if (openCardIsTheWholeStory(am)) g.push("Reproduce the overridden add-card flow with a CUSTOM add request-handler that performs the same open-card logic; do not fall back to the default related-list add.");
+  else if (am.addDisabled && !am.customAction) g.push("There is no add flow to reproduce: build it as a read-only / attach-only related list, with no add button.");
+  if (am.service) g.push("VERIFY that service is deployed on-stand (else port its logic to a process/service).");
+  if (am.editableGrid) g.push("Confirm the Freedom list supports inline edit for those columns via `get-component-info`.");
+  return g;
+}
+
+// A detail's label for the worklist. The caption alone is NOT an identity — the stock related-list caption is shared
+// by every detail built on that base schema, so several rows on one page would be indistinguishable. Qualify with
+// the child entity, the same pair the Layout table identifies it by.
+function detailLabel(d) {
+  const base = d.caption || d.detailSchema || d.entity || "detail";
+  return d.caption && d.entity ? `${base} · ${d.entity}` : base;
+}
+
+// Exported for the golden suite. The rendered plan proves the end-to-end path (a real `runMigration` covers the
+// openCard branch), but each add-mode combination needs its own assertion and driving them through a full run
+// would need one fixture schema per branch. Same reason `detectAddMode` is exported: the unit is the contract
+// being pinned, not a shortcut around the renderer.
+export function attachDetailAddModes(changeSet, detailSchemas) {
   for (const d of (changeSet.details || [])) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
     const parts = describeAddMode(am);
-    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: d.caption || d.detailSchema || d.entity,
-      reason: `Detail '${d.caption || d.detailSchema || d.entity}' is NOT a plain related list — it ${parts.join("; ")}. Reproduce this on Freedom with a CUSTOM add request-handler (open the lookup, then create the link records / call the service) — not a default add-new. If it calls a service, VERIFY that service is deployed on-stand (else port its logic to a process/service). If inline-editable, confirm the Freedom list supports inline edit for those columns via get-component-info.` });
+    const guidance = addModeGuidance(am);
+    const label = detailLabel(d);
+    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label,
+      reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` });
   }
 }
 
@@ -1304,6 +1339,10 @@ const AGGREGATED_DECISION_KINDS = new Set(["module-dep"]);
 function decidedNames(needsDecision) {
   const decided = new Set();
   for (const d of needsDecision || []) {
+    // `covers` — member ids this decision accounts for besides its own `item` (a mixin's `define()` dependency is a
+    // second member of the same declaration). Without it, removing a name from an aggregated row silently drops
+    // that member to `unaccounted` and the coverage gate blocks on a member that IS decided, just under another row.
+    for (const c of d.covers || []) decided.add(String(c).trim());
     if (d.item == null) continue;
     const item = String(d.item);
     if (!AGGREGATED_DECISION_KINDS.has(d.kind)) { decided.add(item.trim()); continue; }
