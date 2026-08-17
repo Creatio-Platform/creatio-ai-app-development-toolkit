@@ -721,14 +721,16 @@ function unclassifiedCalls(h, siblings) {
   const open = kept.filter((c) => !drop(c));
   // The cap keeps the cell readable, but a silent truncation is the failure this column exists to prevent — the
   // reader would take four names for the whole list. Same `…and N more` overflow the CLI's gap lines use.
-  // TWO things can be hidden, and both are counted: the open calls past the cap, and the calls the PARSER never
-  // handed over — it keeps the first N callee paths in locale order, and every noise namespace (`Boolean`, `Ext.`,
-  // `Math.`, `Terrasoft.`) sorts ahead of `this.`, so a call-dense body can arrive here as nothing but noise.
   const shown = open.slice(0, UNCLASSIFIED_SHOWN).map(esc);
-  const unsent = Math.max(0, (h.evidence?.callsTotal ?? kept.length) - kept.length);
-  const overflow = Math.max(0, open.length - UNCLASSIFIED_SHOWN) + unsent;
-  if (overflow) shown.push(`…and ${overflow} more`);
-  return shown;
+  const over = Math.max(0, open.length - UNCLASSIFIED_SHOWN);
+  if (over) shown.push(`…and ${over} more`);
+  // TWO things can be hidden and they are DIFFERENT hidings, so they are reported apart. The parser keeps only the
+  // first N callee paths in locale order, and every noise namespace (`Boolean`, `Ext.`, `Math.`, `Terrasoft.`) sorts
+  // ahead of `this.`, so a call-dense body can arrive here as nothing but noise. Those calls never passed the noise
+  // and sibling filters above, so adding them to `…and N more` claims unclassified calls nobody established — a
+  // method whose only forwarded call was a SIBLING then rendered `⚠ unclassified: …and 4 more`, a warning naming
+  // nothing. Counted on its own as "not read", which is what it is.
+  return { shown, unread: Math.max(0, (h.evidence?.callsTotal ?? kept.length) - kept.length) };
 }
 
 // What the body does, from evidence. Distinct states, kept apart on purpose: body elsewhere · nothing of its own ·
@@ -740,10 +742,19 @@ function bodyDoesText(h, siblings = new Set()) {
   if (h.trivial) return "passthrough (base only)";
   const kinds = (h.evidence?.kinds || []).filter((k) => k !== "callParent");
   if (kinds.length) return kinds.map(esc).join(", ");
+  const { shown, unread } = unclassifiedCalls(h, siblings);   // already escaped at the sink, plus an overflow marker
+  // What the PARSER never forwarded is stated wherever this cell enumerates calls, so the list cannot read as the
+  // whole one. Kept out of the unclassified names themselves — see `unclassifiedCalls`.
+  const hidden = unread ? ` (+${unread} call(s) the parser did not forward)` : "";
   // Attribute writes ARE evidence — the same evidence `categorize` promotes to `set-values`, so this row is not a ⚠.
-  if ((h.evidence?.writesAttrs || []).length) return "sets values";
-  const open = unclassifiedCalls(h, siblings);   // already escaped at the sink, plus an overflow marker
-  return open.length ? `⚠ unclassified: ${open.join(", ")}` : "⚠ nothing recognised";
+  // But writing an attribute does not make an unread call read. BOTH signals are true at once, and returning only
+  // the first hid the second whenever a method happened to do both — the unread call is exactly what a step-5.1
+  // resolver needs before marking the row resolved (SKILL.md rule 7), so it is composed in, not swallowed.
+  // The cell is the ONLY place this is reported: `categorize` still answers `set-values` (the writes are real, and
+  // so is the handler target that follows from them) — what the unread call changes is how much of the row is read.
+  if ((h.evidence?.writesAttrs || []).length)
+    return (shown.length ? `sets values; ⚠ also calls: ${shown.join(", ")}` : "sets values") + hidden;
+  return (shown.length ? `⚠ unclassified: ${shown.join(", ")}` : "⚠ nothing recognised") + hidden;
 }
 
 function readsWritesText(ev) {

@@ -1726,6 +1726,11 @@ function mapWidgets(eff, opts = {}) {
 
 // kind → category, ORDERED: the first match wins, so the more specific behaviour sits ahead of the more general
 // one (a method that opens a query AND builds filters is a query).
+// `save` sits BELOW publish / refresh / lookup on purpose, and the rule is stated here because no measurement can
+// establish it: saving is what a classic method does *around* its real work (`…; this.save();` closes a handler
+// that published a message or reloaded a detail), so the Freedom target follows from that work, not from the save.
+// A method whose ONLY kind is `save` still categorises as `save`. Pinned by the `category precedence:` goldens in
+// run-mapper.mjs, so reordering this table fails a test instead of passing silently.
 const KIND_CATEGORY = [
   ["validator", "validator"], ["esq", "query/filter"], ["filter-build", "filter-build"], ["service", "service-call"],
   ["sys-setting", "sys-setting"], ["refresh", "refresh"],

@@ -69,7 +69,7 @@ HTML or a rendered artifact.
 #### ⚠ Imperative logic — account for EVERY row (<N>)
 | Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
 | --- | --- | --- | --- | --- | --- | --- |
-| <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values / ⚠ unclassified: <call> | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
+| <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values[; ⚠ also calls: <call>] / ⚠ unclassified: <call> / ⚠ nothing recognised [(+<N> call(s) the parser did not forward)] | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
 | ↳ <helper> | L<from>-<to> | internal call from <caller> | … | … | port with `<caller>` | <card> <AC…> |
 
 #### ⚠ Confirm before I build

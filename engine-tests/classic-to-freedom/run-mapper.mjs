@@ -3047,6 +3047,34 @@ check("method evidence: categorize() reads the body — an esq call is query/fil
   stubOf("loadOwner").category === "query/filter" && stubOf("announce").category === "message-publish"
   && stubOf("passthrough").category === "passthrough");
 
+// KIND_CATEGORY is ORDERED and the first match wins, so a body carrying TWO kinds has its Freedom target decided by
+// the table's row order alone. That order was defended by "no fixture combines them" — an absence of evidence, which
+// stops being true the moment a real page does. `save` sits below publish / refresh / lookup because saving is what
+// a classic method does AROUND its real work, so these pin the precedence: reordering the table now fails here.
+const COMBO = `define("ComboPage", [], function() { return { entitySchemaName: "Deal", methods: {
+    saveAndPublish: function() { this.sandbox.publish("Recalc"); this.save(); },
+    saveAndRefresh: function() { this.save(); this.reloadEntity(); },
+    saveAndLookup: function() { this.openLookup({}); this.save(); },
+    saveOnly: function() { this.save(); } },
+  diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });`;
+const comboRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: COMBO }] }, { baseDir: FIX });
+const comboCat = (m) => comboRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.category;
+const comboKinds = (m) => comboRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.evidence?.kinds;
+check("category precedence: the combined bodies really do carry BOTH kinds (else the checks below pass vacuously)",
+  ["saveAndPublish", "saveAndRefresh", "saveAndLookup"].every((m) => (comboKinds(m) || []).includes("save"))
+  && (comboKinds("saveAndPublish") || []).includes("publish")
+  && (comboKinds("saveAndRefresh") || []).includes("refresh")
+  && (comboKinds("saveAndLookup") || []).includes("lookup"),
+  () => JSON.stringify(["saveAndPublish", "saveAndRefresh", "saveAndLookup"].map(comboKinds)));
+check("category precedence: save + publish is message-publish — the save closes the handler, the publish is its work",
+  comboCat("saveAndPublish") === "message-publish", () => comboCat("saveAndPublish"));
+check("category precedence: save + refresh is refresh",
+  comboCat("saveAndRefresh") === "refresh", () => comboCat("saveAndRefresh"));
+check("category precedence: save + lookup is lookup",
+  comboCat("saveAndLookup") === "lookup", () => comboCat("saveAndLookup"));
+check("category precedence: a body whose ONLY kind is save still categorises as save",
+  comboCat("saveOnly") === "save", () => comboCat("saveOnly"));
+
 /* ---- the category is EVIDENCE ONLY, and the Body-does cell says what it actually read ---- */
 // A category derived from the METHOD'S NAME picks a Freedom target nothing in the body supports and reads exactly
 // like a derived one. These pin the evidence-only rule and each state the Body-does cell can take.
@@ -3066,8 +3094,12 @@ const EVID_BODY = `define("EvidPage", [], function() { return {
 const evid = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: EVID_BODY }] }, { baseDir: FIX });
 const evStub = (m) => evid.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
 const evPlan = renderPlan(evid, {});
-// the Method cell may carry a `↳` fold marker, so match on the cell's CONTENT, not on the raw line prefix
-const evCell = (m) => (evPlan.split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
+// The `Body does` cell of one row, by method name. The Method cell may carry a `↳` fold marker, so match on the
+// cell's CONTENT, not on the raw line prefix — `includes` would take the first line anywhere naming the method.
+// One definition, because every reader below wants the same cell out of a different rendered plan.
+const bodyDoesCell = (md, m) => (md.split("\n").find((l) => l.startsWith("|")
+  && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
+const evCell = (m) => bodyDoesCell(evPlan, m);
 
 check("category: a suggestive method name (on…Changed / init…) derives no category — `unclassified`",
   evStub("onThingChanged").category === "unclassified" && evStub("initSomething").category === "unclassified",
@@ -3090,7 +3122,7 @@ const nsRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
   { baseDir: FIX });
 const nsPlan = renderPlan(nsRun, {});
-const nsCell = (m) => (nsPlan.split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
+const nsCell = (m) => bodyDoesCell(nsPlan, m);
 check("body does: `Terrasoft.*` predicates are noise too, not only their `Ext.*` twins",
   nsCell("tsPredicates") === "⚠ nothing recognised", () => nsCell("tsPredicates"));
 check("body does: a call that gates on the USER is not noise — it stays visible as unclassified",
@@ -3102,8 +3134,7 @@ const capRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     manyUnknowns: function() { this.apiOne(); this.apiTwo(); this.apiThree(); this.apiFour(); this.apiFive(); this.apiSix(); } },
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
   { baseDir: FIX });
-// Match the Method CELL exactly, like evCell/nsCell — `includes` would take the first line anywhere naming it.
-const capCell = (renderPlan(capRun, {}).split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.replaceAll("↳", "").trim() === "manyUnknowns") || "").split("|")[4]?.trim();
+const capCell = bodyDoesCell(renderPlan(capRun, {}), "manyUnknowns");
 check("body does: the unclassified list states its overflow instead of truncating silently",
   /…and 2 more/.test(capCell || "") && (capCell || "").split(",").length === 5,
   () => capCell);
@@ -3114,20 +3145,49 @@ const capAt = (n) => {
     `define("BoundPage", [], function() { return { entitySchemaName: "Deal", methods: { many: function() { ${names} } },
       diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
     { baseDir: FIX });
-  return (renderPlan(r, {}).split("\n").find((l) => l.startsWith("|") && l.split("|")[1]?.trim() === "many") || "").split("|")[4]?.trim();
+  return bodyDoesCell(renderPlan(r, {}), "many");
 };
 check("body does: exactly at the cap there is no overflow marker (a `>=` drift would print `…and 0 more`)",
   !/…and/.test(capAt(4) || "") && (capAt(4) || "").split(",").length === 4, () => capAt(4));
 check("body does: one past the cap states `…and 1 more`",
   (capAt(5) || "").endsWith("…and 1 more"), () => capAt(5));
 // The PARSER's own cap counts too: a body with more callee paths than it forwards must not read as if the
-// forwarded slice were the whole list.
+// forwarded slice were the whole list. Reported APART from the unclassified names, because those calls never
+// passed the noise/sibling filters — folding them into `…and N more` claims unclassified calls nobody established.
 const cappedEvidence = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "dense",
   category: "unclassified",
   evidence: { kinds: [], calls: ["this.a", "this.b"], callsTotal: 12, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: calls the parser never forwarded are counted in the overflow, not silently dropped",
-  /…and 10 more/.test(cappedEvidence),
-  () => cappedEvidence.split("\n").find((l) => l.includes("dense")));
+check("body does: calls the parser never forwarded are stated, not silently dropped",
+  bodyDoesCell(cappedEvidence, "dense") === "⚠ unclassified: this.a, this.b (+10 call(s) the parser did not forward)",
+  () => bodyDoesCell(cappedEvidence, "dense"));
+check("body does: the parser's cap is NOT folded into the unclassified overflow — those calls were never filtered",
+  !/…and 10 more/.test(cappedEvidence), () => bodyDoesCell(cappedEvidence, "dense"));
+// The failure that wording produced: every forwarded call was a SIBLING, so nothing unclassified was established
+// at all, yet the row rendered `⚠ unclassified: …and 4 more` — a warning naming nothing.
+const siblingHidden = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
+  { sourceMethod: "callsOnlySiblings", category: "unclassified",
+    evidence: { kinds: [], calls: ["this.helperOne"], callsTotal: 5, readsAttrs: [], writesAttrs: [] } },
+  { sourceMethod: "helperOne", category: "unclassified",
+    evidence: { kinds: [], calls: [], callsTotal: 0, readsAttrs: [], writesAttrs: [] } }] } });
+check("body does: a ⚠ unclassified is never raised by hidden calls alone — with only siblings forwarded the cell names the gap as unread",
+  bodyDoesCell(siblingHidden, "callsOnlySiblings") === "⚠ nothing recognised (+4 call(s) the parser did not forward)",
+  () => bodyDoesCell(siblingHidden, "callsOnlySiblings"));
+// BOTH signals are true at once for a method that writes an attribute AND makes a call nobody read. Returning only
+// the first hid the second, and an unread call is exactly what a step-5.1 resolver needs before marking the row
+// resolved (Contract rule 7) — the one signal this table exists to surface, dropped because another also held.
+const writesAndCalls = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "stampAndCall",
+  category: "set-values",
+  evidence: { kinds: [], calls: ["this.someUnknownApi"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } });
+check("body does: attribute writes do NOT swallow the unclassified call — both signals are reported",
+  bodyDoesCell(writesAndCalls, "stampAndCall") === "sets values; ⚠ also calls: this.someUnknownApi",
+  () => bodyDoesCell(writesAndCalls, "stampAndCall"));
+// The composed branch is a NEW sink for the call name, so the escaping contract has to hold on it too — a raw pipe
+// would split the row into extra columns. Default to a value CONTAINING a pipe, so a vanished row fails loudly.
+const pipedCell = bodyDoesCell(renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "piped",
+  category: "set-values",
+  evidence: { kinds: [], calls: ["this.a|b"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } }), "piped");
+check("body does: the composed cell still escapes the call name at the sink (a piped name must not break the row)",
+  !/\|/.test(pipedCell || "x|x") && /sets values; ⚠ also calls: this\.a/.test(pipedCell || ""), () => pipedCell);
 // `evCell` returns undefined when no row matches, so a negative assertion on it alone would pass vacuously if the
 // column moved or the row vanished — assert the cell EXISTS and holds the expected state, then that it is clean.
 check("body does: a call to a SIBLING row is the call graph's business, never an unclassified framework call",
@@ -4435,6 +4495,38 @@ check("chain roots: mutual recursion terminates and leaves both rows intact (the
   !!multiStub("pingA") && !!multiStub("pingB")
   && multiStub("pingA").rootTrigger === undefined && multiStub("pingB").rootTrigger === undefined,
   () => JSON.stringify([multiStub("pingA"), multiStub("pingB")]));
+
+// A PLATFORM LIFECYCLE caller is an ANSWER, and `weak()` excludes it for that reason — but nothing exercised that
+// conjunct, and dropping it left the whole suite green. It takes mutual recursion under a lifecycle hook to reach:
+// `hHelper` resolves through `onSaved` and carries `lifecycle`, while `cHelper` is cut off from it by the cycle
+// guard and stays weak. Walking up from `cHelper`, treating that lifecycle caller as weak too would follow
+// `up.from` straight back into `cHelper` — already in `seen` — so the walk dies and a resolvable row keeps reading
+// as "know only their calling method". The conjunct is what stops the answer one hop above it from being thrown away.
+const lifeRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+  `define("LifePage", [], function() { return { entitySchemaName: "Deal", methods: {
+    onSaved: function() { this.cHelper(); },
+    cHelper: function() { this.hHelper(); },
+    hHelper: function() { this.cHelper(); },
+    answered: function() { return 1; } },
+    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }],
+  // propagateChainRoots only runs when an index was supplied; this entry is unrelated to the chain under test.
+  behaviourIndex: { answered: { trigger: "attribute-onchange", from: "Stage attribute onChange", card: "C1", ac: ["AC-1"] } } });
+const lifeTrig = (m) => (lifeRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.triggers || [])[0];
+check("chain roots: the SETUP holds — the caller carries `lifecycle` while the row under test is still weak",
+  lifeTrig("hHelper")?.lifecycle === "onSaved"
+  && lifeTrig("cHelper")?.kind === "internal" && !lifeTrig("cHelper")?.lifecycle,
+  () => JSON.stringify([lifeTrig("hHelper"), lifeTrig("cHelper")]));
+check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop — the row inherits the platform hook",
+  lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.lifecycle === "onSaved",
+  () => JSON.stringify(lifeTrig("cHelper")));
+check("chain roots: and the composed cell names the platform hook instead of stopping at the calling method",
+  /onSaved \(platform lifecycle\) → internal call/.test(
+    renderPlan(lifeRun, {}).split("\n").find((l) => l.startsWith("|")
+      && l.split("|")[1]?.replaceAll("↳", "").trim() === "cHelper") || ""),
+  () => renderPlan(lifeRun, {}).split("\n").filter((l) => /cHelper/.test(l)));
+check("chain roots: the header stops counting that row as knowing only its calling method",
+  !/know only their calling method/.test(renderPlan(lifeRun, {})),
+  () => renderPlan(lifeRun, {}).split("\n").filter((l) => /no trigger yet/.test(l)));
 
 // The header counts EMPTY cells, so it must not call them "no TRACED trigger": a row the behaviour run answered
 // leaves that count with nothing traced for it. The described answers are counted next to it, so a reader can see
