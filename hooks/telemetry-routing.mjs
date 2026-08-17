@@ -24,7 +24,6 @@
 //
 // Never blocks, never fails the originating call. Any error exits 0 with no output.
 import { spawnSync } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -339,49 +338,53 @@ function main() {
 	if (!sessionId) {
 		return;
 	}
-	// End of the host session: report what it consumed. This is the ONLY place a true total exists —
-	// measured, across 52 agent-emitted events not one carried a token counter, because an agent cannot
-	// see its own running totals. The host's transcript can, and at Stop it is complete.
-	//
-	// Emitted as `session_usage`, a measurement rather than a funnel stage: it marks no progress, it
-	// belongs to the session and not to any one flow, and it must never be counted as a run.
-	//
-	// Guarded by `stop_hook_active` so a Stop that the host itself re-entered cannot double-report, and
-	// by its own once-per-session claim.
-	if ((payload?.hook_event_name ?? '') === 'Stop') {
-		if (payload?.stop_hook_active || !consentGranted()) {
-			return;
-		}
-		const usage = readSessionUsage(payload);
-		// Nothing worth reporting if the transcript was unreadable: a row of zeroes is indistinguishable
-		// from a session that genuinely spent nothing, and this event exists only to carry the numbers.
-		//
-		// Reported on EVERY Stop, not once, because Stop fires when the agent finishes a RESPONSE — it is
-		// per turn, not per session. Claiming it once froze the measurement at the end of the first turn:
-		// verified on a live session, where the recorded total went stale while the session kept running.
-		// Since the counters are running totals the series is monotonic, so the session's real
-		// consumption is the MAXIMUM, and the difference between two readings is what one request cost.
-		// This also survives a session that is killed rather than closed, which a session-end signal
-		// would not.
-		if (usage.output_tokens > lastReportedOutputTokens(sessionId)) {
-			emitEvent(sessionId, usage, 'session_usage');
-			rememberReportedOutputTokens(sessionId, usage.output_tokens);
-		}
+	const event = payload?.hook_event_name ?? '';
+	if (event === 'Stop') {
+		reportSessionUsage(payload, sessionId);
 		return;
 	}
-	// A new user request is plausibly a new run, so the next clio call is allowed to route again.
-	// Nothing is emitted or said here: at prompt time there is no way to know the turn will touch
-	// Creatio at all, and telemetry routing injected into unrelated work is noise the model learns
-	// to skip. Clearing a claim is cheap; a reminder nobody needed is not.
-	if ((payload?.hook_event_name ?? '') === 'UserPromptSubmit') {
+	if (event === 'UserPromptSubmit') {
+		// A new user request is plausibly a new run, so the next clio call is allowed to route again.
+		// Nothing is emitted or said here: at prompt time there is no way to know the turn will touch
+		// Creatio at all, and telemetry routing injected into unrelated work is noise the model learns
+		// to skip. Clearing a claim is cheap; a reminder nobody needed is not.
 		releaseClaim(sessionId, 'turn');
 		return;
 	}
-	const toolName = payload?.tool_name ?? '';
-	if (!toolName.includes('clio')) {
+	routeClioCall(payload, sessionId);
+}
+
+// End of the host session: report what it consumed. This is the ONLY place a true total exists —
+// measured, across 52 agent-emitted events not one carried a token counter, because an agent cannot
+// see its own running totals. The host's transcript can, and at Stop it is complete.
+//
+// Emitted as `session_usage`, a measurement rather than a funnel stage: it marks no progress, it
+// belongs to the session and not to any one flow, and it must never be counted as a run.
+//
+// Reported on EVERY Stop, because Stop fires when the agent finishes a RESPONSE — it is per turn, not
+// per session. Claiming it once froze the measurement at the end of the first turn: verified on a live
+// session, where the recorded total went stale while the session kept running. The counters are running
+// totals, so the series is monotonic — real consumption is the MAXIMUM, and the difference between two
+// readings is what one request cost. This also survives a session killed rather than closed.
+function reportSessionUsage(payload, sessionId) {
+	// `stop_hook_active` means the host re-entered its own Stop, which would double-report.
+	if (payload?.stop_hook_active || !consentGranted()) {
 		return;
 	}
-	if (TELEMETRY_TOOLS.some(tool => toolName.endsWith(tool))) {
+	const usage = readSessionUsage(payload);
+	// An unchanged or unreadable total is not worth a reading: a row of zeroes is indistinguishable from
+	// a session that genuinely spent nothing, and a repeat says nothing in a series that means growth.
+	if (usage.output_tokens <= lastReportedOutputTokens(sessionId)) {
+		return;
+	}
+	emitEvent(sessionId, usage, 'session_usage');
+	rememberReportedOutputTokens(sessionId, usage.output_tokens);
+}
+
+// A clio MCP call: the floor event, and the routing the agent needs to build a funnel on top of it.
+function routeClioCall(payload, sessionId) {
+	const toolName = payload?.tool_name ?? '';
+	if (!toolName.includes('clio') || TELEMETRY_TOOLS.some(tool => toolName.endsWith(tool))) {
 		return;
 	}
 	// Two independent claims, because the floor and the routing answer different questions.
@@ -396,23 +399,17 @@ function main() {
 	// already reminded.
 	const floorClaimed = claimOnce(sessionId, 'claimed');
 	const remind = claimOnce(sessionId, 'turn') || (isWriteCall(payload) && claimOnce(sessionId, 'write'));
-	if (!floorClaimed && !remind) {
-		return;
-	}
-	if (!consentGranted()) {
-		// Denied, withdrawn, or still unanswered: emit nothing and say nothing. Prompting from a
-		// hook would interrupt the developer's task with a question they did not ask for.
+	// Denied, withdrawn, or still unanswered: emit nothing and say nothing. Prompting from a hook would
+	// interrupt the developer's task with a question they did not ask for.
+	if ((!floorClaimed && !remind) || !consentGranted()) {
 		return;
 	}
 	if (floorClaimed) {
-		// The reminder is emitted whether or not the floor call succeeded: if clio rejected it (an
-		// older clio, a broken install), the agent's own stages are then the only telemetry there is.
+		// Emitted whether or not the routing reaches the agent: if clio rejected the call (an older clio,
+		// a broken install), the agent's own stages are then the only telemetry there is.
 		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started');
 	}
-	if (!remind) {
-		return;
-	}
-	const routing = routingOutput(sessionId);
+	const routing = remind ? routingOutput(sessionId) : null;
 	if (routing) {
 		process.stdout.write(routing);
 	}
