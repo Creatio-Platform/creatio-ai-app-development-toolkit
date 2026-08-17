@@ -316,6 +316,8 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
         transcript = write_transcript()
+        # Stop is scoped to sessions that used clio, so the session has to have done so.
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
 
         first = run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
@@ -337,10 +339,10 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         for result in (first, again, reentered):
             self.assertEqual(result.returncode, 0)
-        # The marker carries the last reported figure, so an unchanged total is skipped rather than
-        # re-sent. The transcript fixture totals 7 output tokens.
+        # The marker carries the last reported figure and the transcript size it was read at, so an
+        # unchanged total is skipped rather than re-sent. The fixture totals 7 output tokens.
         marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
-        self.assertEqual(marker.read_text(encoding="utf-8"), "7")
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 7)
 
     def test_reports_again_once_the_session_has_spent_more(self):
         # The point of the series: a live session was measured freezing its total at the end of the
@@ -348,6 +350,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # nothing recorded. A grown total must produce a new reading.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
 
         run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": write_transcript()},
@@ -370,8 +373,89 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         self.assertEqual(later.returncode, 0)
         marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
-        self.assertEqual(marker.read_text(encoding="utf-8"), "18",
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 18,
                          "a grown total must be reported, or every turn after the first goes unmeasured")
+
+    def test_stays_silent_on_stop_when_the_session_never_touched_clio(self):
+        # `Stop` carries no tool name, so it cannot take the `mcp__.*clio.*` matcher its PostToolUse
+        # sibling has. Without an explicit scope check, EVERY session on EVERY project would spawn a
+        # clio MCP server each turn and report an unrelated session's token usage into Creatio
+        # product telemetry, as soon as consent had been granted anywhere on the machine.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "hook_event_name": "Stop",
+                "transcript_path": write_transcript(),
+            },
+            telemetry_home=home,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "")
+        self.assertEqual(
+            glob.glob(os.path.join(_TMP, "caadt-telemetry-routing", f"{session}.usage")),
+            [],
+            "a session that never called clio must not report consumption",
+        )
+
+    def test_floor_is_still_emitted_when_consent_arrives_later_in_the_session(self):
+        # The floor claim used to be taken before the consent check, so a first clio call made while
+        # consent was still `unknown` — the ordinary bootstrap case — burned the one-shot marker and
+        # the "guaranteed" floor event was lost for the whole session, even after the developer said
+        # yes moments later.
+        session = str(uuid.uuid4())
+        undecided = telemetry_home(None)
+        granted = telemetry_home("granted")
+
+        first = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=undecided
+        )
+        later = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__list-apps",
+                "transcript_path": write_transcript(),
+            },
+            telemetry_home=granted,
+        )
+
+        self.assertEqual(first.stdout.strip(), "", "nothing is said while consent is unanswered")
+        self.assertIn(
+            session,
+            json.loads(later.stdout)["hookSpecificOutput"]["additionalContext"],
+            "the floor and its routing must still be available once consent is granted",
+        )
+
+    def test_floor_omits_token_counters_when_the_transcript_is_unreadable(self):
+        # A row of zeros is indistinguishable from a session that genuinely spent nothing, which the
+        # file's own comment says must be avoided — but only the Stop path was guarding it.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__list-apps",
+                "transcript_path": os.path.join(_TMP, "caadt-absent-transcript.jsonl"),
+                "cwd": _TMP,
+            },
+            telemetry_home=home,
+            clio=CLIO or "caadt-no-such-clio",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        events = glob.glob(os.path.join(home, "events", "*.json"))
+        if not events:
+            self.skipTest("floor emission needs a real clio binary (CAADT_TEST_CLIO)")
+        attributes = {
+            item["key"]: next(iter(item["value"].values()))
+            for item in json.loads(Path(events[0]).read_text(encoding="utf-8-sig"))["attributes"]
+        }
+        for field in ("input_tokens", "output_tokens", "cached_input_tokens"):
+            self.assertNotIn(field, attributes)
 
     def test_reports_no_session_usage_without_a_readable_transcript(self):
         # A row of zeroes is indistinguishable from a session that genuinely spent nothing, and this
@@ -609,14 +693,15 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
         }
         self.assertEqual(stored["event_name"], "workflow_started")
         self.assertEqual(attributes["session_id"], session)
-        # Model and the running token counters come from the host's own session transcript,
-        # which the payload points at. They are a snapshot: this hook fires on the first clio
-        # call, so the numbers are small by construction — the value is the series, not this
-        # one reading.
+        # Model and the token counters come from the host's own session transcript, which the
+        # payload points at. Only output accumulates: `input_tokens` and the cache fields are the
+        # size of the LAST request, because each turn re-sends the whole context and re-reports it
+        # — summing them grew quadratically and produced a cached total of 157,881,680 for one real
+        # session. The fixture's two turns are 10/20 input and 500+100 / 600+0 cache.
         self.assertEqual(attributes["model"], "claude-opus-5")
-        self.assertEqual(int(attributes["input_tokens"]), 30)
+        self.assertEqual(int(attributes["input_tokens"]), 20)
         self.assertEqual(int(attributes["output_tokens"]), 7)
-        self.assertEqual(int(attributes["cached_input_tokens"]), 1200)
+        self.assertEqual(int(attributes["cached_input_tokens"]), 600)
         # `unattributed` is reserved for exactly this: a hook sees a tool name, not a
         # workflow, so a real-looking value would be a guess presented as data — and an
         # omitted one would break the contract's own "always send workflow" rule.
@@ -650,6 +735,7 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
         # agent-emitted events, zero carried a counter — an agent cannot see its own running totals.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
 
         result = run_hook(
             {
@@ -669,10 +755,10 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
             item["key"]: next(iter(item["value"].values())) for item in stored["attributes"]
         }
         self.assertEqual(stored["event_name"], "session_usage")
-        # Summed across the session's assistant turns, not just the latest one.
-        self.assertEqual(int(attributes["input_tokens"]), 30)
+        # Output is summed across the session's turns; input and cache are the latest reading.
+        self.assertEqual(int(attributes["input_tokens"]), 20)
         self.assertEqual(int(attributes["output_tokens"]), 7)
-        self.assertEqual(int(attributes["cached_input_tokens"]), 1200)
+        self.assertEqual(int(attributes["cached_input_tokens"]), 600)
         self.assertEqual(attributes["model"], "claude-opus-5")
         # Session-scoped, so it carries the same reserved value as the floor: it reports on the whole
         # session and belongs to no single flow.

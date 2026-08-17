@@ -108,15 +108,18 @@ function readStdin() {
 // `usage` — and the file is named for the session id, so it is reachable even when the payload omits
 // `transcript_path`.
 //
-// The counters are a SNAPSHOT, not a total: this hook fires on the first clio call, so its numbers
-// are necessarily small. That is intended — every event carries the running totals at the moment its
-// stage was reached, which makes the series monotonic (a session's real consumption is the maximum)
-// and shows which stage of which flow actually cost the tokens. A single end-of-session total would
-// need a session-end signal that not every host provides.
+// Only `output_tokens` accumulates. The other two are per-REQUEST sizes: each assistant turn reports
+// the whole prompt it just sent, so the same context is counted again every turn and summing them grows
+// quadratically with turn count — it produced a `cached_input_tokens` of 157,881,680 for a single
+// session, which is why this is a correctness fix and not a preference. The LATEST reading is the
+// meaningful one: it is the size of the context as it now stands.
+//
+// `hasData` separates "read the transcript, it reported no usage" from "could not read it at all", so
+// callers can omit the counters instead of shipping zeros that look like a session that spent nothing.
 function readSessionUsage(payload) {
 	const transcript = payload?.transcript_path
 		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
-	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 };
+	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false };
 	let raw;
 	try {
 		raw = fs.readFileSync(transcript, 'utf8');
@@ -143,9 +146,10 @@ function readSessionUsage(payload) {
 		if (!consumed) {
 			continue;
 		}
-		usage.input_tokens += consumed.input_tokens || 0;
+		usage.hasData = true;
 		usage.output_tokens += consumed.output_tokens || 0;
-		usage.cached_input_tokens +=
+		usage.input_tokens = consumed.input_tokens || 0;
+		usage.cached_input_tokens =
 			(consumed.cache_read_input_tokens || 0) + (consumed.cache_creation_input_tokens || 0);
 	}
 	return usage;
@@ -185,7 +189,33 @@ function consentGranted() {
 function stateDir() {
 	const dir = path.join(os.tmpdir(), 'caadt-telemetry-routing');
 	fs.mkdirSync(dir, { recursive: true });
+	sweepStaleMarkers(dir);
 	return dir;
+}
+
+// Marker files are per session and nothing removes them when a session ends, so without this they
+// accumulate for as long as the machine lives. Cleaning on read costs one directory listing on the
+// paths that already touch the directory, and only unlinks what no live session can still claim:
+// `claimOnce` relies on exclusive-create, so removing a marker a running session still holds would
+// let it emit a second floor event.
+const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function sweepStaleMarkers(dir) {
+	try {
+		const cutoff = Date.now() - MARKER_TTL_MS;
+		for (const name of fs.readdirSync(dir)) {
+			const file = path.join(dir, name);
+			try {
+				if (fs.statSync(file).mtimeMs < cutoff) {
+					fs.rmSync(file, { force: true });
+				}
+			} catch {
+				// Raced with another hook process; whoever won already handled it.
+			}
+		}
+	} catch {
+		// A sweep that cannot run is not a reason to skip telemetry.
+	}
 }
 
 function markerPath(sessionId, suffix) {
@@ -206,19 +236,55 @@ function claimOnce(sessionId, suffix) {
 // How much output the session had already reported. A turn that spent nothing — the developer typed
 // something the agent answered from context, or a Stop the host repeated — would otherwise re-send an
 // identical row, which is noise in a series whose whole meaning is that it grows.
-function lastReportedOutputTokens(sessionId) {
+function lastReported(sessionId) {
 	try {
-		return Number.parseInt(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'), 10) || 0;
+		const stored = JSON.parse(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'));
+		return { output: stored.output || 0, size: stored.size || 0 };
+	} catch {
+		return { output: 0, size: 0 };
+	}
+}
+
+function rememberReported(sessionId, outputTokens, transcriptSize) {
+	try {
+		fs.writeFileSync(markerPath(sessionId, 'usage'), JSON.stringify({
+			output: outputTokens, size: transcriptSize
+		}));
+	} catch {
+		// A marker we cannot write costs one duplicate reading, never a lost one.
+	}
+}
+
+// Path the transcript is read from, resolved the same way `readSessionUsage` resolves it.
+function transcriptPath(payload) {
+	return payload?.transcript_path
+		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
+}
+
+function transcriptSize(payload) {
+	try {
+		return fs.statSync(transcriptPath(payload)).size;
 	} catch {
 		return 0;
 	}
 }
 
-function rememberReportedOutputTokens(sessionId, outputTokens) {
+// Recorded on EVERY clio call, before consent and independently of the floor, because its only job is
+// to answer "did this session use clio at all" — which is what scopes the `Stop` handler to Creatio
+// work. Kept separate from the floor's one-shot claim so neither can consume the other.
+function markTouchedClio(sessionId) {
 	try {
-		fs.writeFileSync(markerPath(sessionId, 'usage'), String(outputTokens));
+		fs.writeFileSync(markerPath(sessionId, 'touched'), '');
 	} catch {
-		// A marker we cannot write costs one duplicate reading, never a lost one.
+		// Unwritable state means Stop stays silent for this session: the conservative direction.
+	}
+}
+
+function touchedClio(sessionId) {
+	try {
+		return fs.existsSync(markerPath(sessionId, 'touched'));
+	} catch {
+		return false;
 	}
 }
 
@@ -311,9 +377,13 @@ function emitEvent(sessionId, usage, eventName) {
 							// Omitted rather than sent empty when the transcript was unreadable: a zero
 							// would be indistinguishable from a session that genuinely spent nothing.
 							...(usage.model ? { model: usage.model } : {}),
-							input_tokens: usage.input_tokens,
-							output_tokens: usage.output_tokens,
-							cached_input_tokens: usage.cached_input_tokens
+							// Omitted together when the transcript reported nothing, for the same reason as
+							// `model`: a row of zeros is indistinguishable from a session that spent nothing.
+							...(usage.hasData ? {
+								input_tokens: usage.input_tokens,
+								output_tokens: usage.output_tokens,
+								cached_input_tokens: usage.cached_input_tokens
+							} : {})
 						}
 					}
 				}
@@ -367,18 +437,35 @@ function main() {
 // totals, so the series is monotonic — real consumption is the MAXIMUM, and the difference between two
 // readings is what one request cost. This also survives a session killed rather than closed.
 function reportSessionUsage(payload, sessionId) {
+	// Scoped to sessions that actually used clio. `Stop` carries no tool name, so it cannot take the
+	// `mcp__.*clio.*` matcher its PostToolUse sibling has — without this gate EVERY session on EVERY
+	// project would spawn a clio MCP server each turn and report an unrelated session's usage into
+	// Creatio product telemetry, once consent had been granted anywhere.
+	if (!touchedClio(sessionId)) {
+		return;
+	}
 	// `stop_hook_active` means the host re-entered its own Stop, which would double-report.
 	if (payload?.stop_hook_active || !consentGranted()) {
+		return;
+	}
+	// Stop fires per response, so this runs many times per session. When the transcript has not grown
+	// since the last reading there is provably nothing new, so the file is not read or parsed at all —
+	// a stat instead of a full parse of a file that reaches megabytes. (Parsing only the appended tail
+	// would save more, but it needs a byte offset that survives truncation and partial lines; the
+	// growth check removes the repeated work on quiet turns without that state.)
+	const size = transcriptSize(payload);
+	const previous = lastReported(sessionId);
+	if (size !== 0 && size === previous.size) {
 		return;
 	}
 	const usage = readSessionUsage(payload);
 	// An unchanged or unreadable total is not worth a reading: a row of zeroes is indistinguishable from
 	// a session that genuinely spent nothing, and a repeat says nothing in a series that means growth.
-	if (usage.output_tokens <= lastReportedOutputTokens(sessionId)) {
+	if (!usage.hasData || usage.output_tokens <= previous.output) {
 		return;
 	}
 	emitEvent(sessionId, usage, 'session_usage');
-	rememberReportedOutputTokens(sessionId, usage.output_tokens);
+	rememberReported(sessionId, usage.output_tokens, size);
 }
 
 // A clio MCP call: the floor event, and the routing the agent needs to build a funnel on top of it.
@@ -397,11 +484,20 @@ function routeClioCall(payload, sessionId) {
 	// reports nothing — so the session spent its only reminder there, and the mutating work that
 	// followed got none. Hence also once on the first WRITE of the session, even if this turn was
 	// already reminded.
+	//
+	// Consent is checked BEFORE the floor is claimed. Claiming first burned the one-shot marker on a
+	// call made while consent was still `unknown` — the common bootstrap case — and the floor event,
+	// the one this design calls guaranteed, was then permanently lost for that session even after the
+	// developer granted consent moments later.
+	markTouchedClio(sessionId);
+	if (!consentGranted()) {
+		// Denied, withdrawn, or still unanswered: emit nothing and say nothing. Prompting from a hook
+		// would interrupt the developer's task with a question they did not ask for.
+		return;
+	}
 	const floorClaimed = claimOnce(sessionId, 'claimed');
 	const remind = claimOnce(sessionId, 'turn') || (isWriteCall(payload) && claimOnce(sessionId, 'write'));
-	// Denied, withdrawn, or still unanswered: emit nothing and say nothing. Prompting from a hook would
-	// interrupt the developer's task with a question they did not ask for.
-	if ((!floorClaimed && !remind) || !consentGranted()) {
+	if (!floorClaimed && !remind) {
 		return;
 	}
 	if (floorClaimed) {
