@@ -312,8 +312,8 @@ showing an empty body. The walk is iterative with a node budget and depth cap, a
 **Decisions (`mapper.mjs`).** New kinds: `attribute-lookup-filter` (the imperative twin of a
 FILTRATION rule), `attribute-dependency`, `attribute-imperative`, `attribute-virtual` (page UI
 state with no entity column behind it — the largest silent drop after the methods themselves),
-`message`, `mixin`, `module-dep` (aggregated). `categorize()` keeps its name heuristic but body
-evidence now wins over it.
+`message`, `mixin`, `module-dep` (aggregated). `categorize()` classifies from body
+evidence alone; a body it cannot classify is reported as unclassified rather than guessed from its name.
 
 **The `coverage` gate (`migrate.mjs`).** `buildCoverage()` builds the member ledger — every `diff`
 op, method, attribute, message, mixin, dependency and details entry gets a disposition (`mapped` /

@@ -68,7 +68,7 @@ Migration call vocabulary (the `Call` column in `Pages`):
 ```
 
 `Main scope` is the index of the pages this migration covers; expand each below IN THIS ORDER — list
-page, then form page (Layout → Logic → Confirm), then child pages under `Child page mappings`. Then
+page, then form page (Layout → Logic → ⚠ Imperative logic → ⚠ Confirm), then child pages under `Child page mappings`. Then
 present the per-page design spec (`--spec`/`--plan` output) and stop for explicit approval. Do not stop
 on the summary alone — the user approves the design spec.
 
