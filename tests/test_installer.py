@@ -1208,6 +1208,84 @@ class InstallCursorTests(unittest.TestCase):
 
 
 class McpConfigMergeTests(unittest.TestCase):
+    def test_merge_cursor_telemetry_hook_keeps_unrelated_entries(self):
+        # The developer's own hooks live in this file. A reinstall that replaced it with our single
+        # entry would silently delete their work.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            (cursor_home / "hooks.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "hooks": {
+                        "afterMCPExecution": [{"command": "node ./their-own-audit.js"}],
+                        "beforeShellExecution": [{"command": "node ./their-guard.js"}],
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            after = config["hooks"]["afterMCPExecution"]
+            self.assertEqual(len(after), 2)
+            self.assertIn("their-own-audit.js", after[0]["command"])
+            self.assertIn("telemetry-routing.mjs", after[1]["command"])
+            self.assertEqual(after[1]["env"]["CAADT_TELEMETRY_HOOK_HOST"], "cursor")
+            # An unrelated hook family must be untouched.
+            self.assertEqual(
+                config["hooks"]["beforeShellExecution"], [{"command": "node ./their-guard.js"}]
+            )
+
+    def test_merge_cursor_telemetry_hook_is_idempotent(self):
+        # Installing twice is ordinary. A second entry would make the hook run — and the floor
+        # event fire — twice per tool call.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            plugin_dir = Path(temp) / "plugin"
+
+            installer.merge_cursor_telemetry_hook(cursor_home, plugin_dir)
+            installer.merge_cursor_telemetry_hook(cursor_home, plugin_dir)
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            entries = [
+                item for item in config["hooks"]["afterMCPExecution"]
+                if "telemetry-routing.mjs" in item["command"]
+            ]
+            self.assertEqual(len(entries), 1)
+
+    def test_merge_cursor_telemetry_hook_leaves_a_broken_file_untouched(self):
+        # A hand-broken hooks.json is the developer's file. Rewriting it with our single entry
+        # would destroy whatever they were in the middle of editing.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            broken = '{"hooks": {"afterMCPExecution": [  <-- half-edited'
+            (cursor_home / "hooks.json").write_text(broken, encoding="utf-8")
+
+            installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+            self.assertEqual((cursor_home / "hooks.json").read_text(encoding="utf-8"), broken)
+
+    def test_render_cursor_telemetry_rule_delegates_the_vocabulary(self):
+        # Cursor has no hook that can reach the agent, so this always-applied rule is its only
+        # routing channel — and it must point at the guidance article rather than copy the stages,
+        # which would outlive the release that changed them.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            rule = installer.render_cursor_telemetry_rule(Path(temp))
+
+        self.assertIn("get-guidance name=product-telemetry", rule)
+        self.assertIn("alwaysApply: true", rule)
+        residue = rule.replace("migration_plan_approved", "")
+        for stage in ("workflow_started", "plan_approved", "work_item_completed"):
+            self.assertNotIn(stage, residue)
+
     def test_merge_mcp_config_preserves_existing_server_entries(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

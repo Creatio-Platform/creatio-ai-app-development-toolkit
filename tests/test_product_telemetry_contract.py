@@ -147,6 +147,37 @@ class ProductTelemetryContractTests(unittest.TestCase):
         for stage in ("clarification_requested", "changes_applied", "workflow_failed"):
             self.assertNotIn(stage, telemetry)
 
+    def test_agents_md_does_not_instruct_the_deprecated_event_names(self):
+        """AGENTS.md must not name the app-creation events the vocabulary replaced.
+
+        It used to enumerate them as mandatory emission points in the UX Contract and the
+        Orchestration Checklist while the Product Telemetry section two headings above said
+        stages are delegated and must not be spelled from memory. An agent reading the file
+        top to bottom got both instructions, and a measured run reported its ENTIRE funnel
+        under those names — invisible to every funnel built on the stages.
+        """
+        agents = read("AGENTS.md")
+
+        for deprecated in (
+            "session_started",
+            "pre_plan_clarification_requested",
+            "pre_plan_user_input_received",
+            "business_plan_generated",
+            "business_plan_regenerated",
+            "business_plan_generation_skipped",
+            "business_plan_feedback_received",
+            "business_plan_approved",
+            "implementation_started",
+            "implementation_completed",
+            "implementation_failed",
+        ):
+            self.assertNotIn(deprecated, agents)
+
+        # And it delegates rather than re-listing the replacements.
+        self.assertIn("get-guidance name=product-telemetry", agents)
+        for stage in ("clarification_requested", "plan_approved", "work_item_completed"):
+            self.assertNotIn(f"`{stage}`", agents)
+
     def test_contract_does_not_reintroduce_per_flow_event_names(self):
         telemetry = read("context", "product-telemetry.md")
 
