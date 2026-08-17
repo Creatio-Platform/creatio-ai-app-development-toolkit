@@ -933,6 +933,10 @@ function detailLabel(d) {
   return d.caption && d.entity ? `${base} · ${d.entity}` : base;
 }
 
+// Exported for the golden suite. The rendered plan proves the end-to-end path (a real `runMigration` covers the
+// openCard branch), but each add-mode combination needs its own assertion and driving them through a full run
+// would need one fixture schema per branch. Same reason `detectAddMode` is exported: the unit is the contract
+// being pinned, not a shortcut around the renderer.
 export function attachDetailAddModes(changeSet, detailSchemas) {
   for (const d of (changeSet.details || [])) {
     const am = detailSchemas[d.detailSchema]?.addMode;

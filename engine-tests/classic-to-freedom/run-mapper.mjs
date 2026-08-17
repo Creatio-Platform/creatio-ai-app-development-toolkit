@@ -3516,6 +3516,21 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   check("⚠ Imperative members table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
     () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Amount ← Quantity, Price|attribute-dependency/.test(l)));
+  // Section ORDER including the new worklist. The order is documented as prose in SKILL.md, AGENTS.md and three
+  // reference templates; without this, moving ⚠ Imperative members below ⚠ Confirm would contradict every one of
+  // them and no assertion would notice — the older order check (above) predates the section and omits it.
+  // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
+  // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
+  // two different pages and compare positions that were never in the same block.
+  check("plan sections run Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm → Member ledger",
+    () => {
+      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Imperative members"));
+      if (!page) return false;
+      const order = ["#### Layout", "#### Logic", "#### ⚠ Imperative logic", "#### ⚠ Imperative members",
+        "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
+      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
+    },
+    () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));
   // `referenced-module` was the one member kind pinned nowhere on the ARRIVAL side — breaking its emission would
   // drop it from Confirm AND from the table, leaving the suite green. `umCs` already carries CasesEstimateLabel.
   const refRun = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
@@ -5277,7 +5292,7 @@ for (const [label, blank] of [["empty string", ""], ["whitespace only", "   "]])
     /only a wiring card/.test(blankPlan),
     () => hoBlank.behaviourIndex.wiringOnly);
   // Asserted on THAT row, ending where it ends: a plan-wide match would be satisfied by any other clean row.
-  const blankRow = (blankPlan.split("\n").find((l) => /^\| LeadMixin \| mixin \|/.test(l)) || "").trim();
+  const blankRow = (blankPlan.split("\n").find((l) => l.startsWith("| LeadMixin | mixin |")) || "").trim();
   check(`wiringOnly: a ${label} bodyCard renders NOTHING — never a dangling \` · body\` with no card behind it`,
     () => blankRow.endsWith("| main/C28 AC-200 |"), () => blankRow || "(no LeadMixin members row found)");
 }
@@ -5325,7 +5340,7 @@ check("⚠ Imperative members: a described member row names its card + AC",
 // The members must NOT also appear as ⚠ Confirm bullets — that double-listing is what moving them fixed.
 check("⚠ Confirm: no `message` / `mixin` / `module-dep` / `attribute-*` bullet remains in the Confirm worklist",
   () => !/^- \*\*\[(message|mixin|module-dep|attribute-virtual|attribute-imperative|attribute-dependency|attribute-lookup-filter|referenced-module)\]/m.test(hoConfirm),
-  () => hoConfirm.split("\n").filter((l) => /^- \*\*\[/.test(l)));
+  () => hoConfirm.split("\n").filter((l) => l.startsWith("- **[")));
 
 // `--stubs` is a separate CLI artifact on purpose: the full result JSON carries megabytes the analysis run never reads.
 const stubsCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--stubs"],

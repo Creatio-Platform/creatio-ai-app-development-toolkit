@@ -661,23 +661,23 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("");
   }
 
-  // ---- ⚠ Imperative logic: the METHOD worklist, and a BINDING one ----
-  // Directly under Logic: the two are one subject split in two — what the engine mapped, then what it could not.
-  // Methods stay out of the ⚠ Confirm list (that one holds open questions needing an on-stand answer); this is
-  // where each method gets its ported / dropped / blocked mark, with the evidence the engine read from the body.
-  // Both sections together are "the ⚠ worklist" the SKILL's rules refer to.
-  L.push(...renderImperativeLogic(cs));
-
-  // ---- ⚠ Imperative members: the same worklist contract for the NON-method imperative members. Beside the method
-  // worklist because they are the same kind of thing — declared here, defined elsewhere, each a port unit.
-  L.push(...renderImperativeMembers(cs));
-
-  // ---- Child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist (GENUINE open
-  // decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed) ----
-  L.push(...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs));
-
-  // ---- Member ledger: the completeness proof ----
-  L.push(...renderMemberLedger(result.coverage));
+  // ---- The rest of the page, in render order, in ONE push (S7778) ----
+  //  • ⚠ Imperative logic — the METHOD worklist, and a BINDING one. Directly under Logic: the two are one subject
+  //    split in two, what the engine mapped and then what it could not. Methods stay out of the ⚠ Confirm list
+  //    (that one holds open questions needing an on-stand answer); this is where each method gets its ported /
+  //    dropped / blocked mark, with the evidence the engine read from the body.
+  //  • ⚠ Imperative members — the same worklist contract for the NON-method imperative members. Beside the method
+  //    worklist because they are the same kind of thing: declared here, defined elsewhere, each a port unit.
+  //    These three worklists together are "the ⚠ worklist" the SKILL's rules refer to.
+  //  • child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist — GENUINE open
+  //    decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed.
+  //  • the member ledger, which is the completeness proof.
+  L.push(
+    ...renderImperativeLogic(cs),
+    ...renderImperativeMembers(cs),
+    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
+    ...renderMemberLedger(result.coverage),
+  );
 
 
   return L.join("\n");

@@ -1429,29 +1429,37 @@ function mapUnmappedDrop(eff, accountedFor) {
     }
     return false;
   };
-  // Collect the alive CLIENT-authored items the mapper produced nothing for (skip template chrome, mapped
-  // containers and structural scaffolding). Own fn for Sonar CC 15.
+  // One alive item's verdict: `skip` (already resolved elsewhere), `structural` (accounted for, just not here) or
+  // `dropped` (the mapper produced nothing for it). Its own fn so the guard chain sits at nesting level 0 — inside
+  // the collect loop each guard also carried the loop's nesting weight, which is what pushed that function over the
+  // Sonar cognitive-complexity budget (S3776).
   //
-  // It ALSO collects `structural` — the elements this function deliberately skips because they ARE accounted for,
-  // just not by THIS function: a tab / control group / detail (the container + detail builders emit those), pure
-  // scaffolding the mapper rebuilds, the primary-display title (native Freedom page title), and a real layout
-  // container whose subtree produced Freedom elements. Without that set the member ledger reads every one of them
-  // as a silent drop and flags MAPPED elements as gaps — a gate that cries wolf teaches the reader to ignore it.
-  // `templateOwned` / `bindTo` are excluded from it on purpose: the ledger already resolves those to `context`
+  // `structural` matters as much as `dropped`: it is what this deliberately skips because the elements ARE
+  // accounted for, just not by THIS function — a tab / control group / detail (the container + detail builders emit
+  // those), pure scaffolding the mapper rebuilds, the primary-display title (native Freedom page title), and a real
+  // layout container whose subtree produced Freedom elements. Without that set the member ledger reads every one of
+  // them as a silent drop and flags MAPPED elements as gaps — a gate that cries wolf teaches the reader to ignore
+  // it. `templateOwned` / `bindTo` return `skip` on purpose: the ledger already resolves those to `context`
   // (inherited) and to the bound column's own `mapped` row.
+  const dropVerdict = (i) => {
+    if (i.templateOwned || i.bindTo) return "skip";
+    if (i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) return "structural";
+    if (accountedFor.has(i.name)) return "skip";
+    if (insideMappedControl(i)) return "structural";      // part of a control the mapper already built
+    if (HARD_SCAFFOLD_RX.test(i.name)) return "structural";
+    if (isPrimaryDisplay(i)) return "structural";         // record title → native Freedom page title; nothing to port, no ⚠
+    if (hasMappedDesc.has(i.name)) return "structural";   // real layout container — its subtree produced Freedom elements
+    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) return "structural"; // structural container (has children)
+    return "dropped";
+  };
+  // Sort every alive item into the two sets by its verdict; the classification itself lives in `dropVerdict`.
   const collectDropped = () => {
     const dropped = new Set();
     const structural = new Set();
     for (const i of (eff.items || [])) {
-      if (i.templateOwned || i.bindTo) continue;
-      if (i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) { structural.add(i.name); continue; }
-      if (accountedFor.has(i.name)) continue;
-      if (insideMappedControl(i)) { structural.add(i.name); continue; } // part of a control the mapper already built
-      if (HARD_SCAFFOLD_RX.test(i.name)) { structural.add(i.name); continue; }
-      if (isPrimaryDisplay(i)) { structural.add(i.name); continue; } // record title → native Freedom page title; nothing to port, no ⚠
-      if (hasMappedDesc.has(i.name)) { structural.add(i.name); continue; } // real layout container — its subtree produced Freedom elements
-      if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) { structural.add(i.name); continue; } // structural container (has children)
-      dropped.add(i.name);
+      const verdict = dropVerdict(i);
+      if (verdict === "structural") structural.add(i.name);
+      else if (verdict === "dropped") dropped.add(i.name);
     }
     return { dropped, structural };
   };
