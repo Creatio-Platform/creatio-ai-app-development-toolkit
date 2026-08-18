@@ -387,53 +387,71 @@ function listColumnLine(section) {
 // Layout table (a machine artifact, presented verbatim), different SHAPE: a grid has no regions to fill, so it
 // renders as an ordered column set plus one filter container plus one command bar, never as the form's
 // `Region | Element | Type | Source | Rule | Additional` table.
-function renderListLayoutTables(lcs) {
-  const L = [];
-  if (lcs.columns.length) {
-    L.push("", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |");
-    lcs.columns.forEach((c, i) => {
-      const ref = c.ref ? ` → ${esc(c.ref)}` : "";
-      const type = c.dataValueType == null
-        ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
-        : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
-      const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
-      L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
-    });
-  }
-  if (lcs.quickFilters.length) {
-    L.push("", "#### Quick filters", "| Classic filter | Freedom element | Container | Column | Control |", "| --- | --- | --- | --- | --- |");
-    for (const f of lcs.quickFilters) {
-      const ctrl = f.quickFilterType == null
-        ? `⚠ ${esc(f.classicType || "UNKNOWN")} — no known \`quickFilterType\``
-        : `\`crt.QuickFilter\` · ${esc(f.quickFilterType)}`;
-      L.push(`| \`${esc(f.classicName || "—")}\` | \`${esc(f.name)}\` | \`${esc(f.parentName)}\` · index ${f.index} | ${esc(f.column || "—")} | ${ctrl} |`);
-    }
-  }
-  if (lcs.rowActions?.length) {
-    L.push("", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |");
-    for (const ra of lcs.rowActions) {
-      const cond = ra.condition ? `\`${esc(ra.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
-      const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
-      L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
-    }
-    L.push("", "> ⚠ **A row action carries no op in this ChangeSet.** Every other op here reproduces a shape measured on a built Freedom page; no such measurement exists for a row action, so the control and its placement are read off a built page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.");
-  }
-  if (lcs.commandBarActions.length) {
-    L.push("", "#### Command-bar actions", "| Action | Source | Freedom target |", "| --- | --- | --- |");
-    for (const a of lcs.commandBarActions) {
-      L.push(`| \`${esc(a.name)}\` | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
-    }
+// ONE table per function: each surface reads as its own shape, and no single function carries every branch.
+// The TYPE cell states the resolved `dataValueType` or says it is unresolved — never a guessed enum.
+function listColumnsTable(columns) {
+  if (!columns.length) return [];
+  const L = ["", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |"];
+  columns.forEach((c, i) => {
+    const ref = c.ref ? ` → ${esc(c.ref)}` : "";
+    const type = c.dataValueType == null
+      ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
+      : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
+    const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
+    L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
+  });
+  return L;
+}
+// A filter's row is its PLACEMENT: which element, which container, at which index, on which column, as which control.
+function listFiltersTable(filters) {
+  if (!filters.length) return [];
+  const L = ["", "#### Quick filters", "| Classic filter | Freedom element | Container | Column | Control |", "| --- | --- | --- | --- | --- |"];
+  for (const f of filters) {
+    const ctrl = f.quickFilterType == null
+      ? `⚠ ${esc(f.classicType || "UNKNOWN")} — no known \`quickFilterType\``
+      : `\`${LIST_FILTER_TYPE}\` · ${esc(f.quickFilterType)}`;
+    L.push(`| \`${esc(f.classicName || "—")}\` | \`${esc(f.name)}\` | \`${esc(f.parentName)}\` · index ${f.index} | ${esc(f.column || "—")} | ${ctrl} |`);
   }
   return L;
 }
-// The build instructions the ops cannot carry themselves. Each names a failure that is SILENT if ignored: a merge
-// REPLACES `filterAttributes`, so an unlisted pre-existing entry disables search and the folder tree; and a Freedom
-// grid column requires a GUID `id`, for which the engine has no stable source.
+// Row actions carry no op — see the note this appends. The condition is the deliverable: an always-enabled port of a
+// conditionally-enabled Classic action is a behaviour change.
+function listRowActionsTable(rowActions) {
+  if (!rowActions?.length) return [];
+  const L = ["", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |"];
+  for (const ra of rowActions) {
+    const cond = ra.condition ? `\`${esc(ra.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
+    L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
+  }
+  L.push("", "> ⚠ **A row action carries no op in this ChangeSet.** Every other op here reproduces a shape measured on a built Freedom page; no such measurement exists for a row action, so the control and its placement are read off a built page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.");
+  return L;
+}
+// The command bar states its SOURCE, because that source is known to be incomplete until the section view `diff` is
+// folded — the ⚠ Confirm item carries the question.
+function listCommandBarTable(actions) {
+  if (!actions.length) return [];
+  const L = ["", "#### Command-bar actions", "| Action | Source | Freedom target |", "| --- | --- | --- |"];
+  for (const a of actions) {
+    L.push(`| \`${esc(a.name)}\` | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
+  }
+  return L;
+}
+function renderListLayoutTables(lcs) {
+  return [
+    ...listColumnsTable(lcs.columns),
+    ...listFiltersTable(lcs.quickFilters),
+    ...listRowActionsTable(lcs.rowActions),
+    ...listCommandBarTable(lcs.commandBarActions),
+  ];
+}
+// The build instructions the ops cannot carry themselves — each names a place this ChangeSet is deliberately PARTIAL,
+// so a builder cannot mistake it for a finished page body: a Freedom grid column requires a GUID `id`, for which the
+// engine has no stable source, and a quick-filter op carries placement facts only, not the component's nested config.
+// (The `filterAttributes` merge hazard is NOT here — it is a real question with a real answer, so it rides the
+// `list-filter-attributes` ⚠ Confirm item, where it is gated rather than merely printed.)
 function renderListBuildNotes(lcs) {
   const L = [];
-  if (lcs.filterAttributes.mustRelistExisting) {
-    L.push("", `> ⚠ **\`filterAttributes\` is a MERGE, and a merge REPLACES the whole array.** This ChangeSet contributes ${lcs.filterAttributes.contributed.map((n) => "`" + esc(n) + "`").join(" · ")}. Read the starter list page FIRST and re-list every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes) alongside these — omitting them breaks search and the folder tree with no error.`);
-  }
   if (lcs.columnIdsAssignedByBuilder) {
     L.push("", "> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.");
   }
@@ -1668,14 +1686,20 @@ export const LIST_PAGE_KEY = "list";
 // WHICH mechanism a row gets is decided by whether the built page can answer it, never by convenience:
 //   · columns and quick filters are IN the page body, so they are MEASURED off it (`listcolumns` / `listfilter`),
 //     exactly like a form-page field row — see `resolveListColumnsVk` / `resolveListFilterVk`;
-//   · a command-bar action is NOT: its Freedom container stays unresolved while the section view `diff` goes
-//     unfolded, so there is no element name to match and it keeps an EVIDENCE row (D7) — a filed record plus a
-//     judge verdict, the mechanism for claims a page body genuinely cannot settle.
-// Closing a body-answerable row on a filed record would let a build agent's own claim stand in for the page.
+//   · a command-bar action and a ROW action are NOT: a command-bar action's Freedom container stays unresolved while
+//     the section view `diff` goes unfolded, and a row action's Freedom element name is not predictable here at all,
+//     so neither has an identity to match and BOTH keep an EVIDENCE row (D7) — a filed record plus a judge verdict,
+//     the mechanism for claims a page body genuinely cannot settle.
+// The split is mechanical, not editorial: a kind listed in `LIST_ROW_VK` is measured and EVERY other kind falls
+// through to an evidence row, so this comment must be read as naming the table below, never as a second opinion
+// about it. Closing a body-answerable row on a filed record would let a build agent's own claim stand in for the page.
 const LIST_ROW_VK = {
   columns: (n, names, columns) => ({ type: "listcolumns", n, names, columns }),
   filter: (n, names) => ({ type: "listfilter", n, names }),
 };
+// The measured kinds, published so a test can DERIVE which kinds are evidence rows. Prose that restates the split
+// instead of reading it from here is a second copy, and a copy is what drifts.
+export const LIST_MEASURED_KINDS = Object.keys(LIST_ROW_VK);
 function listRow(label, kind, item, n, names, columns) {
   const make = LIST_ROW_VK[kind];
   return {
@@ -2079,7 +2103,7 @@ const vkOfType = (rows, t) => rows.map((r) => r.vk).find((v) => v?.type === t);
 // The LIST page's expectations are a different vocabulary — a grid has no fields/tabs/details — so they are read off
 // the `list` marker its rows carry, and added ONLY for a page that emits such rows. Keep them conditional: a form
 // page's `expect` keeps one fixed shape, so no executor has to learn a second one for a page it already handles.
-const LIST_EXPECT_KINDS = [["columns", "listColumns", "listColumnNames"], ["filter", "quickFilters", "quickFilterNames"], ["action", "commandBarActions", "commandBarActionNames"], ["rowaction", "rowActions", "rowActionNames"]];
+export const LIST_EXPECT_KINDS = [["columns", "listColumns", "listColumnNames"], ["filter", "quickFilters", "quickFilterNames"], ["action", "commandBarActions", "commandBarActionNames"], ["rowaction", "rowActions", "rowActionNames"]];
 function listExpect(rows) {
   const marked = rows.filter((r) => r.list);
   if (!marked.length) return null;
@@ -2135,14 +2159,20 @@ function componentTypesOf(rows) {
     else if (vk.type === "tabs") out.add(TAB_TYPES[0]);
     else if (vk.type === "details") out.add("crt.DataGrid");
   }
-  // The LIST page's types come off the `list` marker rather than a `vk`. Publish them for the same reason as the
-  // rest: a build agent then fetches each component's documentation once per run instead of discovering its
-  // constraints — `crt.QuickFilter` is `compositeOnly` with no published composite recipe — mid-build.
-  for (const r of rows || []) {
-    if (r.list?.kind === "filter") out.add("crt.QuickFilter");
-    else if (r.list?.kind === "columns") out.add("crt.DataGrid");
-  }
+  for (const t of listComponentTypes(rows)) out.add(t);
   return [...out].sort((a, b) => a.localeCompare(b));
+}
+// The LIST page's types come off the `list` marker rather than a `vk`, so they read off their own function. Publish
+// them for the same reason as the rest: a build agent fetches each component's documentation once per run instead of
+// discovering its constraints — `crt.QuickFilter` is `compositeOnly` with no published composite recipe — mid-build.
+const LIST_KIND_TYPE = { filter: LIST_FILTER_TYPE, columns: "crt.DataGrid" };
+function listComponentTypes(rows) {
+  const out = new Set();
+  for (const r of rows || []) {
+    const t = LIST_KIND_TYPE[r.list?.kind];
+    if (t) out.add(t);
+  }
+  return out;
 }
 function pageUnit(key, node, rows) {
   const tpl = vkOfType(rows, "template")?.exp;
@@ -2549,7 +2579,7 @@ function evidenceComplete(rec, requires) {
 // EXACT string the builder was told to write — the mapping is never re-derived here, where it could drift from the
 // emission side and fail a correctly built page.
 function resolveListColumnsVk(vk, ctx) {
-  const want = (vk.columns || []).filter((c) => c && c.code);
+  const want = (vk.columns || []).filter((c) => c?.code);
   if (!want.length) return ["⚠ verify", "no expected column set was published — nothing to match against", "unverified"];
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected list column(s)`);
   // D6's third state: the entry is `false`, i.e. the verifier looked and reports the page as NOT BUILT. Still a hard
@@ -2588,7 +2618,7 @@ function resolveListFilterVk(vk, ctx) {
   // An op list with no names at all cannot answer identity — that is a payload problem, not a build defect.
   if (ctx.ops.length && !byName.size) return ["⚠ verify", `identity NOT checked — the built list page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
   if (wrongType.length) {
-    const built = wrongType.map((n) => esc(String(n)) + " is built as \`" + esc(byName.get(n) || "an untyped component") + "\`").join(", ");
+    const built = wrongType.map((n) => esc(String(n)) + " is built as `" + esc(byName.get(n) || "an untyped component") + "`").join(", ");
     return ["❌ MISSING", `${built}, not \`${LIST_FILTER_TYPE}\` — the filter bar needs the quick-filter control, not a field with the same name`, "missing"];
   }
   return ["❌ MISSING", `NO ${missing.map((n) => esc(String(n))).join(", ")} on the built list page — the registry filter bar is short this filter`, "missing"];
@@ -2643,18 +2673,30 @@ function collectColumnCodes(cols, out) {
   for (const c of cols || []) { const code = c?.code ?? c?.name; if (typeof code === "string" && code.trim()) out.add(code.trim()); }
   return out;
 }
+// A node's own columns, under either shape: `values.columns` on a diff op, `columns` on a rendered node.
+function columnsOf(node) {
+  if (Array.isArray(node?.columns)) return node.columns;
+  if (Array.isArray(node?.values?.columns)) return node.values.columns;
+  return null;
+}
 // Every node named `LIST_GRID`, under either shape (a diff op's `values.columns`, a rendered node's `columns`).
 function findGridNodes(node, out = []) {
-  if (Array.isArray(node)) { for (const n of node) findGridNodes(n, out); return out; }
+  if (Array.isArray(node)) {
+    for (const n of node) { findGridNodes(n, out); }
+    return out;
+  }
   if (!node || typeof node !== "object") return out;
-  if (node.name === LIST_GRID && (Array.isArray(node.columns) || Array.isArray(node.values?.columns))) out.push(node);
+  if (node.name === LIST_GRID && columnsOf(node)) out.push(node);
   for (const v of Object.values(node)) if (v && typeof v === "object") findGridNodes(v, out);
   return out;
 }
 function walkGridColumnCodes(node, out = new Set()) {
-  if (Array.isArray(node)) { for (const n of node) walkGridColumnCodes(n, out); return out; }
+  if (Array.isArray(node)) {
+    for (const n of node) { walkGridColumnCodes(n, out); }
+    return out;
+  }
   if (!node || typeof node !== "object") return out;
-  const cols = Array.isArray(node.columns) ? node.columns : (Array.isArray(node.values?.columns) ? node.values.columns : null);
+  const cols = columnsOf(node);
   collectColumnCodes(cols, out);
   for (const v of Object.values(node)) if (v && typeof v === "object") walkGridColumnCodes(v, out);
   return out;
@@ -2667,7 +2709,7 @@ function pageGridColumnsOf(entry) {
   const grids = findGridNodes(root);
   if (grids.length) {
     const codes = new Set();
-    for (const g of grids) collectColumnCodes(Array.isArray(g.columns) ? g.columns : g.values.columns, codes);
+    for (const g of grids) collectColumnCodes(columnsOf(g), codes);
     return { codes, anchored: true };
   }
   return { codes: walkGridColumnCodes(root), anchored: false };

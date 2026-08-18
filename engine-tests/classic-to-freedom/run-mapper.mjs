@@ -5,7 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -1292,7 +1292,7 @@ check("ENG-95229: the legacy bare-array path renders the narrowed question, not 
 check("ENG-95229/ENG-95218: a resolved-only manifest (no section chain) publishes exactly one `List columns` checklist row, on the `list` page key and GATED",
   () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "entity-default", columns: [{ name: "Name" }] });
-    const rows = checklistGroups(r, checklistOpts(r)).flatMap((g) => g.rows).filter((x) => /^List columns/.test(x.label));
+    const rows = checklistGroups(r, checklistOpts(r)).flatMap((g) => g.rows).filter((x) => x.label.startsWith("List columns"));
     return rows.length === 1 && rows[0].pageKey === "list"
       && rows[0].vk?.type === "listcolumns" && rows[0].list?.kind === "columns"
       && rows[0].vk.columns.map((c) => c.code).join(",") === "PDS_Name"
@@ -1362,7 +1362,7 @@ const lpRun = runMigration(LP_MANIFEST, { baseDir: FIX });
 const lpOpts = checklistOpts(LP_MANIFEST);
 const lcs = lpRun.listChangeSet;
 check("ENG-95218: a section run emits a list ChangeSet at all (and a run with no section does not)",
-  !!lcs && lcs.entity === "Applicant" && Array.isArray(lcs.listViewConfigDiff),
+  lcs?.entity === "Applicant" && Array.isArray(lcs?.listViewConfigDiff),
   () => ({ has: !!lcs, keys: lcs && Object.keys(lcs) }));
 check("ENG-95218: grid columns are ONE `merge` on `DataTable` carrying `values.columns[]` — NOT one insert per column (the shape a real built list page uses)",
   () => { const ops = lcs.listViewConfigDiff.filter((o) => o.name === "DataTable");
@@ -1378,7 +1378,7 @@ check("ENG-95218: `dataValueType` is emitted ONLY for the values observed on a b
   () => ({ cols: lcs.listViewConfigDiff.find((o) => o.name === "DataTable").values.columns, nd: lcs.needsDecision }));
 check("ENG-95218: a classic display PATH (`Stage.Name`) binds the LOOKUP column and says so — reported as a decision, never silently rewritten",
   () => { const c = lcs.columns.find((x) => x.name === "Stage.Name");
-    return !!c && c.root === "Stage" && c.code === "PDS_Stage" && c.isPath === true
+    return c?.root === "Stage" && c.code === "PDS_Stage" && c.isPath === true
       && lcs.listViewModelConfigDiff[0].values.PDS_Stage.modelConfig.path === "PDS.Stage"
       && lcs.needsDecision.some((d) => d.kind === "list-column-path" && /Stage\.Name/.test(d.item)); },
   () => ({ col: lcs.columns.find((x) => x.name === "Stage.Name"), nd: lcs.needsDecision.filter((d) => d.kind === "list-column-path") }));
@@ -1402,8 +1402,12 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
       // apply verbatim and which no real Freedom diff op carries
       && Object.keys(fa).join(",") === "operation,path,values"
       && lcs.filterAttributes.mustRelistExisting === true
-      && /⚠ \*\*`filterAttributes` is a MERGE, and a merge REPLACES the whole array/.test(lpRun.designSpec)
-      && /re-list every entry it already registers/.test(lpRun.designSpec)
+      // the hazard is a ⚠ Confirm item (an on-stand query with a recordable answer), not prose a reader may skip
+      && lpRun.designSpec.includes("[list-filter-attributes]")
+      && lpRun.designSpec.includes("REPLACES the array")
+      && !lpRun.designSpec.includes("Read the starter list page FIRST")
+      && lcs.needsDecision.some((d) => d.kind === "list-filter-attributes"
+        && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
 check("ENG-95218: the command-bar set does NOT claim to be complete — ONE decision per run (never per action, so a section whose buttons live only in its view `diff` still raises it) names the buttons found and reaches the plan through the shared ⚠ Confirm section, not a prose aside",
@@ -1427,7 +1431,7 @@ check("ENG-95218: the design spec renders the list page as POSITIONED tables (co
 const lpUnits = pageUnits(lpRun, lpOpts);
 const lpList = lpUnits.pages.find((p) => p.key === "list");
 check("ENG-95218: `--units` publishes a `list` build unit — role, the classic section it was derived from, and per-kind expectations in the LIST vocabulary (a grid has no fields/tabs/details)",
-  () => !!lpList && lpList.role === "list" && lpList.schema === "Applicant1Section"
+  () => lpList?.role === "list" && lpList.schema === "Applicant1Section"
     && lpList.expect.listColumns === 3 && lpList.expect.listColumnNames.join(",") === "Name,Stage.Name,Flagged"
     && lpList.expect.quickFilters === 2 && lpList.expect.commandBarActions === 1
     && !("fields" in lpList.expect),
@@ -1442,9 +1446,9 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
     const byKind = Object.fromEntries(rows.filter((r) => r.list).map((r) => [r.list.kind + ":" + r.list.item, r.vk.type]));
     // 4 deliverable rows (columns · 2 filters · 1 action) + the per-page `creatio-ui-guidelines` quality gate, which
     // applies to a list page's layout like any other page's — a published key must carry exactly one of those.
-    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 3 
+    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4 
     // ⚠ Confirm items + the page's one quality gate
-    return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 3
+    return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 4
       && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 1
       && byKind["columns:set"] === "listcolumns"
       && byKind["filter:QuickFilterByDueDate"] === "listfilter" && byKind["filter:QuickFilterByStage"] === "listfilter"
@@ -1457,8 +1461,8 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
   () => ({ ids: lpUnits.evidenceRows.filter((e) => e.pageKey === "list"), rows: checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label) }));
 check("ENG-95218: `list` appears in the BUILD ORDER (a leaf — `create-app-section` mints it before the form page) and carries a parent edge like every other published key",
   () => lpUnits.buildOrder.includes("list") && lpUnits.buildOrder.indexOf("list") < lpUnits.buildOrder.indexOf("main")
-    && Object.prototype.hasOwnProperty.call(lpUnits.parents, "list") && lpUnits.parents.list === null
-    && lpUnits.pages.every((p) => Object.prototype.hasOwnProperty.call(lpUnits.parents, p.key)),
+    && Object.hasOwn(lpUnits.parents, "list") && lpUnits.parents.list === null
+    && lpUnits.pages.every((p) => Object.hasOwn(lpUnits.parents, p.key)),
   () => ({ order: lpUnits.buildOrder, parents: lpUnits.parents }));
 check("ENG-95218: the `list` unit publishes the crt.* types its own gate will look for, so a build agent fetches `crt.QuickFilter` documentation once instead of discovering it mid-build",
   () => (lpList.componentTypes || []).join(",") === "crt.DataGrid,crt.QuickFilter",
@@ -1536,16 +1540,16 @@ check("ENG-95218: an approved `pages-only-no-menu` plan publishes NO `list` unit
   () => { const u = pageUnits(lpRun, lpNoMenuOpts);
     const rows = checklistGroups(lpRun, lpNoMenuOpts).flatMap((g) => g.rows);
     return !u.pages.some((p) => p.key === "list") && !u.buildOrder.includes("list")
-      && !Object.prototype.hasOwnProperty.call(u.parents, "list")
+      && !Object.hasOwn(u.parents, "list")
       && !rows.some((r) => r.pageKey === "list")
       && rows.some((r) => /Deliberately NOT built/.test(r.label))
-      && rows.some((r) => /^List columns/.test(r.label) && !r.vk)
+      && rows.some((r) => r.label.startsWith("List columns") && !r.vk)
       // …and the FORM unit keeps its own vocabulary: the degraded rows carry no `list` marker
       && Object.keys(u.pages.find((p) => p.key === "main").expect).join(",") === "fields,fieldNames,tabs,details,images"; },
   () => ({ keys: pageUnits(lpRun, lpNoMenuOpts).pages.map((p) => p.key),
     order: pageUnits(lpRun, lpNoMenuOpts).buildOrder,
     mainExpect: pageUnits(lpRun, lpNoMenuOpts).pages.find((p) => p.key === "main")?.expect }));
-check("ENG-95218 GATE: a list page REPORTED AS NOT BUILT (\`false\`) fails for that reason — not as an empty grid or a short filter bar, because the repair is to build the page rather than to add columns to one",
+check("ENG-95218 GATE: a list page REPORTED AS NOT BUILT (`false`) fails for that reason — not as an empty grid or a short filter bar, because the repair is to build the page rather than to add columns to one",
   () => { const v = renderVerify(lpRun, lpOpts, { pages: { list: false } });
     return lpListTally(v).missing >= 1
       && v.markdown.includes("the list page is reported as NOT BUILT")
@@ -1567,7 +1571,7 @@ check("ENG-95218 GATE: a correctly typed filter still closes, and the evidence s
 const twoFilterRun = runMigration({ ...LP_MANIFEST,
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"}};},initFixedFiltersConfig:function(){this.set("FixedFilterConfig",{filters:[{name:"PeriodFilter",dataValueType:this.Terrasoft.DataValueType.DATE,columnName:"DueDate"},{name:"DueWeekFilter",dataValueType:this.Terrasoft.DataValueType.DATE,columnName:"DueDate"}]});}},diff:[]};});` }],
 }, { baseDir: FIX });
-check("ENG-95218: two classic filters on ONE column get DISTINCT Freedom elements — unique insert names, no doubled \`filterAttributes\` entry, and one expected name per classic filter",
+check("ENG-95218: two classic filters on ONE column get DISTINCT Freedom elements — unique insert names, no doubled `filterAttributes` entry, and one expected name per classic filter",
   () => { const l = twoFilterRun.listChangeSet;
     const names = l.quickFilters.map((f) => f.name);
     const inserts = l.listViewConfigDiff.filter((o) => o.operation === "insert").map((o) => o.name);
@@ -1579,7 +1583,7 @@ check("ENG-95218: two classic filters on ONE column get DISTINCT Freedom element
   () => ({ names: twoFilterRun.listChangeSet.quickFilters.map((f) => f.name),
     contributed: twoFilterRun.listChangeSet.filterAttributes.contributed }));
 check("ENG-95218: with two same-column filters, ONE built element does NOT close both rows",
-  () => { const o = checklistOpts({ ...LP_MANIFEST, section: undefined });
+  () => { 
     const names = twoFilterRun.listChangeSet.quickFilters.map((f) => f.name);
     const v = renderVerify(twoFilterRun, lpOpts, { pages: { list: { viewConfig: { items: [
       { name: "DataTable", type: "crt.DataGrid", columns: [{ code: "PDS_Name" }] },
@@ -1593,21 +1597,21 @@ check("ENG-95218: with two same-column filters, ONE built element does NOT close
 const lpEmptySection = runMigration({ ...LP_MANIFEST, addRecordMiniPage: false,
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
 }, { baseDir: FIX });
-check("ENG-95218: with NOTHING gated for the list page (empty section, no \`list\` unit) its ⚠ Confirm items are still GATED — they ride on \`main\` as \`main#confirm:list-*\` and reach \`--units.preflight\`, because withholding a page nobody builds must not withhold the questions",
+check("ENG-95218: with NOTHING gated for the list page (empty section, no `list` unit) its ⚠ Confirm items are still GATED — they ride on `main` as `main#confirm:list-*` and reach `--units.preflight`, because withholding a page nobody builds must not withhold the questions",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
-    const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm && /^list-/.test(r.confirm.kind));
+    const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
     return !u.pages.some((p) => p.key === "list")
       && rows.length >= 2 && rows.every((r) => r.pageKey === "main" && r.vk?.type === "evidence")
       && rows.every((r) => r.vk.id.startsWith("main#confirm:list-"))
-      && u.preflight.filter((p) => /^list-/.test(p.kind)).length === rows.length; },
+      && u.preflight.filter((p) => p.kind.startsWith("list-")).length === rows.length; },
   () => ({ keys: pageUnits(lpEmptySection, lpOpts).pages.map((p) => p.key),
     rows: checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm).map((r) => ({ k: r.pageKey, id: r.vk.id })) }));
-check("ENG-95218: when the \`list\` key IS published the same items ride on \`list\` and are never gated twice",
-  () => { const rows = checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm && /^list-/.test(r.confirm.kind));
+check("ENG-95218: when the `list` key IS published the same items ride on `list` and are never gated twice",
+  () => { const rows = checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
     return rows.length >= 1 && rows.every((r) => r.pageKey === "list")
       && new Set(rows.map((r) => r.vk.id)).size === rows.length; },
   () => checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm).map((r) => ({ k: r.pageKey, id: r.vk.id })));
-check("ENG-95218: under \`pages-only-no-menu\` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
+check("ENG-95218: under `pages-only-no-menu` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
   () => { const spec = renderDesignSpec(lpRun, lpNoMenuOpts);
     const at = spec.indexOf("### List page");
     const head = spec.slice(at, at + 400);
@@ -1641,7 +1645,7 @@ const lpRowActionRun = runMigration({ ...LP_MANIFEST,
     rowActions: [{ name: "DataGridActiveRowQualificationProcessAction", condition: "canQualify", package: "CoreLead" },
       { name: "DataGridActiveRowPlainAction" }] },
 }, { baseDir: FIX });
-check("ENG-95218: a declared row action is POSITIONED and GATED — it reaches the ChangeSet, the spec's Row actions table with its condition and source package, a \`list\` checklist row, and \`expect.rowActionNames\`",
+check("ENG-95218: a declared row action is POSITIONED and GATED — it reaches the ChangeSet, the spec's Row actions table with its condition and source package, a `list` checklist row, and `expect.rowActionNames`",
   () => { const l = lpRowActionRun.listChangeSet;
     const u = pageUnits(lpRowActionRun, lpOpts).pages.find((p) => p.key === "list");
     const rows = checklistGroups(lpRowActionRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.list?.kind === "rowaction");
@@ -1689,16 +1693,60 @@ const leakManifest = {
 };
 const leakRun = runMigration(leakManifest, { baseDir: FIX });
 const leakOpts = checklistOpts(leakManifest);
-check("ENG-95218: a SUB-BUNDLE carrying its own \`section\` does not put list-page ⚠ Confirm rows on the SUB-PAGE's key — they belong to the main scope, and \`--units.preflight\` must not demand list-column evidence from a per-type form page",
-  () => { const rows = checklistGroups(leakRun, leakOpts).flatMap((g) => g.rows).filter((r) => r.confirm && /^list-/.test(r.confirm.kind));
+check("ENG-95218: a SUB-BUNDLE carrying its own `section` does not put list-page ⚠ Confirm rows on the SUB-PAGE's key — they belong to the main scope, and `--units.preflight` must not demand list-column evidence from a per-type form page",
+  () => { const rows = checklistGroups(leakRun, leakOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
     const u = pageUnits(leakRun, leakOpts);
     const strayRows = rows.filter((r) => r.pageKey !== "main" && r.pageKey !== "list");
-    const strayPre = u.preflight.filter((p) => /^list-/.test(p.kind) && p.pageKey !== "main" && p.pageKey !== "list");
+    const strayPre = u.preflight.filter((p) => p.kind.startsWith("list-") && p.pageKey !== "main" && p.pageKey !== "list");
     return rows.length >= 1 && strayRows.length === 0 && strayPre.length === 0
       // not vacuous: the typed page IS published, so there was a key to leak onto
       && u.pages.some((p) => p.key === "typed:AppICPage"); },
   () => ({ rows: checklistGroups(leakRun, leakOpts).flatMap((g) => g.rows).filter((r) => r.confirm).map((r) => ({ k: r.pageKey, id: r.vk.id })),
     preflight: pageUnits(leakRun, leakOpts).preflight.map((p) => ({ k: p.pageKey, id: p.id })) }));
+// PRECEDENCE, on the seam rather than through a manifest: the layer arm has no producer until the section view
+// \`diff\` fold lands, so this rule would otherwise ship untestable — and it is the rule that decides whose data
+// survives once both sources exist. A manifest entry supplied while the fold was missing must not mask the fold.
+check("ENG-95218: when the SAME row-action name arrives from BOTH the layer fold and the manifest, the LAYER entry wins and the name appears once — the automated source is derived from the section itself, so a hand-supplied stand-in never supersedes it",
+  () => { const merged = mergeRowActions(
+      [{ name: "DataGridActiveRowQualificationProcessAction", condition: "canQualify", package: "CoreLead" }],
+      [{ name: "DataGridActiveRowQualificationProcessAction", condition: "handTyped", package: "Usr" },
+        { name: "DataGridActiveRowOnlyOnTheManifest", condition: "keepMe" }]);
+    const dup = merged.filter((r) => r.name === "DataGridActiveRowQualificationProcessAction");
+    return merged.length === 2
+      && dup.length === 1 && dup[0].condition === "canQualify" && dup[0].package === "CoreLead"
+      // …and a manifest-only entry still comes through, so precedence is not "ignore the manifest"
+      && merged.some((r) => r.name === "DataGridActiveRowOnlyOnTheManifest" && r.condition === "keepMe"); },
+  () => mergeRowActions([{ name: "DataGridActiveRowQualificationProcessAction", condition: "canQualify" }],
+    [{ name: "DataGridActiveRowQualificationProcessAction", condition: "handTyped" }]));
+check("ENG-95218: `mergeRowActions` drops nameless entries and tolerates both sources being absent — a malformed manifest row cannot become an unnamed deliverable",
+  () => mergeRowActions().length === 0
+    && mergeRowActions([], [{ condition: "no name" }, { name: "   " }, null]).length === 0
+    && mergeRowActions([{ name: "A" }]).length === 1,
+  () => mergeRowActions([], [{ condition: "no name" }, { name: "   " }, null]));
+// The trim must reach the STORED entry, not only the dedup key: that entry's `name` is what the Row actions table and
+// `expect.rowActionNames` publish, and the gate matches a built element name EXACTLY — so a padded name deduped under
+// the clean one would still ship padded and miss, the very mismatch the nameless guard above exists to prevent.
+check("ENG-95218: `mergeRowActions` stores the TRIMMED name, so a padded manifest entry cannot reach `expect.rowActionNames` with whitespace the gate will never match",
+  () => { const merged = mergeRowActions([], [{ name: "  DataGridActiveRowPadded  ", condition: "canDo" }]);
+    return merged.length === 1 && merged[0].name === "DataGridActiveRowPadded" && merged[0].condition === "canDo"; },
+  () => mergeRowActions([], [{ name: "  DataGridActiveRowPadded  ", condition: "canDo" }]));
+/* ---- THE OBJECT THE LIST GRID IS BOUND TO. `"?"` is the parser's stub for "the merged chain named no entity" — a
+   name, not an entity. It must never reach the PDS data-source op: `entitySchemaName: "?"` reads as configured and
+   binds the grid to a schema that does not exist, which is worse than emitting no op at all. And when the manifest
+   carries the stub while the page schemas DO name an entity, the resolved name is the one to bind — the run's own
+   `entity` already resolves that way, and the two must not disagree. ---- */
+const lpStubEntityRun = runMigration({ ...LP_MANIFEST, entity: "?" }, { baseDir: FIX });
+check("ENG-95218: a manifest `entity` of `?` is resolved from the schema chain before the grid is bound — the list ChangeSet's PDS op names the SAME entity the run reports, never the stub",
+  () => { const ops = lpStubEntityRun.listChangeSet.listModelConfigDiff;
+    return lpStubEntityRun.entity === "Applicant" && lpStubEntityRun.listChangeSet.entity === "Applicant"
+      && ops.length === 1 && ops[0].values.entitySchemaName === "Applicant"; },
+  () => ({ runEntity: lpStubEntityRun.entity, lcsEntity: lpStubEntityRun.listChangeSet.entity,
+    ops: lpStubEntityRun.listChangeSet.listModelConfigDiff }));
+const lpNoEntityRun = runMigration({ ...LP_MANIFEST, entity: "?",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }, { baseDir: FIX });
+check("ENG-95218: when NOTHING names an entity, the list ChangeSet emits NO PDS data-source op — an absent binding is honest, `entitySchemaName: \"?\"` would be a broken grid that looks configured",
+  () => lpNoEntityRun.listChangeSet.entity === null && lpNoEntityRun.listChangeSet.listModelConfigDiff.length === 0,
+  () => ({ lcsEntity: lpNoEntityRun.listChangeSet.entity, ops: lpNoEntityRun.listChangeSet.listModelConfigDiff }));
 const noSec = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
@@ -6550,10 +6598,10 @@ check("ENG-94975 P3 (D3, EXPECTED side): each sub-page's `template` row expects 
 const P3_SECTION_KEYS = new Set(["main", "list"]);
 check("ENG-94975 P3 (D3, EXPECTED side) + ENG-95218: with a SECTION named in the plan, the section-scoped deliverables stay on the SECTION's keys — no `<childKey> · List page` group, no `List page →` row and no `Navigable section registered` row under any sub-page; and with NOTHING gated for the list page its row stays UNGATED on `main` rather than publishing an unclosable `list` unit (all ARE emitted for the section, so the absence is the override's doing)",
   !p3Groups.some((g) => !P3_SECTION_KEYS.has(g.pageKey) && g.title.endsWith(" · List page"))
-  && !p3Rows.some((r) => !P3_SECTION_KEYS.has(r.pageKey) && (SECTION_RE.test(r.label) || r.label.startsWith("List page →") || /^List columns/.test(r.label) || /^\[list-/.test(r.label)))
+  && !p3Rows.some((r) => !P3_SECTION_KEYS.has(r.pageKey) && (SECTION_RE.test(r.label) || r.label.startsWith("List page →") || r.label.startsWith("List columns") || r.label.startsWith("[list-")))
   // positive controls on the same run — the rows exist, they are just page-scoped
   && p3Groups.some((g) => g.pageKey === "main" && g.title.endsWith("List page"))
-  && p3Rows.some((r) => r.pageKey === "main" && /^List columns$/.test(r.label) && !r.vk)
+  && p3Rows.some((r) => r.pageKey === "main" && r.label === "List columns" && !r.vk)
   && !p3Units.pages.some((p) => p.key === "list")
   && p3Rows.some((r) => r.pageKey === "main" && SECTION_RE.test(r.label))
   && p3Rows.some((r) => r.pageKey === "main" && r.label.startsWith("List page → ListPageV3")),

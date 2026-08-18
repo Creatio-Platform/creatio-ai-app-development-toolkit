@@ -1136,6 +1136,24 @@ function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns
   return notes;
 }
 
+// Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
+// section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
+// EXPORTED because the layer arm is unreachable until the section view `diff` is folded — without a seam here the
+// precedence rule would ship with no way to test it.
+export function mergeRowActions(fromLayers = [], fromManifest = []) {
+  const byName = new Map();
+  for (const ra of [...fromLayers, ...fromManifest]) {
+    // A name is the element's identity, so a blank or non-string one is not a deliverable: it would reach the
+    // plan and the gate as an unnamed row nothing can match. Guarded HERE, not only at the manifest edge,
+    // because this is the exported seam both sources go through.
+    const name = typeof ra?.name === "string" ? ra.name.trim() : "";
+    // Store the TRIMMED name, not just key on it: the stored object's `name` is what reaches the Row actions table
+    // and `expect.rowActionNames`, and the gate matches element names EXACTLY — so a padded `" Foo "` deduped under
+    // `Foo` would still be published padded and fail against a built `Foo`, the very mismatch this guard exists for.
+    if (name && !byName.has(name)) byName.set(name, { ...ra, name });
+  }
+  return [...byName.values()];
+}
 function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false, suppliedRows = []) {
   if (!sectionSchemas.length && !resolvedListColumns && !listColumnReadRejected) return null;
   const quickFilters = unionQuickFilters(sectionSchemas);
@@ -1159,15 +1177,7 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,
     quickFilters,
-    // Row actions: whatever the layers produced (empty until the section `diff` is folded) plus anything supplied on
-    // the manifest, deduped by name so one source cannot mask the other.
-    rowActions: (() => {
-      const byName = new Map();
-      for (const ra of [...sectionSchemas.flatMap((l) => l.rowActions || []), ...suppliedRows]) {
-        if (ra?.name && !byName.has(ra.name)) byName.set(ra.name, ra);
-      }
-      return [...byName.values()];
-    })(),
+    rowActions: mergeRowActions(sectionSchemas.flatMap((l) => l.rowActions || []), suppliedRows),
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
   };
@@ -1708,7 +1718,12 @@ export function runMigration(manifest, opts = {}) {
   // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,
   // so the list page is a deliverable on the same footing as the form page. Signals alone render only as prose, which
   // no build step can consume. `null` when the run has no section (mini/child scope).
-  const listChangeSet = buildListChangeSet({ entity: manifest.entity, section, entityColumns: manifest.entityColumns });
+  // THE run's entity, resolved once: the manifest's own value when it named a real one, else the entity the merged
+  // schema chain reports. Hoisted rather than repeated at each consumer, because the list page's data-source op and
+  // the result's `entity` must name the SAME object — a ChangeSet that binds PDS to a different schema than the plan
+  // states is a page built on the wrong table.
+  const resolvedEntity = manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
+  const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section, entityColumns: manifest.entityColumns });
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
@@ -1820,7 +1835,7 @@ export function runMigration(manifest, opts = {}) {
     typedPages.some((t) => t.cyclic || t.treeCyclic) ||
     !!(miniPage && (miniPage.cyclic || miniPage.treeCyclic));
   const out = {
-    entity: manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity,
+    entity: resolvedEntity,
     treeCyclic,   // internal: drives the acyclic-only child-page memo (diamond reuse)
     memoStats,    // internal: { hits, misses } — child/typed/mini fold cache hits across the whole tree
     gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal

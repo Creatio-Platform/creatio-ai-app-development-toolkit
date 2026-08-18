@@ -10,6 +10,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -587,6 +589,49 @@ const execSkill = readFileSync(fileURLToPath(new URL("../../skills/freedom-build
 check("executor SKILL.md: carries the untrusted-data rule across the delegation boundary (the parent skill states it; this side used not to mention it at all)",
   /untrusted DATA/i.test(execSkill) && /<<UNTRUSTED-DATA>>/.test(execSkill),
   () => execSkill.split("\n").filter((l) => /untrusted/i.test(l)).slice(0, 3).join("\n"));
+
+/* --- THE `list` UNIT'S BUILD PROMPT, pinned against the engine constants it DESCRIBES. The prompt is prose, so no
+   behavioural test reaches it, and prose that restates a constant is a second copy of it — free to disagree. A
+   prompt naming fewer `expect` fields than the unit publishes tells the builder to read fewer expectations than the
+   gate enforces; one naming fewer evidence surfaces than `listRow` makes leaves the unnamed rows unclosable. So
+   derive both facts from the constants rather than restating them, the way `carryBlock`'s data rule is pinned
+   above. --- */
+const LIST_EXPECT_FIELDS = LIST_EXPECT_KINDS.flatMap(([, countKey, namesKey]) => [countKey, namesKey]);
+// Matched with a WORD BOUNDARY, not as a bare substring: a plain `includes` is also satisfied by any longer name
+// that merely STARTS with a real field, so a prompt naming a superstring of one would read as naming the field.
+const namesField = (k) => new RegExp(String.raw`\b${k}\b`).test(wfSrc);
+check("workflow: the `list` unit's build prompt names EVERY field `LIST_EXPECT_KINDS` publishes — a prompt one pair short tells the builder to read fewer expectations than the gate enforces",
+  LIST_EXPECT_FIELDS.every(namesField),
+  () => ({ missing: LIST_EXPECT_FIELDS.filter((k) => !namesField(k)), all: LIST_EXPECT_FIELDS }));
+// WHICH rows close on a filed record is mechanical: `listRow` measures only the kinds in `LIST_ROW_VK` and every
+// other kind gets an evidence vk. A prompt naming fewer evidence surfaces than that leaves the unnamed ones with no
+// route to closed at all, so the `list` unit can never complete on a page that has one.
+const LIST_EVIDENCE_KINDS = LIST_EXPECT_KINDS.map(([kind]) => kind).filter((k) => !LIST_MEASURED_KINDS.includes(k));
+check("workflow: the build prompt names the ROW-ACTION rows as evidence rows too, not the command-bar rows alone — `LIST_ROW_VK` measures columns and filters only, so both of the other two kinds close on a filed record",
+  LIST_EVIDENCE_KINDS.join(",") === "action,rowaction"
+    && /command-bar action and row-action rows are evidence rows/.test(wfSrc)
+    && !/Only the command-bar action rows are evidence rows/.test(wfSrc),
+  () => ({ evidenceKinds: LIST_EVIDENCE_KINDS, measured: LIST_MEASURED_KINDS,
+    lines: wfSrc.split("\n").filter((l) => /evidence rows/.test(l)).map((l) => l.slice(0, 170)) }));
+
+/* --- THE REFERENCE DOC'S ⚠ Confirm LIST, pinned to the engine's closed kind set. The doc states the set is closed —
+   "a kind absent from a run's plan means the run had nothing to ask, never that the question went unasked" — which a
+   reader ACTS on: a kind the engine raises while the doc names a smaller set reads as spurious rather than as a
+   question they must answer. That makes the list load-bearing prose, so it is pinned like the prompt's above. --- */
+const specDoc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/page-design-spec.md", import.meta.url)), "utf8");
+const docKinds = [...new Set([...specDoc.matchAll(/\*\*\[(list-[a-z-]+)\]\*\*/g)].map((m) => m[1]))].sort((a, b) => a.localeCompare(b));
+const engineKinds = [...LIST_DECISION_KINDS].sort((a, b) => a.localeCompare(b));
+check("page-design-spec.md: documents EVERY `list-*` decision kind the engine can raise, and no kind it cannot — the doc calls the set closed, so a reader treats an undocumented item as spurious instead of answering it",
+  docKinds.join(",") === engineKinds.join(","),
+  () => ({ missingFromDoc: engineKinds.filter((k) => !docKinds.includes(k)),
+    notEmittedByEngine: docKinds.filter((k) => !engineKinds.includes(k)) }));
+// …and the registry has to BE the source. A push site that inlines the string would grow the emitted set without
+// growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
+const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
+check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
+  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 8,
+  () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
+    registrySize: LIST_DECISION_KINDS.length }));
 
 // --- blockedByParked: exact with the parent edge, honestly approximated without it. ---
 const parents = { "child:Leaf": "child:Mid", "child:Mid": "main", main: null, "child:Other": "main" };

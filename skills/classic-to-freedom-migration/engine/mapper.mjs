@@ -1978,41 +1978,68 @@ function listRowActionSpec(ra) {
     freedomControl: null,     // unresolved by design — see above
   };
 }
+// THE CLOSED SET of questions a list page can raise. Exported as the ONE source of these strings because each is
+// three things at once: the plan's `[kind]` label, half the `<pageKey>#confirm:<kind>:<item>` evidence id an
+// executor reproduces verbatim, and a documented item in `references/page-design-spec.md`, whose "the set is
+// closed" claim a reader ACTS on — an undocumented ninth kind reads to them as spurious rather than as a question
+// they must answer. A test pins the doc against this object AND rejects a push site that inlines the string instead
+// of reading it from here, so the set cannot grow in one place only.
+export const LIST_DECISION_KIND = {
+  columns: "list-columns",
+  columnType: "list-column-type",
+  columnPath: "list-column-path",
+  filterType: "list-filter-type",
+  filterAttributes: "list-filter-attributes",
+  commandBar: "list-command-bar",
+  rowAction: "list-row-action",
+  process: "list-process",
+};
+export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
 function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
   const out = [];
   if (!columns.length) {
-    out.push({ kind: "list-columns", item: "no list columns resolved",
+    out.push({ kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
       reason: "the Freedom grid would ship empty — confirm the column set the list should show" });
   }
   for (const c of columns.filter((x) => x.dataValueType == null)) {
-    out.push({ kind: "list-column-type", item: c.name,
+    out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
       reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });
   }
   for (const c of columns.filter((x) => x.isPath)) {
-    out.push({ kind: "list-column-path", item: c.name,
+    out.push({ kind: LIST_DECISION_KIND.columnPath, item: c.name,
       reason: `a display path, bound as the lookup column \`${c.root}\` — confirm the list should show that lookup's display value` });
   }
   for (const f of filters.filter((x) => x.quickFilterType == null)) {
-    out.push({ kind: "list-filter-type", item: f.classicName || f.name,
+    out.push({ kind: LIST_DECISION_KIND.filterType, item: f.classicName || f.name,
       reason: `classic filter type ${f.classicType || "UNKNOWN"} maps to no known \`quickFilterType\` — resolve which Freedom control renders it` });
+  }
+  // The `filterAttributes` merge REPLACES the whole array, so every entry the starter list page already registers has
+  // to be re-listed alongside this ChangeSet's contribution. That is an on-stand query with a recordable answer (read
+  // the starter page's `Items` model config), which is what makes it a ⚠ Confirm item rather than a note: an entry
+  // omitted here disables search, the folder tree or the filter builder with no error anywhere.
+  if (filters.length) {
+    // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
+    // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
+    out.push({ kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
+      reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` });
   }
   // ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
   // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
   if (section) {
     const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
-    out.push({ kind: "list-command-bar", item: `command-bar buttons: ${found}`,
+    out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
       reason: "only `getSectionActions()` items are read; a button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar" });
   }
   for (const ra of rowActions) {
     const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
-    out.push({ kind: "list-row-action", item: `row action: ${ra.name || "unnamed"}`,
+    out.push({ kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
       reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` });
   }
   if (section?.processLaunch) {
-    out.push({ kind: "list-process", item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
+    out.push({ kind: LIST_DECISION_KIND.process, item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
       reason: "the Classic section launches it — wire it as a list-page run-process action" });
   }
   return out;
@@ -2021,17 +2048,21 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
 // that does not exist must not appear as a build deliverable.
 export function buildListChangeSet({ entity, section, entityColumns } = {}) {
   if (!section) return null;
+  // `"?"` is the schema parser's stub for "the merged chain named no entity" — a name, not an entity. It must not
+  // reach an op: `entitySchemaName: "?"` reads as configured and binds the grid's data source to a schema that does
+  // not exist, which is worse than emitting no op at all. So a stub is absent, exactly as `undefined` is.
+  const boundEntity = entity && entity !== "?" ? entity : null;
   const columns = (section.listColumns || []).map((c) => listColumnSpec(c, entityColumns));
   const takenFilterNames = new Set();
   const filters = (section.quickFilters || []).map((qf, i) => listFilterSpec(qf, i, entityColumns, takenFilterNames));
   const actions = (section.sectionActions || []).map((a) => ({ name: a, source: "getSectionActions" }));
   const rowActions = (section.rowActions || []).map(listRowActionSpec);
   return {
-    entity: entity || null,
+    entity: boundEntity,
     columns, quickFilters: filters, commandBarActions: actions, rowActions,
     listViewConfigDiff: listViewOps(columns, filters),
     listViewModelConfigDiff: listViewModelOps(columns, filters),
-    listModelConfigDiff: entity ? [{ operation: "merge", path: ["dataSources", "PDS", "config"], values: { entitySchemaName: entity } }] : [],
+    listModelConfigDiff: boundEntity ? [{ operation: "merge", path: ["dataSources", "PDS", "config"], values: { entitySchemaName: boundEntity } }] : [],
     // The five entries a starter list page already registers are NOT knowable here — see `listViewModelOps`.
     filterAttributes: {
       contributed: filters.map((f) => `${f.name}_${LIST_ITEMS_ATTR}`),

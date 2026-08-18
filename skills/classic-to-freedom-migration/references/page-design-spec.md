@@ -58,9 +58,10 @@ These are BUILD deliverables, verified off the built page like the form's: `--ve
 `PDS_*` code inside the `DataTable` node's own `columns` array (never from another grid on the page) and each quick
 filter by element name AND `crt.QuickFilter` — an element with the right name built as a plain field is reported as a
 wrong-type failure, not as absent — from
-`--built.pages.list` (clio `get-page`'s `bundle.viewConfig` for the list schema). Only the command-bar rows are
-closed by a filed evidence record, because their Freedom container cannot be resolved while the section view `diff`
-goes unfolded.
+`--built.pages.list` (clio `get-page`'s `bundle.viewConfig` for the list schema). The command-bar action and row-action
+rows are the ones closed by a filed evidence record: a command-bar action's Freedom container cannot be resolved while
+the section view `diff` goes unfolded, and a row action's Freedom element name is not resolved here at all, so neither
+has an identity to match on the built page.
 
 #### List columns (in order)
 | # | Column | Grid column | Source | Type |
@@ -77,20 +78,39 @@ goes unfolded.
 | --- | --- | --- | --- |
 | `<DataGridActiveRow…>` | `<condition>` — carry as Freedom state / ⚠ none declared | <package> | ⚠ row action on `DataTable` — control and placement NOT resolved here |
 
-Emitted only once the section view `diff` is folded (nothing declares a row action before that). It carries **no op**:
-the name, the condition and the grid are resolved facts, while the Freedom control is read off a built page rather than
-guessed, as every other op here was measured.
+> ⚠ **A row action carries no op in this ChangeSet.** Every other op here reproduces a shape measured on a built
+> Freedom page; no such measurement exists for a row action, so the control and its placement are read off a built
+> page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.
 
 #### Command-bar actions
 | Action | Source | Freedom target |
 | --- | --- | --- |
 | `<action>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
-> ⚠ **The command-bar set may be incomplete** — `getSectionActions()` only; a button the section adds through its
-> view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches the ChangeSet.
-> ⚠ **`filterAttributes` is a MERGE, and a merge REPLACES the whole array** — re-list every entry the starter list
-> page already registers alongside the contributed ones, or search and the folder tree break with no error.
 > **Build note — column ids:** each grid column also needs a GUID `id`; the engine mints none, so the builder assigns it.
+
+> **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its
+> container and index, the filtered column and the control. `crt.QuickFilter` also needs its own nested filter config
+> and value binding, and it is `compositeOnly`, so complete it from that component's documentation.
+
+Build notes are the two places this ChangeSet is deliberately PARTIAL — a fact with no answer to resolve. A hazard
+that DOES have an answer is not a note: it is a ⚠ Confirm item, gated on the `list` page key like a form page's, so
+it reaches `--units.preflight` and cannot be read past. The list page raises its own:
+
+#### ⚠ Confirm before I build (<n>)
+All eight kinds the list page can raise — the set is closed, so a kind absent from a run's plan means the run had
+nothing to ask, never that the question went unasked:
+- **[list-columns]** no list columns resolved — the grid would be built empty …
+- **[list-column-type]** `<column>` — classic type `<T>` has no confirmed Freedom `dataValueType` …
+- **[list-column-path]** `<column>.<display>` — a display path, bound as the lookup column `<column>` …
+- **[list-filter-type]** `<FilterName>` — its Classic `dataValueType` maps to no known `quickFilterType` …
+- **[list-filter-attributes]** `<Items>.filterAttributes` — a `merge` REPLACES the array, so re-list every entry the
+  starter list page already registers alongside this ChangeSet's contribution …
+- **[list-command-bar]** command-bar buttons: `<set>` — only `getSectionActions()` items are read; a button the
+  section adds through its view `diff` is not folded at all …
+- **[list-row-action]** row action: `<DataGridActiveRow…>` — its enablement condition must become Freedom state …
+- **[list-process]** section process: `<names>` — the Classic section launches it; wire it as a list-page
+  run-process action …
 
 ### <entity> form page
 #### Layout
@@ -155,9 +175,10 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | --- | --- | --- |
 | `runBulkAssign` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
-> ⚠ **The command-bar set may be incomplete.** These come from the `getSectionActions()` signal only. A button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet: confirm the full button set against the Classic section on-stand.
-
 > **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.
+
+#### ⚠ Confirm before I build (1)
+- **[list-command-bar]** command-bar buttons: runBulkAssign — only `getSectionActions()` items are read; a button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar
 
 ### Applicant form page
 #### Layout
