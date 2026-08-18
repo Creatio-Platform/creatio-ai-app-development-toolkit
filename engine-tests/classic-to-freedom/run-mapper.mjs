@@ -2444,9 +2444,14 @@ check("ENG-95021: reuse with NO supplied Classic page name does not invent `<Ent
   /Reuse — a Freedom form page already exists/.test(reuseNoName.plan)
   && /Its schema name was not recorded in the manifest, so this plan does not name it/.test(reuseNoName.plan)
   && !/ContactPageV2/.test(reuseNoName.plan),
-  () => (reuseNoName.plan.match(/.*Reuse — .*/) || [])[0]);
+  () => (reuseNoName.plan.match(/^> \*\*Reuse — .*$/m) || [])[0]);
 check("ENG-95021: reuse resolves the child for the gate (nothing is rebuilt)",
-  !reuseNoName.structure.issues.some((i) => /Contact/.test(i)), () => reuseNoName.structure.issues);
+  reuseNoName.childPages.some((c) => c.entity === "Contact" && c.reuseFreedomPage === "Contacts_FormPage") // not vacuous
+  && !reuseNoName.structure.issues.some((i) => /Contact/.test(i)),
+  () => ({ children: reuseNoName.childPages.map((c) => c.entity), issues: reuseNoName.structure.issues }));
+check("ENG-95021: the Main-scope ROW for a reuse child names the Freedom page and calls it `Reuse (Freedom)`",
+  /\| Contact — opened by detail "RuDetail" \| existing Freedom form `Contacts_FormPage` \| Reuse \(Freedom\) \|/.test(reuseNoName.plan),
+  () => (reuseNoName.plan.match(/^\| Contact .*$/m) || [])[0]);
 check("ENG-95021: reuse carries the client-delta reconcile obligation + the procedure pointer",
   /Reconcile the client's Classic customizations onto `Contacts_FormPage`/.test(reuseNoName.plan)
   && /existing-freedom-reconcile\.md/.test(reuseNoName.plan)
@@ -2495,10 +2500,16 @@ check("ENG-95021: the reuse run's own `onstand` keys are registered in REACHABIL
 // in REACHABILITY_KEYS can never be offered by `--units` nor cleared by `--verify` — exit 2 with no valid answer.
 const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
 const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\s*evidence:\s*"([A-Za-z]+)"/g)].map((m) => m[1]))];
+// Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
+// registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward
+// direction plus a count lets a simultaneous add+drop pass net-neutral.
 check("ENG-95021: EVERY `onstand` emission site in designspec.mjs uses a key registered in REACHABILITY_KEYS",
   emittedKeys.length >= REACHABILITY_KEYS.length            // the scan really found the sites (not a silent 0-match)
   && emittedKeys.every((k) => REACHABILITY_KEYS.includes(k)),
   () => ({ emitted: emittedKeys, registered: REACHABILITY_KEYS }));
+check("ENG-95021: and every REGISTERED key is emitted somewhere — no key the executor can never be asked for",
+  REACHABILITY_KEYS.every((k) => emittedKeys.includes(k)),
+  () => ({ registered: REACHABILITY_KEYS, emitted: emittedKeys, unemitted: REACHABILITY_KEYS.filter((k) => !emittedKeys.includes(k)) }));
 // The scan above is single-file, so pin that designspec is the only emitter — else a key could hide in another module.
 for (const f of ["migrate.mjs", "mapper.mjs", "engine.mjs"]) {
   check(`ENG-95021: no \`onstand\` vk is emitted outside designspec.mjs (${f})`,

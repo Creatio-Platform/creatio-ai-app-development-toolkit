@@ -1149,12 +1149,26 @@ function renderPlanBanners(result, opts) {
 // three surfaces that state it: the structure gate's blocking message (migrate.mjs imports this), the unresolved
 // `<FILL>` note and the read-only note. An answer missing from any one of them is an answer nobody records there.
 // Lives here, not in migrate.mjs, because designspec cannot import from its importer. (`cyclic` is engine-detected.)
+// The reconcile procedure's path, stated once: four rendered sentences point at it (main page + three reuse
+// sites) and they differ too much to share a sentence, but a rename must not have to find them all.
+export const RECONCILE_REFERENCE = "./references/existing-freedom-reconcile.md";
+
 export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema to `manifest.childPageSchemas` '
   + '(rebuild it here); none exists → record `"editPage": false`; the CHILD entity already ships a `kind: freedom` '
   + 'form page (`list-entity-client-schemas`) → record `"reuseFreedomPage": "<Freedom form page>"` (the related '
   + 'list opens THAT page and nothing is rebuilt here). `"editable": false` records that the list is read-only, '
   + 'which is NOT an answer to whether a page exists — pair it with one of the three above. '
   + 'No self-declared "out of scope".';
+
+// What a REUSE says about the Classic child page, by what the manifest actually recorded — THREE states, tested
+// distinctly, because a truthiness test merges the last two and then asserts both that a page exists and that
+// nothing was recorded. Never derive `<Entity>PageV2`: a name nobody read is not a name, least of all inside a
+// claim about it. Own fn for Sonar CC 15.
+function reuseClassicChildSentence(c) {
+  if (typeof c.editPage === "string" && c.editPage) return `The Classic \`${esc(c.editPage)}\` is NOT migrated — it is superseded, not skipped.`;
+  if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form.";
+  return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
+}
 
 function renderChildMappings(childs) {
   if (!childs.length) return [];
@@ -1163,16 +1177,9 @@ function renderChildMappings(childs) {
     const h = "#".repeat(Math.min(6, lvl));
     P.push(`${h} Child page: ${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`);
     if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-      // THREE states, tested distinctly — a truthiness test would merge the last two. Say only what was recorded:
-      // named → name it; `editPage:false` → nothing exists to supersede; nothing recorded → superseded, unnamed.
-      // Never derive `<Entity>PageV2`: a name nobody read is not a name, least of all inside a claim about it.
-      let classicChild;
-      if (typeof c.editPage === "string" && c.editPage) classicChild = `The Classic \`${esc(c.editPage)}\` is NOT migrated — it is superseded, not skipped.`;
-      else if (c.editPage === false) classicChild = "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form.";
-      else classicChild = "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
-      P.push(`> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${classicChild} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
+      P.push(`> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${reuseClassicChildSentence(c)} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
         ">",
-        `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`./references/existing-freedom-reconcile.md\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`);
+        `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`${RECONCILE_REFERENCE}\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`);
     } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
     } else if (c.spec) {
@@ -1288,7 +1295,9 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
 }
 
 // Child edit pages belong in Main scope too — each related list's child entity opens its OWN form on add/edit.
-// Honest label by resolution state (mapped/real page → Rebuild; verified-none/view-only → Reuse; else ⚠ resolve).
+// Honest label by resolution state (mapped/real page → Rebuild; verified-none → Reuse; shipped Freedom form →
+// Reuse (Freedom); ancestor on this branch → Mapped above; else ⚠ resolve, view/attach-only ALONE included —
+// read-only tags the row, it does not answer whether a page exists).
 function buildChildScopeRows(childs) {
   return childs.map((c) => {
     let target, call, label;
@@ -1410,7 +1419,7 @@ export function renderPlan(result, opts = {}) {
   const formTpl = pm.formTemplate || opts.template || null;
   const scopeRows = buildScopeRows(pm, opts, entity, typed, fill);
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
-  if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
+  if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `" + RECONCILE_REFERENCE + "`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
@@ -1568,7 +1577,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
     // `onstand` row needs its evidence key in REACHABILITY_KEYS or `--units` never offers it and `--verify` can
     // never clear it; and the MAIN page's reconcile is ungated prose, so gating the child harder than the page it
     // is modelled on breaks the symmetry that justifies it. A vk-less row still renders "☐ confirm on-stand".
-    { label: `Reused child pages reconciled (${reused.length}) — for each, apply the client's Classic customization delta to the reused Freedom form (or record the packages checked as carrying none), per \`./references/existing-freedom-reconcile.md\`.` });
+    { label: `Reused child pages reconciled (${reused.length}) — for each, apply the client's Classic customization delta to the reused Freedom form (or record the packages checked as carrying none), per \`${RECONCILE_REFERENCE}\`.` });
   // The navigable-section deliverable, gated on the DECIDED host mode. An approved `pages-only-no-menu` run
   // ships pages without a menu entry ON PURPOSE, so emitting the row there would demand evidence for something
   // the plan decided not to do — a permanent false red. It is replaced by an explicit dropped row rather than
@@ -1691,7 +1700,7 @@ export function reuseChildGroups(pageKey, c) {
   }, {
     // Ungated on purpose — see the set-level row in checklistGroups for why (no registered reachability key, and
     // the MAIN-page reconcile it mirrors is ungated too). Renders "☐ confirm on-stand"; does not block `--verify`.
-    label: `Client's Classic customizations on the \`${esc(c.entity)}\` child page reconciled onto \`${esc(c.reuseFreedomPage)}\` (or the packages checked recorded as carrying none) — per \`./references/existing-freedom-reconcile.md\`.`,
+    label: `Client's Classic customizations on the \`${esc(c.entity)}\` child page reconciled onto \`${esc(c.reuseFreedomPage)}\` (or the packages checked recorded as carrying none) — per \`${RECONCILE_REFERENCE}\`.`,
   }])];
 }
 // A child page that is a REAL deliverable (a Classic edit page exists, or its existence was never verified) but
