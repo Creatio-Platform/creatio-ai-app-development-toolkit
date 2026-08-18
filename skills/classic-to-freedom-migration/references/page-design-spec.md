@@ -48,8 +48,49 @@ HTML or a rendered artifact.
 ### List page
 - **Add record:** via mini page `<MiniPage>` (folded under `### Add mini-page mapping`) / full edit page — verified / ⚠ NOT verified (resolve from `list-entity-client-schemas` `miniPageSchema`; the engine never assumes "none")
 - **List columns:** <col> · <col> · … — the wording follows the resolved PROVENANCE: a `schema-default` set narrows the question ("the Classic list shows these columns; confirm this set is kept in Freedom"), an `entity-default` set is prefixed ⚠ and qualified as a single fallback column the Classic section never declared (with the resolver's own note in parentheses), and an empty set keeps the ⚠ question, distinguishing "the resolver ran and found nothing" (`none`) from "no resolver ran at all" (⚠ NOT resolved — which also names the remedy)
-- **Quick filters:** `<FilterName>` (<column>, <TYPE>) · … — rebuild as the Freedom list-page filter / quick-filter controls (from the section's `initFixedFiltersConfig`; omitted when the section defines none)
-- **Section actions:** `<action>` · … — migrate as Freedom list-page actions
+- **Section process:** ⚠ launches <process> — wire as a list-page run-process action (omitted when the section launches none)
+
+The list page's CONTENTS then follow as their own tables, from `listChangeSet` — the list page is a
+build artifact on the same footing as the form page. Deliberately NOT the form's `Region | Element | …` table: a
+grid has no regions to fill, so its structure is an ordered column set, one filter container and one command bar.
+
+These are BUILD deliverables, verified off the built page like the form's: `--verify` matches each column by its
+`PDS_*` code inside the `DataTable` node's own `columns` array (never from another grid on the page) and each quick
+filter by element name AND `crt.QuickFilter` — an element with the right name built as a plain field is reported as a
+wrong-type failure, not as absent — from
+`--built.pages.list` (clio `get-page`'s `bundle.viewConfig` for the list schema). Only the command-bar rows are
+closed by a filed evidence record, because their Freedom container cannot be resolved while the section view `diff`
+goes unfolded.
+
+#### List columns (in order)
+| # | Column | Grid column | Source | Type |
+| --- | --- | --- | --- | --- |
+| 1 | <classic column> | `PDS_<col>` | PDS.<col> (from `<col>.<display>` when the classic column was a display path) | <classic type> (`dataValueType` <n>) → <ref> / ⚠ <type> — `dataValueType` unresolved |
+
+#### Quick filters
+| Classic filter | Freedom element | Container | Column | Control |
+| --- | --- | --- | --- | --- |
+| `<FilterName>` | `QuickFilterBy<Column>` | `LeftFilterContainerInner` · index <n> | <column> | `crt.QuickFilter` · date/lookup / ⚠ <TYPE> — no known `quickFilterType` |
+
+#### Row actions
+| Action | Condition | Source package | Freedom target |
+| --- | --- | --- | --- |
+| `<DataGridActiveRow…>` | `<condition>` — carry as Freedom state / ⚠ none declared | <package> | ⚠ row action on `DataTable` — control and placement NOT resolved here |
+
+Emitted only once the section view `diff` is folded (nothing declares a row action before that). It carries **no op**:
+the name, the condition and the grid are resolved facts, while the Freedom control is read off a built page rather than
+guessed, as every other op here was measured.
+
+#### Command-bar actions
+| Action | Source | Freedom target |
+| --- | --- | --- |
+| `<action>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
+
+> ⚠ **The command-bar set may be incomplete** — `getSectionActions()` only; a button the section adds through its
+> view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches the ChangeSet.
+> ⚠ **`filterAttributes` is a MERGE, and a merge REPLACES the whole array** — re-list every entry the starter list
+> page already registers alongside the contributed ones, or search and the folder tree break with no error.
+> **Build note — column ids:** each grid column also needs a GUID `id`; the engine mints none, so the builder assigns it.
 
 ### <entity> form page
 #### Layout
@@ -101,7 +142,22 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 ### List page
 - **Add record:** via mini page `ApplicantMiniPage` — migrate as a Freedom mini page / quick-add
 - **List columns:** Name · Stage · Created on — the Classic list shows these columns; confirm this set is kept in Freedom
-- **Section actions:** `runBulkAssign` — migrate as Freedom list-page actions
+
+#### List columns (in order)
+| # | Column | Grid column | Source | Type |
+| --- | --- | --- | --- | --- |
+| 1 | Name | `PDS_Name` | PDS.Name | Text (`dataValueType` 1) |
+| 2 | Stage | `PDS_Stage` | PDS.Stage | Lookup (`dataValueType` 10) → RecruitmentStage |
+| 3 | Created on | `PDS_CreatedOn` | PDS.CreatedOn | DateTime (`dataValueType` 7) |
+
+#### Command-bar actions
+| Action | Source | Freedom target |
+| --- | --- | --- |
+| `runBulkAssign` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
+
+> ⚠ **The command-bar set may be incomplete.** These come from the `getSectionActions()` signal only. A button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet: confirm the full button set against the Classic section on-stand.
+
+> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.
 
 ### Applicant form page
 #### Layout
