@@ -60,11 +60,11 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom, STANDARD_CLASSIC_METHODS, isScaffoldingMethod } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
-  checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, reuseChildGroups, unresolvedChildGroups,
+  checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
-// edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
+// edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
 // child is fine. Returns the issue string, or null when the child page raises no structure issue.
 function childPageIssue(c) {
   // A CYCLE (this page is reachable from itself — e.g. Contract→Order→Contract) is NOT a gap: the target page
@@ -90,9 +90,10 @@ function childPageIssue(c) {
   if (typeof c.editPage === "string" && c.editPage)
     return `child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`;
   if (c.editPage === false) return null;                       // agent verified: no Classic *Page exists
-  if (c.editable === false && c.editableVerified) return null; // agent VERIFIED view/attach-only (not just the hidden-Add heuristic)
-  // unverified — incl. a hidden-Add heuristic that did NOT confirm no edit page: resolve before the plan.
-  return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false / "editable": false on this detail once confirmed. No self-declared "out of scope".`;
+  // `editable: false` is NOT an answer here — it says Add is hidden, not that no page exists, and the rule above
+  // only fires once `editPage` is a string, so accepting it would waive an unnamed page. Read-only TAGS the row
+  // view/attach-only; the page-existence answer is still owed.
+  return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run \`list-pages\` by the CHILD entity, then ${CHILD_PAGE_ANSWERS}`;
 }
 
 // ONE resolve → cycle-check → memo → recurse → cache sequence for folding a nested sub-page (child / typed /
@@ -213,7 +214,7 @@ function parseProfileSchemas(manifest, bodyOf) {
 // schema to read (the card's config names none, or it is unreadable) — a resolved answer, exactly like
 // `addRecordMiniPage: false` / `editPage: false`, so the gate can tell "verified none" from "never checked"
 // and the mapper falls back to the by-hand recipe cleanly.
-// Deliberately NOT carried over from detailSchemaRecord: `title`, `editPage`, `editable`, `editableVerified`.
+// Deliberately NOT carried over from detailSchemaRecord: `title`, `editPage`, `editable`.
 // Those are detail-only concerns — a detail governs a child edit page and an add-record workflow, so it needs a
 // resolved title and an edit-page answer. A profile card renders a compact view of an ALREADY-linked record; it
 // opens the record itself, never a child edit page. Do not mirror the detail template here without that changing.
@@ -332,7 +333,6 @@ function enumerateChildPages(changeSet, detailSchemas) {
       via: d.caption || d.detailSchema || d.entity,
       editPage: ds ? (ds.editPage ?? null) : null, // preserve an explicit `false` (agent verified: no page)
       editable: ds ? ds.editable : null,
-      editableVerified: ds ? !!ds.editableVerified : false,
       // agent-verified: the child entity already has a shipped Freedom form page → Reuse, nothing to rebuild
       reuseFreedomPage: ds ? (ds.reuseFreedomPage ?? null) : null,
     };
@@ -1241,8 +1241,7 @@ function parseDetailSchemas(manifest, bodyOf) {
       columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
       title: eObj.title || null, // human detail title (from its resources)
       editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
-      editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
-      editableVerified: ("editable" in eObj),
+      editable: ("editable" in eObj) ? eObj.editable : editableFromBody, // tags view/attach-only; never a gate answer
       // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
       // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
       reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,

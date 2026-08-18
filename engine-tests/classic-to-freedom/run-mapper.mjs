@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -2372,15 +2372,149 @@ check("#7c real edit page → MANDATORY-map slot; 'view-only/native/out of scope
   /RecruitmentInStagePageV2/.test(realChild.plan) && /REAL Classic edit page/.test(realChild.plan)
   && /MUST fetch it and map it/.test(realChild.plan) && /"out of scope" are NOT skip reasons/.test(realChild.plan)
   && /no "out of scope" in this migration/i.test(realChild.plan));
-// a genuinely view-only child (add-record hidden, no edit page) IS a legitimate skip — no child page exists
+// a view-only child detected from the BODY heuristic (add-record hidden, no edit page NAMED). Read-only is not a
+// skip: the page-existence answer is still owed, so the plan tags the row and the gate stays open on it.
 const voChildBody = `define("VoDetail",[],function(){return{entitySchemaName:"VoEntity",methods:{getAddRecordButtonVisible:function(){return false;}},diff:[]};});`;
 const voChild = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{VoDetail:{schemaName:"VoDetail",entitySchemaName:"VoEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"VoDetail",parentName:"T",values:{itemType:2}}]};});` }],
   detailSchemas: { VoDetail: { body: voChildBody, entity: "VoEntity" } } }, { baseDir: FIX });
-check("#7c view/attach-only child (no edit page) is a legit skip — 'read/attach-only' note, not a mandatory-map",
+check("#7c view/attach-only child is TAGGED read/attach-only — not a mandatory-map, and not a skip either",
   voChild.childPages.some((c) => c.entity === "VoEntity" && c.editable === false && !c.editPage)
-  && /Read\/attach-only[\s\S]{0,80}no child edit page/.test(voChild.plan)
+  && /Read\/attach-only — the child page question is still OPEN/.test(voChild.plan)
   && !/MUST fetch it and map it/.test(voChild.plan));
+// Pin the gate on the BODY-heuristic path too, not just the manifest-declared one below: plan text alone would
+// pass while the gate silently waived the child.
+check("#7c the body-heuristic read-only child ALSO leaves the structure gate open on it",
+  voChild.structure.issues.some((i) => /VoEntity/.test(i) && /child page NOT verified/.test(i)),
+  () => voChild.structure.issues);
+
+/* ---- ENG-95021: the child-page dispositions the gate accepts, the ones it does not, and what reuse still owes.
+   Three defects, one theme — the gate accepted an answer to a DIFFERENT question than the one it was asking. ---- */
+
+// (1) Read-only answers add-record visibility, NOT page existence. `editable:false` alone leaves the child open;
+//     the renderer must SAY so, because a reassuring note over a blocking gate is a self-contradicting plan.
+const roDeclared = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{VoDetail:{schemaName:"VoDetail",entitySchemaName:"VoEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"VoDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { VoDetail: { body: voChildBody, entity: "VoEntity", editable: false } } }, { baseDir: FIX });
+check("ENG-95021: a manifest-declared `editable:false` does NOT resolve the child (it answers add-record, not page existence)",
+  roDeclared.structure.issues.some((i) => /VoEntity/.test(i) && /child page NOT verified/.test(i)),
+  () => roDeclared.structure.issues);
+check("ENG-95021: renderer and gate AGREE on a read-only child — the note says OPEN while the gate blocks on it",
+  /Read\/attach-only — the child page question is still OPEN/.test(roDeclared.plan)
+  && /Read-only ALONE does not resolve this child/.test(roDeclared.plan)
+  && roDeclared.structure.issues.some((i) => /VoEntity/.test(i)));
+check("ENG-95021: the Main-scope ROW agrees too — a read-only child the gate blocks on is `⚠ resolve`, not `Reuse`",
+  /\| VoEntity — opened by detail "VoDetail" · view\/attach-only \| ⚠ verify[^|]*\| ⚠ resolve \|/.test(roDeclared.plan)
+  && !/\| VoEntity[^|]*\|[^|]*\| Reuse \|/.test(roDeclared.plan),
+  () => (roDeclared.plan.match(/^\| VoEntity .*$/m) || [])[0]);
+
+// (2) Pairing read-only with the page-existence answer DOES resolve it — gate AND scope row.
+const roPaired = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{VoDetail:{schemaName:"VoDetail",entitySchemaName:"VoEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"VoDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { VoDetail: { body: voChildBody, entity: "VoEntity", editable: false, editPage: false } } }, { baseDir: FIX });
+check("ENG-95021: `editable:false` PAIRED with `editPage:false` resolves the child",
+  // guard the negative: the child must EXIST to have been resolved, else this passes vacuously
+  roPaired.childPages.some((c) => c.entity === "VoEntity" && c.editPage === false)
+  && !roPaired.structure.issues.some((i) => /VoEntity/.test(i)),
+  () => ({ children: roPaired.childPages.map((c) => c.entity), issues: roPaired.structure.issues }));
+check("ENG-95021: a child with `editPage:false` recorded IS still `Reuse` in the Main-scope row",
+  /\| VoEntity[^|]*\|[^|]*\| Reuse \|/.test(roPaired.plan),
+  () => (roPaired.plan.match(/^\| VoEntity .*$/m) || [])[0]);
+
+// (3) The blocking message is the contract an agent follows, so it must enumerate every answer the gate honours —
+//     `reuseFreedomPage` included, and it must say read-only is not one of them.
+const unresolvedChild = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{OpenDetail:{schemaName:"OpenDetail",entitySchemaName:"OpenEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"OpenDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { OpenDetail: { body: `define("OpenDetail",[],function(){return{entitySchemaName:"OpenEntity",diff:[]};});`, entity: "OpenEntity" } } }, { baseDir: FIX });
+const openIssue = unresolvedChild.structure.issues.find((i) => /OpenEntity/.test(i)) || "";
+check("ENG-95021: the gate's remediation names ALL THREE resolving answers, reuseFreedomPage included",
+  /childPageSchemas/.test(openIssue) && /"editPage": false/.test(openIssue) && /"reuseFreedomPage"/.test(openIssue),
+  () => openIssue);
+check("ENG-95021: the remediation states that read-only is NOT one of them",
+  /`"editable": false` records that the list is read-only, which is NOT an answer/.test(openIssue), () => openIssue);
+check("ENG-95021: the unresolved-child plan note offers reuseFreedomPage too (same three answers as the gate)",
+  /<FILL: verify child page>/.test(unresolvedChild.plan) && /"reuseFreedomPage"/.test(unresolvedChild.plan));
+
+// (4) Reuse: never print a Classic page name nobody supplied, and never derive one from the entity. Reuse
+//     supersedes the BASE page only, so the client-delta reconcile is still owed.
+const reuseNoName = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{RuDetail:{schemaName:"RuDetail",entitySchemaName:"Contact",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"RuDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { RuDetail: { body: `define("RuDetail",[],function(){return{entitySchemaName:"Contact",diff:[]};});`, entity: "Contact", reuseFreedomPage: "Contacts_FormPage" } } }, { baseDir: FIX });
+check("ENG-95021: reuse with NO supplied Classic page name does not invent `<Entity>PageV2`",
+  /Reuse — a Freedom form page already exists/.test(reuseNoName.plan)
+  && /Its schema name was not recorded in the manifest, so this plan does not name it/.test(reuseNoName.plan)
+  && !/ContactPageV2/.test(reuseNoName.plan),
+  () => (reuseNoName.plan.match(/^> \*\*Reuse — .*$/m) || [])[0]);
+check("ENG-95021: reuse resolves the child for the gate (nothing is rebuilt)",
+  reuseNoName.childPages.some((c) => c.entity === "Contact" && c.reuseFreedomPage === "Contacts_FormPage") // not vacuous
+  && !reuseNoName.structure.issues.some((i) => /Contact/.test(i)),
+  () => ({ children: reuseNoName.childPages.map((c) => c.entity), issues: reuseNoName.structure.issues }));
+check("ENG-95021: the Main-scope ROW for a reuse child names the Freedom page and calls it `Reuse (Freedom)`",
+  /\| Contact — opened by detail "RuDetail" \| existing Freedom form `Contacts_FormPage` \| Reuse \(Freedom\) \|/.test(reuseNoName.plan),
+  () => (reuseNoName.plan.match(/^\| Contact .*$/m) || [])[0]);
+check("ENG-95021: reuse carries the client-delta reconcile obligation + the procedure pointer",
+  /Reconcile the client's Classic customizations onto `Contacts_FormPage`/.test(reuseNoName.plan)
+  && /existing-freedom-reconcile\.md/.test(reuseNoName.plan)
+  && /"we did not look" is not "there was nothing"/.test(reuseNoName.plan));
+
+const reuseNamed = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{RuDetail:{schemaName:"RuDetail",entitySchemaName:"Contact",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"RuDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { RuDetail: { body: `define("RuDetail",[],function(){return{entitySchemaName:"Contact",methods:{getEditPageName:function(){return "ContactPageV2";}},diff:[]};});`, entity: "Contact", reuseFreedomPage: "Contacts_FormPage" } } }, { baseDir: FIX });
+check("ENG-95021: reuse DOES name the Classic page when the manifest/body actually carried it",
+  /The Classic `ContactPageV2` is NOT migrated/.test(reuseNamed.plan));
+
+// The THIRD state: reuse + a recorded `editPage:false`. "Superseded" and "name not recorded" are BOTH false here —
+// the manifest says no Classic page exists at all, so there is nothing to supersede and nothing was left unsaid.
+const reuseNoClassic = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{RuDetail:{schemaName:"RuDetail",entitySchemaName:"Contact",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"RuDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { RuDetail: { body: `define("RuDetail",[],function(){return{entitySchemaName:"Contact",diff:[]};});`, entity: "Contact", reuseFreedomPage: "Contacts_FormPage", editPage: false } } }, { baseDir: FIX });
+check("ENG-95021: reuse + `editPage:false` claims NEITHER a superseded page NOR an unrecorded name",
+  /There is no Classic child page to supersede/.test(reuseNoClassic.plan)
+  && !/is NOT migrated — it is superseded/.test(reuseNoClassic.plan)
+  && !/not recorded in the manifest, so this plan does not name it/.test(reuseNoClassic.plan),
+  () => (reuseNoClassic.plan.match(/^> \*\*Reuse —.*$/m) || [])[0]);
+
+// (5) A reuse child owes TWO deliverables, so it publishes two rows: which page the list opens (gated), and
+//     whether that page carries the client's own additions (ungated). Neither is derivable from a skipped fold.
+const reuseManifest = { entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{RuDetail:{schemaName:"RuDetail",entitySchemaName:"Contact",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"RuDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { RuDetail: { body: `define("RuDetail",[],function(){return{entitySchemaName:"Contact",diff:[]};});`, entity: "Contact", reuseFreedomPage: "Contacts_FormPage" } } };
+const reuseRun = runMigration(reuseManifest, { baseDir: FIX });
+const reuseRows = checklistGroups(reuseRun, checklistOpts(reuseManifest)).flatMap((g) => g.rows);
+const reuseEvidence = reuseRows.map((r) => r.vk?.evidence).filter(Boolean);
+const reconcileRows = reuseRows.filter((r) => /reconcile/i.test(r.label || ""));
+check("ENG-95021: a reuse child publishes BOTH the RelatedPage-binding row and the client-delta reconcile row",
+  reuseEvidence.includes("reuseBindings") && reconcileRows.length >= 2,
+  () => ({ evidence: reuseEvidence, reconcile: reconcileRows.map((r) => (r.label || "").slice(0, 60)) }));
+// The reconcile rows are deliberately UNGATED: a gated `onstand` row whose evidence key is not registered can
+// never be offered by `--units` nor cleared by `--verify`, so it would force exit 2 with no sanctioned answer.
+check("ENG-95021: the reconcile rows carry NO vk — visible obligation, not an unclosable gate",
+  reconcileRows.every((r) => !r.vk), () => reconcileRows.map((r) => r.vk));
+const reuseOnstand = [...new Set(reuseRows.filter((r) => r.vk?.type === "onstand").map((r) => r.vk.evidence))];
+check("ENG-95021: the reuse run's own `onstand` keys are registered in REACHABILITY_KEYS",
+  reuseOnstand.length > 0 && reuseOnstand.every((k) => REACHABILITY_KEYS.includes(k)),
+  () => ({ emitted: reuseOnstand, registered: REACHABILITY_KEYS }));
+// …and the same invariant over EVERY emission site, not just the ones this fixture happens to reach. A run-shape
+// check only ever covers the keys that run emits (reuse hits 2 of 5), so an unregistered key added on the typed or
+// mini-page path would pass unnoticed. Scanning the source covers all of them: an `onstand` row whose key is not
+// in REACHABILITY_KEYS can never be offered by `--units` nor cleared by `--verify` — exit 2 with no valid answer.
+const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
+const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\s*evidence:\s*"([A-Za-z]+)"/g)].map((m) => m[1]))];
+// Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
+// registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward
+// direction plus a count lets a simultaneous add+drop pass net-neutral.
+check("ENG-95021: EVERY `onstand` emission site in designspec.mjs uses a key registered in REACHABILITY_KEYS",
+  emittedKeys.length >= REACHABILITY_KEYS.length            // the scan really found the sites (not a silent 0-match)
+  && emittedKeys.every((k) => REACHABILITY_KEYS.includes(k)),
+  () => ({ emitted: emittedKeys, registered: REACHABILITY_KEYS }));
+check("ENG-95021: and every REGISTERED key is emitted somewhere — no key the executor can never be asked for",
+  REACHABILITY_KEYS.every((k) => emittedKeys.includes(k)),
+  () => ({ registered: REACHABILITY_KEYS, emitted: emittedKeys, unemitted: REACHABILITY_KEYS.filter((k) => !emittedKeys.includes(k)) }));
+// The scan above is single-file, so pin that designspec is the only emitter — else a key could hide in another module.
+for (const f of ["migrate.mjs", "mapper.mjs", "engine.mjs"]) {
+  check(`ENG-95021: no \`onstand\` vk is emitted outside designspec.mjs (${f})`,
+    !/type:\s*"onstand"/.test(fs.readFileSync(new URL(`../../skills/classic-to-freedom-migration/engine/${f}`, import.meta.url), "utf8")));
+}
 
 /* ---- STRUCTURE VALIDATOR — systemic completeness gate on manifest inputs (blocks the dodge in code) ---- */
 // (a) a custom detail with NO supplied detailSchema → structurally incomplete + banner in the plan.
