@@ -194,5 +194,55 @@ class NormalizationTest(unittest.TestCase):
         self.assertEqual(report.page_count(), 4)
 
 
+class MultiSessionTest(unittest.TestCase):
+    """Two session UUID subdirectories under one export root.
+
+    Each session offloads a result to its OWN tool-results/. The counter must
+    attribute each workflow's offloaded bytes to the directory of the session
+    it belongs to -- not to whichever session was discovered last (R9).
+    """
+
+    def _write_session(self, root, sess, wf_name, agent_id, offload_name, size):
+        wf_dir = os.path.join(root, sess, "subagents", "workflows", wf_name)
+        tr_dir = os.path.join(root, sess, "tool-results")
+        os.makedirs(wf_dir)
+        os.makedirs(tr_dir)
+        with open(os.path.join(tr_dir, offload_name), "w", encoding="utf-8") as f:
+            f.write("X" * size)
+        with open(os.path.join(wf_dir, f"agent-{agent_id}.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines([
+                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+                _line({"message": {"role": "assistant", "usage": _usage(inp=1, cw=1),
+                                   "content": [{"type": "tool_use", "id": "t1", "name": "Bash"}]}}),
+                _line({"message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1",
+                     "content": rf"Output too large. saved to C:\x\tool-results\{offload_name}"},
+                ]}}),
+            ])
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="cc-multi-")
+        # Session A offloads 500 bytes; session B offloads 900 bytes.
+        self._write_session(self.root, "sess-A", "wf_a", "aaa", "a.txt", 500)
+        self._write_session(self.root, "sess-B", "wf_b", "bbb", "b.txt", 900)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_each_workflow_keeps_its_own_tool_results_dir(self):
+        session = export_mod.discover(self.root)
+        by_name = {wf.name: wf for wf in session.workflows}
+        self.assertTrue(by_name["wf_a"].tool_results_dir.endswith(os.path.join("sess-A", "tool-results")))
+        self.assertTrue(by_name["wf_b"].tool_results_dir.endswith(os.path.join("sess-B", "tool-results")))
+
+    def test_offloaded_bytes_attributed_per_session(self):
+        report = Report(export_mod.discover(self.root), metrics.CostConfig())
+        stage_bytes = {label: sum(agg.tool_bytes.values()) for label, agg in report.stage_aggs}
+        # Both offloads are found in their own session's dir: full on-disk sizes,
+        # not the short inline stub length.
+        self.assertEqual(stage_bytes["wf_a (1 agents)"], 500)
+        self.assertEqual(stage_bytes["wf_b (1 agents)"], 900)
+
+
 if __name__ == "__main__":
     unittest.main()

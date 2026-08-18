@@ -29,6 +29,10 @@ class Workflow:
     agent_files: list
     journal: Optional[str]
     meta_json: Optional[str]  # top-level workflows/<name>.json
+    # tool-results/ of the SAME session this workflow belongs to. Kept per
+    # workflow (not once per export) so offloaded-byte lookups resolve against
+    # the right session when the export root holds more than one session UUID.
+    tool_results_dir: Optional[str] = None
 
 
 @dataclass
@@ -62,8 +66,9 @@ def discover(root: str) -> SessionExport:
     for wf_parent in wf_parents:
         session_dir = os.path.dirname(os.path.dirname(wf_parent))
         candidate_results = os.path.join(session_dir, "tool-results")
-        if os.path.isdir(candidate_results):
-            tool_results_dir = candidate_results
+        session_results = candidate_results if os.path.isdir(candidate_results) else None
+        if session_results:
+            tool_results_dir = session_results
         for name in sorted(os.listdir(wf_parent)):
             wf_dir = os.path.join(wf_parent, name)
             if not os.path.isdir(wf_dir):
@@ -73,6 +78,6 @@ def discover(root: str) -> SessionExport:
             journal = journal if os.path.isfile(journal) else None
             meta = os.path.join(session_dir, "workflows", name + ".json")
             meta = meta if os.path.isfile(meta) else None
-            workflows.append(Workflow(name, wf_dir, agents, journal, meta))
+            workflows.append(Workflow(name, wf_dir, agents, journal, meta, session_results))
 
     return SessionExport(root, main, session_dir, tool_results_dir, workflows)

@@ -50,12 +50,19 @@ def effective_cache_write_weight(
 ) -> float:
     """Volume-weighted blend of the two cache-write TTL prices (R4).
 
-    ``w = (tok5m*1.25 + tok1h*2.0) / (tok5m + tok1h)``. Returns 0.0 when there
-    is no cache-write volume at all.
+    ``w = (tok5m*1.25 + tok1h*2.0) / (tok5m + tok1h)``.
+
+    When the two TTL buckets are both zero we cannot blend, so we fall back to
+    the 5-minute rate (``cache_write_5m_weight``) rather than 0.0. This matters
+    for exports that predate the ``usage.cache_creation`` TTL breakdown: those
+    still carry a summed ``cache_creation_input_tokens`` volume, and a 0.0
+    weight would silently drop the entire (typically largest) cache-write cost
+    term. The fallback is harmless when there is genuinely no cache-write
+    volume, because the weight is then multiplied by zero tokens anyway.
     """
     total = ephemeral_5m + ephemeral_1h
     if total <= 0:
-        return 0.0
+        return cfg.cache_write_5m_weight
     return (
         ephemeral_5m * cfg.cache_write_5m_weight
         + ephemeral_1h * cfg.cache_write_1h_weight

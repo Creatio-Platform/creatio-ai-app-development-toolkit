@@ -55,7 +55,10 @@ def _result_bytes(content, offloaded_dir: Optional[str]) -> int:
     text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
     name = parsing.offloaded_filename(text)
     if name and offloaded_dir:
-        path = os.path.join(offloaded_dir, name)
+        # basename() is defensive: _OFFLOAD_RE already forbids path separators
+        # in the captured name, so this cannot escape offloaded_dir -- it keeps
+        # the join provably confined and satisfies SAST taint analysis.
+        path = os.path.join(offloaded_dir, os.path.basename(name))
         if os.path.isfile(path):
             return os.path.getsize(path)
     return len(text.encode("utf-8"))
@@ -157,6 +160,18 @@ class Report:
         self.cfg = cfg
         self.pages_override = pages_override
 
+        # Each agent transcript is parsed exactly once here and every downstream
+        # measure (per-stage, per-agent, reconcile) reads from this cache -- the
+        # "single per-transcript pass" the module docstring promises. Offloaded
+        # bytes are resolved against each workflow's OWN session tool-results so
+        # a multi-session export attributes them to the right directory (R9).
+        self._agent_aggs: dict[str, TranscriptAgg] = {}
+        for workflow in session.workflows:
+            for agent_file in workflow.agent_files:
+                self._agent_aggs[agent_file] = aggregate_transcript(
+                    agent_file, workflow.tool_results_dir
+                )
+
         # per-stage aggregates
         self.stage_aggs: list[tuple[str, TranscriptAgg]] = []
         if session.main_transcript:
@@ -167,7 +182,7 @@ class Report:
         for workflow in session.workflows:
             agg = TranscriptAgg()
             for agent_file in workflow.agent_files:
-                agg.add(aggregate_transcript(agent_file, session.tool_results_dir))
+                agg.add(self._agent_aggs[agent_file])
             label = f"{workflow.name} ({len(workflow.agent_files)} agents)"
             self.stage_aggs.append((label, agg))
 
@@ -175,7 +190,7 @@ class Report:
         self.agent_rows: list[tuple[str, str, str, TranscriptAgg]] = []
         for workflow in session.workflows:
             for agent_file in workflow.agent_files:
-                agg = aggregate_transcript(agent_file, session.tool_results_dir)
+                agg = self._agent_aggs[agent_file]
                 role = parsing.opening_role(agent_file) or "?"
                 agent_id = os.path.basename(agent_file)[len("agent-"):][:14]
                 self.agent_rows.append((workflow.name, agent_id, role, agg))
@@ -212,8 +227,7 @@ class Report:
                 agents_meta, tool_calls_meta = _read_meta(workflow.meta_json)
             tool_calls_seen = 0
             for agent_file in workflow.agent_files:
-                agg = aggregate_transcript(agent_file, self.session.tool_results_dir)
-                tool_calls_seen += sum(agg.tool_calls.values())
+                tool_calls_seen += sum(self._agent_aggs[agent_file].tool_calls.values())
             rows.append(ReconcileRow(
                 workflow.name, agents_meta, len(workflow.agent_files),
                 tool_calls_meta, tool_calls_seen,

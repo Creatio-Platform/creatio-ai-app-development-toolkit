@@ -22,8 +22,19 @@ class TtlWeightTest(unittest.TestCase):
     def test_all_1h_is_the_1h_rate(self):
         self.assertAlmostEqual(metrics.effective_cache_write_weight(0, 1000), 2.0)
 
-    def test_no_volume_is_zero(self):
-        self.assertEqual(metrics.effective_cache_write_weight(0, 0), 0.0)
+    def test_no_ttl_breakdown_falls_back_to_5m_rate(self):
+        # Both TTL buckets zero (e.g. a legacy export with only a summed
+        # cache_creation_input_tokens): blend the 5m rate rather than 0.0, so a
+        # real cache-write volume is not silently dropped from weighted_cost.
+        self.assertEqual(
+            metrics.effective_cache_write_weight(0, 0), metrics.CostConfig().cache_write_5m_weight
+        )
+
+    def test_fallback_weight_is_harmless_without_cache_write_volume(self):
+        # When there is genuinely no cache-write volume the fallback weight is
+        # multiplied by zero tokens, so the cost term is still zero.
+        w = metrics.effective_cache_write_weight(0, 0)
+        self.assertEqual(metrics.weighted_cost(100, 0, 0, 0, w), 100)
 
 
 class WeightedCostTest(unittest.TestCase):

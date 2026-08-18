@@ -63,6 +63,13 @@ def _print_normalization(report: Report) -> None:
     pages = report.page_count()
     weighted = report.weighted_total()
     print("normalization (R7):")
+    total = report.totals
+    if total.cache_write and not (total.ephemeral_5m + total.ephemeral_1h):
+        # Legacy export: cache-write volume with no TTL split. The blended
+        # weight fell back to the 5m rate; flag it so the number isn't read as
+        # exact (see effective_cache_write_weight).
+        print(f"    note: no cache_creation TTL breakdown; cache-write weight "
+              f"fell back to {report.cfg.cache_write_5m_weight:.2f} (5m rate)")
     print(f"    built pages                 : {pages}"
           + (f"  {sorted(report.built_pages)}" if report.built_pages else "  (defaulted to 1)"))
     print(f"    weighted cost (total)       : {weighted / 1e6:,.2f}M input-equiv tokens")
