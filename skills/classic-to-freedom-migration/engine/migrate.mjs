@@ -1155,9 +1155,6 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
   };
 }
 
-// Parse each supplied detail-schema body (#11(ii)/B2) → { entity, columns, title, editPage, editable, addMode … }
-// per detail, so the mapper can resolve auto-named (SchemaNDetail) details, show related-list columns, and
-// reproduce the real add/edit mechanism. Extracted from runMigration to keep it under Sonar CC 15 (S3776).
 // Resolve a detail-schema entry to its body text + parsed schema. A string entry IS the body; an object entry
 // carries {body|file}. Missing body ⇒ empty text + a stub parse. Extracted from parseDetailSchemas for Sonar CC 15.
 function resolveDetailBody(name, e, bodyOf) {
@@ -1221,34 +1218,52 @@ export function detectAddMode(body) {
     openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols };
 }
 
+// What the detail's own BODY yields. Scan the UNION of layers: a declaration may live in a base replacing layer,
+// not the top. All heuristics, but only three are overridable: `detailSchemaRecord` lets the manifest replace
+// `editPage` / `editable` / `entity`; `columns` is body-derived only. Own fn for Sonar CC 15.
+function detailBodySignals(scanText, p) {
+  // the child edit page the detail opens on add/edit; null ⇒ the agent resolves it via list-pages
+  const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(scanText);
+  // an explicit `false` on the add-record button = view-only; else unknown (the read-only signal for
+  // system-maintained details such as stage history)
+  const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(scanText) || /"?addRecordButtonVisible"?\s*:\s*false/.test(scanText);
+  return {
+    editPage: epM ? epM[1] : null,                    // getEditPageName match, else null
+    editable: viewOnly ? false : null,                // add-record hidden ⇒ view-only, else unknown
+    entity: (p.entitySchemaName && p.entitySchemaName !== "?") ? p.entitySchemaName : null,
+    columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
+  };
+}
+
+// ONE detail-schema entry → its record, always the same shape so callers never type-check the return (the
+// counterpart to `profileSchemaRecord`). Per field, a SUPPLIED answer beats a body-derived one: the manifest
+// entry is what the agent verified, the scan is only a heuristic.
+function detailSchemaRecord(e, scanText, p) {
+  const eObj = (e && typeof e === "object") ? e : {};
+  const body = detailBodySignals(scanText, p);
+  return {
+    entity: eObj.entity || body.entity,
+    columns: body.columns,
+    title: eObj.title || null, // human detail title (from its resources)
+    editPage: ("editPage" in eObj) ? eObj.editPage : body.editPage,
+    editable: ("editable" in eObj) ? eObj.editable : body.editable, // tags view/attach-only; never a gate answer
+    // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
+    // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
+    reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
+    addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
+    error: p.error || null,
+    astDiagnostics: p.astDiagnostics || [],
+  };
+}
+
+// Parse each supplied detail-schema body (#11(ii)/B2) → { entity, columns, title, editPage, editable, addMode … }
+// per detail, so the mapper can resolve auto-named (SchemaNDetail) details, show related-list columns, and
+// reproduce the real add/edit mechanism. Extracted from runMigration to keep it under Sonar CC 15 (S3776).
 function parseDetailSchemas(manifest, bodyOf) {
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
     const { scanText, p } = resolveDetailBody(name, e, bodyOf);
-    // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
-    // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages). Scan the UNION of
-    // layers (it may be declared in a base replacing layer, not the top).
-    const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(scanText);
-    // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown. This is the
-    // read-only signal for system-maintained details (stage history) — and it lives in the BASE layer, so scan the union.
-    const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(scanText) || /"?addRecordButtonVisible"?\s*:\s*false/.test(scanText);
-    const eObj = (e && typeof e === "object") ? e : {};
-    const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
-    const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
-    const parsedEntity = (p.entitySchemaName && p.entitySchemaName !== "?") ? p.entitySchemaName : null;
-    detailSchemas[name] = {
-      entity: eObj.entity || parsedEntity,
-      columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
-      title: eObj.title || null, // human detail title (from its resources)
-      editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
-      editable: ("editable" in eObj) ? eObj.editable : editableFromBody, // tags view/attach-only; never a gate answer
-      // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
-      // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
-      reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
-      addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
-      error: p.error || null,
-      astDiagnostics: p.astDiagnostics || [],
-    };
+    detailSchemas[name] = detailSchemaRecord(e, scanText, p);
   }
   return detailSchemas;
 }
