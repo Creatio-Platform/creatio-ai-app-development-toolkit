@@ -2517,10 +2517,10 @@ for (const f of ["migrate.mjs", "mapper.mjs", "engine.mjs"]) {
     !/type:\s*"onstand"/.test(fs.readFileSync(new URL(`../../skills/classic-to-freedom-migration/engine/${f}`, import.meta.url), "utf8")));
 }
 
-/* ---- CHARACTERISATION: the detail record's manifest entry OVERRIDES what the body scan derived — pinned here
-   for `entity`, `title` and `editable`, plus body-derived `columns`. (`editPage` and `reuseFreedomPage` are
-   covered elsewhere.) Losing any of them is silent: the body-derived value simply takes its place. Asserted on
-   observable output (childPages + the Layout table), never on the parser, so its shape stays free to change. ---- */
+/* ---- CHARACTERISATION: the detail record's manifest entry OVERRIDES what the body scan derived — `entity`,
+   `title`, `editable`. `columns` is body-derived only, pinned in both directions. Losing an override is silent:
+   the body-derived value simply takes its place. Asserted on observable output (childPages + the Layout table),
+   never on the parser, so its shape stays free to change. ---- */
 // One detail whose BODY says one thing and whose MANIFEST entry says another. `editPage: false` only resolves the
 // child, keeping an unrelated ⚠ resolve note out of the rendered plan; nothing below asserts it.
 const chBody = `define("ChDetail",[],function(){return{entitySchemaName:"BodyEntity",methods:{getAddRecordButtonVisible:function(){return true;}},diff:[{operation:"insert",name:"C1",values:{bindTo:"BodyCol"}}]};});`;
@@ -2539,6 +2539,16 @@ check("parseDetailSchemas: manifest `editable:false` wins over a body that shows
   () => chRun.childPages.map((c) => ({ e: c.entity, editable: c.editable })));
 check("parseDetailSchemas: the detail's own `bindTo` columns are collected off its body and reach the plan",
   /cols: BodyCol/.test(chRun.plan), () => (chRun.plan.match(/^\|.*Related list.*$/m) || [])[0]);
+
+// `columns` is the ONE field with no manifest fallback, and the asymmetry reads like an oversight — so pin the
+// negative directly: a supplied `columns` must be ignored. Without this, adding `eObj.columns || body.columns`
+// passes every other check in the suite.
+const chIgnored = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{ChDetail:{schemaName:"ChDetail",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"ChDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { ChDetail: { body: chBody, entity: "ManifestEntity", columns: ["ManifestCol"], editPage: false } } }, { baseDir: FIX });
+check("parseDetailSchemas: a manifest `columns` is IGNORED — the field is body-derived only, unlike the overridables",
+  /cols: BodyCol/.test(chIgnored.plan) && !/ManifestCol/.test(chIgnored.plan),
+  () => (chIgnored.plan.match(/^\|.*Related list.*$/m) || [])[0]);
 /* ---- STRUCTURE VALIDATOR — systemic completeness gate on manifest inputs (blocks the dodge in code) ---- */
 // (a) a custom detail with NO supplied detailSchema → structurally incomplete + banner in the plan.
 const stInc = runMigration({ entity: "X",
