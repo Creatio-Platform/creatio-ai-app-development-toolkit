@@ -344,25 +344,19 @@ class Report:
     def by_stage_table(self) -> Table:
         table = Table(
             columns=[
-                Column("input", "input", "mb", share=True),
-                Column("cache_write", "cacheW", "mb", share=True),
-                Column("cache_read", "cacheR", "mb", share=True),
-                Column("output", "outTok", "mb", share=True),
-                Column("calls", "toolCalls", "int"),
-                Column("bytes", "resultMB", "mb", share=True),
-                Column("weighted", "weighted", "mb", share=True),
+                Column("cache_write", "cache write (Mtok)", "mb", share=True, width=18),
+                Column("cache_read", "cache read (Mtok)", "mb", share=True, width=17),
+                Column("output", "output (Mtok)", "mb", share=True, width=13),
+                Column("weighted", "weighted cost (Mtok-eq)", "mb", share=True, width=23),
             ],
             label_header="stage",
             label_width=46,
         )
         for label, agg in self.stage_aggs:
             table.add(label, {
-                "input": agg.input,
                 "cache_write": agg.cache_write,
                 "cache_read": agg.cache_read,
                 "output": agg.output,
-                "calls": sum(agg.tool_calls.values()),
-                "bytes": sum(agg.tool_bytes.values()),
                 "weighted": self._weighted(agg),
             })
         return table
