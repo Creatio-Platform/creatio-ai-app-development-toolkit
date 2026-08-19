@@ -249,9 +249,19 @@ class Report:
     # ---- tables ----------------------------------------------------------
 
     def _weighted(self, agg: TranscriptAgg) -> float:
+        # Weight each aggregate by ITS OWN cache-write TTL mix, not the global
+        # blend. The driver session writes at 1h (x2.0) and the subagents at 5m
+        # (x1.25); a single global weight would move cost off the driver stage
+        # and onto the subagent stages. The run total is unchanged either way
+        # (the per-TTL-bucket sums are identical), but the by-stage / by-role /
+        # per-agent split becomes TTL-correct -- e.g. discovery+plan reads as its
+        # true ~24% of cost rather than being understated.
+        agg_w = metrics.effective_cache_write_weight(
+            agg.ephemeral_5m, agg.ephemeral_1h, self.cfg,
+        )
         return metrics.weighted_cost(
             agg.input, agg.cache_write, agg.cache_read, agg.output,
-            self.effective_w, self.cfg,
+            agg_w, self.cfg,
         )
 
     def by_stage_table(self) -> Table:

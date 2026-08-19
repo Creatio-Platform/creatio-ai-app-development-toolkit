@@ -341,5 +341,50 @@ class FallbackWeightIntegrationTest(unittest.TestCase):
         self.assertAlmostEqual(self.report.weighted_total(), 10 + 1.25 * 1000)
 
 
+class PerStageTtlWeightTest(unittest.TestCase):
+    """Each stage/role is weighted by its OWN cache-write TTL mix, not the
+    global blend. The driver session writes at 1h (x2.0) and the subagents at
+    5m (x1.25); a single global weight would shift cost off the driver stage
+    onto the subagents. The run total is unchanged (the per-TTL-bucket sums are
+    identical either way) -- this guards the split, which N7/ENG-95538 relies on
+    (discovery+plan is ~24% of cost, not ~20%)."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        # main (driver): 100 cache-write, ALL 1-hour TTL.
+        self.fx.write_main([
+            _line({"message": {"role": "assistant", "usage": _usage(cw=100, h1=100)}}),
+        ])
+        # one subagent: 100 cache-write, ALL 5-minute TTL.
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cw=100, m5=100),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Read"}]}}),
+        ])
+        self.report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_stage_weight_follows_each_stage_ttl(self):
+        weighted = {label: vals["weighted"] for label, vals in self.report.by_stage_table().rows}
+        main = next(v for k, v in weighted.items() if k.startswith("main"))
+        wf = next(v for k, v in weighted.items() if k.startswith("wf_a"))
+        # main all 1h -> x2.0 -> 200; subagent all 5m -> x1.25 -> 125.
+        # The global blend here is 1.625, which would give BOTH 162.5 -- the
+        # mis-attribution this test guards against.
+        self.assertAlmostEqual(main, 100 * 2.0)
+        self.assertAlmostEqual(wf, 100 * 1.25)
+
+    def test_total_is_unchanged_by_per_stage_weighting(self):
+        # Per-bucket sum: 100*1.25 (5m) + 100*2.0 (1h) = 325. Both the by-stage
+        # TOTAL row and weighted_total() must still agree with it.
+        self.assertAlmostEqual(self.report.weighted_total(), 100 * 1.25 + 100 * 2.0)
+        self.assertAlmostEqual(
+            self.report.by_stage_table().total_values()["weighted"],
+            100 * 1.25 + 100 * 2.0,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
