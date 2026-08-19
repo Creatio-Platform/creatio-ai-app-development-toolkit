@@ -399,6 +399,19 @@ check("componentTypeMismatches: all-resolved → no mismatch; a missing/empty re
     && wf.componentTypeMismatches(undefined).length === 0));
 check("componentTypeMismatches: a compositeOnly type reported resolved:true is NOT a mismatch (crt.CommunicationOptions resolves as a component-type — the corrected Applicant target)",
   () => wf.componentTypeMismatches([{ type: "crt.CommunicationOptions", resolved: true }]).length === 0);
+// ONLY a strict boolean `false` on a well-formed entry gates — every malformed or absent signal is NOT a failure, so
+// a garbled `componentResolution` can never manufacture a false stop, and (with `type`/`resolved` `required` in
+// RECONCILE_SCHEMA) a genuinely-unresolved type is never silently dropped either. This pins that whole contract at once.
+check("componentTypeMismatches: malformed/absent signals never gate — no `type`, non-string `type`, missing `resolved`, a stringised \"false\", and null/undefined entries are ALL ignored (only a strict boolean false with a string type is a mismatch)",
+  () => wf.componentTypeMismatches([
+    { resolved: false },                       // unresolved but no `type` — nothing to name, so not a mismatch
+    { type: 42, resolved: false },             // non-string `type`
+    { type: "crt.A" },                         // `resolved` omitted — absence is not evidence of a failure
+    { type: "crt.B", resolved: "false" },      // stringised — strict `=== false` does not gate on it
+    { type: "crt.C", resolved: 0 },            // falsy but not boolean false
+    null, undefined,                           // junk entries survive the `c &&` guard
+  ]).length === 0,
+  () => JSON.stringify(wf.componentTypeMismatches([{ resolved: false }, { type: 42, resolved: false }, { type: "crt.A" }, { type: "crt.B", resolved: "false" }, { type: "crt.C", resolved: 0 }, null, undefined])));
 // The Applicant replay (ENG-95468 done-criterion): the two round-1 blockers are BOTH reproducible through the
 // pre-build checks — the fabricated component type via componentTypeMismatches, and new-app-over-existing via
 // packagePreconditionStop — so a re-plan sees both instead of paying repair rounds to rediscover them.
@@ -628,6 +641,12 @@ const gatePasses = await runToBaseline(baselineState([{ type: "crt.Communication
 check("workflow EXECUTES past the component gate: an all-resolved baseline Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches a downstream stop, so an inverted gate condition would surface here",
   !gatePasses.threw && gatePasses.stopped !== "plan-invalid-against-stand" && gatePasses.stopped === "unknown-checkpoint-key",
   () => (gatePasses.threw ? `threw: ${gatePasses.threw}` : `stopped=${gatePasses.stopped}`));
+// Uniform signal: `componentMismatches` is on EVERY return (default []), not only the component stops — so a consumer
+// reads `componentMismatches.length` regardless of which stop fired, and never has to switch on `stopped` (the combined
+// package stop keeps `stopped: new-app-over-existing-package` yet still carries the mismatches).
+check("runReturn: a non-component stop (here `unknown-checkpoint-key`) still exposes `componentMismatches` as an empty array — the field a component stop populates is present on every return",
+  Array.isArray(gatePasses.componentMismatches) && gatePasses.componentMismatches.length === 0,
+  () => `componentMismatches=${JSON.stringify(gatePasses.componentMismatches)}`);
 
 // --- The COMBINED package + component stop as an EXECUTION path (ENG-95468 done-criterion). When placement AND a
 // component type BOTH fail on the baseline, the run must surface both in ONE stop — the Applicant failure was that

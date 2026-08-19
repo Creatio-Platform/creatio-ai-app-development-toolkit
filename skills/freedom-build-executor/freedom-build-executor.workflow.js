@@ -1054,6 +1054,11 @@ function runReturn(extra) {
     pageSchemas: {},
     staleQueueKeys: [],
     newKeys: [],
+    // Unresolved plan component types (ENG-95468). Present on EVERY return, defaulting to `[]`, so a consumer reads
+    // ONE reliable signal — `componentMismatches.length` — instead of switching on `stopped`: the combined package
+    // stop keeps `stopped: 'new-app-over-existing-package'` (placement is primary) yet still carries the component
+    // mismatches here, so keying off `stopped === 'plan-invalid-against-stand'` alone would miss them on that stop.
+    componentMismatches: [],
     next: null,
     ...extra,
   }
