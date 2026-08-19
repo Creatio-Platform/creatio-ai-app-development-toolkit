@@ -3,7 +3,7 @@
 A single committed, parameterised tool that reads a Claude Code session-export
 directory and reports the cost of a Classic->Freedom migration run:
 
-    python cli.py <export-dir> [section] [--pages N]
+    python counter.py <export-dir> [section] [--pages N]
 
 Sections: all (default) | stage | tool | role | agent | ttl | check.
 The export directory is the folder that holds ``transcript.jsonl`` and the

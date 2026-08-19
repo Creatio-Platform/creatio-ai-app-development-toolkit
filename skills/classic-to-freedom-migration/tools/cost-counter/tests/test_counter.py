@@ -2,7 +2,7 @@
 
 Pins the CLI plumbing -- section dispatch, the empty-export exit code, the
 --pages override, and the ttl/check/normalization printers -- so a refactor of
-cli.py cannot silently break the reporting surface.
+counter.py cannot silently break the reporting surface.
 """
 import contextlib
 import io
@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import unittest
 
-import cli
+import counter
 import metrics
 
 
@@ -37,7 +37,7 @@ def _usage(inp=0, cw=0, cr=0, out=0, m5=None, h1=None):
 
 class CliSmokeTest(unittest.TestCase):
     def setUp(self):
-        self.root = tempfile.mkdtemp(prefix="cc-cli-")
+        self.root = tempfile.mkdtemp(prefix="cc-counter-")
         wf_dir = os.path.join(self.root, "sess-1", "subagents", "workflows", "wf_a")
         os.makedirs(wf_dir)
         os.makedirs(os.path.join(self.root, "sess-1", "workflows"))
@@ -58,7 +58,7 @@ class CliSmokeTest(unittest.TestCase):
     def _run(self, section, pages=None):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = cli.run(self.root, section, pages, metrics.CostConfig())
+            rc = counter.run(self.root, section, pages, metrics.CostConfig())
         return rc, buf.getvalue()
 
     def test_all_section_prints_every_block(self):
@@ -88,26 +88,26 @@ class CliSmokeTest(unittest.TestCase):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stderr(buf):
-                rc = cli.run(empty, "all", None, metrics.CostConfig())
+                rc = counter.run(empty, "all", None, metrics.CostConfig())
             self.assertEqual(rc, 2)
             self.assertIn("no transcripts found", buf.getvalue())
         finally:
             shutil.rmtree(empty, ignore_errors=True)
 
     def test_main_parses_argv_and_returns_zero(self):
-        self.assertEqual(cli.main([self.root, "stage"]), 0)
+        self.assertEqual(counter.main([self.root, "stage"]), 0)
 
     def test_pages_zero_is_rejected(self):
         # --pages 0 must not reach page_count() (it would divide by zero in
         # per-page normalization); argparse rejects it with a non-zero exit.
         with self.assertRaises(SystemExit) as ctx:
-            cli.main([self.root, "--pages", "0"])
+            counter.main([self.root, "--pages", "0"])
         self.assertNotEqual(ctx.exception.code, 0)
 
     def test_pages_negative_is_rejected(self):
         # --pages -3 would print a nonsensical negative cost-per-page.
         with self.assertRaises(SystemExit) as ctx:
-            cli.main([self.root, "--pages", "-3"])
+            counter.main([self.root, "--pages", "-3"])
         self.assertNotEqual(ctx.exception.code, 0)
 
 
@@ -139,7 +139,7 @@ class CliFallbackTest(unittest.TestCase):
     def test_fallback_weight_is_annotated_and_noted(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = cli.run(self.root, "all", None, metrics.CostConfig())
+            rc = counter.run(self.root, "all", None, metrics.CostConfig())
         out = buf.getvalue()
         self.assertEqual(rc, 0)
         self.assertIn("effective cache_write weight for this run: 1.250", out)

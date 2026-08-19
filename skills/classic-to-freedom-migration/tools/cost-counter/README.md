@@ -21,7 +21,7 @@ Python 3.10+ (standard library only — no third-party packages).
 
 ```bash
 # from this directory
-python cli.py <export-dir> [section] [--pages N]
+python counter.py <export-dir> [section] [--pages N]
 ```
 
 - `<export-dir>` — the folder that holds `transcript.jsonl` and the
@@ -34,9 +34,9 @@ python cli.py <export-dir> [section] [--pages N]
 Examples:
 
 ```bash
-python cli.py /path/to/session-export            # everything
-python cli.py /path/to/session-export role        # just the by-role table
-python cli.py /path/to/session-export ttl         # cache-write TTL split + weight
+python counter.py /path/to/session-export            # everything
+python counter.py /path/to/session-export role        # just the by-role table
+python counter.py /path/to/session-export ttl         # cache-write TTL split + weight
 ```
 
 The output is UTF-8 (transcripts carry Cyrillic captions and box glyphs); the
