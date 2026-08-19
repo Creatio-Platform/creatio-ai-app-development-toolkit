@@ -4,8 +4,12 @@ A single committed, parameterised tool that reads a Claude Code session-export
 directory and reports the cost of a Classic->Freedom migration run:
 
     python counter.py <export-dir> [section] [--pages N] [--format text|md|json]
+    python counter.py <baseline-export> --compare <candidate-export> [--format ...]
 
-Sections: all (default) | stage | tool | role | agent | ttl | check.
+Sections: all (default) | summary | stage | tool | role | agent | ttl | check.
+  'summary' is the concise single-run headline (weighted cost / page + the main
+  token streams). --compare shows a cost-only baseline->candidate diff with a
+  same-section guard and a one-line verdict.
 Formats: text (default) | md (Markdown tables for Jira) | json (structured).
 The export directory is the folder that holds ``transcript.jsonl`` and the
 ``<session-id>/`` subtree; nothing about the run is hard-coded.
@@ -162,6 +166,8 @@ def _normalization_payload(report: Report) -> dict:
 
 def render_json(report: Report, section: str) -> str:
     doc: dict = {}
+    if section == "summary":
+        doc["summary"] = report.summary()
     if section == "all":
         doc["config"] = _config_payload(report)
         doc["ttl_split"] = _ttl_payload(report)
@@ -239,6 +245,8 @@ def _normalization_markdown(report: Report) -> str:
 
 def render_markdown(report: Report, section: str) -> str:
     parts: list = []
+    if section == "summary":
+        parts.append(_summary_markdown(report))
     if section == "all":
         cfg = _config_payload(report)
         parts.append(
@@ -269,6 +277,150 @@ def render_markdown(report: Report, section: str) -> str:
         parts.append(_reconcile_markdown(report))
         parts.append(_normalization_markdown(report))
     return "\n\n".join(parts)
+
+
+# ---- summary (concise single run) and compare (baseline vs candidate) ------
+
+_COMPARE_MEASURES = [
+    ("weighted_per_page", "weighted cost / page", "mtok"),
+    ("weighted_total", "weighted cost (total)", "mtok"),
+    ("cache_read", "cache read", "mtok"),
+    ("cache_write", "cache write", "mtok"),
+    ("output", "output", "mtok"),
+    ("input", "input", "mtok"),
+    ("tool_calls", "tool calls", "int"),
+    ("agents", "agents", "int"),
+]
+
+
+def _fmt_measure(value: float, kind: str) -> str:
+    return f"{value / 1e6:,.2f}M" if kind == "mtok" else f"{value:,.0f}"
+
+
+def _summary_markdown(report: Report) -> str:
+    s = report.summary()
+    pages = f"{s['page_count']}"
+    pages += f" ({', '.join(s['built_pages'])})" if s["built_pages"] else " (defaulted to 1)"
+    return "\n".join([
+        "### Summary",
+        "",
+        "| measure | value |",
+        "| :-- | --: |",
+        f"| section (built pages) | {pages} |",
+        f"| **weighted cost / built page** | **{s['weighted_per_page'] / 1e6:,.2f}M** |",
+        f"| weighted cost (total) | {s['weighted_total'] / 1e6:,.2f}M |",
+        f"| cache read | {s['cache_read'] / 1e6:,.2f}M |",
+        f"| cache write (eff. w {s['effective_w']:.3f}) | {s['cache_write'] / 1e6:,.2f}M |",
+        f"| output | {s['output'] / 1e6:,.2f}M |",
+        f"| input | {s['input'] / 1e6:,.2f}M |",
+        f"| tool calls / agents / turns | {s['tool_calls']:,} / {s['agents']:,} / {s['turns']:,} |",
+    ])
+
+
+def _print_summary(report: Report) -> None:
+    s = report.summary()
+    pages = f"{s['page_count']}"
+    pages += f" ({', '.join(s['built_pages'])})" if s["built_pages"] else " (defaulted to 1)"
+    print("summary:")
+    print(f"    section (built pages)        : {pages}")
+    print(f"    weighted cost per built page : {s['weighted_per_page'] / 1e6:,.2f}M input-equiv tokens")
+    print(f"    weighted cost (total)        : {s['weighted_total'] / 1e6:,.2f}M")
+    print(f"    cache read                   : {s['cache_read'] / 1e6:,.2f}M")
+    print(f"    cache write                  : {s['cache_write'] / 1e6:,.2f}M  (effective w {s['effective_w']:.3f})")
+    print(f"    output                       : {s['output'] / 1e6:,.2f}M")
+    print(f"    input                        : {s['input'] / 1e6:,.2f}M")
+    print(f"    tool calls / agents / turns  : {s['tool_calls']:,} / {s['agents']:,} / {s['turns']:,}")
+
+
+def _compare_rows(base: dict, cand: dict) -> list:
+    rows = []
+    for key, label, kind in _COMPARE_MEASURES:
+        bv, cv = base[key], cand[key]
+        delta = cv - bv
+        rows.append({
+            "key": key, "label": label, "kind": kind,
+            "baseline": bv, "candidate": cv, "delta": delta,
+            "pct": (delta / bv * 100.0) if bv else None,
+        })
+    return rows
+
+
+def _compare_verdict(base: dict, cand: dict, same_section: bool) -> str:
+    bv, cv = base["weighted_per_page"], cand["weighted_per_page"]
+    if not bv:
+        core = "baseline cost is zero -- cannot compute a ratio"
+    else:
+        pct = (cv - bv) / bv * 100.0
+        if pct < -0.05:
+            core = f"{-pct:.1f}% cheaper per built page"
+        elif pct > 0.05:
+            core = f"{pct:.1f}% more expensive per built page"
+        else:
+            core = "no change in cost per built page"
+    core += " (quality not evaluated -- cost-only compare)"
+    return ("SECTIONS DIFFER -- comparison void. " + core) if not same_section else core
+
+
+def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "text") -> int:
+    sessions = {
+        "baseline": export_mod.discover(base_dir),
+        "candidate": export_mod.discover(cand_dir),
+    }
+    for name, session in sessions.items():
+        if not session.main_transcript and not session.workflows:
+            print(f"no transcripts found in the {name} export -- is it a session export?",
+                  file=sys.stderr)
+            return 2
+    base = Report(sessions["baseline"], cfg).summary()
+    cand = Report(sessions["candidate"], cfg).summary()
+    same_section = bool(base["built_pages"]) and base["built_pages"] == cand["built_pages"]
+    rows = _compare_rows(base, cand)
+    verdict = _compare_verdict(base, cand, same_section)
+
+    if fmt == "json":
+        print(json.dumps({
+            "baseline": base, "candidate": cand,
+            "same_section": same_section, "deltas": rows, "verdict": verdict,
+        }, indent=2, ensure_ascii=False))
+        return 0
+
+    if fmt == "md":
+        lines = ["### Cost comparison (baseline vs candidate)", ""]
+        lines.append(f"- baseline section: {base['built_pages'] or '(none)'}")
+        lines.append(f"- candidate section: {cand['built_pages'] or '(none)'}"
+                     + ("  · ✓ same section" if same_section
+                        else "  · ✗ **sections differ — comparison void**"))
+        lines += ["", "| measure | baseline | candidate | Δ | Δ% |",
+                  "| :-- | --: | --: | --: | --: |"]
+        for r in rows:
+            pct = f"{r['pct']:+.1f}%" if r["pct"] is not None else "n/a"
+            lines.append(
+                f"| {r['label']} | {_fmt_measure(r['baseline'], r['kind'])} "
+                f"| {_fmt_measure(r['candidate'], r['kind'])} "
+                f"| {_fmt_measure(r['delta'], r['kind'])} | {pct} |"
+            )
+        lines += ["", f"**Verdict:** {verdict}"]
+        print("\n".join(lines))
+        return 0
+
+    # text
+    b_sec = ", ".join(base["built_pages"]) or "(none)"
+    c_sec = ", ".join(cand["built_pages"]) or "(none)"
+    mark = "same section" if same_section else "SECTIONS DIFFER -- comparison void"
+    print("cost comparison (baseline -> candidate):")
+    print(f"    baseline section : {b_sec}")
+    print(f"    candidate section: {c_sec}   [{mark}]")
+    print()
+    print(f"    {'measure':28} {'baseline':>12} {'candidate':>12} {'delta':>12} {'delta%':>9}")
+    print(f"    {'-' * 28} {'-' * 12} {'-' * 12} {'-' * 12} {'-' * 9}")
+    for r in rows:
+        pct = f"{r['pct']:+.1f}%" if r["pct"] is not None else "n/a"
+        print(f"    {r['label']:28} {_fmt_measure(r['baseline'], r['kind']):>12} "
+              f"{_fmt_measure(r['candidate'], r['kind']):>12} "
+              f"{_fmt_measure(r['delta'], r['kind']):>12} {pct:>9}")
+    print()
+    print(f"    VERDICT: {verdict}")
+    return 0
 
 
 def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
@@ -307,6 +459,8 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
     if section in ("all", "agent"):
         print(_section("per agent (turns, startup context, cache, output)"))
         print(report.per_agent_table().render())
+    if section == "summary":
+        _print_summary(report)
     if section == "ttl":
         _print_ttl(report)
     if section == "check":
@@ -329,8 +483,8 @@ def main(argv=None) -> int:
     parser.add_argument("export_dir", help="session-export directory (holds transcript.jsonl)")
     parser.add_argument(
         "section", nargs="?", default="all",
-        choices=["all", "stage", "tool", "role", "agent", "ttl", "check"],
-        help="which report section to print (default: all)",
+        choices=["all", "summary", "stage", "tool", "role", "agent", "ttl", "check"],
+        help="which report section to print (default: all; 'summary' is the concise headline)",
     )
     parser.add_argument(
         "--pages", type=_positive_pages, default=None,
@@ -341,8 +495,16 @@ def main(argv=None) -> int:
         "--format", choices=["text", "md", "json"], default="text",
         help="output format: text (default), md (Markdown tables for Jira), or json",
     )
+    parser.add_argument(
+        "--compare", metavar="CANDIDATE_EXPORT", default=None,
+        help="compare export_dir (baseline) against this candidate export -- a "
+             "cost-only before/after diff with a same-section guard; honours --format",
+    )
     args = parser.parse_args(argv)
-    return run(args.export_dir, args.section, args.pages, metrics.CostConfig(), args.format)
+    cfg = metrics.CostConfig()
+    if args.compare:
+        return compare(args.export_dir, args.compare, cfg, args.format)
+    return run(args.export_dir, args.section, args.pages, cfg, args.format)
 
 
 if __name__ == "__main__":

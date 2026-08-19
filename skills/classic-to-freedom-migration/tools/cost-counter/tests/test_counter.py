@@ -175,5 +175,79 @@ class CliFallbackTest(unittest.TestCase):
         self.assertIn("fell back to 1.25", out)
 
 
+class CompareAndSummaryTest(unittest.TestCase):
+    """The concise single-run summary, and the cost-only baseline->candidate
+    compare with its same-section guard and verdict."""
+
+    def _export(self, cr, m5, page):
+        root = tempfile.mkdtemp(prefix="cc-cmp-")
+        self._tmp.append(root)
+        wf = os.path.join(root, "sess-1", "subagents", "workflows", "wf_a")
+        os.makedirs(wf)
+        with open(os.path.join(wf, "agent-a.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines([
+                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+                _line({"message": {"role": "assistant", "usage": _usage(cr=cr, m5=m5, out=5),
+                                   "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
+            ])
+        with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
+            f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
+        return root
+
+    def setUp(self):
+        self._tmp = []
+
+    def tearDown(self):
+        for root in self._tmp:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def _out(self, fn, *args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = fn(*args)
+        return rc, buf.getvalue()
+
+    def test_summary_section_is_concise(self):
+        rc, out = self._out(counter.run, self._export(1000, 100, "PageA"),
+                            "summary", None, metrics.CostConfig())
+        self.assertEqual(rc, 0)
+        self.assertIn("weighted cost per built page", out)
+        self.assertNotIn("by agent role", out)  # not the full report
+
+    def test_compare_same_section_reports_cheaper(self):
+        base = self._export(1000, 100, "PageA")
+        cand = self._export(500, 50, "PageA")   # fewer tokens, same page
+        rc, out = self._out(counter.compare, base, cand, metrics.CostConfig())
+        self.assertEqual(rc, 0)
+        self.assertIn("same section", out)
+        self.assertIn("cheaper per built page", out)
+
+    def test_compare_cross_section_is_void(self):
+        base = self._export(1000, 100, "PageA")
+        cand = self._export(500, 50, "PageB")   # different section
+        rc, out = self._out(counter.compare, base, cand, metrics.CostConfig())
+        self.assertEqual(rc, 0)
+        self.assertIn("comparison void", out)
+
+    def test_compare_json_has_deltas_and_verdict(self):
+        base = self._export(1000, 100, "PageA")
+        cand = self._export(500, 50, "PageA")
+        rc, out = self._out(counter.compare, base, cand, metrics.CostConfig(), "json")
+        self.assertEqual(rc, 0)
+        doc = json.loads(out)
+        self.assertTrue(doc["same_section"])
+        self.assertIn("verdict", doc)
+        self.assertEqual(len(doc["deltas"]), len(counter._COMPARE_MEASURES))
+
+    def test_compare_rejects_empty_export(self):
+        empty = tempfile.mkdtemp(prefix="cc-empty-")
+        self._tmp.append(empty)
+        base = self._export(1000, 100, "PageA")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = counter.compare(base, empty, metrics.CostConfig())
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

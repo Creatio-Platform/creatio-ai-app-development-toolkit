@@ -41,6 +41,38 @@ python counter.py /path/to/session-export --format md      # Markdown for Jira
 python counter.py /path/to/session-export --format json    # machine-readable
 ```
 
+### A quick single-run headline
+
+`section = summary` prints just the headline — weighted cost per built page and
+the main token streams — without the full per-stage/role/agent tables:
+
+```bash
+python counter.py /path/to/session-export summary
+```
+
+### Did a fix make the migration cheaper? (`--compare`)
+
+To answer that, don't read two full reports — diff them. `--compare` takes a
+baseline export and a candidate export and prints a cost-only before/after
+table with deltas and a one-line verdict. **`weighted cost / page` is the
+headline** — it is normalised by built pages, so runs that build a different
+number of pages stay comparable.
+
+```bash
+python counter.py <baseline-export> --compare <candidate-export>
+python counter.py <baseline-export> --compare <candidate-export> --format md   # for Jira
+```
+
+Two guards from the ticket's comparison protocol:
+
+- **Same section only.** If the two runs built different page schemas the diff
+  is marked `comparison void` — cross-section comparisons are meaningless
+  (a CREATE unit and a RESOLVE unit cost wildly different amounts).
+- **Cost only, for now.** The verdict says nothing about quality
+  (the `--verify` verdict and manual-intervention count). "Cheaper and broken"
+  is a regression, not a win — a quality column is a follow-up, and a trustworthy
+  comparison also depends on ENG-95470 (N1) landing first.
+
 Examples:
 
 ```bash

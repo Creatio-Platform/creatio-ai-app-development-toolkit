@@ -285,6 +285,28 @@ class Report:
             return self.pages_override
         return len(self.built_pages) or 1
 
+    def summary(self) -> dict:
+        """Headline scalars for one run -- the concise single-run view and the
+        per-side input to a baseline/candidate comparison. `weighted_per_page`
+        is the figure to compare across runs, since it is normalised by the
+        number of built pages (a run that builds more pages costs more)."""
+        pages = self.page_count()
+        weighted = self.weighted_total()
+        return {
+            "weighted_total": weighted,
+            "weighted_per_page": weighted / pages,
+            "page_count": pages,
+            "built_pages": sorted(self.built_pages),
+            "input": self.totals.input,
+            "cache_write": self.totals.cache_write,
+            "cache_read": self.totals.cache_read,
+            "output": self.totals.output,
+            "tool_calls": sum(self.totals.tool_calls.values()),
+            "agents": len(self.session.agent_files),
+            "turns": self.totals.turns,
+            "effective_w": self.effective_w,
+        }
+
     def reconcile(self) -> list[ReconcileRow]:
         rows = []
         for workflow in self.session.workflows:
