@@ -1209,6 +1209,12 @@ if (stopOnPackage) {
   return runReturn({
     ...stopOnPackage,
     componentMismatches,
+    // `...stopOnPackage` carries the package fix in `next`; when component types ALSO fail, spell them out in the
+    // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
+    // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
+    next: componentMismatches.length
+      ? `${stopOnPackage.next} ALSO — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentMismatches.map((c) => `\`${c.type}\` (${c.note})`).join('; ')}; each must resolve (clio \`get-component-info component-type=<type>\`). Fix both in one re-plan (\`--plan --out\`), re-approve, then re-run.`
+      : stopOnPackage.next,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -2068,6 +2074,24 @@ function acceptReconciled(next, whereFrom) {
   if (stopPkg) {
     log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
     return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null }
+  }
+  // The component-type gate (ENG-95468) is a mid-run GUARANTEE too, for the same reason the two stops above are:
+  // a Reconcile can surface a `resolved: false` type that the BASELINE gate never saw — a resumed run whose baseline
+  // Reconcile predated this field and only now reports `componentResolution`, or a component package uninstalled
+  // from the stand during a long run. Re-checking here stops before the NEXT build unit is dispatched instead of
+  // paying repair rounds for a plan assertion untrue of the stand — the exact failure this gate exists to prevent.
+  const midRunMismatches = componentTypeMismatches(state.componentResolution)
+  if (midRunMismatches.length) {
+    log(`STOP after ${whereFrom} — ${midRunMismatches.length} plan component type(s) do not resolve on the stand: ${midRunMismatches.map((c) => c.type).join(', ')}`)
+    return {
+      stopped: 'plan-invalid-against-stand',
+      componentMismatches: midRunMismatches,
+      targetPackage: state.targetPackage || null,
+      packageState: state.packageState || null,
+      approval: state.approval || approval,
+      planVersion: state.planVersion || null,
+      next: `each named component type must resolve on the target stand (clio \`get-component-info component-type=<type>\`). These do not: ${midRunMismatches.map((c) => `\`${c.type}\` (${c.note})`).join('; ')}. This is a PLAN assertion untrue of the stand — fix the mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), re-run \`--plan --out\`, re-approve, then re-run this build. Anything already built this run is on disk.`,
+    }
   }
   packageState = state.packageState || packageState
   schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
