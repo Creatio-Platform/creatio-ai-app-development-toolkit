@@ -40,6 +40,11 @@ class SessionExport:
     root: str
     main_transcript: Optional[str]
     session_dir: Optional[str]
+    # tool-results/ of the LAST session discovered under the root. Used only to
+    # resolve offloaded bytes for the main transcript, which has no session UUID
+    # of its own. Single-session exports (the normal case) are exact; a multi-
+    # session root is best-effort for the main stage. Each workflow carries its
+    # own Workflow.tool_results_dir and is always attributed exactly (R9).
     tool_results_dir: Optional[str]
     workflows: list = field(default_factory=list)
 

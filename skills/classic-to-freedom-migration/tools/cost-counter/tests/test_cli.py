@@ -97,6 +97,57 @@ class CliSmokeTest(unittest.TestCase):
     def test_main_parses_argv_and_returns_zero(self):
         self.assertEqual(cli.main([self.root, "stage"]), 0)
 
+    def test_pages_zero_is_rejected(self):
+        # --pages 0 must not reach page_count() (it would divide by zero in
+        # per-page normalization); argparse rejects it with a non-zero exit.
+        with self.assertRaises(SystemExit) as ctx:
+            cli.main([self.root, "--pages", "0"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_pages_negative_is_rejected(self):
+        # --pages -3 would print a nonsensical negative cost-per-page.
+        with self.assertRaises(SystemExit) as ctx:
+            cli.main([self.root, "--pages", "-3"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+
+class CliFallbackTest(unittest.TestCase):
+    """No cache_creation TTL breakdown in the export.
+
+    The effective cache-write weight falls back to the 5m rate (1.25); the
+    header must annotate it and normalization must emit the note, so the
+    effective weight is never read as an exact, run-derived blend that
+    contradicts the "no TTL breakdown" TTL block (R4).
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="cc-fallback-")
+        wf_dir = os.path.join(self.root, "sess-1", "subagents", "workflows", "wf_a")
+        os.makedirs(wf_dir)
+        with open(os.path.join(wf_dir, "agent-aaa.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines([
+                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+                _line({"message": {"role": "assistant",
+                                   # cache-write volume but NO m5/h1 TTL split.
+                                   "usage": _usage(inp=10, cw=100, cr=1000, out=5),
+                                   "content": [{"type": "tool_use", "id": "t1", "name": "Bash"}]}}),
+            ])
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_fallback_weight_is_annotated_and_noted(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.run(self.root, "all", None, metrics.CostConfig())
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("effective cache_write weight for this run: 1.250", out)
+        # header effective-weight line is annotated as a fallback, not bare.
+        self.assertIn("no cache_creation TTL breakdown in export", out)
+        # normalization always emits the explicit fallback note.
+        self.assertIn("fell back to 1.25", out)
+
 
 if __name__ == "__main__":
     unittest.main()

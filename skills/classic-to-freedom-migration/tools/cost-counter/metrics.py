@@ -29,8 +29,15 @@ class CostConfig:
     cache_write_5m_weight: float = 1.25
     cache_write_1h_weight: float = 2.0
 
-    def as_lines(self, effective_w: float | None = None) -> list[str]:
-        """Human-readable config block printed at the top of every report."""
+    def as_lines(self, effective_w: float | None = None,
+                 effective_from_fallback: bool = False) -> list[str]:
+        """Human-readable config block printed at the top of every report.
+
+        ``effective_from_fallback`` annotates the effective-weight line when the
+        weight is the 5m fallback (no TTL breakdown in the export) rather than a
+        real volume-weighted blend, so the header does not read as an exact,
+        run-derived number that contradicts the TTL block below it.
+        """
         lines = [
             "weighted-cost config  (Anthropic list-price ratios, relative to 1 input token,",
             "                       model-tier independent -- change here, never in code paths):",
@@ -41,7 +48,10 @@ class CostConfig:
             f"5m={self.cache_write_5m_weight:.2f} / 1h={self.cache_write_1h_weight:.2f}",
         ]
         if effective_w is not None:
-            lines.append(f"    -> effective cache_write weight for this run: {effective_w:.3f}")
+            line = f"    -> effective cache_write weight for this run: {effective_w:.3f}"
+            if effective_from_fallback:
+                line += "  (default 5m rate; no cache_creation TTL breakdown in export)"
+            lines.append(line)
         return lines
 
 

@@ -175,6 +175,13 @@ class Report:
         # per-stage aggregates
         self.stage_aggs: list[tuple[str, TranscriptAgg]] = []
         if session.main_transcript:
+            # The main transcript lives at the export root and carries no session
+            # UUID of its own, so its offloaded bytes are resolved against
+            # session.tool_results_dir (the last session discovered). Single-
+            # session exports -- the normal case -- are exact. In the rare
+            # multi-session root only the main stage is best-effort here; every
+            # workflow agent is still attributed to its own session's
+            # tool-results via workflow.tool_results_dir above (R9).
             self.stage_aggs.append(
                 ("main (discovery+plan)",
                  aggregate_transcript(session.main_transcript, session.tool_results_dir))
@@ -215,7 +222,12 @@ class Report:
         )
 
     def page_count(self) -> int:
-        if self.pages_override is not None:
+        # Only a positive override is meaningful. A non-positive value would make
+        # per-page normalization divide by zero or print a negative cost, so we
+        # ignore it and fall back to the discovered built-page count. The CLI
+        # also rejects non-positive --pages up front; this is defence in depth
+        # for direct run()/Report callers.
+        if self.pages_override is not None and self.pages_override > 0:
             return self.pages_override
         return len(self.built_pages) or 1
 
@@ -245,7 +257,7 @@ class Report:
     def by_stage_table(self) -> Table:
         table = Table(
             columns=[
-                Column("input", "input", "mb"),
+                Column("input", "input", "mb", share=True),
                 Column("cache_write", "cacheW", "mb", share=True),
                 Column("cache_read", "cacheR", "mb", share=True),
                 Column("output", "outTok", "mb", share=True),

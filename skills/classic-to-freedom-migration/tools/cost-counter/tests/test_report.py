@@ -244,5 +244,102 @@ class MultiSessionTest(unittest.TestCase):
         self.assertEqual(stage_bytes["wf_b (1 agents)"], 900)
 
 
+class ByToolFoldTest(unittest.TestCase):
+    """by_tool_table shows the top-N tools, folds the long tail into one row,
+    and the TOTAL still reconciles to the TRUE call/byte counts rather than the
+    top-N sum (R5)."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        # One agent issuing four distinct tools: Read x3, Bash x2, Grep x1, Glob x1.
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(inp=1),
+                               "content": [
+                                   {"type": "tool_use", "id": "r1", "name": "Read"},
+                                   {"type": "tool_use", "id": "r2", "name": "Read"},
+                                   {"type": "tool_use", "id": "r3", "name": "Read"},
+                                   {"type": "tool_use", "id": "b1", "name": "Bash"},
+                                   {"type": "tool_use", "id": "b2", "name": "Bash"},
+                                   {"type": "tool_use", "id": "g1", "name": "Grep"},
+                                   {"type": "tool_use", "id": "l1", "name": "Glob"},
+                               ]}}),
+        ])
+        self.report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_long_tail_folds_and_total_reconciles(self):
+        table = self.report.by_tool_table(limit=2)
+        labels = [label for label, _ in table.rows]
+        # Top 2 by call count shown explicitly; the remaining 2 fold into one row.
+        self.assertIn("Read", labels)
+        self.assertIn("Bash", labels)
+        self.assertIn("(+2 more tools)", labels)
+        self.assertNotIn("Grep", labels)
+        self.assertNotIn("Glob", labels)
+        # TOTAL reconciles to the true call count (7), not the top-2 sum (5).
+        self.assertEqual(table.total_values()["calls"], 7)
+
+
+class OffloadNotFoundTest(unittest.TestCase):
+    """A tool_result that references an offloaded file no longer on disk
+    (pruned/rotated tool-results/) charges the inline stub length, not 0, and
+    does not raise (R9)."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        # Reference gone.txt but never write it into tool-results/.
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(inp=1),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Bash"}]}}),
+            _line({"message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": r"Output too large. saved to C:\x\tool-results\gone.txt"},
+            ]}}),
+        ])
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_missing_offload_file_falls_back_to_stub_length(self):
+        stub = r"Output too large. saved to C:\x\tool-results\gone.txt"
+        agg = aggregate_transcript(
+            os.path.join(self.fx.wf_dir, "agent-aaa.jsonl"), self.fx.tool_results
+        )
+        self.assertEqual(agg.tool_bytes["Bash"], len(stub.encode("utf-8")))
+
+
+class FallbackWeightIntegrationTest(unittest.TestCase):
+    """cache_write volume with NO TTL breakdown, driven end-to-end through
+    Report: effective_w blends the 5m fallback rate (1.25) rather than 0.0, so
+    the (typically largest) cache-write cost term is not silently dropped (R4)."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant",
+                               # cache-write volume, no m5/h1 TTL split.
+                               "usage": _usage(inp=10, cw=1000),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Bash"}]}}),
+        ])
+        self.report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_effective_weight_is_the_5m_fallback(self):
+        self.assertEqual(
+            self.report.effective_w, metrics.CostConfig().cache_write_5m_weight
+        )
+
+    def test_cache_write_term_is_not_dropped(self):
+        # weighted_total = input*1 + cache_write*1.25 = 10 + 1250.
+        self.assertAlmostEqual(self.report.weighted_total(), 10 + 1.25 * 1000)
+
+
 if __name__ == "__main__":
     unittest.main()

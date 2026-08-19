@@ -64,16 +64,32 @@ def _print_normalization(report: Report) -> None:
     weighted = report.weighted_total()
     print("normalization (R7):")
     total = report.totals
-    if total.cache_write and not (total.ephemeral_5m + total.ephemeral_1h):
-        # Legacy export: cache-write volume with no TTL split. The blended
-        # weight fell back to the 5m rate; flag it so the number isn't read as
-        # exact (see effective_cache_write_weight).
+    if not (total.ephemeral_5m + total.ephemeral_1h):
+        # No TTL split in this export: the blended weight fell back to the 5m
+        # rate rather than a real volume-weighted blend. Always flag it so the
+        # effective weight in the header isn't read as exact and does not
+        # contradict the TTL block (see effective_cache_write_weight).
         print(f"    note: no cache_creation TTL breakdown; cache-write weight "
               f"fell back to {report.cfg.cache_write_5m_weight:.2f} (5m rate)")
     print(f"    built pages                 : {pages}"
           + (f"  {sorted(report.built_pages)}" if report.built_pages else "  (defaulted to 1)"))
     print(f"    weighted cost (total)       : {weighted / 1e6:,.2f}M input-equiv tokens")
     print(f"    weighted cost per built page: {weighted / pages / 1e6:,.2f}M input-equiv tokens")
+
+
+def _positive_pages(value: str) -> int:
+    """argparse type for --pages: a page count must be a positive integer.
+
+    Zero would make the per-page normalization divide by zero (uncaught
+    ZeroDivisionError); a negative value would print a nonsensical negative
+    cost-per-page. Reject both up front with a clear message.
+    """
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a positive integer (got {ivalue})"
+        )
+    return ivalue
 
 
 def _section(name: str) -> str:
@@ -90,7 +106,9 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig) 
     report = Report(session, cfg, pages_override=pages_override)
 
     if section in ("all",):
-        for line in cfg.as_lines(report.effective_w):
+        total = report.totals
+        from_fallback = (total.ephemeral_5m + total.ephemeral_1h) == 0
+        for line in cfg.as_lines(report.effective_w, effective_from_fallback=from_fallback):
             print(line)
         print()
         _print_ttl(report)
@@ -133,8 +151,9 @@ def main(argv=None) -> int:
         help="which report section to print (default: all)",
     )
     parser.add_argument(
-        "--pages", type=int, default=None,
-        help="override the built-page count used for per-page normalization",
+        "--pages", type=_positive_pages, default=None,
+        help="override the built-page count used for per-page normalization "
+             "(must be a positive integer)",
     )
     args = parser.parse_args(argv)
     return run(args.export_dir, args.section, args.pages, metrics.CostConfig())
