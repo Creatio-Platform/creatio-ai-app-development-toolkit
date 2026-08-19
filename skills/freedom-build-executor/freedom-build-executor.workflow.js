@@ -954,6 +954,18 @@ function componentTypeMismatches(componentResolution) {
     .filter((c) => c && typeof c.type === 'string' && c.resolved === false)
     .map((c) => ({ type: c.type, note: (typeof c.note === 'string' && c.note.trim()) ? c.note : 'does not resolve on the target stand' }))
 }
+// The operator-facing renderings of the unresolved types, shared by every stop and log that reports them so the
+// wording (and its fix instruction) has ONE home — and built with plain concatenation so no call site carries a
+// nested template literal. `componentTypeList` is the bare `type, type` list for a log; `componentMismatchList` is
+// the `` `type` (note) `` detail; `planInvalidNext` is the whole re-plan instruction, parameterised only by the
+// trailing clause that differs between a pre-build stop ('Nothing was built.') and a mid-run one.
+const componentTypeList = (mismatches) => (mismatches || []).map((c) => c.type).join(', ')
+const componentMismatchList = (mismatches) => (mismatches || []).map((c) => '`' + c.type + '` (' + c.note + ')').join('; ')
+const planInvalidNext = (mismatches, tail) =>
+  'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
+  + 'These do not: ' + componentMismatchList(mismatches) + '. This is a PLAN assertion untrue of the stand — fix the '
+  + 'mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), '
+  + 're-run `--plan --out`, re-approve, then re-run this build. ' + tail
 
 // WHICH ⚠ CONFIRM ITEMS PREFLIGHT ACTUALLY HAS TO RESOLVE. `--units.preflight` is the PLAN's list of open
 // questions, not a list of unanswered ones, and the run used to hand all of it to the fan-out on every start. So a
@@ -1205,7 +1217,8 @@ if ((state.planGaps || []).length) {
 const componentMismatches = componentTypeMismatches(state.componentResolution)
 const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
 if (stopOnPackage) {
-  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentMismatches.map((c) => c.type).join(', ')}` : ''}`)
+  const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
+  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}`)
   return runReturn({
     ...stopOnPackage,
     componentMismatches,
@@ -1213,7 +1226,9 @@ if (stopOnPackage) {
     // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
     // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
     next: componentMismatches.length
-      ? `${stopOnPackage.next} ALSO — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentMismatches.map((c) => `\`${c.type}\` (${c.note})`).join('; ')}; each must resolve (clio \`get-component-info component-type=<type>\`). Fix both in one re-plan (\`--plan --out\`), re-approve, then re-run.`
+      ? stopOnPackage.next + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
+        + componentMismatchList(componentMismatches) + '; each must resolve (clio `get-component-info component-type=<type>`). '
+        + 'Fix both in one re-plan (`--plan --out`), re-approve, then re-run.'
       : stopOnPackage.next,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
@@ -1231,7 +1246,7 @@ if (stopOnPackage) {
 // EVERY unresolved type at once so a re-plan fixes them in a single pass. Read-only: the resolution was
 // Reconcile's `get-component-info` sweep. (When placement ALSO fails, the stop above already carried these.)
 if (componentMismatches.length) {
-  log(`STOP — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentMismatches.map((c) => c.type).join(', ')}`)
+  log(`STOP — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(componentMismatches)}`)
   return runReturn({
     stopped: 'plan-invalid-against-stand',
     componentMismatches,
@@ -1242,7 +1257,7 @@ if (componentMismatches.length) {
     verdict: verdictOf(state.verify),
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
-    next: `each named component type must resolve on the target stand (clio \`get-component-info component-type=<type>\`). These do not: ${componentMismatches.map((c) => `\`${c.type}\` (${c.note})`).join('; ')}. This is a PLAN assertion untrue of the stand — fix the mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), re-run \`--plan --out\`, re-approve, then re-run this build. Nothing was built.`,
+    next: planInvalidNext(componentMismatches, 'Nothing was built.'),
   })
 }
 
@@ -2082,7 +2097,7 @@ function acceptReconciled(next, whereFrom) {
   // paying repair rounds for a plan assertion untrue of the stand — the exact failure this gate exists to prevent.
   const midRunMismatches = componentTypeMismatches(state.componentResolution)
   if (midRunMismatches.length) {
-    log(`STOP after ${whereFrom} — ${midRunMismatches.length} plan component type(s) do not resolve on the stand: ${midRunMismatches.map((c) => c.type).join(', ')}`)
+    log(`STOP after ${whereFrom} — ${midRunMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(midRunMismatches)}`)
     return {
       stopped: 'plan-invalid-against-stand',
       componentMismatches: midRunMismatches,
@@ -2090,7 +2105,7 @@ function acceptReconciled(next, whereFrom) {
       packageState: state.packageState || null,
       approval: state.approval || approval,
       planVersion: state.planVersion || null,
-      next: `each named component type must resolve on the target stand (clio \`get-component-info component-type=<type>\`). These do not: ${midRunMismatches.map((c) => `\`${c.type}\` (${c.note})`).join('; ')}. This is a PLAN assertion untrue of the stand — fix the mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), re-run \`--plan --out\`, re-approve, then re-run this build. Anything already built this run is on disk.`,
+      next: planInvalidNext(midRunMismatches, 'Anything already built this run is on disk.'),
     }
   }
   packageState = state.packageState || packageState

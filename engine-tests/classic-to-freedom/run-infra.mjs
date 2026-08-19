@@ -406,7 +406,7 @@ check("ENG-95468 replay: the Applicant plan's BOTH round-1 blockers are caught p
   () => { const comp = wf.componentTypeMismatches([{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }]);
     const place = wf.packagePreconditionStop("UsrApplicantMig", "exists", "new-app");
     return comp.length === 1 && comp[0].type === "crt.ContactCommunication"
-      && place && place.stopped === "new-app-over-existing-package"; });
+      && place?.stopped === "new-app-over-existing-package"; });
 
 // Source-level pins for the parts that close over run state.
 check("workflow: the app unit creates the section on the EXISTING object via `create-app-section --entity-schema-name`, and REMOVES the stub section create-app always mints — this is the created-a-new-object failure",
