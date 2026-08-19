@@ -44,7 +44,7 @@ class CostConfig:
             f"    input        x {self.input_weight:>5.2f}",
             f"    cache_read   x {self.cache_read_weight:>5.2f}",
             f"    output       x {self.output_weight:>5.2f}",
-            f"    cache_write  x TTL blend of "
+            f"    cache_write  x blend by cache lifetime: "
             f"5m={self.cache_write_5m_weight:.2f} / 1h={self.cache_write_1h_weight:.2f}",
         ]
         if effective_w is not None:

@@ -37,18 +37,19 @@ def _reconfigure_stdout() -> None:
 def _print_ttl(report: Report) -> None:
     total = report.totals
     ttl_total = total.ephemeral_5m + total.ephemeral_1h
-    print("cache-write TTL split (weighted-cost driver, R4):")
-    print(f"    cache_creation_input_tokens (summed) : {total.cache_write:>14,}")
+    print("cache-write, split by cache lifetime "
+          "(tokens written INTO the cache -- not the reused ones; drives the weighted cost):")
+    print(f"    total cache-write tokens             : {total.cache_write:>14,}")
     if ttl_total:
         m5_pct = total.ephemeral_5m / ttl_total * 100
         h1_pct = total.ephemeral_1h / ttl_total * 100
-        print(f"    ephemeral 5m  (x{report.cfg.cache_write_5m_weight:.2f}) : "
+        print(f"    5-minute cache  (x{report.cfg.cache_write_5m_weight:.2f} price) : "
               f"{total.ephemeral_5m:>14,}  {m5_pct:5.1f}%")
-        print(f"    ephemeral 1h  (x{report.cfg.cache_write_1h_weight:.2f}) : "
+        print(f"    1-hour cache    (x{report.cfg.cache_write_1h_weight:.2f} price) : "
               f"{total.ephemeral_1h:>14,}  {h1_pct:5.1f}%")
-        print(f"    effective cache-write weight         : {report.effective_w:>14.3f}")
+        print(f"    blended write weight                 : {report.effective_w:>14.3f}")
     else:
-        print("    (no cache_creation TTL breakdown found in this export)")
+        print("    (no cache-lifetime breakdown found in this export)")
 
 
 def _print_check(report: Report) -> None:
@@ -195,19 +196,23 @@ def _ttl_markdown(report: Report) -> str:
     ttl = _ttl_payload(report)
     cfg = report.cfg
     lines = [
-        "**Cache-write TTL split** (weighted-cost driver)",
+        "**Cache-write, split by cache lifetime**",
         "",
-        "| bucket | tokens | % |",
+        "_Tokens written **into** the cache (not the reused ones — those are cache read). "
+        "The write price depends on how long the cache lives, so the two lifetimes are "
+        "blended into one weight._",
+        "",
+        "| cache lifetime | tokens written | share |",
         "| :-- | --: | --: |",
     ]
     if ttl["pct_5m"] is not None:
-        lines.append(f"| ephemeral 5m (x{cfg.cache_write_5m_weight:.2f}) | "
+        lines.append(f"| 5-minute cache (x{cfg.cache_write_5m_weight:.2f} price) | "
                      f"{ttl['ephemeral_5m']:,} | {ttl['pct_5m']:.1f}% |")
-        lines.append(f"| ephemeral 1h (x{cfg.cache_write_1h_weight:.2f}) | "
+        lines.append(f"| 1-hour cache (x{cfg.cache_write_1h_weight:.2f} price) | "
                      f"{ttl['ephemeral_1h']:,} | {ttl['pct_1h']:.1f}% |")
-        lines.append(f"| **effective w** | **{ttl['effective_w']:.3f}** |  |")
+        lines.append(f"| **blended write weight** | **{ttl['effective_w']:.3f}** |  |")
     else:
-        lines.append("| _(no cache_creation TTL breakdown found)_ |  |  |")
+        lines.append("| _(no cache-lifetime breakdown found)_ |  |  |")
     return "\n".join(lines)
 
 
@@ -254,7 +259,7 @@ def render_markdown(report: Report, section: str) -> str:
             "input token; model-tier independent):\n\n"
             f"- input x{cfg['input_weight']:.2f} · "
             f"cache_read x{cfg['cache_read_weight']:.2f} · "
-            f"output x{cfg['output_weight']:.2f} · cache_write x(TTL blend "
+            f"output x{cfg['output_weight']:.2f} · cache_write x(blend by cache lifetime: "
             f"5m={cfg['cache_write_5m_weight']:.2f} / 1h={cfg['cache_write_1h_weight']:.2f})\n"
             f"- effective cache_write weight for this run: "
             f"**{cfg['effective_cache_write_weight']:.3f}**"
