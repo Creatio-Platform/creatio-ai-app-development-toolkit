@@ -17,6 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
+import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -382,25 +383,105 @@ function listColumnLine(section) {
   }
   return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
 }
+// The list page's own LAYOUT tables — the positioned contents of `result.listChangeSet`. Same STATUS as the form's
+// Layout table (a machine artifact, presented verbatim), different SHAPE: a grid has no regions to fill, so it
+// renders as an ordered column set plus one filter container plus one command bar, never as the form's
+// `Region | Element | Type | Source | Rule | Additional` table.
+// ONE table per function: each surface reads as its own shape, and no single function carries every branch.
+// The TYPE cell states the resolved `dataValueType` or says it is unresolved — never a guessed enum.
+function listColumnsTable(columns) {
+  if (!columns.length) return [];
+  const L = ["", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |"];
+  columns.forEach((c, i) => {
+    const ref = c.ref ? ` → ${esc(c.ref)}` : "";
+    const type = c.dataValueType == null
+      ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
+      : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
+    const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
+    L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
+  });
+  return L;
+}
+// A filter's row is its PLACEMENT: which element, which container, at which index, on which column, as which control.
+function listFiltersTable(filters) {
+  if (!filters.length) return [];
+  const L = ["", "#### Quick filters", "| Classic filter | Freedom element | Container | Column | Control |", "| --- | --- | --- | --- | --- |"];
+  for (const f of filters) {
+    const ctrl = f.quickFilterType == null
+      ? `⚠ ${esc(f.classicType || "UNKNOWN")} — no known \`quickFilterType\``
+      : `\`${LIST_FILTER_TYPE}\` · ${esc(f.quickFilterType)}`;
+    L.push(`| \`${esc(f.classicName || "—")}\` | \`${esc(f.name)}\` | \`${esc(f.parentName)}\` · index ${f.index} | ${esc(f.column || "—")} | ${ctrl} |`);
+  }
+  return L;
+}
+// Row actions carry no op — see the note this appends. The condition is the deliverable: an always-enabled port of a
+// conditionally-enabled Classic action is a behaviour change.
+function listRowActionsTable(rowActions) {
+  if (!rowActions?.length) return [];
+  const L = ["", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |"];
+  for (const ra of rowActions) {
+    const cond = ra.condition ? `\`${esc(ra.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
+    L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
+  }
+  L.push("", "> ⚠ **A row action carries no op in this ChangeSet.** Every other op here reproduces a shape measured on a built Freedom page; no such measurement exists for a row action, so the control and its placement are read off a built page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.");
+  return L;
+}
+// The command bar states its SOURCE, because that source is known to be incomplete until the section view `diff` is
+// folded — the ⚠ Confirm item carries the question.
+function listCommandBarTable(actions) {
+  if (!actions.length) return [];
+  const L = ["", "#### Command-bar actions", "| Action | Source | Freedom target |", "| --- | --- | --- |"];
+  for (const a of actions) {
+    L.push(`| \`${esc(a.name)}\` | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
+  }
+  return L;
+}
+function renderListLayoutTables(lcs) {
+  return [
+    ...listColumnsTable(lcs.columns),
+    ...listFiltersTable(lcs.quickFilters),
+    ...listRowActionsTable(lcs.rowActions),
+    ...listCommandBarTable(lcs.commandBarActions),
+  ];
+}
+// The build instructions the ops cannot carry themselves — each names a place this ChangeSet is deliberately PARTIAL,
+// so a builder cannot mistake it for a finished page body: a Freedom grid column requires a GUID `id`, for which the
+// engine has no stable source, and a quick-filter op carries placement facts only, not the component's nested config.
+// (The `filterAttributes` merge hazard is NOT here — it is a real question with a real answer, so it rides the
+// `list-filter-attributes` ⚠ Confirm item, where it is gated rather than merely printed.)
+function renderListBuildNotes(lcs) {
+  const L = [];
+  if (lcs.columnIdsAssignedByBuilder) {
+    L.push("", "> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.");
+  }
+  if (lcs.quickFilterConfigCompletedByBuilder) {
+    L.push("", "> **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its container and index, the filtered column and the control — the engine's resolvable facts. `crt.QuickFilter` also needs its own nested filter config and value binding, and it is `compositeOnly` with no published composite recipe, so complete it from that component's documentation (`get-component-info crt.QuickFilter`) rather than treating these `values` as the whole body.");
+  }
+  return L;
+}
 // The `### List page` block (section concerns: add-record, columns, quick filters, section actions, process).
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
-function renderListPageBlock(result, section) {
+function renderListPageBlock(result, section, opts = {}) {
   const L = ["### List page"];
+  // The plan is the document an operator APPROVES, so it must not present a full build spec for a page the run
+  // deliberately does not build. Same treatment as the `Navigable section registered` row: state the decision, then
+  // keep the contents as a record of what a later run — the one that adds the menu entry — would build.
+  if (opts.sectionHostMode === "pages-only-no-menu") {
+    L.push("", "> ⚠ **NOT built in this run** (`placement.sectionHost.mode = pages-only-no-menu`): no section is registered, so no list page is minted. Everything below records what a list page WOULD carry, for the run that adds the menu entry.", "");
+  }
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
     L.push(listColumnLine(section));
-    if ((section.quickFilters || []).length) {
-      const f = section.quickFilters.map((q) => {
-        let s = `\`${esc(q.name)}\``;
-        if (q.column) { const typePart = q.type ? `, ${esc(q.type)}` : ""; s += ` (${esc(q.column)}${typePart})`; }
-        return s;
-      }).join(" · ");
-      L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
-    }
-    if ((section.sectionActions || []).length) { const acts = section.sectionActions.map((a) => "`" + esc(a) + "`").join(" · "); L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`); }
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
+  // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
+  // traceable to the ops a builder applies. The bullets stated them as prose no build step could consume.
+  const lcs = result.listChangeSet;
+  // …and its own ⚠ Confirm section, from the SAME `needsDecision` mechanism the form page uses: a list-page decision
+  // is an open question with an owner, not a note in prose.
+  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs));
   L.push("");
   return L;
 }
@@ -614,7 +695,7 @@ export function renderDesignSpec(result, opts = {}) {
   // misleading "no add-record mini page" line — a mini page inside a mini page).
   // A MINI page is NOT a section (no list page). List page renders for a section migration only, not formOnly.
   const isSectionMigration = isSectionScope(result, section, opts);
-  if (isSectionMigration && !opts.formOnly) L.push(...renderListPageBlock(result, section));
+  if (isSectionMigration && !opts.formOnly) L.push(...renderListPageBlock(result, section, opts));
 
   // TYPED entity: the base fold is NOT a deliverable — it only supplies the List page (section concerns) and
   // shared context. Its own form Layout/Logic/Confirm must NOT render (it's empty/misleading: 0 rules etc.,
@@ -1595,11 +1676,58 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
 // `planMeta.sectionSchema`/`listTemplate`, but that only covers the first disjunct — a sub-page that folds its OWN
 // mini page still satisfied the third one and emitted a whole `List page` group (List columns / quick filters /
 // section actions) for a page that has no list page at all.
+// The list page's OWN published key. It is no node in the page tree — the section's list page is minted by
+// `create-app-section`, not folded from a classic edit-page bundle — so the key is reserved here rather than claimed
+// by `assignPageKeys`. `--units` publishes it ONLY when the run emits gated list rows.
+export const LIST_PAGE_KEY = "list";
+// ONE list-page row. Every list-page deliverable carries a `vk`: a row with none renders `☐ confirm on-stand` and
+// can never be closed, which is what makes a page's contents unverifiable.
+//
+// WHICH mechanism a row gets is decided by whether the built page can answer it, never by convenience:
+//   · columns and quick filters are IN the page body, so they are MEASURED off it (`listcolumns` / `listfilter`),
+//     exactly like a form-page field row — see `resolveListColumnsVk` / `resolveListFilterVk`;
+//   · a command-bar action and a ROW action are NOT: a command-bar action's Freedom container stays unresolved while
+//     the section view `diff` goes unfolded, and a row action's Freedom element name is not predictable here at all,
+//     so neither has an identity to match and BOTH keep an EVIDENCE row (D7) — a filed record plus a judge verdict,
+//     the mechanism for claims a page body genuinely cannot settle.
+// The split is mechanical, not editorial: a kind listed in `LIST_ROW_VK` is measured and EVERY other kind falls
+// through to an evidence row, so this comment must be read as naming the table below, never as a second opinion
+// about it. Closing a body-answerable row on a filed record would let a build agent's own claim stand in for the page.
+const LIST_ROW_VK = {
+  columns: (n, names, columns) => ({ type: "listcolumns", n, names, columns }),
+  filter: (n, names) => ({ type: "listfilter", n, names }),
+};
+// The measured kinds, published so a test can DERIVE which kinds are evidence rows. Prose that restates the split
+// instead of reading it from here is a second copy, and a copy is what drifts.
+export const LIST_MEASURED_KINDS = Object.keys(LIST_ROW_VK);
+function listRow(label, kind, item, n, names, columns) {
+  const make = LIST_ROW_VK[kind];
+  return {
+    label,
+    vk: make ? make(n, names, columns) : { type: "evidence", id: `${LIST_PAGE_KEY}#listpage:${kind}:${item}`, requires: [...EVIDENCE_REQUIRES] },
+    list: { kind, item, n, names },
+  };
+}
 function buildListItems(pm, section, result, isMain) {
   if (!(pm.sectionSchema || section || (isMain && result.miniPage))) return [];
-  const items = [{ label: "List columns" }];
-  if ((section?.quickFilters || []).length) items.push({ label: `Quick filters (${section.quickFilters.length})` });
-  if ((section?.sectionActions || []).length) items.push({ label: `Section actions (${section.sectionActions.length})` });
+  const lcs = result.listChangeSet;
+  const cols = lcs?.columns || [];
+  const filters = lcs?.quickFilters || [];
+  const actions = lcs?.commandBarActions || [];
+  // One row per ACTUAL element, not one row per concern: a single "List columns" row could be closed while half the
+  // columns were missing, and it named none of them, so nothing said WHICH columns the built page must carry.
+  const items = cols.length
+    ? [listRow(`List columns — ${cols.length} expected (${cols.map((c) => esc(c.name)).join(" · ")})`, "columns", "set",
+        cols.length, cols.map((c) => c.name), cols.map((c) => ({ name: c.name, code: c.code })))]
+    : [{ label: "List columns" }];   // unresolved ⇒ nothing to gate; the spec's ⚠ line carries the question
+  for (const f of filters) items.push(listRow(`Quick filter — \`${esc(f.name)}\` on ${esc(f.column || "?")}`, "filter", f.name, 1, [f.name]));
+  for (const a of actions) items.push(listRow(`Command-bar action — \`${esc(a.name)}\``, "action", a.name, 1, [a.name]));
+  // A row action is an EVIDENCE row for the same reason a command-bar action is, and more strongly: its Freedom
+  // element name is not predictable here, so there is no identity to match against the built page.
+  for (const ra of lcs?.rowActions || []) {
+    const cond = ra.condition ? ` (conditional: \`${esc(ra.condition)}\`)` : "";
+    items.push(listRow(`Row action — \`${esc(ra.name)}\`${cond}`, "rowaction", ra.name, 1, [ra.name]));
+  }
   return items;
 }
 // ONE checklist group, stamped with the page it belongs to. `pageKey` stays RAW on the group and on every row —
@@ -1621,12 +1749,14 @@ function pageGroup(pageKey, title, rows) {
 }
 // EVIDENCE ROWS (D7). A deliverable that no page body can prove — the page-DESIGN pass, an imperative member, a
 // ⚠ Confirm item — is closed by an evidence RECORD plus an independent judge verdict, not by prose in the Evidence
-// cell. The record is looked up by an id the ENGINE derives and publishes; the agent never invents one. THREE shapes
-// (this comment said "two" while listing the third one file below — an undercount an executor reads as "there is no
-// `#childpage` id", which is the one id it must file to close an unfolded child):
+// cell. The record is looked up by an id the ENGINE derives and publishes; the agent never invents one. Keep this
+// list complete — an id missing here reads to an executor as an id that does not exist, so it never gets filed.
+// FOUR shapes:
 //   `<pageKey>#quality-gates`            — the singleton per-page row (one per published page key)
 //   `<pageKey>#confirm:<kind>:<item>`    — one per ⚠ Confirm worklist item
 //   `<pageKey>#childpage`                — an unfolded child page (see `unresolvedChildGroups` below)
+//   `list#listpage:<kind>:<item>`        — one per list-page deliverable: `columns:set`, `filter:<name>`,
+//                                          `action:<name>` (see `listRow`; `<pageKey>` is always `list`)
 // Built from the RAW `pageKey` / `d.kind` / `d.item`, never from the rendered label: labels pass through `esc`, so
 // a caption carrying a backtick or a pipe would yield an id the caller could not reproduce to file its evidence
 // under. `requires` is the UI gate for "this record is complete" and rides on the row so `--units` can publish it.
@@ -1848,7 +1978,44 @@ export function checklistGroups(result, opts = {}) {
   const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push(pageGroup(pageKey, title, r)); };
   G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
   const section = result.section || null;
-  G("List page", buildListItems(pm, section, result, isMain));
+  // The List page group belongs to the LIST page's key, not the form page's: its rows are the list page's own
+  // deliverables, so `--units` publishes them as their own build unit and `--verify` gates them there. Only the main
+  // scope emits it — a sub-page has no list page, and two pages must never write rows under one global key.
+  //
+  // Emit the key ONLY when at least one of those rows is GATED. A published key whose rows all resolve
+  // `☐ confirm on-stand` is a hole by construction: it adds a build unit nothing can ever close. With nothing
+  // resolved (no columns, no filters, no actions), the single unresolved-columns row stays on the form page's key and
+  // the ⚠ line in the spec carries the question.
+  const listRows = isMain ? buildListItems(pm, section, result, isMain).filter(Boolean) : [];
+  // An approved `pages-only-no-menu` run registers NO section, so `create-app-section` never runs and no list page is
+  // minted: queueing one would gate rows on a page the plan deliberately does not build. Its deliverables degrade to
+  // ungated prose on the form page's key — the same treatment the `Navigable section registered` row gets — and the
+  // `list` marker goes with the `vk`, or `pageExpect` would hand the FORM unit the list vocabulary.
+  // A list-page DECISION is gated whichever key ends up owning the deliverables. Withholding the `list` key withholds
+  // a page nobody builds — it must never withhold the questions, or the run that has no gated list row (an empty
+  // section, or `pages-only-no-menu`) is exactly the run whose questions go unanswered. When the key is withheld the
+  // items ride on `main` (`main#confirm:list-*`); when it is published they ride on `list`.
+  // MAIN SCOPE ONLY, like every other list-page deliverable. A sub-bundle that carries its own `section` gets its own
+  // `listChangeSet`, and without this guard that node's questions ride onto the SUB-PAGE's key — a per-type form page
+  // carrying mandatory list-column questions for a grid it does not have.
+  let listConfirmOnMain = isMain ? confirmWorklistRows(pageKey, result.listChangeSet || {}) : [];
+  if (opts.sectionHostMode === "pages-only-no-menu" && listRows.length) {
+    G("List page (NOT built — `pages-only-no-menu`)", [
+      { label: "**Deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): no section is registered, so no list page is minted. The rows below record what a list page WOULD carry, for the run that adds the menu entry later." },
+      ...listRows.map((r) => ({ label: r.label })),
+    ]);
+  } else if (listRows.some((r) => r.vk)) {
+    // The quality gate is "one per published page key" (see the evidence-id shapes above) and the list page is now
+    // one of them — the `creatio-ui-guidelines` pass genuinely applies to a list page's layout, so omitting it here
+    // would let the one page the skill was NOT run on be the one page nothing asks about.
+    groups.push(pageGroup(LIST_PAGE_KEY, "List page", listRows));
+    // The list page's ⚠ Confirm items are gated like the form's — same evidence-id namespace, so `--units` publishes
+    // them in `preflight` and the executor resolves them before the build round.
+    const listConfirm = confirmWorklistRows(LIST_PAGE_KEY, result.listChangeSet || {});
+    if (listConfirm.length) groups.push(pageGroup(LIST_PAGE_KEY, "⚠ Confirm worklist", listConfirm));
+    groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY)));
+    listConfirmOnMain = [];   // gated on `list`; never in two places
+  } else G("List page", listRows);
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
@@ -1883,7 +2050,7 @@ export function checklistGroups(result, opts = {}) {
     .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
-  G("⚠ Confirm worklist", confirmWorklistRows(pageKey, cs));
+  G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
   // Child pages that publish NO page key of their own — a cycle (mapped higher on this branch, and gated there),
   // a child verified to have no separate page / to be view-only (no deliverable to gate), or a malformed child
   // bundle (a PLAN-completeness failure the structure gate already blocks on). They keep an identity row so
@@ -1910,10 +2077,13 @@ export function checklistGroups(result, opts = {}) {
 // literals `--verify` resolves — never off the fold entry's `fieldCount`/`ruleCount`, which are computed with a
 // deliberately different predicate (`countFormFields` also counts `crt.ImageInput`, `isField` does not) and would
 // hand the executor a number the gate does not check. Units and gate therefore agree by construction, not by
-// coincidence. `list` (D1) is NOT published: the list page's deliverables are rows of the `main` page and
-// `--built.pages` has no entry for it, so a key with no gated row of its own would be a hole by construction.
+// coincidence. `list` (D1) IS published — but only when this run gates at least one of its rows, and only when the
+// approved plan actually builds a list page. A key whose rows all resolve `☐ confirm on-stand` would be a hole by
+// construction (a queue entry nothing can close), and so would one for a `pages-only-no-menu` plan, which registers
+// no section and therefore mints no list page. In both cases the list deliverables stay ungated rows of `main`.
 const PAGE_ROLE_PREFIX = [["child:", "child"], ["typed:", "typed"], ["mini:", "mini"]];
 function pageRole(key) {
+  if (key === LIST_PAGE_KEY) return "list";
   const hit = PAGE_ROLE_PREFIX.find(([p]) => key.startsWith(p));
   return hit ? hit[1] : "main";
 }
@@ -1930,9 +2100,26 @@ const vkOfType = (rows, t) => rows.map((r) => r.vk).find((v) => v?.type === t);
 // without it the fields check is UNREACHABLE for the executor — it matches by element NAME and the name is not
 // derivable from the bound column (several classic items bind the same column as `col`, `col_2`, `col_3`).
 // A count of 0 means the page emits no row of that kind, i.e. nothing is expected and nothing is gated.
+// The LIST page's expectations are a different vocabulary — a grid has no fields/tabs/details — so they are read off
+// the `list` marker its rows carry, and added ONLY for a page that emits such rows. Keep them conditional: a form
+// page's `expect` keeps one fixed shape, so no executor has to learn a second one for a page it already handles.
+export const LIST_EXPECT_KINDS = [["columns", "listColumns", "listColumnNames"], ["filter", "quickFilters", "quickFilterNames"], ["action", "commandBarActions", "commandBarActionNames"], ["rowaction", "rowActions", "rowActionNames"]];
+function listExpect(rows) {
+  const marked = rows.filter((r) => r.list);
+  if (!marked.length) return null;
+  const out = {};
+  for (const [kind, countKey, namesKey] of LIST_EXPECT_KINDS) {
+    const hits = marked.filter((r) => r.list.kind === kind);
+    out[countKey] = hits.reduce((a, r) => a + (r.list.n || 0), 0);
+    out[namesKey] = hits.flatMap((r) => r.list.names || []);
+  }
+  return out;
+}
 function pageExpect(rows) {
   const n = (t) => vkOfType(rows, t)?.n || 0;
   const f = vkOfType(rows, "fields");
+  const list = listExpect(rows);
+  if (list) return list;
   return { fields: n("fields"), fieldNames: [...(f?.names || [])], tabs: n("tabs"), details: n("details"), images: n("image") };
 }
 // ONE page entry. `expectedTemplate` is the SCHEMA NAME (via CHILD_TEMPLATE_SCHEMA at fold time), taken from the
@@ -1972,7 +2159,20 @@ function componentTypesOf(rows) {
     else if (vk.type === "tabs") out.add(TAB_TYPES[0]);
     else if (vk.type === "details") out.add("crt.DataGrid");
   }
+  for (const t of listComponentTypes(rows)) out.add(t);
   return [...out].sort((a, b) => a.localeCompare(b));
+}
+// The LIST page's types come off the `list` marker rather than a `vk`, so they read off their own function. Publish
+// them for the same reason as the rest: a build agent fetches each component's documentation once per run instead of
+// discovering its constraints — `crt.QuickFilter` is `compositeOnly` with no published composite recipe — mid-build.
+const LIST_KIND_TYPE = { filter: LIST_FILTER_TYPE, columns: "crt.DataGrid" };
+function listComponentTypes(rows) {
+  const out = new Set();
+  for (const r of rows || []) {
+    const t = LIST_KIND_TYPE[r.list?.kind];
+    if (t) out.add(t);
+  }
+  return out;
 }
 function pageUnit(key, node, rows) {
   const tpl = vkOfType(rows, "template")?.exp;
@@ -2036,6 +2236,12 @@ function rowsByPageKey(groups) {
   }
   return byKey;
 }
+// The `list` key owns no tree node (its page is minted by `create-app-section`), so `subPageNodes` cannot supply one.
+// Give it a node carrying the CLASSIC schema its expectations came from — the section chain — so the queue names the
+// source of the list page's deliverables exactly as a folded child names its `resolvedFrom`.
+function listUnitNode(key, opts) {
+  return key === LIST_PAGE_KEY ? { schema: opts.planMeta?.sectionSchema || null } : null;
+}
 export function pageUnits(result, opts = {}) {
   assignPageKeys(result);   // claim the global keys BEFORE anything reads one — `--units` is a root-level artifact
   const byKey = rowsByPageKey(checklistGroups(result, opts));
@@ -2059,7 +2265,7 @@ export function pageUnits(result, opts = {}) {
     // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
     // approved app instead of resolving one off the stand.
     applicationCode: opts.applicationCode || null,
-    pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || null, r)),
+    pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || listUnitNode(k, opts), r)),
     reachability: reachabilityUnits(rows),
     // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so
     // it is closed through `--built.evidence`/`.judge` exactly like any other evidence row — republished here with
@@ -2067,8 +2273,14 @@ export function pageUnits(result, opts = {}) {
     preflight: evidence.filter((r) => r.confirm)
       .map((r) => ({ id: r.vk.id, pageKey: r.pageKey, kind: r.confirm.kind, item: r.confirm.item, requires: [...r.vk.requires] })),
     evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
-    buildOrder: [...buildOrderNodes(result, new Set(), []), "main"],
-    parents: parentEdge(result),
+    // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
+    // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
+    // an order naming a key with no entry would send the executor to build a page it was never given.
+    buildOrder: [...buildOrderNodes(result, new Set(), []), ...(byKey.has(LIST_PAGE_KEY) ? [LIST_PAGE_KEY] : []), "main"],
+    // The list page has no PARENT page — it is the section's own page, a sibling of the form page rather than a child
+    // folded from one, so its edge is `null` exactly like `main`'s. Published because every key in `pages[]` must
+    // carry an edge: a key missing from this map reads to the executor as a page whose place in the tree is unknown.
+    parents: { ...parentEdge(result), ...(byKey.has(LIST_PAGE_KEY) ? { [LIST_PAGE_KEY]: null } : {}) },
   };
 }
 
@@ -2353,6 +2565,65 @@ function evidenceComplete(rec, requires) {
   if (!rec || typeof rec !== "object" || Array.isArray(rec)) return false;
   return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k]));
 }
+// LIST-PAGE deliverables, MEASURED off the built page. A column set and a filter bar are IN the page body, so they
+// are the same class of check as a form field and get the same treatment: match the expected identities against what
+// the page actually carries. Never close a body-answerable row on a filed record — that lets a build agent's own
+// claim stand in for the page.
+//
+// Columns match by their `PDS_*` CODE, which is the grid's own identity for a column (`walkGridColumnCodes`); a
+// filter matches by ELEMENT NAME off the ordinary flattened ops, because a quick filter IS a named page item and
+// was always visible there. Both keep D6's tri-state: no entry for the page is `⚠ unverified` (nobody looked), a
+// page reported absent or built short is `❌ MISSING`, and the message NAMES what is missing so the repair is
+// mechanical rather than a re-derivation.
+// `vk.columns` pairs each classic column with the `PDS_*` code the ChangeSet emitted for it, so the gate matches the
+// EXACT string the builder was told to write — the mapping is never re-derived here, where it could drift from the
+// emission side and fail a correctly built page.
+function resolveListColumnsVk(vk, ctx) {
+  const want = (vk.columns || []).filter((c) => c?.code);
+  if (!want.length) return ["⚠ verify", "no expected column set was published — nothing to match against", "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected list column(s)`);
+  // D6's third state: the entry is `false`, i.e. the verifier looked and reports the page as NOT BUILT. Still a hard
+  // MISSING, but never described as an empty grid — the repair is to build the page, not to add columns to one.
+  if (ctx.page === false) return ["❌ MISSING", `the list page is reported as NOT BUILT, so none of the ${want.length} expected column(s) exist`, "missing"];
+  const { codes: built, anchored } = ctx.gridColumns;
+  // A page that was fetched but carries NO grid columns at all is a different failure from one missing a few: the
+  // grid was never configured, so say that instead of listing every column as individually absent. The two ways of
+  // arriving there read differently, because the repair differs: an EMPTY grid is a build defect, whereas a page with
+  // no grid node at all is either the wrong page or a payload taken from the wrong source.
+  const where = anchored ? ` (\`${LIST_GRID}\` carries no \`columns\`)` : ` (no \`${LIST_GRID}\` node on the page, and no columns anywhere on it — check that this payload is the LIST page)`;
+  if (!built.size) return ["❌ MISSING", `NO grid columns on the built list page — the ${want.length} expected column(s) were not configured${where}`, "missing"];
+  const missing = want.filter((c) => !built.has(c.code));
+  const from = anchored ? "" : ` — NB: matched outside \`${LIST_GRID}\` (no such node on the page), so confirm the grid itself carries them`;
+  // Anchored ⇒ a real ✅. Unanchored means the grid was not found at all, which is nearer "wrong payload" than "done",
+  // so it reads ⚠ verify — status and outcome agree, as they do for every other row in this file.
+  if (!missing.length && anchored) return ["✅ Done", `${want.length} of ${want.length} expected columns matched BY CODE on the built list page`, "ok"];
+  if (!missing.length) return ["⚠ verify", `${want.length} of ${want.length} expected columns matched BY CODE${from}`, "unverified"];
+  const overflow = missing.length > 8 ? "…" : "";
+  const named = missing.slice(0, 8).map((c) => `${esc(String(c.name))} (\`${esc(String(c.code))}\`)`).join(", ");
+  return ["❌ MISSING", `${want.length - missing.length}/${want.length} expected columns present — missing: ${named}${overflow}`, "missing"];
+}
+// A filter row needs BOTH halves: the element name AND `crt.QuickFilter`. Name alone closed on any component that
+// happened to carry the name — and the control IS the deliverable here, which is why the unit publishes the type.
+function resolveListFilterVk(vk, ctx) {
+  const want = [...new Set(vk.names || [])];
+  if (!want.length) return ["⚠ verify", "no expected filter element was published — nothing to match against", "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the quick filter ${want.join(", ")}`);
+  if (ctx.page === false) return ["❌ MISSING", `the list page is reported as NOT BUILT, so ${want.join(", ")} does not exist`, "missing"];
+  const byName = new Map(ctx.ops.filter((o) => o.name).map((o) => [o.name, o.type || ""]));
+  const missing = want.filter((n) => !byName.has(n));
+  // Present under the right name but the WRONG type is its own failure, and it must not read as absent: the element
+  // is there, so the repair is to change its type rather than to add a filter.
+  const wrongType = want.filter((n) => byName.has(n) && byName.get(n) !== LIST_FILTER_TYPE);
+  if (!missing.length && !wrongType.length) return ["✅ Done", `${want.join(", ")} present on the built list page as \`${LIST_FILTER_TYPE}\` (matched BY NAME + TYPE)`, "ok"];
+  // An op list with no names at all cannot answer identity — that is a payload problem, not a build defect.
+  if (ctx.ops.length && !byName.size) return ["⚠ verify", `identity NOT checked — the built list page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
+  if (wrongType.length) {
+    const built = wrongType.map((n) => esc(String(n)) + " is built as `" + esc(byName.get(n) || "an untyped component") + "`").join(", ");
+    return ["❌ MISSING", `${built}, not \`${LIST_FILTER_TYPE}\` — the filter bar needs the quick-filter control, not a field with the same name`, "missing"];
+  }
+  return ["❌ MISSING", `NO ${missing.map((n) => esc(String(n))).join(", ")} on the built list page — the registry filter bar is short this filter`, "missing"];
+}
+const VK_LIST = new Set(["listcolumns", "listfilter"]);
 const VK_PLACEMENT = new Set(["placement"]);
 const VK_ENTITY = new Set(["entity"]);
 const VK_CHILDPAGE = new Set(["childpage"]);
@@ -2362,6 +2633,7 @@ function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
   if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
+  if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
   if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
   if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
   if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
@@ -2387,6 +2659,60 @@ function walkViewConfig(node, out = []) {
   if (!node || typeof node !== "object") return out;
   if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
   return walkViewConfig(node.items, out);
+}
+// GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
+// DATA inside the grid's own op (`DataTable` carries `values.columns: [{ code: "PDS_<Col>", … }]`), not as page
+// items with a name and a type, so `walkViewConfig` walks past them.
+//
+// Read them from the NODE THE CHANGESET TARGETS (`LIST_GRID`), never from wherever a `columns` array turns up: a
+// stock list page ships `DataTable_Summaries` beside the grid, and a detail on the page can carry its own columns, so
+// a page-wide search closes this deliverable on another node's data — including on a grid whose own `columns` is
+// empty. Fall back to the page-wide read ONLY when no such node exists, and tell the caller which read it got, so the
+// verdict can say so instead of implying the grid was found.
+function collectColumnCodes(cols, out) {
+  for (const c of cols || []) { const code = c?.code ?? c?.name; if (typeof code === "string" && code.trim()) out.add(code.trim()); }
+  return out;
+}
+// A node's own columns, under either shape: `values.columns` on a diff op, `columns` on a rendered node.
+function columnsOf(node) {
+  if (Array.isArray(node?.columns)) return node.columns;
+  if (Array.isArray(node?.values?.columns)) return node.values.columns;
+  return null;
+}
+// Every node named `LIST_GRID`, under either shape (a diff op's `values.columns`, a rendered node's `columns`).
+function findGridNodes(node, out = []) {
+  if (Array.isArray(node)) {
+    for (const n of node) { findGridNodes(n, out); }
+    return out;
+  }
+  if (!node || typeof node !== "object") return out;
+  if (node.name === LIST_GRID && columnsOf(node)) out.push(node);
+  for (const v of Object.values(node)) if (v && typeof v === "object") findGridNodes(v, out);
+  return out;
+}
+function walkGridColumnCodes(node, out = new Set()) {
+  if (Array.isArray(node)) {
+    for (const n of node) { walkGridColumnCodes(n, out); }
+    return out;
+  }
+  if (!node || typeof node !== "object") return out;
+  const cols = columnsOf(node);
+  collectColumnCodes(cols, out);
+  for (const v of Object.values(node)) if (v && typeof v === "object") walkGridColumnCodes(v, out);
+  return out;
+}
+// `{ codes, anchored }` — `anchored` is true when the codes came from the grid node itself.
+function pageGridColumnsOf(entry) {
+  const e = entryObject(entry);
+  if (!e) return { codes: new Set(), anchored: false };
+  const root = e.viewConfig != null ? e.viewConfig : e.ops;
+  const grids = findGridNodes(root);
+  if (grids.length) {
+    const codes = new Set();
+    for (const g of grids) collectColumnCodes(columnsOf(g), codes);
+    return { codes, anchored: true };
+  }
+  return { codes: walkGridColumnCodes(root), anchored: false };
 }
 // This page's record. `pages` ABSENT ⇒ the single-page payload shape: the whole object IS the main page (what the
 // direct `renderVerify(result, opts, built)` callers supply). The fallback is keyed on `pages` being absent and
@@ -2423,6 +2749,9 @@ function verifyCtx(root, pageKey) {
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
   return {
     pageKey, page, root, ops, typeCount,
+    // The built page's GRID COLUMN codes — read once per page, like `ops`, so the list-column resolver measures the
+    // page instead of trusting a report about it. `.anchored` says whether they came from the grid node itself.
+    gridColumns: pageGridColumnsOf(page),
     // D6 tri-state, decided ONCE here where `pageEntryOf`'s three outcomes are still distinguishable: `undefined`
     // = no entry (nobody looked) · `false` = reported absent · an object = looked at, whatever it contained. Past
     // `pageOpsOf` the first two are both `[]` and no resolver can tell them apart any more.
