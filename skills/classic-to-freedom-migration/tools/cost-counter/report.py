@@ -182,6 +182,24 @@ def _workflow_labels(session: export_mod.SessionExport) -> dict:
     return labels
 
 
+def _workflow_sort_key(workflow) -> tuple:
+    """Execution order: sort workflows by their `startTime` (epoch ms) from the
+    meta, so stages read in the order they actually ran (behaviour-analysis,
+    build round 1, 2, 3 …) rather than by the opaque run-id directory name.
+    Workflows without a numeric start time sort last, then by name for stability.
+    """
+    start = None
+    if workflow.meta_json:
+        try:
+            with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
+                start = json.load(handle).get("startTime")
+        except Exception:
+            pass
+    if isinstance(start, (int, float)):
+        return (0, start, workflow.name)
+    return (1, 0, workflow.name)
+
+
 def _built_pages(session: export_mod.SessionExport) -> set:
     """Distinct built page schema names, read from workflow journals."""
     pages: set = set()
@@ -223,6 +241,8 @@ class Report:
 
         # human-friendly stage labels (workflowName + round #), not raw run ids
         self.workflow_labels = _workflow_labels(session)
+        # execution order (by startTime), so stages read the way the run happened
+        self._ordered_workflows = sorted(session.workflows, key=_workflow_sort_key)
 
         # per-stage aggregates
         self.stage_aggs: list[tuple[str, TranscriptAgg]] = []
@@ -238,7 +258,7 @@ class Report:
                 ("main (discovery+plan)",
                  aggregate_transcript(session.main_transcript, session.tool_results_dir))
             )
-        for workflow in session.workflows:
+        for workflow in self._ordered_workflows:
             agg = TranscriptAgg()
             for agent_file in workflow.agent_files:
                 agg.add(self._agent_aggs[agent_file])
@@ -309,7 +329,7 @@ class Report:
 
     def reconcile(self) -> list[ReconcileRow]:
         rows = []
-        for workflow in self.session.workflows:
+        for workflow in self._ordered_workflows:
             agents_meta = tool_calls_meta = None
             if workflow.meta_json:
                 agents_meta, tool_calls_meta = _read_meta(workflow.meta_json)
