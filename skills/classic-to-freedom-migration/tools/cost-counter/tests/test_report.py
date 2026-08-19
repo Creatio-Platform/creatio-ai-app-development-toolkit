@@ -386,5 +386,60 @@ class PerStageTtlWeightTest(unittest.TestCase):
         )
 
 
+class FriendlyLabelTest(unittest.TestCase):
+    """Stage labels come from workflows/<wf>.json `workflowName` (minus the
+    `creatio-` prefix); repeated workflows are numbered round 1/2/3 in
+    start-time order -- never the opaque run-id directory name. A workflow
+    with no readable name falls back to its raw run id."""
+
+    def _write_wf(self, run_id, workflow_name, start):
+        wf_dir = os.path.join(self.root, "sess-1", "subagents", "workflows", run_id)
+        os.makedirs(wf_dir)
+        meta_dir = os.path.join(self.root, "sess-1", "workflows")
+        os.makedirs(meta_dir, exist_ok=True)
+        with open(os.path.join(wf_dir, f"agent-{run_id}.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines([
+                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+                _line({"message": {"role": "assistant", "usage": _usage(cr=1000, m5=100),
+                                   "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
+            ])
+        if workflow_name is not None:
+            with open(os.path.join(meta_dir, run_id + ".json"), "w", encoding="utf-8") as f:
+                json.dump({"workflowName": workflow_name, "startTime": start,
+                           "agentCount": 1, "totalToolCalls": 1}, f)
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="cc-labels-")
+        # two runs of the build workflow (written out of start-time order) and
+        # one single-run analysis workflow.
+        self._write_wf("wf_bbb", "creatio-freedom-build-executor", 200)
+        self._write_wf("wf_aaa", "creatio-freedom-build-executor", 100)
+        self._write_wf("wf_ccc", "creatio-classic-behaviour-analysis", 50)
+        self.report = Report(export_mod.discover(self.root), metrics.CostConfig())
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_labels_use_workflow_name_and_round_numbers(self):
+        labels = self.report.workflow_labels
+        self.assertEqual(labels["wf_aaa"], "freedom-build-executor · round 1")  # earlier start
+        self.assertEqual(labels["wf_bbb"], "freedom-build-executor · round 2")
+        self.assertEqual(labels["wf_ccc"], "classic-behaviour-analysis")  # single run, no round
+        # no raw run id leaks into the by-stage labels
+        stage_labels = [lbl for lbl, _ in self.report.stage_aggs]
+        self.assertTrue(any("round 1" in s for s in stage_labels))
+        self.assertFalse(any(s.startswith("wf_") for s in stage_labels))
+
+    def test_reconcile_carries_friendly_label_and_keeps_run_id(self):
+        by_run = {r.run_id: r for r in self.report.reconcile()}
+        self.assertEqual(by_run["wf_ccc"].workflow, "classic-behaviour-analysis")
+        self.assertEqual(by_run["wf_aaa"].workflow, "freedom-build-executor · round 1")
+
+    def test_missing_workflow_name_falls_back_to_run_id(self):
+        self._write_wf("wf_nometa", None, None)  # no meta json written
+        report = Report(export_mod.discover(self.root), metrics.CostConfig())
+        self.assertEqual(report.workflow_labels["wf_nometa"], "wf_nometa")
+
+
 if __name__ == "__main__":
     unittest.main()

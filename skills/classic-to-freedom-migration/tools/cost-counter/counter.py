@@ -49,7 +49,7 @@ def _print_ttl(report: Report) -> None:
 
 def _print_check(report: Report) -> None:
     print("cross-checks vs workflow journals (R8):")
-    print(f"    {'workflow':22} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
+    print(f"    {'workflow':34} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
     all_ok = True
     for row in report.reconcile():
         a_mark = "ok" if row.agents_ok else "MISMATCH"
@@ -57,7 +57,7 @@ def _print_check(report: Report) -> None:
         all_ok = all_ok and row.agents_ok and row.tool_calls_ok
         agents = f"{row.agents_meta}/{row.agents_seen} {a_mark}"
         toolcalls = f"{row.tool_calls_meta}/{row.tool_calls_seen} {t_mark}"
-        print(f"    {row.workflow:22} {agents:>20} {toolcalls:>24}")
+        print(f"    {row.workflow:34} {agents:>20} {toolcalls:>24}")
     print(f"    => {'all workflows reconcile' if all_ok else 'DISCREPANCIES ABOVE'}")
 
 
@@ -137,6 +137,7 @@ def _reconcile_payload(report: Report) -> list:
     return [
         {
             "workflow": r.workflow,
+            "run_id": r.run_id,
             "agents_meta": r.agents_meta,
             "agents_seen": r.agents_seen,
             "agents_ok": r.agents_ok,

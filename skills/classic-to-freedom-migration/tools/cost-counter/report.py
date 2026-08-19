@@ -109,11 +109,12 @@ def aggregate_transcript(path: str, offloaded_dir: Optional[str] = None) -> Tran
 
 @dataclass
 class ReconcileRow:
-    workflow: str
+    workflow: str            # human-friendly stage label (see _workflow_labels)
     agents_meta: Optional[int]
     agents_seen: int
     tool_calls_meta: Optional[int]
     tool_calls_seen: int
+    run_id: Optional[str] = None   # opaque workflow run-id, kept for traceability
 
     @property
     def agents_ok(self) -> bool:
@@ -131,6 +132,54 @@ def _read_meta(path: str) -> tuple[Optional[int], Optional[int]]:
     except Exception:
         return (None, None)
     return (data.get("agentCount"), data.get("totalToolCalls"))
+
+
+def _workflow_labels(session: export_mod.SessionExport) -> dict:
+    """Human-friendly stage label per workflow, read from the workflow meta.
+
+    ``workflows/<wf>.json`` carries ``workflowName`` (e.g.
+    ``creatio-freedom-build-executor``) and ``startTime``. We show that name --
+    minus the ``creatio-`` prefix -- instead of the opaque run-id directory name
+    (``wf_1f254b35-538``). When the same workflow ran more than once (e.g. three
+    build rounds), the repeats are numbered ``round 1/2/3`` in start-time order.
+    Anything without a readable name falls back to its raw run id.
+    """
+    info: dict = {}
+    for workflow in session.workflows:
+        name = start = None
+        if workflow.meta_json:
+            try:
+                with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
+                    data = json.load(handle)
+                name = data.get("workflowName")
+                start = data.get("startTime") or data.get("timestamp")
+            except Exception:
+                pass
+        info[workflow.name] = (name, start)
+
+    groups: dict = collections.defaultdict(list)
+    for run_id, (name, start) in info.items():
+        if name:
+            groups[name].append((start, run_id))
+    round_no: dict = {}
+    for runs in groups.values():
+        if len(runs) > 1:
+            # start-time order; None sorts first so numbering stays deterministic.
+            for index, (_, run_id) in enumerate(
+                sorted(runs, key=lambda r: (r[0] is None, r[0])), start=1
+            ):
+                round_no[run_id] = index
+
+    labels: dict = {}
+    for run_id, (name, _) in info.items():
+        if not name:
+            labels[run_id] = run_id
+            continue
+        friendly = name[len("creatio-"):] if name.startswith("creatio-") else name
+        if run_id in round_no:
+            friendly = f"{friendly} · round {round_no[run_id]}"
+        labels[run_id] = friendly
+    return labels
 
 
 def _built_pages(session: export_mod.SessionExport) -> set:
@@ -172,6 +221,9 @@ class Report:
                     agent_file, workflow.tool_results_dir
                 )
 
+        # human-friendly stage labels (workflowName + round #), not raw run ids
+        self.workflow_labels = _workflow_labels(session)
+
         # per-stage aggregates
         self.stage_aggs: list[tuple[str, TranscriptAgg]] = []
         if session.main_transcript:
@@ -190,7 +242,8 @@ class Report:
             agg = TranscriptAgg()
             for agent_file in workflow.agent_files:
                 agg.add(self._agent_aggs[agent_file])
-            label = f"{workflow.name} ({len(workflow.agent_files)} agents)"
+            friendly = self.workflow_labels.get(workflow.name, workflow.name)
+            label = f"{friendly} ({len(workflow.agent_files)} agents)"
             self.stage_aggs.append((label, agg))
 
         # per-agent aggregates (subagents only)
@@ -200,7 +253,8 @@ class Report:
                 agg = self._agent_aggs[agent_file]
                 role = parsing.opening_role(agent_file) or "?"
                 agent_id = os.path.basename(agent_file)[len("agent-"):][:14]
-                self.agent_rows.append((workflow.name, agent_id, role, agg))
+                friendly = self.workflow_labels.get(workflow.name, workflow.name)
+                self.agent_rows.append((friendly, agent_id, role, agg))
 
         # global effective cache-write weight (from every transcript)
         total = TranscriptAgg()
@@ -241,8 +295,9 @@ class Report:
             for agent_file in workflow.agent_files:
                 tool_calls_seen += sum(self._agent_aggs[agent_file].tool_calls.values())
             rows.append(ReconcileRow(
-                workflow.name, agents_meta, len(workflow.agent_files),
-                tool_calls_meta, tool_calls_seen,
+                self.workflow_labels.get(workflow.name, workflow.name),
+                agents_meta, len(workflow.agent_files),
+                tool_calls_meta, tool_calls_seen, run_id=workflow.name,
             ))
         return rows
 
@@ -276,7 +331,7 @@ class Report:
                 Column("weighted", "weighted", "mb", share=True),
             ],
             label_header="stage",
-            label_width=32,
+            label_width=46,
         )
         for label, agg in self.stage_aggs:
             table.add(label, {
@@ -359,11 +414,11 @@ class Report:
                 Column("cache_read", "cacheR", "mb", share=True),
                 Column("output", "outTok", "mb", share=True),
             ],
-            label_header="workflow / agent / role",
-            label_width=44,
+            label_header="workflow · role · agent",
+            label_width=58,
         )
         for wf, agent_id, role, agg in sorted(self.agent_rows, key=lambda r: -r[3].cache_read):
-            label = f"{wf[:15]} {agent_id} {role}"
+            label = f"{wf} · {role} · {agent_id}"
             table.add(label, {
                 "turns": agg.turns,
                 "startup": agg.startup,
