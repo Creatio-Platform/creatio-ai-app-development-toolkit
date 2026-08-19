@@ -195,16 +195,70 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
 // and statically evaluates the returned object literal — no code runs, so a hostile body cannot reach
 // process/fs/env. Anything it cannot resolve statically is left null AND recorded in `astDiagnostics`
 // (fail-loud) rather than silently guessed.
-const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
+// `Terrasoft.ViewItemType`, complete, transcribed from core `Terrasoft.Nui/Resources/Terrasoft/core/enums/
+// sysenums.js`. Classic identifies every element with one `switch (itemType)` over all of these
+// (`ViewGeneratorV2.generateStandardItem`), so the table stays complete and the values stay exact — a schema may
+// write `itemType` as a raw number instead of the enum member.
+const AST_VIEW_ITEM_TYPE = {
+  GRID_LAYOUT: 0, TAB_PANEL: 1, DETAIL: 2, MODEL_ITEM: 3, MODULE: 4, BUTTON: 5, LABEL: 6, CONTAINER: 7,
+  MENU: 8, MENU_ITEM: 9, MENU_SEPARATOR: 10, SECTION_VIEWS: 11, SECTION_VIEW: 12, GRID: 13, SCHEDULE_EDIT: 14,
+  CONTROL_GROUP: 15, RADIO_GROUP: 16, DESIGN_VIEW: 17, COLOR_BUTTON: 18, IMAGE_TAB_PANEL: 19, HYPERLINK: 20,
+  INFORMATION_BUTTON: 21, TIP: 22, COMPONENT: 23, TIP_LABEL: 24,
+  PROGRESS_BAR: 30, GRID_LAYOUT_EDIT: 31, IFRAMECONTROL: 32, EXTERNAL_WIDGET: 33,
+};
 // The classic Terrasoft.core.enums vocabulary the mapper also switches on — one named source of truth so the
 // two files never drift on a raw itemType/contentType literal (an off-by-value waiting to happen).
-export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE; // ViewItemType: GridLayout 0 · Detail 2 · ControlGroup 15
-export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a column rendered via a picker)
+export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE;
+// `Terrasoft.ContentType`, complete. LOOKUP (5) is the only member that drives a mapping decision (the mapper
+// renders it via a picker); the rest are pinned so a member the schema names is identified rather than collapsing
+// to null — "could not read it" and "the page set none" must stay distinguishable.
+export const CONTENT_TYPE = {
+  LONG_TEXT: 0, SHORT_TEXT: 1, DATE_TIME: 2, ENUM: 3, RICH_TEXT: 4, LOOKUP: 5, SEARCHABLE_TEXT: 6,
+};
+// `Terrasoft.DataValueType`, complete. A diff item may declare its own `dataValueType`; for a VIRTUAL field (no
+// entity column behind it) that declaration is the only type evidence there is.
+export const DATA_VALUE_TYPE = {
+  GUID: 0, TEXT: 1, INTEGER: 4, FLOAT: 5, MONEY: 6, DATE_TIME: 7, DATE: 8, TIME: 9, LOOKUP: 10, ENUM: 11,
+  BOOLEAN: 12, BLOB: 13, IMAGE: 14, CUSTOM_OBJECT: 15, IMAGELOOKUP: 16, COLLECTION: 17, COLOR: 18,
+  LOCALIZABLE_STRING: 19, ENTITY: 20, ENTITY_COLLECTION: 21, ENTITY_COLUMN_MAPPING_COLLECTION: 22,
+  HASH_TEXT: 23, SECURE_TEXT: 24, FILE: 25, MAPPING: 26, SHORT_TEXT: 27, MEDIUM_TEXT: 28, MAXSIZE_TEXT: 29,
+  LONG_TEXT: 30, FLOAT1: 31, FLOAT2: 32, FLOAT3: 33, FLOAT4: 34, LOCALIZABLE_PARAMETER_VALUES_LIST: 35,
+  METADATA_TEXT: 36, STAGE_INDICATOR: 37, OBJECT_LIST: 38, COMPOSITE_OBJECT_LIST: 39, FLOAT8: 40,
+  FILE_LOCATOR: 41, PHONE_TEXT: 42, RICH_TEXT: 43, WEB_TEXT: 44, EMAIL_TEXT: 45, COMPOSITE_OBJECT: 46,
+  FLOAT0: 47, MONEY0: 48, MONEY1: 49, MONEY3: 50,
+};
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
 // stored as `Foo` was looked up as `Foo#bar` and the raw key leaked into the plan.
 export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "");
+// ---- ENUM DRIFT GUARD ------------------------------------------------------------------------------------
+// The tables above are a snapshot of core, so they can drift from the target platform. `manifest.enumVocabulary`
+// is the stand's own echo of these enums (`{ ViewItemType: {…}, ContentType: {…}, DataValueType: {…} }`).
+// Severities are deliberately unequal:
+//  • MISMATCH on a member both sides carry ⇒ blocking. The engine's number is wrong for this stand, so every
+//    element of that kind is mis-read and there is no safe partial reading.
+//  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
+//    stop every migration on the day a release adds a member.
+//  • A member only the ENGINE carries ⇒ not a finding: an older stand legitimately predates it.
+const DRIFT_TABLES = { ViewItemType: AST_VIEW_ITEM_TYPE, ContentType: CONTENT_TYPE, DataValueType: DATA_VALUE_TYPE };
+export function enumDriftIssues(vocabulary) {
+  const live = plainObj(vocabulary);
+  const mismatches = [], newMembers = [];
+  for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
+    const standTable = plainObj(live[enumName]);
+    if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
+    for (const [member, standValue] of Object.entries(standTable)) {
+      if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
+      if (!(member in pinned)) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
+      if (pinned[member] !== standValue) mismatches.push(`${enumName}.${member}: engine ${pinned[member]}, stand ${standValue}`);
+    }
+  }
+  mismatches.sort(byLocale);
+  newMembers.sort(byLocale);
+  return { mismatches, newMembers };
+}
+
 // Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
 // not blow the call stack (DoS). `path.length` is the current nesting depth — bail to null + a diagnostic
 // well before any real stack limit. Real page schemas nest only a handful of levels; 500 is unreachable by
@@ -228,11 +282,12 @@ const TAG_TRANSITIONS = {
   this: { BusinessRuleModule: "brm", Terrasoft: "terrasoft" },
   brm: { enums: "brm.enums" },
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
-  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", controls: "terrasoft.controls", core: "terrasoft.core",
+  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
+    controls: "terrasoft.controls", core: "terrasoft.core",
     MessageMode: "t:sym", MessageDirectionType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
-  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct",
+  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
     MessageMode: "t:sym", MessageDirectionType: "t:sym" },
 };
 // "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
@@ -241,11 +296,13 @@ const TAG_TRANSITIONS = {
 // plan reads better naming it, so there is no reason to pin numeric constants the engine would have to assert.
 // An unknown key under this state still yields its name (any member of these two namespaces is a symbol we want).
 const TAG_SYMBOLIC = "t:sym";
-// "t:ct" indexes ContentType. Only LOOKUP (5) drives behavior (the mapper renders it via a picker); every other
-// ContentType key is a display hint the mapper does not switch on, so it intentionally stays null (unknown-key →
-// null, exactly as before) rather than being pinned to a guessed numeric — resolving LOOKUP is the fix, and no
-// other value can silently equal 5 and mis-flag a scalar as a lookup.
-const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY, "t:ct": CONTENT_TYPE };
+// The terminal enum tables, each complete against core `sysenums.js`. A member that does NOT resolve against one
+// is a vocabulary gap in this engine and is reported BY NAME (`unknown-enum-member`), never as a silent null.
+const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY,
+  "t:ct": CONTENT_TYPE, "t:dvt": DATA_VALUE_TYPE };
+// The enum a terminal state indexes, by NAME — the miss-report cites `ViewItemType.RADIO_GROUP`, not the tag.
+const TAG_ENUM_NAME = { "t:vit": "ViewItemType", "t:rule": "RuleType", "t:prop": "Property",
+  "t:ct": "ContentType", "t:dvt": "DataValueType" };
 
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
@@ -290,27 +347,34 @@ function spliceAliasChain(path, base, scope) {
   return cur;
 }
 
-// Walk the transition table from `tag` along `path` to the value it lands on.
+// Walk the transition table from `tag` along `path` to the value it lands on. Returns `{ value }`, plus
+// `unknown: "<Enum>.<MEMBER>"` when the walk REACHED a terminal enum table and the member was not in it: the enum
+// and the member are then both identified and only the number is missing, so it is reported by name. A miss on a
+// non-terminal state stays a plain null — an opaque proxy has nothing to name.
 function walkTagAutomaton(tag, path) {
   for (const k of path) {
-    if (tag === TAG_SYMBOLIC) return k;                          // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
+    if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
-    if (enumTable) return k in enumTable ? enumTable[k] : null;  // terminal: the next key indexes the enum table
+    if (enumTable) {                                             // terminal: the next key indexes the enum table
+      if (k in enumTable) return { value: enumTable[k] };
+      return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
+    }
     const next = TAG_TRANSITIONS[tag];
-    if (!next) return null;                                      // proxy (or already a value) — further access is null
+    if (!next) return { value: null };                           // proxy (or already a value) — further access is null
     tag = next[k] || "proxy";                                    // unknown key at this state collapses to proxy
   }
-  return null; // ended on a resolver, not a concrete value
+  return { value: null }; // ended on a resolver, not a concrete value
 }
 
+// Same `{ value, unknown? }` shape as walkTagAutomaton: the caller needs the reason a null is null.
 function resolveMemberValue(node, scope) {
   const chain = memberChain(node);
-  if (!chain) return null;
+  if (!chain) return { value: null };
   const { path } = chain;
   const cur = spliceAliasChain(path, chain.base, scope);
-  if (cur === null) return null;
+  if (cur === null) return { value: null };
   const tag = baseTag(cur, scope);
-  if (tag == null) return null;
+  if (tag == null) return { value: null };
   return walkTagAutomaton(tag, path);
 }
 
@@ -320,7 +384,10 @@ function memberBase(node) { let cur = node; while (cur?.type === "MemberExpressi
 
 function makeAstEvaluator(scope, diagnostics, src) {
   const snippet = (n) => { try { return src.slice(n.start, Math.min(n.end, n.start + 60)).replace(/\s+/g, " "); } catch { return "?"; } };
-  const flag = (kind, node, path) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node) });
+  // `detail` (optional) — a machine-readable rider a consumer reads instead of re-parsing `snippet` (today: the
+  // enum member name). Omitted when absent, so a diagnostic without one keeps its exact shape.
+  const flag = (kind, node, path, detail) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node),
+    ...(detail ? { detail } : {}) });
   function evalNode(node, path) {
     if (!node) return null;
     if (path.length > MAX_AST_DEPTH) { flag("max-nesting-depth", node, path); return null; }
@@ -370,12 +437,16 @@ function makeAstEvaluator(scope, diagnostics, src) {
     });
   }
   function evalMember(node, path) {
-    const v = resolveMemberValue(node, scope);
+    const { value, unknown } = resolveMemberValue(node, scope);
+    // A member of a known framework enum the pinned table does not carry: a vocabulary gap in THIS engine, so it
+    // is reported by name in `detail`. ADVISORY — the kind is identified, only its number is not, which is why the
+    // gate treats it differently from a value it genuinely could not read (see migrate.mjs).
+    if (unknown) flag("unknown-enum-member", node, path, unknown);
     // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
     // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
     // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
-    if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
-    return v;
+    if (value == null && !unknown) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
+    return value;
   }
   function evalIdentifier(node, path) {
     if (node.name === "undefined") return undefined;
@@ -956,8 +1027,11 @@ function normalizeDiffOp(op, i) {
     propertyName: strOrNull(op.propertyName),
     index: opIndex,
     bindTo: strOrNull(v.bindTo),
-    itemType: numOrNull(v.itemType),      // 0 grid,2 detail,15 group
+    itemType: numOrNull(v.itemType),      // the element KIND — the whole ViewItemType vocabulary (see AST_VIEW_ITEM_TYPE)
     contentType: numOrNull(v.contentType),
+    // The item's OWN declared data type. The entity column wins where there is one; this is the only type
+    // evidence a VIRTUAL field has.
+    dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
     hasCaption: !!(v.caption),
     // caption resource key (tab/group/detail label) — carried so the real caption is shown for
@@ -1096,7 +1170,7 @@ function sanitizeConditions(conds) {
 function makeItem(op, seed, pkg) {
   return {
     name: op.name, parent: op.parentName, propertyName: op.propertyName,
-    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
+    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
     handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
@@ -1124,7 +1198,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
     return;
   }
-  for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  for (const k of ["order", "contentType", "itemType", "dataValueType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
@@ -1431,10 +1505,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     // (defining insert came from a seed schema): payload = client-authored items, structural identity =
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema schema contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
-      itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
+      itemType: i.itemType, contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
       visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).

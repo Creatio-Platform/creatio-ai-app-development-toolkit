@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
+  VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -436,23 +437,29 @@ check("field-hint: a dynamic hint is flagged EVEN when a static tip already occu
 const umCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", refModules: ["CasesEstimateLabel"], diff: [
   di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" }),                        // field → mapped
   di({ name: "TimerLabel", parentName: "Header", propertyName: "items", caption: "getTimer" }),       // LABEL, no bindTo → unmapped
-  di({ name: "MyGrid", parentName: "Header", propertyName: "items" }),                                // scaffolding (Grid$) → skipped
+  di({ name: "MyGrid", parentName: "Header", propertyName: "items", itemType: 0 }),                    // GRID_LAYOUT → structural by KIND, skipped
   di({ name: "EscalateButton", parentName: "Header", propertyName: "items" }),                        // custom button → unmapped
   di({ name: "SlaGroup", parentName: "Header", propertyName: "items", caption: "getSla" }),           // childless + struct NAME + content → must surface
-  di({ name: "RealGroup", parentName: "Header", propertyName: "items" }),                             // struct NAME parent (child below) → skip
-  di({ name: "RealGroupLabel", parentName: "RealGroup", propertyName: "items", caption: "x" })] })])); // non-field child → makes RealGroup a parent
+  di({ name: "RealGroup", parentName: "Header", propertyName: "items", itemType: 7 }),                 // CONTAINER whose whole subtree maps to nothing → surfaces ONCE
+  di({ name: "RealGroupLabel", parentName: "RealGroup", propertyName: "items", caption: "x" })] })])); // its only child, itself unmapped
 check("unmapped-component: a client LABEL/container with no Freedom element is surfaced (LOUD, not silent)",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "TimerLabel"));
 check("unmapped-component: a custom *Button is surfaced with card-action guidance",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "EscalateButton" && /card action/.test(n.reason)));
-check("unmapped-component: grid/tab scaffolding the mapper rebuilds is NOT flagged (no noise)",
+check("unmapped-component: grid/tab scaffolding the mapper rebuilds is NOT flagged (no noise) — by its STATED kind, not its name",
   !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "MyGrid"));
 check("unmapped-component: a mapped field is NOT flagged as unmapped",
   !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "F"));
 check("unmapped-component: a CHILDLESS struct-named content item (SlaGroup) IS surfaced — no silent drop on name alone",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaGroup"));
-check("unmapped-component: a struct-named PARENT container (RealGroup, has a child) is NOT surfaced (no noise)",
-  !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroup"));
+// ENG-95412: a CONTAINER whose ENTIRE subtree produced no Freedom element surfaces — once, at the subtree root.
+// It previously stayed silent because its NAME ended in `Group`, which is the name-guessing this change removed:
+// a container holding nothing but unmapped content is real UI, and the reader gets ONE decision for the block
+// (its child is folded in, not listed separately).
+check("unmapped-component: a CONTAINER whose whole subtree maps to nothing surfaces ONCE, at the block root",
+  umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroup")
+  && !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroupLabel"),
+  () => umCs.needsDecision.filter(n => n.kind === "unmapped-component").map(n => n.item));
 // review (s-vanislemarina #2/#5): a CONTAINER whose children were MAPPED (a photo wrapper, a profile island, a
 // header column block) is a real layout container — NOT an unmapped micro-widget — even when its NAME misses the
 // struct whitelist (PhotoContainer / EmployeeProfile / HeaderColumnContainer were all falsely flagged "port
@@ -3128,9 +3135,12 @@ check("L5: section processLaunch + processNames captured from an executeProcess 
 // scalarControl aligned to what get-entity-schema-properties ACTUALLY returns (verified on-stand): Date
 // arrives as the numeric code "8"; text subtypes arrive by NAME (Short/Medium/Long/MaxSize). These used to
 // fall to a loud field-control decision (phantom numeric codes 27/28/29/30/32 were never emitted); now they
-// map. A genuinely unknown code (18=Color) still falls to a loud field-control decision. (42=Phone / 44=Web link are
-// now RECOGNIZED formats — see the R-m3 golden above — so a still-unmapped code is used here.)
-const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "18" } };
+// map. ENG-95412: the code table is now COMPLETE (derived from the pinned DataValueType enum), so the loud
+// field-control decision is no longer raised by an unrecognized NUMBER — it is raised by a type Classic's own
+// `generateEditControl` refuses to render (it throws `UnsupportedTypeException`), which is the real invariant the
+// old "18=Color is unknown" case stood for. 37 = STAGE_INDICATOR is such a type; 18 = COLOR now maps to the text
+// edit Classic gives it.
+const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "37" } };
 const rdNames = ["DT8", "ST", "MT", "LT", "XT", "UNK"];
 const rdDiff = rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const rdCs = runMigration({ entity: "X", entityColumns: rdCols,
@@ -3141,12 +3151,14 @@ check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Sho
   && rf("ST")?.values.type === "crt.Input" && rf("MT")?.values.type === "crt.Input"
   && rf("LT")?.values.type === "crt.Input" && rf("LT")?.values.typeLabel === "Long text"
   && rf("XT")?.values.type === "crt.Input" && rf("XT")?.values.typeLabel === "Long text");
-check("scalarControl: a genuinely unknown type code (18=Color) still falls to a loud field-control decision (folded: field named in the summary)",
-  rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bUNK\b/.test(d.reason)));
+check("scalarControl: a type Classic itself refuses to render (37=STAGE_INDICATOR) still falls to a loud field-control decision (folded: field named in the summary)",
+  rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bUNK\b/.test(d.reason)),
+  () => rdCs.changeSet.needsDecision.filter((d) => d.kind === "field-control").map((d) => d.reason));
 // s48 — get-entity-schema-properties returns some core scalars as the NUMERIC DataValueType code, not a name
-// (Money "6" on the ASPContractData configurator was 202 field-control misses). Map the stable core codes;
-// an uncertain text-range code (e.g. 31) still falls to field-control (not guessed into a wrong control).
-const codeCols = { MON: { type: "6" }, DT7: { type: "7" }, BOOL: { type: "12" }, INT: { type: "4" }, FLT: { type: "5" }, TXT: { type: "1" }, DEC31: { type: "31" }, COLOR18: { type: "18" } };
+// (Money "6" on the ASPContractData configurator was 202 field-control misses). ENG-95412: the code table is
+// derived from the pinned enum and therefore complete, so every core code below resolves — including the ones a
+// hand-maintained list had to leave out (9=TIME, 0=GUID read-only, 11=ENUM, 18=COLOR).
+const codeCols = { MON: { type: "6" }, DT7: { type: "7" }, BOOL: { type: "12" }, INT: { type: "4" }, FLT: { type: "5" }, TXT: { type: "1" }, DEC31: { type: "31" }, COLOR18: { type: "18" }, TIME9: { type: "9" }, GUID0: { type: "0" }, ENUM11: { type: "11" } };
 const codeNames = Object.keys(codeCols);
 const codeDiff = codeNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const codeCs = runMigration({ entity: "X", entityColumns: codeCols,
@@ -3160,9 +3172,22 @@ check("scalarControl: numeric DataValueType codes map — Money '6'→NumberInpu
   && codeF("FLT")?.values.type === "crt.NumberInput"
   && codeF("TXT")?.values.type === "crt.Input"
   && codeF("DEC31")?.values.type === "crt.NumberInput" && codeF("DEC31")?.values.typeLabel === "Decimal"); // "31" = Decimal(0.1), confirmed on-stand
-check("scalarControl: a genuinely unknown code (18=Color) is NOT guessed — still a loud field-control decision",
-  codeF("COLOR18")?.values.type === "crt.Input"   // defaulted
-  && codeCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bCOLOR18\b/.test(d.reason)));
+// ENG-95412 change 3 — the coverage completed from Classic's own `generateEditControl` switch. Each of these fell
+// to the loud field-control decision before, although Classic renders every one of them.
+check("scalarControl: COLOR '18' → the text edit Classic gives it, with NO field-control ⚠ (it is a mapped type, not an unknown one)",
+  codeF("COLOR18")?.values.type === "crt.Input"
+  && !codeCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bCOLOR18\b/.test(d.reason)),
+  () => ({ type: codeF("COLOR18")?.values.type, decisions: codeCs.changeSet.needsDecision.filter((d) => d.kind === "field-control").map((d) => d.reason) }));
+check("scalarControl: TIME '9' → DateTimePicker with picker 'time' (its own classic control, generateTimeEdit)",
+  codeF("TIME9")?.values.type === "crt.DateTimePicker" && codeF("TIME9")?.values.pickerType === "time",
+  () => ({ type: codeF("TIME9")?.values.type, picker: codeF("TIME9")?.values.pickerType }));
+check("scalarControl: GUID '0' → a READ-ONLY Input (Classic forces enabled:false on the GUID branch — an editable key would be a fidelity loss)",
+  codeF("GUID0")?.values.type === "crt.Input" && codeF("GUID0")?.values.readOnly === true,
+  () => codeF("GUID0")?.values);
+check("scalarControl: ENUM '11' → ComboBox WITHOUT a lookup ref (an enum has no referenced schema; marking it a lookup would emit a spurious lookup-no-ref ⚠)",
+  codeF("ENUM11")?.values.type === "crt.ComboBox"
+  && !codeCs.changeSet.needsDecision.some((d) => d.kind === "lookup-no-ref" && /\bENUM11\b/.test(d.reason || d.item || "")),
+  () => ({ type: codeF("ENUM11")?.values.type, nd: codeCs.changeSet.needsDecision.filter((d) => d.kind === "lookup-no-ref").map((d) => d.item) }));
 
 // Blocker 1 — the AST parser (which replaced the vm) must not let an unresolved structural field pass as a
 // clean-but-EMPTY page. (a) A diff built via a top-level const alias now resolves statically (part 2); (b) a
@@ -7153,6 +7178,117 @@ try {
   check("ENG-94975: when the judge AGREES it is absent, no contradiction is reported either",
     () => !/DISAGREES/.test(rowOf(agree)) && agree.missing >= 1,
     () => rowOf(agree));
+}
+
+// ---- ENG-95412 · generator-mirrored recognition -----------------------------------------------------------
+// The engine now identifies elements the way Classic's own renderer does (one dispatch over the COMPLETE
+// ViewItemType vocabulary, field path as the default). These pin the behaviours that change is made of: a
+// recognised-but-unmapped kind is named, decoration is a recorded disposition rather than a ⚠, an enum member the
+// table does not carry is advisory instead of a hard block, every diagnostic reaches the plan, and the drift guard
+// separates a wrong value from a merely newer one.
+{
+  const gmBody = (extra, diff) => `define("P",[],function(){return{entitySchemaName:"X",${extra}diff:[${diff}]};});`;
+  const nameOp = `{operation:"insert",name:"Name",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`;
+  const gmRun = (diff, extra = "", manifest = {}) => runMigration({ entity: "X", noParentTemplate: true,
+    entityColumns: { Name: { type: "ShortText" } }, ...manifest,
+    schemas: [{ pkg: "P", body: gmBody(extra, [nameOp, diff].filter(Boolean).join(",")) }] }, { baseDir: FIX });
+
+  // The enum tables are COMPLETE against core sysenums.js — the property the whole dispatch rests on. Counts are
+  // asserted so a half-transcribed table cannot pass: ViewItemType is 25 members in 0..24 plus 4 in 30..33.
+  check("ENG-95412: the pinned enums are complete — ViewItemType 29, ContentType 7, DataValueType 49 members",
+    Object.keys(VIEW_ITEM_TYPE).length === 29 && Object.keys(CONTENT_TYPE).length === 7 && Object.keys(DATA_VALUE_TYPE).length === 49,
+    () => ({ vit: Object.keys(VIEW_ITEM_TYPE).length, ct: Object.keys(CONTENT_TYPE).length, dvt: Object.keys(DATA_VALUE_TYPE).length }));
+  check("ENG-95412: every ViewItemType member has a role in the item-kind dispatch (a member with no role would fall through unnamed)",
+    Object.values(VIEW_ITEM_TYPE).every((v) => itemKindName({ itemType: v })),
+    () => Object.values(VIEW_ITEM_TYPE).filter((v) => !itemKindName({ itemType: v })));
+
+  // A RADIO_GROUP: recognised, and reported BY KIND. The old text ("classic component 'X' produced no Freedom
+  // element — non-standard UI") told the reader nothing they could act on although the schema stated the kind.
+  const rg = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"}}}`);
+  const rgRow = rg.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "IsPrimary");
+  check("ENG-95412: a RADIO_GROUP is reported BY KIND — `itemKind` carries it and the reason calls it a missing MAPPING, not 'non-standard UI'",
+    rgRow?.itemKind === "RADIO_GROUP" && /classic RADIO_GROUP 'IsPrimary'/.test(rgRow.reason)
+    && /missing MAPPING rather than unknown UI/.test(rgRow.reason) && !/non-standard UI/.test(rgRow.reason),
+    () => rgRow);
+
+  // A recognised kind with no mapping names the KIND and asks for a mapping — it does not assert which Freedom
+  // component that should be (choosing one is the mapping task, and a target asserted here would pre-empt it).
+  const gaps = gmRun([
+    `{operation:"insert",name:"Btn",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON}}`,
+    `{operation:"insert",name:"Planner",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.SCHEDULE_EDIT}}`,
+  ].join(","));
+  const gapOf = (n) => gaps.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === n);
+  check("ENG-95412: a recognised-but-unmapped kind names the kind and asks for a mapping, WITHOUT naming a `crt.*` target",
+    gapOf("Planner")?.itemKind === "SCHEDULE_EDIT" && /missing MAPPING rather than unknown UI/.test(gapOf("Planner").reason)
+    && !/crt\./.test(gapOf("Planner").reason),
+    () => gapOf("Planner"));
+  check("ENG-95412: a BUTTON keeps its card-action guidance (its click handler is the part that needs porting)",
+    /card action/.test(gapOf("Btn")?.reason || ""),
+    () => gapOf("Btn"));
+
+  // Decoration: a recorded disposition, NOT a suppression and NOT a ⚠. Both halves matter — a filter would leave
+  // the reader unable to audit what the engine decided to ignore.
+  const decRun = gmRun([
+    `{operation:"insert",name:"SepA",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU_SEPARATOR}}`,
+    `{operation:"insert",name:"TipA",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.TIP}}`,
+  ].join(","));
+  const chromeRows = (decRun.coverage?.rows || []).filter((r) => r.disposition === "chrome").map((r) => r.name).sort();
+  check("ENG-95412: pure decoration (MENU_SEPARATOR / TIP) is recorded as `chrome` in the ledger and raises NO ⚠",
+    chromeRows.join(",") === "SepA,TipA"
+    && !decRun.changeSet.needsDecision.some((d) => d.item === "SepA" || d.item === "TipA"),
+    () => ({ chromeRows, nd: decRun.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`) }));
+  check("ENG-95412: decoration is not `unaccounted` — it never blocks the coverage gate over a menu separator",
+    !(decRun.coverage?.issues || []).some((i) => /SepA|TipA/.test(i)),
+    () => decRun.coverage?.issues);
+
+  // An enum member the pinned table does not carry: identified BY NAME, advisory, and on the plan. Blocking here
+  // produced an instruction nobody could act on (the body is correct; the table is short a member).
+  const fk = gmRun(`{operation:"insert",name:"Weird",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.FUTURE_KIND_9000}}`);
+  const fkDiag = (fk.parseDiagnostics || []).find((d) => d.kind === "unknown-enum-member");
+  check("ENG-95412: an unpinned enum member is recorded as `unknown-enum-member` naming the member (`detail`), not a nameless null",
+    fkDiag?.detail === "ViewItemType.FUTURE_KIND_9000",
+    () => fk.parseDiagnostics);
+  check("ENG-95412: that miss does NOT raise the structural-parse gate reason — it is advisory, the hard gate is for unreadable structure",
+    !fk.gate.reasons.some((r) => /statically resolve structural field/.test(r)),
+    () => fk.gate.reasons);
+  check("ENG-95412: and it still REACHES the plan, as a `parse-gap` row naming the member",
+    fk.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && /ViewItemType\.FUTURE_KIND_9000/.test(d.reason)),
+    () => fk.changeSet.needsDecision.filter((d) => d.kind === "parse-gap"));
+
+  // Diagnostic routing: an attribute whose default the parser cannot read used to be console-only, so its
+  // worklist row showed an empty Detail cell — which reads as "this attribute has no default".
+  const attrGap = gmRun(null, `attributes:{FeatureOn:{value:Terrasoft.Features.getIsEnabled("Widget")}},`);
+  check("ENG-95412: a diagnostic on a NON-diff member (an attribute's unreadable default) reaches the plan, routed to that attribute",
+    attrGap.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "FeatureOn" && /attribute 'FeatureOn'/.test(d.reason)),
+    () => attrGap.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+
+  // Drift: unequal severities, by design.
+  check("ENG-95412: drift — a value MISMATCH on a pinned member is reported (every element of that kind would be mis-identified)",
+    enumDriftIssues({ ViewItemType: { DETAIL: 99 } }).mismatches.join("") === "ViewItemType.DETAIL: engine 2, stand 99",
+    () => enumDriftIssues({ ViewItemType: { DETAIL: 99 } }));
+  check("ENG-95412: drift — a member only the STAND carries is advisory (newMembers), never a mismatch",
+    enumDriftIssues({ ViewItemType: { BRAND_NEW: 77 } }).newMembers.length === 1
+    && enumDriftIssues({ ViewItemType: { BRAND_NEW: 77 } }).mismatches.length === 0,
+    () => enumDriftIssues({ ViewItemType: { BRAND_NEW: 77 } }));
+  check("ENG-95412: drift — a member only the ENGINE carries is NOT a finding (an older stand legitimately predates it)",
+    enumDriftIssues({ ViewItemType: { DETAIL: 2 } }).mismatches.length === 0
+    && enumDriftIssues({ ViewItemType: { DETAIL: 2 } }).newMembers.length === 0,
+    () => enumDriftIssues({ ViewItemType: { DETAIL: 2 } }));
+  const driftRun = gmRun(null, "", { enumVocabulary: { ViewItemType: { DETAIL: 99 } } });
+  check("ENG-95412: a value mismatch BLOCKS the correctness gate, naming both values",
+    driftRun.gate.blocked && driftRun.gate.reasons.some((r) => /enum drift/.test(r) && /engine 2, stand 99/.test(r)),
+    () => driftRun.gate.reasons);
+
+  // The field-control table, completed from Classic's own `generateEditControl` coverage.
+  const ctlCols = { G: { type: "0" }, T: { type: "9" }, C: { type: "18" }, E: { type: "11" } };
+  const ctlRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: ctlCols,
+    schemas: [{ pkg: "P", body: gmBody("", Object.keys(ctlCols).map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")) }] }, { baseDir: FIX });
+  const cf = (n) => ctlRun.changeSet.viewConfigDiff.find((o) => o.name === n)?.values;
+  check("ENG-95412: the control table covers what Classic covers — GUID read-only Input, TIME picker, COLOR Input, ENUM ComboBox",
+    cf("G")?.type === "crt.Input" && cf("G")?.readOnly === true
+    && cf("T")?.type === "crt.DateTimePicker" && cf("T")?.pickerType === "time"
+    && cf("C")?.type === "crt.Input" && cf("E")?.type === "crt.ComboBox",
+    () => ({ G: cf("G"), T: cf("T"), C: cf("C"), E: cf("E") }));
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

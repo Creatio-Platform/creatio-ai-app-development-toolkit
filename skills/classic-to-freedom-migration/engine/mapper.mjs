@@ -1,7 +1,64 @@
 // Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
-import { VIEW_ITEM_TYPE, CONTENT_TYPE, resourceKey } from "./engine.mjs";
+import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
+
+// ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
+// Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
+// (`ViewGeneratorV2.generateStandardItem` → default → `generateModelItem`). This table is that switch expressed as
+// data: for each kind of the complete vocabulary, what this migration does with it. Roles:
+//  • `field`      — a data-bound control; the field builder owns it (Classic's own default).
+//  • `structural` — layout the container builder rebuilds (grids, tab panels, groups, details).
+//  • `container`  — a layout box that is structural ONLY when its subtree produced Freedom elements. A container
+//                   whose whole subtree mapped to nothing is real UI and must still surface, so the role is
+//                   conditional rather than structural.
+//  • `decoration` — UI furniture that carries no migration answer (a menu separator, a tooltip, a control's own
+//                   label, a designer-only grid editor). Recorded in the member ledger as `chrome`.
+//  • `unmapped`   — this engine emits no Freedom element for the kind. It states ENGINE COVERAGE only: WHICH Freedom
+//                   component should serve a kind is the mapping task's business, not this table's, so no target is
+//                   named here. The element gets a TYPED ⚠ naming its classic kind, which is what makes the gap
+//                   actionable without pre-deciding the answer.
+// Role constants: one spelling each, so a typo cannot silently read as a different role.
+const ROLE = { FIELD: "field", STRUCT: "structural", CONTAINER: "container", DECOR: "decoration", UNMAPPED: "unmapped" };
+const ITEM_ROLE = {
+  [VIEW_ITEM_TYPE.GRID_LAYOUT]: ROLE.STRUCT,
+  [VIEW_ITEM_TYPE.GRID_LAYOUT_EDIT]: ROLE.DECOR,   // design-time grid-settings editor, not page content
+  [VIEW_ITEM_TYPE.TAB_PANEL]: ROLE.STRUCT,
+  [VIEW_ITEM_TYPE.IMAGE_TAB_PANEL]: ROLE.STRUCT,
+  [VIEW_ITEM_TYPE.DETAIL]: ROLE.STRUCT,
+  [VIEW_ITEM_TYPE.CONTROL_GROUP]: ROLE.STRUCT,
+  [VIEW_ITEM_TYPE.MODEL_ITEM]: ROLE.FIELD,
+  [VIEW_ITEM_TYPE.CONTAINER]: ROLE.CONTAINER,
+  [VIEW_ITEM_TYPE.MENU_SEPARATOR]: ROLE.DECOR,
+  [VIEW_ITEM_TYPE.TIP]: ROLE.DECOR,                // a tooltip; a field's own `tip` is carried on the field
+  [VIEW_ITEM_TYPE.TIP_LABEL]: ROLE.DECOR,          // the LABEL of a control — Freedom fields label themselves
+  [VIEW_ITEM_TYPE.MODULE]: ROLE.UNMAPPED,        // widget / profile-card builders claim the ones they know first
+  [VIEW_ITEM_TYPE.BUTTON]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.LABEL]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.MENU]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.MENU_ITEM]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.RADIO_GROUP]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.HYPERLINK]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.INFORMATION_BUTTON]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.COLOR_BUTTON]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.COMPONENT]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.GRID]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.SCHEDULE_EDIT]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.SECTION_VIEWS]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.SECTION_VIEW]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.DESIGN_VIEW]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.PROGRESS_BAR]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.IFRAMECONTROL]: ROLE.UNMAPPED,
+  [VIEW_ITEM_TYPE.EXTERNAL_WIDGET]: ROLE.UNMAPPED,
+};
+// The member NAME for a kind, so a typed ⚠ reads `RADIO_GROUP 'IsPrimary'` — the identity a reviewer can act on.
+const ITEM_KIND_NAME = Object.fromEntries(Object.entries(VIEW_ITEM_TYPE).map(([k, v]) => [v, k]));
+// The kind the schema stated, or null when it stated none. Null is not "unknown element": Classic reads a missing
+// itemType as a field, and it is the one case where a name-shaped fallback applies (see `dropVerdict`).
+const itemRole = (i) => (i?.itemType == null ? null : ITEM_ROLE[i.itemType] || ROLE.UNMAPPED);
+export const itemKindName = (i) => (i?.itemType == null ? null : ITEM_KIND_NAME[i.itemType] || `itemType ${i.itemType}`);
+// Pure decoration. Exported: the member ledger records it as `chrome` rather than letting it fall to `unaccounted`.
+export const isDecorationItem = (i) => itemRole(i) === ROLE.DECOR;
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -53,15 +110,36 @@ function resolveOwner(startParent, index, profileAnchors = PROFILE_CONTAINERS) {
 }
 const tabGridName = (tab) => `${tab}Grid`;
 
-// Some column types arrive from get-entity-schema-properties as the numeric Terrasoft DataValueType CODE
-// rather than a name — inconsistently: on real stands Date comes as "8", Money as "6", and the Decimal-precision
-// variants as codes too (all VERIFIED on-stand on the ASPContractData configurator: 202 Money columns as "6";
-// code "31" = "Decimal (0.1)", i.e. a Float variant → NumberInput). Normalize the codes we have ground truth for
-// to their names so the name-based mapping below catches them. ONLY confirmed codes are listed — the numeric
-// range is NOT cleanly partitioned (31 is a decimal, yet 30/32 were believed to be text), so an UNCONFIRMED code
-// is left unmapped and flagged loudly (a folded field-control decision) rather than guessed into a wrong control.
-// If another Decimal-precision code (0.01/0.001/…) surfaces on a future page, confirm it on-stand and add it here.
-const DATAVALUETYPE_CODE = { "1": "text", "4": "integer", "5": "float", "6": "money", "7": "datetime", "8": "date", "12": "boolean", "16": "imagelookup", "31": "float", "42": "phone", "44": "weblink" };
+// Some column types arrive from get-entity-schema-properties as the numeric Terrasoft DataValueType CODE rather
+// than a name — inconsistently: on real stands Date comes as "8", Money as "6", the Decimal-precision variants as
+// codes too. This map normalizes code → the internal type name the control mapping below switches on.
+//
+// DERIVED from the pinned `DATA_VALUE_TYPE` table (engine.mjs), never hand-listed: a code then cannot disagree
+// with the enum the rest of the engine reads, and the map is complete, so a code is IDENTIFIED even when no
+// Freedom control is mapped for it. Identification and mapping capability are separate concerns — a type with no
+// analog falls to the loud field-control decision below, never to a wrong control.
+const DVT_TYPE_NAME = {
+  GUID: "guid", TEXT: "text", SHORT_TEXT: "shorttext", MEDIUM_TEXT: "mediumtext", MAXSIZE_TEXT: "maxsizetext",
+  LONG_TEXT: "longtext", RICH_TEXT: "richtext", HASH_TEXT: "hashtext", SECURE_TEXT: "securetext",
+  LOCALIZABLE_STRING: "text", METADATA_TEXT: "text",
+  PHONE_TEXT: "phone", WEB_TEXT: "weblink", EMAIL_TEXT: "email", COLOR: "color",
+  INTEGER: "integer", FLOAT: "float", FLOAT0: "float", FLOAT1: "float", FLOAT2: "float", FLOAT3: "float",
+  FLOAT4: "float", FLOAT8: "float",
+  MONEY: "money", MONEY0: "money", MONEY1: "money", MONEY3: "money",
+  DATE_TIME: "datetime", DATE: "date", TIME: "time",
+  LOOKUP: "lookup", ENUM: "enum", BOOLEAN: "boolean", IMAGELOOKUP: "imagelookup",
+  // Identified, deliberately WITHOUT a field control: Classic's own `generateEditControl` throws
+  // `UnsupportedTypeException` for these, so there is no classic field behaviour to port. Naming them keeps the
+  // decision honest ("STAGE_INDICATOR, no field analog") instead of reporting an unreadable type.
+  MAPPING: "mapping", STAGE_INDICATOR: "stageindicator", BLOB: "blob", IMAGE: "image", FILE: "file",
+  FILE_LOCATOR: "file", COLLECTION: "collection", ENTITY: "entity", ENTITY_COLLECTION: "entitycollection",
+  CUSTOM_OBJECT: "customobject", COMPOSITE_OBJECT: "compositeobject", OBJECT_LIST: "objectlist",
+  COMPOSITE_OBJECT_LIST: "compositeobjectlist",
+  ENTITY_COLUMN_MAPPING_COLLECTION: "entitycolumnmapping", LOCALIZABLE_PARAMETER_VALUES_LIST: "parametervalues",
+};
+const DATAVALUETYPE_CODE = Object.fromEntries(Object.entries(DATA_VALUE_TYPE)
+  .filter(([member]) => DVT_TYPE_NAME[member])
+  .map(([member, code]) => [String(code), DVT_TYPE_NAME[member]]));
 // An IMAGELOOKUP column (dataValueType 16, "Image link" → references SysImage) is the ONLY column crt.ImageInput
 // can bind — NOT a binary Image, NOT a Text URL. Recognize it by normalized code or by name so an image field /
 // generator-image can be bound concretely (and a non-IMAGELOOKUP source flagged, never silently mis-bound).
@@ -71,16 +149,36 @@ function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
   // (Boolean/DateTime/Integer/Float/Money/ShortText/MediumText/LongText/MaxSizeText/RichText); some core scalars
   // arrive as a numeric DataValueType code (Date "8", Money "6", Decimal "31", Phone "42", Web link "44", …) —
-  // normalized above. Genuinely unknown/unconfirmed codes (18=Color, …) stay null → the caller flags a loud
-  // field-control decision.
+  // normalized above.
+  //
+  // COVERAGE is Classic's own: `ViewGeneratorV2.generateEditControl` switches over dataValueType and throws
+  // `UnsupportedTypeException` outside its set, so that set defines "a classic field control" and this mirrors it.
+  // A type Classic refuses to render has no field behaviour to port, so it returns null and the caller raises the
+  // loud field-control decision — naming a type it identified (STAGE_INDICATOR, BLOB, …), not an unreadable one.
   t = DATAVALUETYPE_CODE[t] || t;
   if (t === "imagelookup") return { type: "crt.ImageInput", image: true }; // binds via `value`, not `control`
   if (t === "boolean") return { type: "crt.Checkbox" };
   if (t === "datetime") return { type: "crt.DateTimePicker", picker: "datetime" };
   if (t === "date") return { type: "crt.DateTimePicker", picker: "date" };
+  // TIME is its own DataValueType (9) with its own classic control (`generateTimeEdit`).
+  if (t === "time") return { type: "crt.DateTimePicker", picker: "time" };
   if (["integer", "decimal", "float", "money"].includes(t)) return { type: "crt.NumberInput" };
   if (["longtext", "maxsizetext", "richtext"].includes(t)) return { type: "crt.Input", multiline: true };
   if (["text", "shorttext", "mediumtext"].includes(t)) return { type: "crt.Input" };
+  // GUID renders as a text edit in Classic, forced READ-ONLY (`generateEditControl` sets `enabled = false` on the
+  // GUID branch before falling through to the text control); carry that, or the field invites editing a key the
+  // classic page protected.
+  if (t === "guid") return { type: "crt.Input", readOnly: true };
+  // An ENUM column is a fixed value list, not an entity lookup (Classic: `generateEnumEdit`). `enumeration` rather
+  // than `lookup`: a lookup carries a referenced schema and lookup actions, an enum carries neither, so marking it
+  // a lookup would emit a spurious `lookup-no-ref` decision plus actions over an object that does not exist. The
+  // value list comes from the column metadata, which is what the caller flags.
+  if (t === "enum") return { type: "crt.ComboBox", enumeration: true };
+  // COLOR is text-storage on a classic text edit. A Freedom colour component would be a design upgrade, not a
+  // migration of what the classic page did.
+  if (t === "color") return { type: "crt.Input" };
+  // HASH / SECURE text are text-storage on classic text edits; masking is a column property, not a field prop.
+  if (["hashtext", "securetext"].includes(t)) return { type: "crt.Input" };
   // Phone / Email / Web link are TEXT-storage columns carrying a FORMAT on the column (verified on-stand: Contact.
   // Phone/MobilePhone = 42, Account.Web = 44, Contact.Email = "Email"). The Freedom field is a plain crt.Input bound
   // to the column — the phone/email/web-link rendering is inherited from the column's format, there is NO field-level
@@ -447,6 +545,8 @@ export function mapToFreedom(eff, opts = {}) {
   _drop.needsDecision.forEach(d => needsDecision.push(d));
   // structure another builder owns (tabs / groups / details / scaffolding) — accounted for, not dropped
   _drop.structural.forEach(a => accountedFor.add(a));
+  // Decoration is deliberately NOT added to `accountedFor` — that set means a Freedom artifact exists, and none
+  // does. The ledger classifies it independently, via `isDecorationItem`.
 
   return {
     entity: eff.entity,
@@ -661,6 +761,8 @@ function mapFields(ctx, containers) {
   const applyFieldTypeMeta = (values, col, c, meta) => {
     if (c.lookup && meta.ref) values.refSchema = meta.ref;
     if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
+    // read-only carried by the TYPE rather than the column (Classic forces `enabled = false` for a GUID).
+    if (c.readOnly) values.readOnly = true;
     // linkedDisplay: a plain scalar shown via a picker (contentType 5, no ref) — a read-only value from a linked record.
     if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
     if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
@@ -1377,15 +1479,15 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 // surfaced (one decision per dropped subtree root), instead of silently vanishing. Reads the final accountedFor.
 function mapUnmappedDrop(eff, accountedFor) {
   const needsDecision = [];
-  // Candidate = alive, CLIENT-authored (non-template) item the mapper produced NOTHING for. Skip STRUCTURAL
-  // containers the mapper builds on demand: a tab (isTab), a CONTROL_GROUP (itemType 15) or detail
-  // (itemType 2). itemType isn't always resolvable, so back it with the naming convention — but a name
-  // suffix ALONE must never silently suppress content (a childless block misnamed `SlaGroup` is real UI):
-  //  • HARD_SCAFFOLD (grids / the root tab panel) is pure layout the mapper rebuilds — always skip.
-  //  • SOFT_STRUCT (…Group/Tab/ControlGroup/TabContainer) is skipped ONLY when it is a real parent (has a
-  //    child routed through it); a childless one IS surfaced, so nothing vanishes on name convention alone.
-  const HARD_SCAFFOLD_RX = /(?:_gridLayout|Grid)$|^Tabs$/;
-  const SOFT_STRUCT_RX = /(?:Tabs|Tab|TabContainer|ControlGroup|Group)$/;
+  // Candidate = alive, CLIENT-authored (non-template) item the mapper produced NOTHING for. The element's KIND
+  // decides (ITEM_ROLE): structural layout is skipped because another builder owns it, decoration is recorded as
+  // `chrome`, anything else surfaces as a TYPED ⚠ naming its kind.
+  //
+  // An element's NAME decides nothing. A name-shaped guess (`…Grid` is scaffolding, `…Group` is a container) can
+  // only ever agree or disagree with the kind the schema already states, and where the schema states no kind the
+  // guess is unfalsifiable — an item the engine knows nothing about is a decision to raise, not a name to pattern
+  // match. The one structural signal that stays is `hasMappedDesc` below: a container whose subtree produced
+  // Freedom elements is a real layout box, which is evidence from the mapping, not from the name.
   // A classic primary-display label (caption `getPrimaryDisplayColumnValue`) shows the record's primary display
   // value as a header title — the Freedom form/mini page provides this NATIVELY (its page title is bound to the
   // entity's primary display column). So it maps to the native page title: nothing to build, and NOT an unmapped
@@ -1393,12 +1495,10 @@ function mapUnmappedDrop(eff, accountedFor) {
   // with no ⚠ message.
   const isPrimaryDisplay = (i) => /getPrimaryDisplayColumnValue/i.test(i.caption || "");
   const byName = new Map((eff.items || []).map(i => [i.name, i]));
-  const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
   // A CONTAINER whose subtree DID produce Freedom elements is a real layout container (a profile island, a
-  // photo wrapper, a header column block), NOT an unmapped micro-widget — even when its NAME misses the
-  // SOFT_STRUCT_RX whitelist (PhotoContainer / EmployeeProfile / HeaderColumnContainer). Flagging those was a
-  // false "port manually or drop" for a block whose fields/image were already migrated. Mark every ancestor of
-  // an accounted-for item as "has a mapped descendant" and never surface it. The genuine SLA-timer case — a
+  // photo wrapper, a header column block), NOT an unmapped micro-widget — whatever its name says. Flagging those
+  // was a false "port manually or drop" for a block whose fields/image were already migrated. Mark every ancestor
+  // of an accounted-for item as "has a mapped descendant" and never surface it. The genuine SLA-timer case — a
   // container whose ENTIRE subtree mapped to nothing — has no accounted descendant, so it still surfaces.
   // Mark every ancestor of a mapped item as "has a mapped descendant" (own fn for Sonar CC 15) — a container
   // whose subtree produced Freedom elements is a real layout container, never an unmapped micro-widget.
@@ -1443,13 +1543,15 @@ function mapUnmappedDrop(eff, accountedFor) {
   // (inherited) and to the bound column's own `mapped` row.
   const dropVerdict = (i) => {
     if (i.templateOwned || i.bindTo) return "skip";
-    if (i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) return "structural";
+    const role = itemRole(i);
+    if (role === ROLE.STRUCT || i.isTab) return ROLE.STRUCT;
+    // Before `accountedFor`: decoration is an outcome of its own, and the ledger needs the verdict even for an
+    // item some builder also touched.
+    if (role === ROLE.DECOR) return ROLE.DECOR;
     if (accountedFor.has(i.name)) return "skip";
-    if (insideMappedControl(i)) return "structural";      // part of a control the mapper already built
-    if (HARD_SCAFFOLD_RX.test(i.name)) return "structural";
-    if (isPrimaryDisplay(i)) return "structural";         // record title → native Freedom page title; nothing to port, no ⚠
-    if (hasMappedDesc.has(i.name)) return "structural";   // real layout container — its subtree produced Freedom elements
-    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) return "structural"; // structural container (has children)
+    if (insideMappedControl(i)) return ROLE.STRUCT;        // part of a control the mapper already built
+    if (isPrimaryDisplay(i)) return ROLE.STRUCT;           // record title → native Freedom page title; nothing to port, no ⚠
+    if (hasMappedDesc.has(i.name)) return ROLE.STRUCT;     // real layout container — its subtree produced Freedom elements
     return "dropped";
   };
   // Sort every alive item into the two sets by its verdict; the classification itself lives in `dropVerdict`.
@@ -1458,8 +1560,10 @@ function mapUnmappedDrop(eff, accountedFor) {
     const structural = new Set();
     for (const i of (eff.items || [])) {
       const verdict = dropVerdict(i);
-      if (verdict === "structural") structural.add(i.name);
+      if (verdict === ROLE.STRUCT) structural.add(i.name);
       else if (verdict === "dropped") dropped.add(i.name);
+      // ROLE.DECOR needs no set: the ledger reads it from `isDecorationItem`, which is a pure function of the
+      // element's kind, so collecting a list here would be a second copy of the same fact.
     }
     return { dropped, structural };
   };
@@ -1468,14 +1572,25 @@ function mapUnmappedDrop(eff, accountedFor) {
   // block, not one per leaf: the SLA timer surfaces as a single "port this block" item, not six.
   for (const i of (eff.items || [])) {
     if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
-    const isBtn = i.name.endsWith("Button");
+    // A BUTTON is recognised by its stated kind; the name suffix is the fallback for an untyped item only.
+    const isBtn = i.itemType === VIEW_ITEM_TYPE.BUTTON || (itemRole(i) === null && i.name.endsWith("Button"));
     const captionNote = i.caption ? ` (caption ${i.caption})` : "";
     const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
-    // Only CUSTOM (non-template) items reach here now — template-owned buttons are skipped above.
-    const reason = isBtn
-      ? `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`
-      : `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
-    needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
+    // Lead with the element's real classic kind, so the reader can tell a known kind without a mapping (a
+    // `RADIO_GROUP`) from a genuinely bespoke block.
+    const kind = itemKindName(i);
+    // Only CUSTOM (non-template) items reach here now — template-owned buttons are skipped above. The ⚠ states the
+    // kind and that no Freedom element was produced for it; it does NOT name a target component, because choosing
+    // one is the mapping task and a target asserted here would pre-empt that decision.
+    let reason;
+    if (isBtn) {
+      reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
+    } else if (kind) {
+      reason = `classic ${kind} '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — the element's KIND is known, so this is a missing MAPPING rather than unknown UI: map ${kind} to its Freedom counterpart, or confirm drop`;
+    } else {
+      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema states NO itemType — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
+    }
+    needsDecision.push({ kind: "unmapped-component", item: i.name, itemKind: kind, reason });
   }
   return { needsDecision, structural: [...structural] };
 }

@@ -1109,11 +1109,15 @@ const LEDGER_PREAMBLE = [
   "> Every member of every merged schema layer, and what happened to it. **mapped** = the ChangeSet carries a",
   "> Freedom artifact · **decision** = it is on a ⚠ worklist above · **resolved** = you recorded a disposition in",
   "> `manifest.memberDispositions` · **context** = inherited base-template content, excluded by design ·",
+  "> **decoration** = pure UI furniture (a menu separator, a tooltip, a control's own label, a designer-only",
+  "> editor) — identified by its classic kind, and carrying no migration answer to give ·",
   "> **unaccounted** = a gap, and the coverage gate blocks on it.", "",
-  "| Member kind | Mapped | Decision | Resolved | Context | Unaccounted |",
-  "| --- | --- | --- | --- | --- | --- |",
+  "| Member kind | Mapped | Decision | Resolved | Context | Decoration | Unaccounted |",
+  "| --- | --- | --- | --- | --- | --- | --- |",
 ];
-const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "unaccounted"];
+// Column order = the header above, and the order `disposition()` (migrate.mjs) ranks them in: strongest statement
+// first, `unaccounted` last because it is the absence of any.
+const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "chrome", "unaccounted"];
 // explicit locale-aware comparator (Array#sort's default coerces to string and orders by code unit) — the same
 // determinism discipline engine.mjs applies to its own diagnostic lists, and a golden test asserts byte-identical
 // output across two runs of the same manifest.
