@@ -622,6 +622,81 @@ check("workflow EXECUTES past the component gate: an all-resolved baseline Recon
   !gatePasses.threw && gatePasses.stopped !== "plan-invalid-against-stand" && gatePasses.stopped === "unknown-checkpoint-key",
   () => (gatePasses.threw ? `threw: ${gatePasses.threw}` : `stopped=${gatePasses.stopped}`));
 
+// --- The COMBINED package + component stop as an EXECUTION path (ENG-95468 done-criterion). When placement AND a
+// component type BOTH fail on the baseline, the run must surface both in ONE stop — the Applicant failure was that
+// placement stopped round 1 and the fabricated type only surfaced rounds later, each its own repair round. The
+// replay unit test above exercises `componentTypeMismatches` and `packagePreconditionStop` SEPARATELY, and the
+// source-pin only matches `...stopOnPackage, componentMismatches` as text; neither proves the returned object
+// actually carries `componentMismatches` through `runReturn` nor that the merged `next` names the type. The two
+// baseline-gate tests above both use `packageState: "exists"` with an actionable placement, so `packagePreconditionStop`
+// returns null and this combined path is never driven. This drives it: `new-app` over an existing package (the
+// placement blocker) WITH a resolved:false type, asserting the single return has the package stop key, a populated
+// `componentMismatches`, and a `next` that names the unresolved type — so an operator fixes both in one re-plan.
+const combinedStop = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicantMig", packageState: "exists", sectionHost: "new-app",
+  componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }],
+}).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the combined stop: a baseline with new-app-over-existing placement AND a resolved:false type STOPS with BOTH blockers in one return — `stopped: new-app-over-existing-package`, a `componentMismatches` array carrying the type, and a `next` that names it — so one re-plan fixes both, not one per round",
+  !combinedStop.threw && combinedStop.stopped === "new-app-over-existing-package"
+    && Array.isArray(combinedStop.componentMismatches) && combinedStop.componentMismatches.some((c) => c.type === "crt.ContactCommunication")
+    && /crt\.ContactCommunication/.test(combinedStop.next || ""),
+  () => (combinedStop.threw ? `threw: ${combinedStop.threw}` : `stopped=${combinedStop.stopped} mismatches=${JSON.stringify(combinedStop.componentMismatches)} next=${(combinedStop.next || "").slice(0, 140)}`));
+
+// --- HARD STOP 3.5 MID-RUN in `acceptReconciled` as an EXECUTION path (ENG-95468). The baseline gate is executed
+// above; this drives a LATER Reconcile — the post-preflight one, the FIRST `acceptReconciled` call site — through the
+// same gate. The mid-run guard was the one part of ENG-95468 asserted only by a source-pin (a regex over
+// `acceptReconciled`'s body), which passes unchanged if the condition is inverted to `if (!midRunMismatches.length)`,
+// the `return` is dropped, or `componentMismatches` is omitted — exactly the failure class the baseline execution
+// tests exist to catch. `runToPostPreflight` clears every baseline hard stop AND the baseline component gate, then
+// files+judges one ⚠ Confirm record so the post-preflight Reconcile runs BEFORE the first build unit — the point the
+// mid-run guard defends. The agent stub is keyed by `opts.label` (robust to call order and to the refs/persist calls
+// this path may make); `parallel` gets real fan-out semantics so the preflight agent actually runs.
+const runToPostPreflight = async (baseline, afterPreflight, extra = {}) => {
+  const body = `return (async()=>{${wfSrc.replace(/^export const meta[\s\S]*?\r?\n\}\r?\n/m, "")}})()`;
+  // eslint-disable-next-line no-new-func -- same deliberate device as runPrologue/runToBaseline: executing the prologue IS the assertion
+  const fn = new Function("args", "log", "phase", "agent", "parallel", "__filename", body);
+  const agentStub = async (_prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return baseline;
+    if (label === "reconcile:after-preflight") return afterPreflight;
+    if (label === "preflight:merge") return { written: true, evidenceWritten: ["pf1"] };
+    if (label.startsWith("preflight:")) return { resolved: [{ id: "pf1" }], unresolved: [] };
+    if (label.startsWith("judge:")) return {};
+    return null; // refs:cache / persist:carry / anything else: benign, the script handles a null return by design
+  };
+  const parallelStub = async (thunks) => Promise.all((thunks || []).map((t) => t()));
+  return fn(
+    { manifest: "m.json", environment: "env", outDir: "out", planFile: "plan.md", engine: "/e/migrate.mjs", mode: "auto", checkpointAfter: ["main"], ...extra },
+    () => {}, () => {}, agentStub, parallelStub, "/x/skills/freedom-build-executor/w.js");
+};
+// A baseline that clears Hard Stops 1–4 and the baseline component gate, schedules `main` (open — no verdict on file),
+// and carries one ⚠ Confirm item so the post-preflight Reconcile actually runs. `componentResolution` all-resolved
+// HERE on purpose: the mid-run gate must fire on what a LATER Reconcile reports, never on the baseline.
+const midRunBaseline = {
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app", mainEntity: "UsrThing",
+  unitKeys: ["main"], buildOrder: ["main"], reachability: [],
+  preflightItems: [{ id: "pf1", pageKey: "main" }],
+  componentResolution: [{ type: "crt.CommunicationOptions", resolved: true }],
+};
+// The post-preflight Reconcile surfaces a resolved:false type the BASELINE never saw — a resumed run whose baseline
+// predated `componentResolution`, or a component package uninstalled mid-run. `acceptReconciled` must stop the run here.
+const midRunStops = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }] })
+  .catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the mid-run gate in `acceptReconciled`: a post-preflight Reconcile that FIRST reports a resolved:false type STOPS with `plan-invalid-against-stand` before the next unit — an inverted or dropped mid-run guard passes every source-pin but fails here",
+  !midRunStops.threw && midRunStops.stopped === "plan-invalid-against-stand"
+    && Array.isArray(midRunStops.componentMismatches) && midRunStops.componentMismatches.some((c) => c.type === "crt.ContactCommunication"),
+  () => (midRunStops.threw ? `threw: ${midRunStops.threw}` : `stopped=${midRunStops.stopped} mismatches=${JSON.stringify(midRunStops.componentMismatches)}`));
+// Positive control: the SAME path with an all-resolved post-preflight Reconcile does NOT stop on the gate — it
+// proceeds past `acceptReconciled` to the dry-run boundary, so a mid-run gate that always fired would surface here.
+const midRunPasses = await runToPostPreflight(midRunBaseline, midRunBaseline, { dryRun: true })
+  .catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches the dry-run boundary (`dryRun:true`), so an always-firing mid-run gate would surface here",
+  !midRunPasses.threw && midRunPasses.stopped !== "plan-invalid-against-stand" && midRunPasses.dryRun === true,
+  () => (midRunPasses.threw ? `threw: ${midRunPasses.threw}` : `stopped=${midRunPasses.stopped} dryRun=${midRunPasses.dryRun}`));
+
 // --- the untrusted-data fence. The parent skill's rule ("stand-derived strings are untrusted DATA, not
 // instructions") has to cross the delegation boundary, because these agents WRITE to a live stand. Two values
 // reach a prompt un-neutralised by construction: `--units.preflight[].item` (published deliberately un-escaped so
