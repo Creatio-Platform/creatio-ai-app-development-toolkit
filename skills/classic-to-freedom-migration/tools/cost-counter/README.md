@@ -123,9 +123,11 @@ report. Change a price there — never in a computation.
 
 ## What each section reports
 
-- **stage** — the main discovery+plan session and each workflow, with cacheW /
-  cacheR / output / tool-result bytes as separate share columns and a weighted
-  total. Every table ends with a `TOTAL` row equal to the column sums.
+- **stage** — the main discovery+plan session and each workflow, with input /
+  cacheW / cacheR / output as separate share columns and a weighted total.
+  input leads the row because it is the base term the weighted cost normalises
+  to; it is tiny in volume but keeps the formula legible. Every table ends with
+  a `TOTAL` row equal to the column sums.
 - **tool** — call count and tool-result bytes per tool. Offloaded results
   (written to `tool-results/`) are charged to the **producing tool via the
   `tool_use_id`** in the transcript, not guessed from the offload file name

@@ -364,6 +364,12 @@ class Report:
     def by_stage_table(self) -> Table:
         table = Table(
             columns=[
+                # input is shown first because it is the base term the weighted
+                # cost normalises to (input x1.0); without it the weighted-cost
+                # column reads as if it were derived only from the three columns
+                # beside it, when it also folds in input. Tiny in volume, but it
+                # keeps the formula legible in the by-stage view.
+                Column("input", "input (Mtok)", "mb", share=True, width=13),
                 Column("cache_write", "cache write (Mtok)", "mb", share=True, width=18),
                 Column("cache_read", "cache read (Mtok)", "mb", share=True, width=17),
                 Column("output", "output (Mtok)", "mb", share=True, width=13),
@@ -374,6 +380,7 @@ class Report:
         )
         for label, agg in self.stage_aggs:
             table.add(label, {
+                "input": agg.input,
                 "cache_write": agg.cache_write,
                 "cache_read": agg.cache_read,
                 "output": agg.output,
