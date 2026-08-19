@@ -326,6 +326,13 @@ Details of the record shapes, the ids and the judge tri-state:
   **stops the run** — no repair round closes a plan gap, and re-running buys a guaranteed identical
   answer. Only `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is repairable. (`⛔ PLAN INCOMPLETE`
   is a `--plan`-mode line only; it cannot appear on a `--verify` run.)
+- A **plan assertion untrue of the STAND**, caught at the BASELINE Reconcile **before the first build unit**:
+  a named component type that does not resolve on the target stand (Reconcile's read-only `get-component-info`
+  sweep → `componentResolution`), or the placement preconditions (`new-app-over-existing-package`, an unknown or
+  unnamed target package). It **stops the run** (`stopped: 'plan-invalid-against-stand'`, or the package
+  precondition stop — which now also carries any `componentMismatches`), naming EVERY mismatch at once so a
+  re-plan fixes them in one pass instead of a builder rediscovering each mid-build over expensive repair rounds.
+  This is not repairable by a build round — it is a plan-vs-stand mismatch, so the fix is a re-plan (ENG-95468).
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.

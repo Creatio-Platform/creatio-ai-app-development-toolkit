@@ -354,6 +354,24 @@ const RECONCILE_SCHEMA = {
     // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
     componentTypes: { type: 'array', items: { type: 'string' } },
+    // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
+    // resolved against the TARGET stand: `{ type, resolved, note }`. This is what the pre-build component gate
+    // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
+    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
+    // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
+    // run that predates this field behaves exactly as it did before.
+    componentResolution: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['type', 'resolved'],
+        properties: {
+          type: { type: 'string' },
+          resolved: { type: 'boolean' },
+          note: { type: 'string' },
+        },
+      },
+    },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -922,6 +940,21 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost) {
   return null
 }
 
+// THE COMPONENT-TYPE PRE-BUILD GATE (ENG-95468). Every `crt.*` type the plan names must resolve on the TARGET
+// stand before the first build unit. The one that did not — the fabricated `crt.ContactCommunication`, which is
+// not a component type at all — made a builder hit the wall mid-Build, and the run paid repair rounds for a plan
+// assertion untrue of the stand. This returns EVERY unresolved type at once, so a re-plan fixes them in a single
+// pass instead of rediscovering them one build unit at a time. `componentResolution` is the Reconcile agent's
+// read-only `get-component-info` result per type; ONLY an explicit `resolved: false` gates — an entry the agent
+// did not report is not a failure (absence is not evidence of absence, and a plan predating this field must
+// behave exactly as before). The `note` carries the stand's reason (closest matches / required package /
+// feature) so the stop names the fix, not just the miss.
+function componentTypeMismatches(componentResolution) {
+  return (componentResolution || [])
+    .filter((c) => c && typeof c.type === 'string' && c.resolved === false)
+    .map((c) => ({ type: c.type, note: (typeof c.note === 'string' && c.note.trim()) ? c.note : 'does not resolve on the target stand' }))
+}
+
 // WHICH ⚠ CONFIRM ITEMS PREFLIGHT ACTUALLY HAS TO RESOLVE. `--units.preflight` is the PLAN's list of open
 // questions, not a list of unanswered ones, and the run used to hand all of it to the fan-out on every start. So a
 // resumed session re-resolved every item its predecessor had already answered: measured on a real folder, 107
@@ -1069,7 +1102,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\`, with the entry quoted verbatim and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create. Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that.
 
@@ -1165,11 +1198,17 @@ if ((state.planGaps || []).length) {
 // --- HARD STOP 3: the target package cannot be established or created -------
 // Deliberately NOT a stop for the common case: an absent package WITH a name is what the `app` unit exists to
 // build. What stops the run is a state it cannot act on — see `packagePreconditionStop`.
+// The component-type pre-build gate (ENG-95468) shares this stop point — it runs on the SAME baseline Reconcile
+// facts, before any unit is built. Computed here so a placement stop can carry the component mismatches too: the
+// Applicant run stopped on placement in round 1 and only hit the fabricated component type rounds later, so a
+// re-plan that sees BOTH at once fixes them in one pass.
+const componentMismatches = componentTypeMismatches(state.componentResolution)
 const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
 if (stopOnPackage) {
-  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}`)
+  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentMismatches.map((c) => c.type).join(', ')}` : ''}`)
   return runReturn({
     ...stopOnPackage,
+    componentMismatches,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -1177,6 +1216,27 @@ if (stopOnPackage) {
     verdict: verdictOf(state.verify),
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
+  })
+}
+
+// --- HARD STOP 3.5: a named component type that does not resolve on the stand (ENG-95468) ------------------
+// The plan asserts `crt.*` types the build will look for; one that is not a real type on THIS stand makes a
+// builder fail mid-Build and the run pay repair rounds for it. Catch it here, before the first unit, naming
+// EVERY unresolved type at once so a re-plan fixes them in a single pass. Read-only: the resolution was
+// Reconcile's `get-component-info` sweep. (When placement ALSO fails, the stop above already carried these.)
+if (componentMismatches.length) {
+  log(`STOP — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentMismatches.map((c) => c.type).join(', ')}`)
+  return runReturn({
+    stopped: 'plan-invalid-against-stand',
+    componentMismatches,
+    targetPackage: state.targetPackage || null,
+    packageState: state.packageState || null,
+    approval,
+    planVersion: state.planVersion || null,
+    verdict: verdictOf(state.verify),
+    staleQueueKeys: state.staleQueueKeys || [],
+    newKeys: state.newKeys || [],
+    next: `each named component type must resolve on the target stand (clio \`get-component-info component-type=<type>\`). These do not: ${componentMismatches.map((c) => `\`${c.type}\` (${c.note})`).join('; ')}. This is a PLAN assertion untrue of the stand — fix the mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), re-run \`--plan --out\`, re-approve, then re-run this build. Nothing was built.`,
   })
 }
 

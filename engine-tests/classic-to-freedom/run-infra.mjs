@@ -137,7 +137,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun"];
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -384,6 +384,30 @@ check("packagePreconditionStop: `unknown` STOPS — neither reading is safe, and
 check("packagePreconditionStop: absent with NO name STOPS and points at `manifest.targetPackage` — there is nothing to create",
   () => { const r = wf.packagePreconditionStop(null, "absent"); return r && r.stopped === "target-package-unnamed" && /manifest\.targetPackage/.test(r.next); });
 
+// --- componentTypeMismatches: the pre-build component gate (ENG-95468) ---
+check("componentTypeMismatches: a type reported resolved:false is a mismatch that names the type + carries the stand's reason",
+  () => { const m = wf.componentTypeMismatches([{ type: "crt.ContactCommunication", resolved: false, note: "not a component type; closest: crt.CommunicationOptions" }]);
+    return m.length === 1 && m[0].type === "crt.ContactCommunication" && /CommunicationOptions/.test(m[0].note); });
+check("componentTypeMismatches: EVERY unresolved type is returned at once (a re-plan fixes them in one pass, not one per build unit)",
+  () => { const m = wf.componentTypeMismatches([{ type: "crt.Foo", resolved: false }, { type: "crt.Input", resolved: true }, { type: "crt.Bar", resolved: false }]);
+    return m.length === 2 && m.map((x) => x.type).sort().join(",") === "crt.Bar,crt.Foo"; });
+check("componentTypeMismatches: an unresolved entry with no note still names a reason (the stop is actionable)",
+  () => { const m = wf.componentTypeMismatches([{ type: "crt.Foo", resolved: false }]); return m.length === 1 && /does not resolve/.test(m[0].note); });
+check("componentTypeMismatches: all-resolved → no mismatch; a missing/empty resolution is NOT a failure (absence is not evidence; a plan predating the field is unchanged)",
+  () => (wf.componentTypeMismatches([{ type: "crt.Input", resolved: true }]).length === 0
+    && wf.componentTypeMismatches([]).length === 0
+    && wf.componentTypeMismatches(undefined).length === 0));
+check("componentTypeMismatches: a compositeOnly type reported resolved:true is NOT a mismatch (crt.CommunicationOptions resolves as a component-type — the corrected Applicant target)",
+  () => wf.componentTypeMismatches([{ type: "crt.CommunicationOptions", resolved: true }]).length === 0);
+// The Applicant replay (ENG-95468 done-criterion): the two round-1 blockers are BOTH reproducible through the
+// pre-build checks — the fabricated component type via componentTypeMismatches, and new-app-over-existing via
+// packagePreconditionStop — so a re-plan sees both instead of paying repair rounds to rediscover them.
+check("ENG-95468 replay: the Applicant plan's BOTH round-1 blockers are caught pre-build — crt.ContactCommunication (component) + new-app-over-existing (placement)",
+  () => { const comp = wf.componentTypeMismatches([{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }]);
+    const place = wf.packagePreconditionStop("UsrApplicantMig", "exists", "new-app");
+    return comp.length === 1 && comp[0].type === "crt.ContactCommunication"
+      && place && place.stopped === "new-app-over-existing-package"; });
+
 // Source-level pins for the parts that close over run state.
 check("workflow: the app unit creates the section on the EXISTING object via `create-app-section --entity-schema-name`, and REMOVES the stub section create-app always mints — this is the created-a-new-object failure",
   /create-app-section\b/.test(wfSrc) && /--entity-schema-name \$\{unit\.entity/.test(wfSrc)
@@ -391,6 +415,12 @@ check("workflow: the app unit creates the section on the EXISTING object via `cr
 check("workflow: the built payload records the page OBJECT — without it the gate cannot tell the real entity from a stub, which is how a whole run stayed green on the wrong one",
   /entitySchemaName/.test(wfSrc) && /modelConfig: <bundle\.modelConfig VERBATIM>/.test(wfSrc)
     && /primaryDataSourceName/.test(wfSrc));
+check("workflow: the component-type gate (ENG-95468) is WIRED at the baseline — it computes componentMismatches from the Reconcile resolution, carries them on the placement stop too (both blockers in one stop), and has its own `plan-invalid-against-stand` stop before any build unit",
+  /const componentMismatches = componentTypeMismatches\(state\.componentResolution\)/.test(wfSrc)
+    && /\.\.\.stopOnPackage,\s*componentMismatches,/.test(wfSrc)
+    && /stopped: 'plan-invalid-against-stand'/.test(wfSrc));
+check("workflow: the Reconcile prompt tells the agent to RESOLVE each component type read-only (get-component-info) and return componentResolution — the gate's input",
+  /get-component-info component-type=<type>/.test(wfSrc) && /return \\`componentResolution\\`/.test(wfSrc));
 // --- ENG-94859 the per-run REFS cache, the page slice and the split worklog. Measured on a real run: 40% of all
 // tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
