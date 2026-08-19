@@ -560,20 +560,34 @@ check("workflow: `buildMode` owns its mode list rather than closing over a modul
   /function buildMode\(raw\) \{\s*\n\s*const BUILD_MODES = \[/.test(wfSrc) && topLevelConstAt("BUILD_MODES") < 0);
 
 // …and the same failure caught by EXECUTION rather than by reading the source, which is the only check that
-// covers initialization order in general. The script is a function body with injected globals and top-level
-// await, so it cannot be imported as a module the way the pure block is — `new Function` here is deliberate and
-// is the point: it runs the file's real prologue. Every agent is stubbed to return nothing, so the run reaches
-// its first Reconcile, gets nothing, and returns `reconcile-failed`. Nothing is read, written or called out to.
-const runPrologue = async (mode) => {
-  // `\r?` on both terminators deliberately: on a checkout that converted the file this strip would otherwise
-  // MISS, leaving `export const meta` inside a function body, and five prologue cases would fail with a syntax
-  // error instead of the one CR check that actually explains the problem. A misleading red is worse than a slow one.
-  const body = `return (async()=>{${wfSrc.replace(/^export const meta[\s\S]*?\r?\n\}\r?\n/m, "")}})()`;
-  // eslint-disable-next-line no-new-func -- see the comment above: executing the prologue IS the assertion
-  const fn = new Function("args", "log", "phase", "agent", "parallel", "__filename", body);
-  return fn({ manifest: "m.json", environment: "env", outDir: "out", planFile: "plan.md", engine: "/e/migrate.mjs", mode, checkpointAfter: ["main"] },
-    () => {}, () => {}, async () => null, async () => [], "/x/skills/freedom-build-executor/w.js");
-};
+// covers initialization order in general. The script is a function body with injected globals and top-level await,
+// so it cannot be run as written — but rather than a `new Function` (a dynamic-code construct a reviewer has to
+// reason about, and one SonarCloud flags as a code-injection risk), the body is wrapped in an exported async
+// function that TAKES those globals as parameters, written to a temp module and IMPORTED — the SAME "no eval, no
+// new Function" device the pure-helper block above uses. Executing the file's real prologue is still the assertion.
+// `\r?` on both meta terminators deliberately: on a checkout that converted the file this strip would otherwise
+// MISS, leaving `export const meta` inside the function body and turning every prologue case into one syntax error
+// instead of the CR check that actually explains it. A misleading red is worse than a slow one.
+let runWorkflow;
+let tmpProl;
+try {
+  tmpProl = mkdtempSync(path.join(os.tmpdir(), "wf-prologue-"));
+  const modPath = path.join(tmpProl, "prologue.mjs");
+  const prologueBody = wfSrc.replace(/^export const meta[\s\S]*?\r?\n\}\r?\n/m, "");
+  writeFileSync(modPath, `export default async function __runPrologue(args, log, phase, agent, parallel, __filename) {\n${prologueBody}\n}\n`);
+  ({ default: runWorkflow } = await import(pathToFileURL(modPath).href));
+} finally {
+  // Once imported the module is loaded into memory, so the temp file can go immediately — same as the pure block.
+  if (tmpProl) rmSync(tmpProl, { recursive: true, force: true });
+}
+// One entry point for every prologue-execution test: the fixed run args (overridable per test), the injected no-op
+// log/phase, and the test's own `agent` / `parallel` stubs. Executing the prologue IS the assertion.
+const runWith = (argsExtra, agent, parallel = async () => []) =>
+  runWorkflow(
+    { manifest: "m.json", environment: "env", outDir: "out", planFile: "plan.md", engine: "/e/migrate.mjs", mode: "auto", checkpointAfter: ["main"], ...argsExtra },
+    () => {}, () => {}, agent, parallel, "/x/skills/freedom-build-executor/w.js");
+// Every agent stubbed to return nothing: the run reaches its first Reconcile, gets nothing, returns `reconcile-failed`.
+const runPrologue = (mode) => runWith({ mode }, async () => null);
 for (const mode of ["checkpoints", "guided", "auto", undefined]) {
   const label = mode === undefined ? "(omitted)" : mode;
   // eslint-disable-next-line no-await-in-loop -- four sequential runs, each a whole script prologue
@@ -591,17 +605,10 @@ check("workflow prologue: an UNKNOWN mode still throws its own error — the TDZ
 // returns a crafted state on that call, and nothing after, drives the run to a deterministic stop with no build.
 // An inverted condition, a wrong stop key, or a dropped `return` in Hard Stop 3.5 passes every source-pin but fails
 // here — which is the gap these close: a gate that never fires would otherwise ship green.
-const runToBaseline = async (reconcileState) => {
-  const body = `return (async()=>{${wfSrc.replace(/^export const meta[\s\S]*?\r?\n\}\r?\n/m, "")}})()`;
-  // eslint-disable-next-line no-new-func -- same deliberate device as runPrologue: executing the prologue IS the assertion
-  const fn = new Function("args", "log", "phase", "agent", "parallel", "__filename", body);
+const runToBaseline = (reconcileState) => {
   let calls = 0;
-  return fn(
-    { manifest: "m.json", environment: "env", outDir: "out", planFile: "plan.md", engine: "/e/migrate.mjs", mode: "auto", checkpointAfter: ["main"] },
-    () => {}, () => {},
-    // The baseline Reconcile is call #1; every later agent call (none are reached here) returns null.
-    async () => { calls += 1; return calls === 1 ? reconcileState : null; },
-    async () => [], "/x/skills/freedom-build-executor/w.js");
+  // The baseline Reconcile is call #1; every later agent call (none are reached here) returns null.
+  return runWith({}, async () => { calls += 1; return calls === 1 ? reconcileState : null; });
 };
 // A baseline state that clears Hard Stops 1–3 (approval matches the plan version; the package exists so placement is
 // actionable) and carries the component resolution under test. No `unitKeys`/`reachability`, so a run that CLEARS the
@@ -652,10 +659,7 @@ check("workflow EXECUTES the combined stop: a baseline with new-app-over-existin
 // files+judges one ⚠ Confirm record so the post-preflight Reconcile runs BEFORE the first build unit — the point the
 // mid-run guard defends. The agent stub is keyed by `opts.label` (robust to call order and to the refs/persist calls
 // this path may make); `parallel` gets real fan-out semantics so the preflight agent actually runs.
-const runToPostPreflight = async (baseline, afterPreflight, extra = {}) => {
-  const body = `return (async()=>{${wfSrc.replace(/^export const meta[\s\S]*?\r?\n\}\r?\n/m, "")}})()`;
-  // eslint-disable-next-line no-new-func -- same deliberate device as runPrologue/runToBaseline: executing the prologue IS the assertion
-  const fn = new Function("args", "log", "phase", "agent", "parallel", "__filename", body);
+const runToPostPreflight = (baseline, afterPreflight, extra = {}) => {
   const agentStub = async (_prompt, opts = {}) => {
     const label = opts.label || "";
     if (label === "reconcile:baseline") return baseline;
@@ -666,9 +670,8 @@ const runToPostPreflight = async (baseline, afterPreflight, extra = {}) => {
     return null; // refs:cache / persist:carry / anything else: benign, the script handles a null return by design
   };
   const parallelStub = async (thunks) => Promise.all((thunks || []).map((t) => t()));
-  return fn(
-    { manifest: "m.json", environment: "env", outDir: "out", planFile: "plan.md", engine: "/e/migrate.mjs", mode: "auto", checkpointAfter: ["main"], ...extra },
-    () => {}, () => {}, agentStub, parallelStub, "/x/skills/freedom-build-executor/w.js");
+  // Real fan-out `parallel` so the preflight agent actually runs (the default stub returns `[]` and never calls the thunks).
+  return runWith(extra, agentStub, parallelStub);
 };
 // A baseline that clears Hard Stops 1–4 and the baseline component gate, schedules `main` (open — no verdict on file),
 // and carries one ⚠ Confirm item so the post-preflight Reconcile actually runs. `componentResolution` all-resolved
