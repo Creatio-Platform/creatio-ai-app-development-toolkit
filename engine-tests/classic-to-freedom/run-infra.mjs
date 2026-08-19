@@ -140,7 +140,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "resolutionsForUnit",
-  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor"];
+  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -318,9 +318,13 @@ check("workflow: an unknown checkpoint key REFUSES the run before anything is bu
   /stopped: 'unknown-checkpoint-key'/.test(wfSrc)
     && /unknownCheckpointKeys\(CHECKPOINT_AFTER, schedulableKeys\)/.test(wfSrc)
     && /appUnitFor\(state\.targetPackage, state\.packageState\) \? \['app'\] : \[\]/.test(wfSrc));
+// The block is no longer interpolated inline: `buildPrompt` hands every rendered block to `composeBuildPrompt`,
+// which orders them. Same guarantee, checked on both halves of the new seam — the caller passes the findings block
+// and the composer interpolates it.
 check("workflow: operator findings reach the BUILD prompt, and are marked as the operator's instructions rather than untrusted stand text",
   /function findingsPromptBlock\(/.test(wfSrc) && /OPERATOR'S words, not stand-derived content/.test(wfSrc)
-    && /\$\{findingsPromptBlock\(unit\.key\)\}/.test(wfSrc));
+    && /findings: findingsPromptBlock\(unit\.key\)/.test(wfSrc)
+    && /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc));
 check("workflow: `checkFirst` is asked for ONLY at a checkpoint, and is sourced from the card's acceptance criteria including the negative ones",
   /function checkFirstPromptBlock\(/.test(wfSrc) && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unitKey\)/.test(wfSrc)
     && /NEGATIVE ones/.test(wfSrc));
@@ -575,12 +579,40 @@ check("ENG-95503: the batch gate treats a blank answer as no answer, and empty/m
   () => wf.answeredNoteFor([{ id: "a", resolution: { answer: "" } }], NOTE) === ""
     && wf.answeredNoteFor([], NOTE) === "" && wf.answeredNoteFor(undefined, NOTE) === "",
   () => "blank/empty/missing must all yield ''");
+/* THE CALL SITE, EXECUTED. The regexes below prove the composer is CALLED with the resolutions block; they cannot
+   prove the block survives into the string the agent is handed — a reordering, a stray truncation, or a block
+   interpolated into a value that is not returned would all keep them green. So the assembly itself is run here with
+   a real routed resolution, and the operator's answer is read back out of the composed prompt. */
+const CBP_ANSWER = "Full name, Stage, Request, Responsible, Source, Modified on";
+const cbpBlock = wf.resolutionsBlockText(
+  wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
+const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md",
+  kindBlock: "KIND-BLOCK", repair: "", resolutions: cbpBlock, findings: "", checkFirst: "" };
+check("ENG-95503: the operator's answer survives into the COMPOSED build prompt — the assembly is executed and the answer text read back out, not matched in the source",
+  () => { const prompt = wf.composeBuildPrompt(cbpArgs);
+    return typeof prompt === "string" && prompt.includes(CBP_ANSWER)
+      && prompt.includes("ALREADY ANSWERED THESE") && prompt.includes("KIND-BLOCK")
+      && prompt.includes("RULES-BLOCK") && prompt.includes("BEHAVIOUR-BLOCK"); },
+  () => { const t = wf.composeBuildPrompt(cbpArgs); return { len: t.length, hasAnswer: t.includes(CBP_ANSWER), tail: t.slice(-160) }; });
+check("ENG-95503: an EMPTY resolutions block leaves the composed prompt intact and mentions no answer — the block is additive, so a page with no recorded decision is unaffected",
+  () => { const prompt = wf.composeBuildPrompt({ ...cbpArgs, resolutions: "" });
+    return !prompt.includes(CBP_ANSWER) && !prompt.includes("ALREADY ANSWERED THESE")
+      && prompt.includes("KIND-BLOCK") && prompt.includes("Return the schema."); },
+  () => wf.composeBuildPrompt({ ...cbpArgs, resolutions: "" }).slice(-200));
+check("ENG-95503: the composed prompt keeps the resolutions block BEFORE the closing instruction, so it is inside the prompt the agent reads rather than appended past its end",
+  () => { const prompt = wf.composeBuildPrompt(cbpArgs);
+    return prompt.indexOf(CBP_ANSWER) > 0 && prompt.indexOf(CBP_ANSWER) < prompt.indexOf("Return the schema."); },
+  () => { const t = wf.composeBuildPrompt(cbpArgs);
+    return { answerAt: t.indexOf(CBP_ANSWER), closingAt: t.indexOf("Return the schema.") }; });
 // The wiring that connects the executed helpers above to the real prompt. Pinned on the shipped source because the
 // wrapper reads run state and this host's fencer, neither of which the harness can supply.
 const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf("// OPERATOR FINDINGS from an earlier checkpoint"));
-check("ENG-95503 wiring: the build prompt actually INTERPOLATES the resolved-decisions block for its own unit — the answers must reach the builder's prompt, not merely be computable",
-  buildPromptSrc.length > 200 && /\$\{resolutionsPromptBlock\(unit\.key\)\}/.test(buildPromptSrc),
-  () => ({ found: /resolutionsPromptBlock/.test(buildPromptSrc), sliceLen: buildPromptSrc.length }));
+check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
+  buildPromptSrc.length > 200
+    && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
+    && /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc),
+  () => ({ passesBlock: /resolutions: resolutionsPromptBlock/.test(buildPromptSrc),
+    composerOrders: /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc), sliceLen: buildPromptSrc.length }));
 check("ENG-95503 wiring: `resolutionsPromptBlock` reads the run's OWN queue items and published keys — a block fed from somewhere else would render answers the engine never matched to a question",
   /function resolutionsPromptBlock\(unitKey\)\s*\{[\s\S]{0,400}?resolutionsForUnit\(state\.preflightItems, unitKey, new Set\(state\.unitKeys \|\| \[\]\)\)/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 260));

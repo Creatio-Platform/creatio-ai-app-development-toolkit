@@ -1000,7 +1000,7 @@ function resolutionAttribution(res) {
 // is imported standalone, so it cannot reach the host's fencer itself.
 function resolutionsBlockText(mine, fence) {
   if (!mine.length) return ''
-  const wrap = typeof fence === 'function' ? fence : ((s) => String(s))
+  const wrap = typeof fence === 'function' ? fence : String
   const lines = mine.map((p) => {
     const who = resolutionAttribution(p.resolution)
     // Inner strings are hoisted, not nested in the template: a nested template literal is both harder to read and
@@ -1024,6 +1024,30 @@ An answer is an INPUT, not evidence: it does not close any checklist row on its 
 // and a gate that silently went false would drop those instructions from every prompt with every suite still green.
 function answeredNoteFor(batch, note) {
   return (batch || []).some((p) => p?.resolution?.answer) ? note : ''
+}
+
+// THE BUILD PROMPT, ASSEMBLED. Pure and in this block so the assembly is EXECUTED by a test rather than matched in
+// the source: a regex can show a block is interpolated somewhere in the function, never that it reaches the string
+// the agent is handed. Every block arrives already rendered; this only orders them.
+function composeBuildPrompt({ rules, behaviour, worklogPath, kindBlock, repair, resolutions, findings, checkFirst }) {
+  return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
+
+${rules}
+
+${kindBlock}
+${repair}
+${behaviour}
+
+MANDATORY WHILE BUILDING:
+- Invoke the \`creatio-ui-guidelines\` skill BEFORE authoring the page body, and run its review AFTER saving — the review is tool-based: open a SHIPPED reference page on the same template and diff concrete props (\`color\`/\`padding\`/\`borderRadius\`/\`gap\`, panel \`toggleType\`, \`caption\` not raw \`title\`, \`labelPosition\`, column count) with \`get-component-info\` per component you added. A screenshot glance is not the gate.
+- Build the plan EXACTLY: every profile island is its own container, every tab and group exists, and BOTH halves of a two-part component (Approvals = the approval module above the island AND \`crt.ApprovalList\`; DCM = the progress bar in \`MainContainer\` AND the Next steps tab). If you think the plan is wrong, put it in \`proposals\` AND BUILD THE PLAN. Never simplify silently.
+- When you create a page on a non-default template, RE-BIND the object to it and drop the old binding. A page built but not re-bound is an orphan and is not migrated.
+- Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogPath}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. An interrupted run must not lose the history. Do NOT read or append to the shared \`worklog.md\`: the Close phase assembles it from these per-unit files, and reading a growing shared log just to append to it cost 37 reads on one run.
+- Touch NO other unit's page. The stand is shared and units run one at a time for that reason.
+
+WHAT YOU DO NOT DO: you do not file the evidence record, you do not write \`--built\`, and you do not run \`--verify\`. A separate read-only agent fetches the stand and files what it finds; a third agent judges. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
+${resolutions}${findings}${checkFirst}
+Return the schema. Anything you could not do goes in \`blocked\` with why — a stated blocker is worth more than a quiet omission.`
 }
 
 // Operator findings, indexed by unit.
@@ -1699,24 +1723,14 @@ Get your inputs from the engine, not from memory:
 RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this page key now resolves to — the page a later \`get-page\` must be handed. Return it whether you created the page or found it already there. \`--units\` cannot publish it (its \`schema\` field is the CLASSIC source, and it is \`null\` for \`main\` and for an unfolded child) and the queue file is its only home. Omit it and nothing can verify this unit, in this session or any later one.`
   }
 
-  return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
-
-${RULES}
-
-${kindBlock}
-${repair}
-${BEHAVIOUR_BLOCK}
-
-MANDATORY WHILE BUILDING:
-- Invoke the \`creatio-ui-guidelines\` skill BEFORE authoring the page body, and run its review AFTER saving — the review is tool-based: open a SHIPPED reference page on the same template and diff concrete props (\`color\`/\`padding\`/\`borderRadius\`/\`gap\`, panel \`toggleType\`, \`caption\` not raw \`title\`, \`labelPosition\`, column count) with \`get-component-info\` per component you added. A screenshot glance is not the gate.
-- Build the plan EXACTLY: every profile island is its own container, every tab and group exists, and BOTH halves of a two-part component (Approvals = the approval module above the island AND \`crt.ApprovalList\`; DCM = the progress bar in \`MainContainer\` AND the Next steps tab). If you think the plan is wrong, put it in \`proposals\` AND BUILD THE PLAN. Never simplify silently.
-- When you create a page on a non-default template, RE-BIND the object to it and drop the old binding. A page built but not re-bound is an orphan and is not migrated.
-- Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogFile(unit.key)}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. An interrupted run must not lose the history. Do NOT read or append to the shared \`worklog.md\`: the Close phase assembles it from these per-unit files, and reading a growing shared log just to append to it cost 37 reads on one run.
-- Touch NO other unit's page. The stand is shared and units run one at a time for that reason.
-
-WHAT YOU DO NOT DO: you do not file the evidence record, you do not write \`--built\`, and you do not run \`--verify\`. A separate read-only agent fetches the stand and files what it finds; a third agent judges. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
-${resolutionsPromptBlock(unit.key)}${findingsPromptBlock(unit.key)}${checkFirstPromptBlock(unit.key)}
-Return the schema. Anything you could not do goes in \`blocked\` with why — a stated blocker is worth more than a quiet omission.`
+  // Assembled by a PURE composer so the hand-off is executable: every block is rendered here and ordered there.
+  return composeBuildPrompt({
+    rules: RULES, behaviour: BEHAVIOUR_BLOCK, worklogPath: worklogFile(unit.key),
+    kindBlock, repair,
+    resolutions: resolutionsPromptBlock(unit.key),
+    findings: findingsPromptBlock(unit.key),
+    checkFirst: checkFirstPromptBlock(unit.key),
+  })
 }
 
 // OPERATOR FINDINGS from an earlier checkpoint. These are the ONE kind of text in this whole run that IS an
