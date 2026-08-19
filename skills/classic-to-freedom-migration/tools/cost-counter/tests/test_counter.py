@@ -97,6 +97,32 @@ class CliSmokeTest(unittest.TestCase):
     def test_main_parses_argv_and_returns_zero(self):
         self.assertEqual(counter.main([self.root, "stage"]), 0)
 
+    def test_json_format_parses_and_mirrors_the_report(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = counter.run(self.root, "all", None, metrics.CostConfig(), "json")
+        self.assertEqual(rc, 0)
+        doc = json.loads(buf.getvalue())  # must be valid JSON
+        self.assertIn("config", doc)
+        self.assertIn("by_stage", doc["tables"])
+        self.assertEqual(doc["tables"]["by_stage"]["total"]["label"], "TOTAL")
+        self.assertIn("reconcile", doc)
+        self.assertIn("normalization", doc)
+
+    def test_md_format_emits_markdown_tables(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = counter.run(self.root, "all", None, metrics.CostConfig(), "md")
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("Weighted-cost config", out)
+        self.assertIn("### By stage", out)
+        self.assertIn("| **TOTAL**", out)  # bold total row, GFM table
+
+    def test_main_accepts_format_flag(self):
+        self.assertEqual(counter.main([self.root, "role", "--format", "md"]), 0)
+        self.assertEqual(counter.main([self.root, "--format", "json"]), 0)
+
     def test_pages_zero_is_rejected(self):
         # --pages 0 must not reach page_count() (it would divide by zero in
         # per-page normalization); argparse rejects it with a non-zero exit.

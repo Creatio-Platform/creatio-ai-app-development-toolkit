@@ -77,3 +77,68 @@ class Table:
         lines.append("-" * len(header))
         lines.append(self._render_row("TOTAL", totals, totals))
         return "\n".join(lines)
+
+    # ---- structured / markdown views (same contract as render()) ----------
+
+    def _cells(self, values: dict, totals: dict) -> dict:
+        """One row's cells keyed by column: {value, [pct]} per measure."""
+        out: dict = {}
+        for col in self.columns:
+            value = values.get(col.key, 0) or 0
+            cell = {"value": value}
+            if col.share:
+                col_total = totals[col.key]
+                cell["pct"] = round((value / col_total * 100.0) if col_total else 0.0, 1)
+            out[col.key] = cell
+        return out
+
+    def to_dict(self) -> dict:
+        """Structured view for --format json. Same numbers as render(): each
+        measure carries its own share and the TOTAL row equals the column sums."""
+        totals = self.total_values()
+        return {
+            "label_header": self.label_header,
+            "columns": [
+                {"key": c.key, "label": c.label, "kind": c.kind, "share": c.share}
+                for c in self.columns
+            ],
+            "rows": [
+                {"label": label, "cells": self._cells(values, totals)}
+                for label, values in self.rows
+            ],
+            "total": {"label": "TOTAL", "cells": self._cells(totals, totals)},
+        }
+
+    def to_markdown(self) -> str:
+        """GitHub-flavoured Markdown table for --format md (renders in Jira).
+
+        Same columns as render() -- each measure plus its own ``%`` column --
+        with a bold ``TOTAL`` row equal to the column sums. Label left-aligned,
+        numbers right-aligned."""
+        totals = self.total_values()
+        heads = [self.label_header or " "]
+        seps = [":--"]
+        for col in self.columns:
+            heads.append(col.label)
+            seps.append("--:")
+            if col.share:
+                heads.append("%")
+                seps.append("--:")
+
+        def row(label: str, values: dict, bold: bool = False) -> str:
+            wrap = (lambda s: f"**{s}**") if bold else (lambda s: s)
+            cells = [wrap(label)]
+            for col in self.columns:
+                value = values.get(col.key, 0) or 0
+                cells.append(wrap(_fmt(value, col.kind)))
+                if col.share:
+                    col_total = totals[col.key]
+                    pct = (value / col_total * 100.0) if col_total else 0.0
+                    cells.append(wrap(f"{pct:.1f}%"))
+            return "| " + " | ".join(cells) + " |"
+
+        lines = ["| " + " | ".join(heads) + " |", "| " + " | ".join(seps) + " |"]
+        for label, values in self.rows:
+            lines.append(row(label, values))
+        lines.append(row("TOTAL", totals, bold=True))
+        return "\n".join(lines)

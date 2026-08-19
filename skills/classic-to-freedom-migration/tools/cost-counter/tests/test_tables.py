@@ -43,6 +43,26 @@ class ShareAndTotalTest(unittest.TestCase):
         self.assertIn("80.0%", build_line)
         self.assertIn("66.7%", build_line)
 
+    def test_to_dict_carries_values_shares_and_total(self):
+        data = self._table().to_dict()
+        self.assertEqual([c["key"] for c in data["columns"]], ["n", "cw", "cr"])
+        self.assertEqual(data["total"]["cells"]["cw"]["value"], 5_000_000)
+        # a plain count column has no share; a measure column does.
+        self.assertNotIn("pct", data["total"]["cells"]["n"])
+        self.assertAlmostEqual(data["rows"][0]["cells"]["cw"]["pct"], 80.0)
+        self.assertAlmostEqual(data["rows"][0]["cells"]["cr"]["pct"], 66.7)
+
+    def test_to_markdown_has_bold_total_and_per_measure_shares(self):
+        lines = self._table().to_markdown().splitlines()
+        # header + separator + 2 data rows + TOTAL.
+        self.assertEqual(len(lines), 5)
+        self.assertTrue(lines[-1].startswith("| **TOTAL**"))
+        # exactly one "%" header column per measure (2), none for the count.
+        self.assertEqual(lines[0].count("%"), 2)
+        build = next(l for l in lines if l.startswith("| BUILD"))
+        self.assertIn("80.0%", build)
+        self.assertIn("66.7%", build)
+
 
 if __name__ == "__main__":
     unittest.main()

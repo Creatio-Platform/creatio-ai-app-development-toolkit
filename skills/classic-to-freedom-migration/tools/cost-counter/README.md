@@ -21,7 +21,7 @@ Python 3.10+ (standard library only — no third-party packages).
 
 ```bash
 # from this directory
-python counter.py <export-dir> [section] [--pages N]
+python counter.py <export-dir> [section] [--pages N] [--format text|md|json]
 ```
 
 - `<export-dir>` — the folder that holds `transcript.jsonl` and the
@@ -30,6 +30,16 @@ python counter.py <export-dir> [section] [--pages N]
   `ttl`, `check`.
 - `--pages N` — override the built-page count used for per-page normalization
   (by default it is read from the workflow journals).
+- `--format` — `text` (default, fixed-width console tables), `md`
+  (GitHub-flavoured Markdown tables, ready to paste into a Jira comment), or
+  `json` (structured — config, TTL split, every table as rows with per-measure
+  values and shares, reconcile, normalization). All three report the same
+  numbers and honour `section`.
+
+```bash
+python counter.py /path/to/session-export --format md      # Markdown for Jira
+python counter.py /path/to/session-export --format json    # machine-readable
+```
 
 Examples:
 
