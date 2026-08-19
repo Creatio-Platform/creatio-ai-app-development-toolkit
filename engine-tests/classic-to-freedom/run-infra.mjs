@@ -435,8 +435,13 @@ check("behaviour analysis: completion requires a Merge that actually produced th
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
 
-check("workflow: the refs cache is invalidated on a DIFFERENT plan version or environment, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch",
-  /records BOTH \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
+check("workflow: the refs cache is invalidated on a DIFFERENT plan version, environment OR CLI HOST, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch, and a slice built through another machine's clio describes that machine's stand",
+  // Pins the SHIPPED wording, and the escaping is load-bearing: the phrase lives inside a template
+  // literal, so the backticks around each key are backslash-escaped in the source and the pattern has
+  // to match that. A pattern without the escape silently never matches, which is a pin that passes
+  // nothing while looking like it passes something.
+  /records ALL THREE of \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
+    && /\\`cliHost:\\` line whose value equals THIS machine's/.test(wfSrc)
     && /REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc)
     && /planVersion: \$\{state\.planVersion/.test(wfSrc));
 check("workflow: the index is written LAST, so a half-built cache cannot read as a finished one",
