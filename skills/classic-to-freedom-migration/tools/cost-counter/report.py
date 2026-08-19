@@ -364,11 +364,17 @@ class Report:
     def by_stage_table(self) -> Table:
         table = Table(
             columns=[
-                # input is shown first because it is the base term the weighted
-                # cost normalises to (input x1.0); without it the weighted-cost
-                # column reads as if it were derived only from the three columns
-                # beside it, when it also folds in input. Tiny in volume, but it
-                # keeps the formula legible in the by-stage view.
+                # kind marks whether a stage is the main driver session or a
+                # workflow of subagents. The main transcript runs discovery+plan
+                # itself (no subagents); every other stage is a workflow whose
+                # row aggregates its spawned subagents -- so the by-role table
+                # (subagents only) totals less than this table's grand total.
+                Column("kind", "kind", "text", width=9),
+                # input is shown first (after kind) because it is the base term
+                # the weighted cost normalises to (input x1.0); without it the
+                # weighted-cost column reads as if it were derived only from the
+                # three columns beside it, when it also folds in input. Tiny in
+                # volume, but it keeps the formula legible in the by-stage view.
                 Column("input", "input (Mtok)", "mb", share=True, width=13),
                 Column("cache_write", "cache write (Mtok)", "mb", share=True, width=18),
                 Column("cache_read", "cache read (Mtok)", "mb", share=True, width=17),
@@ -378,8 +384,13 @@ class Report:
             label_header="stage",
             label_width=46,
         )
-        for label, agg in self.stage_aggs:
+        # The main (driver) stage, when present, is always the first appended in
+        # __init__; every later stage is a workflow of subagents.
+        main_present = bool(self.session.main_transcript)
+        for index, (label, agg) in enumerate(self.stage_aggs):
+            kind = "main" if (main_present and index == 0) else "subagents"
             table.add(label, {
+                "kind": kind,
                 "input": agg.input,
                 "cache_write": agg.cache_write,
                 "cache_read": agg.cache_read,

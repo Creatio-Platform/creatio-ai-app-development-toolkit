@@ -64,5 +64,47 @@ class ShareAndTotalTest(unittest.TestCase):
         self.assertIn("66.7%", build)
 
 
+class TextColumnTest(unittest.TestCase):
+    """A text column carries a per-row category label: left-aligned, no share,
+    and a blank (never summed) TOTAL cell across text/json/markdown."""
+
+    def _table(self):
+        table = Table(
+            columns=[
+                Column("kind", "kind", "text", width=9),
+                Column("cw", "cacheW", "mb", share=True),
+            ],
+            label_header="stage",
+            label_width=10,
+        )
+        table.add("main", {"kind": "main", "cw": 4_000_000})
+        table.add("wf1", {"kind": "subagents", "cw": 1_000_000})
+        return table
+
+    def test_text_column_has_blank_total(self):
+        self.assertEqual(self._table().total_values()["kind"], "")
+
+    def test_text_values_render_in_rows(self):
+        rendered = self._table().render()
+        main_line = next(l for l in rendered.splitlines() if l.startswith("main"))
+        self.assertIn("main", main_line)
+        wf_line = next(l for l in rendered.splitlines() if l.startswith("wf1"))
+        self.assertIn("subagents", wf_line)
+        # the cacheW measure still totals normally alongside the text column.
+        self.assertEqual(self._table().total_values()["cw"], 5_000_000)
+
+    def test_to_dict_text_cell_is_string_without_share(self):
+        cells = self._table().to_dict()["rows"][0]["cells"]
+        self.assertEqual(cells["kind"]["value"], "main")
+        self.assertNotIn("pct", cells["kind"])
+
+    def test_markdown_text_column_left_aligned_and_total_blank(self):
+        lines = self._table().to_markdown().splitlines()
+        # left-aligned separator for the text column (its own :-- among --:).
+        self.assertIn(":--", lines[1].split("|")[2])
+        # the TOTAL row's text cell is blank, not a bolded empty "****".
+        self.assertNotIn("****", lines[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

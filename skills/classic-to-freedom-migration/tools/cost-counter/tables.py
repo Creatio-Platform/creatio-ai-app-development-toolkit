@@ -15,7 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-def _fmt(value: float, kind: str) -> str:
+def _fmt(value, kind: str) -> str:
+    if kind == "text":
+        return "" if value is None else str(value)
     if kind == "mb":
         return f"{value / 1e6:,.2f}"
     if kind == "float":
@@ -27,9 +29,16 @@ def _fmt(value: float, kind: str) -> str:
 class Column:
     key: str
     label: str
-    kind: str = "int"          # "int" | "float" | "mb"
+    kind: str = "int"          # "int" | "float" | "mb" | "text"
     share: bool = False        # render a trailing "%" column
     width: int = 12
+
+    @property
+    def is_text(self) -> bool:
+        # A text column (e.g. a per-row category label) carries a string, is
+        # left-aligned, never gets a share, and is skipped in the TOTAL row --
+        # summing category labels is meaningless.
+        return self.kind == "text"
 
 
 @dataclass
@@ -43,15 +52,26 @@ class Table:
         self.rows.append((label, values))
 
     def total_values(self) -> dict:
-        """Column sums over the data rows -- the values of the TOTAL row."""
+        """Column sums over the data rows -- the values of the TOTAL row.
+
+        Text columns carry per-row category labels, not quantities, so they get
+        an empty TOTAL cell instead of a (meaningless) sum.
+        """
         totals: dict = {}
         for col in self.columns:
+            if col.is_text:
+                totals[col.key] = ""
+                continue
             totals[col.key] = sum((vals.get(col.key, 0) or 0) for _, vals in self.rows)
         return totals
 
     def _render_row(self, label: str, values: dict, totals: dict) -> str:
         cells = [f"{label[: self.label_width]:<{self.label_width}}"]
         for col in self.columns:
+            if col.is_text:
+                text = _fmt(values.get(col.key), col.kind)
+                cells.append(f"{text[: col.width]:<{col.width}}")
+                continue
             value = values.get(col.key, 0) or 0
             cells.append(f"{_fmt(value, col.kind):>{col.width}}")
             if col.share:
@@ -63,6 +83,9 @@ class Table:
     def _header(self) -> str:
         cells = [f"{self.label_header:<{self.label_width}}"]
         for col in self.columns:
+            if col.is_text:
+                cells.append(f"{col.label:<{col.width}}")
+                continue
             cells.append(f"{col.label:>{col.width}}")
             if col.share:
                 cells.append(f"{'%':>6}")
@@ -84,6 +107,9 @@ class Table:
         """One row's cells keyed by column: {value, [pct]} per measure."""
         out: dict = {}
         for col in self.columns:
+            if col.is_text:
+                out[col.key] = {"value": _fmt(values.get(col.key), col.kind)}
+                continue
             value = values.get(col.key, 0) or 0
             cell = {"value": value}
             if col.share:
@@ -120,15 +146,20 @@ class Table:
         seps = [":--"]
         for col in self.columns:
             heads.append(col.label)
-            seps.append("--:")
+            seps.append(":--" if col.is_text else "--:")
             if col.share:
                 heads.append("%")
                 seps.append("--:")
 
         def row(label: str, values: dict, bold: bool = False) -> str:
-            wrap = (lambda s: f"**{s}**") if bold else (lambda s: s)
+            # Never bold an empty cell -- "****" would render as literal asterisks
+            # (e.g. the text column's blank TOTAL cell).
+            wrap = (lambda s: f"**{s}**" if bold and s else s)
             cells = [wrap(label)]
             for col in self.columns:
+                if col.is_text:
+                    cells.append(wrap(_fmt(values.get(col.key), col.kind)))
+                    continue
                 value = values.get(col.key, 0) or 0
                 cells.append(wrap(_fmt(value, col.kind)))
                 if col.share:
