@@ -4,9 +4,9 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, LIST_DECISION_KINDS} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1611,6 +1611,164 @@ check("ENG-95218: when the `list` key IS published the same items ride on `list`
     return rows.length >= 1 && rows.every((r) => r.pageKey === "list")
       && new Set(rows.map((r) => r.vk.id)).size === rows.length; },
   () => checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm).map((r) => ({ k: r.pageKey, id: r.vk.id })));
+/* ---- ENG-95503 — ⚠ Confirm RESOLUTIONS: an operator's ANSWER reaching the build queue.
+   `--units.preflight` published what to resolve and nothing published what it RESOLVED TO, so an answer the
+   operator had already given reached the builder only through `findings` (whose job is re-opening a unit the gate
+   called complete) or by being hand-written into the page. The channel is keyed on `kind`+`item` rather than on the
+   published id alone, because the id's `pageKey` half is NOT stable for one logical question — the two fixtures
+   above (`lpRun`, list key published · `lpEmptySection`, list key withheld) are exactly that pair, so the keying
+   claim is testable here with no stand.
+   The rule that must hold above all others: an ANSWER IS AN INPUT. It closes no `--verify` row on its own. ---- */
+const KIND_LIST_COLUMNS = "list-columns";
+const RES_FLAG = "--resolutions";
+const RES_ID_COLS = "main#confirm:list-columns:cols";
+const RES_ORPHAN_ITEM = "a question this plan does not ask";
+const RES_STALE_ANSWER = "still applied";
+// The SAME question as the operator would answer it, keyed the stable way, on the run where the `list` key is
+// WITHHELD — the empty section, which is the shape whose list columns no parse can recover.
+const lpEmptyConfirm = pageUnits(lpEmptySection, lpOpts).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+const lpListConfirm = pageUnits(lpRun, lpOpts).preflight.find((p) => p.kind?.startsWith("list-"));
+const RES_FILE = { schemaVersion: 1, resolutions: [
+  { kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "Name, Status, Owner, DueDate, Priority, Flagged", decidedBy: "operator", date: "2026-08-19" },
+] };
+/* An ANSWER ALONE CLOSES NO `--verify` ROW. The test has to DISCRIMINATE, and comparing two `renderVerify` calls
+   cannot: `opts.resolutions` has exactly one reader — `pageUnits` — so a verify-path comparison is two identical
+   computations and stays green no matter what the channel does. What makes the pair meaningful is asserting BOTH
+   halves of the same `opts`: the queue MUST change (proving the answer really was supplied and matched) while the
+   verdict MUST NOT (proving nothing on the gate path consumes it). Wire resolutions into `checklistGroups` — the
+   one edit that would let an answer close a row — and the second half goes red. */
+check("ENG-95503: an ANSWER ALONE CLOSES NO `--verify` ROW — the SAME opts that attach the answer to the build queue leave the gate's verdict byte-identical, and the answered row is still open in it",
+  () => { const built = { pages: { list: false }, evidence: {}, judge: {} };
+    const withOpts = { ...lpOpts, resolutions: RES_FILE };
+    // HALF 1 — the answer really is supplied and matched: the queue differs.
+    const qWithout = pageUnits(lpEmptySection, lpOpts).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    const qWith = pageUnits(lpEmptySection, withOpts).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    const queueChanged = qWithout?.resolution === null && !!qWith?.resolution?.answer;
+    // HALF 2 — and the gate is untouched by those same opts.
+    const without = renderVerify(lpEmptySection, lpOpts, built);
+    const withRes = renderVerify(lpEmptySection, withOpts, built);
+    const verdictUnchanged = without.markdown === withRes.markdown && without.missing === withRes.missing
+      && without.unverified === withRes.unverified && without.complete === withRes.complete;
+    // HALF 3 — the answered question's OWN row is still open, named by its id, in the verdict that saw the answer.
+    const rep = verifyReport(lpEmptySection, withRes);
+    const openIds = Object.values(rep.pages || {}).flatMap((p) => (p.openRows || []).map((r) => r.id).filter(Boolean));
+    const answeredRowStillOpen = openIds.includes(qWith.id);
+    return queueChanged && verdictUnchanged && answeredRowStillOpen && !withRes.complete; },
+  () => { const withOpts = { ...lpOpts, resolutions: RES_FILE };
+    const q = pageUnits(lpEmptySection, withOpts).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    const v = renderVerify(lpEmptySection, withOpts, { pages: { list: false }, evidence: {}, judge: {} });
+    return { queuedAnswer: !!q?.resolution, rowId: q?.id, complete: v.complete,
+      openIds: Object.values(verifyReport(lpEmptySection, v).pages || {}).flatMap((p) => (p.openRows || []).map((r) => r.id).filter(Boolean)) }; });
+check("ENG-95503: the answer reaches the queue item that ASKED it — `--units.preflight[].resolution` carries the operator's text, `decidedBy` and `date`, on the run where the question rides on `main`",
+  () => { const u = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+    const hit = u.preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    return !!hit && hit.pageKey === "main" && hit.resolution?.answer === "Name, Status, Owner, DueDate, Priority, Flagged"
+      && hit.resolution.decidedBy === "operator" && hit.resolution.date === "2026-08-19"; },
+  () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.map((p) => ({ id: p.id, res: p.resolution })));
+check("ENG-95503: an UNANSWERED question publishes `resolution: null` — an explicit \"nobody answered\", not an omitted field an executor could not tell apart from an engine that does not publish resolutions at all",
+  () => { const u = pageUnits(lpEmptySection, lpOpts);
+    return u.preflight.length >= 1 && u.preflight.every((p) => "resolution" in p && p.resolution === null); },
+  () => pageUnits(lpEmptySection, lpOpts).preflight.slice(0, 3));
+check("ENG-95503: ONE answer file matches the same logical question on BOTH runs — the `list`-published run and the `list`-withheld run — because the key is `kind`+`item` and never the id whose `pageKey` half moves between them",
+  () => { const onMain = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    // the same file, unchanged, against the run that publishes the `list` key
+    const listRes = { schemaVersion: 1, resolutions: [{ kind: lpListConfirm?.kind, item: lpListConfirm?.item, answer: "answered once" }] };
+    const onList = pageUnits(lpRun, { ...lpOpts, resolutions: listRes }).preflight.find((p) => p.kind === lpListConfirm?.kind);
+    // …and the two ids genuinely differ in their pageKey half, or this proves nothing
+    return !!onMain?.resolution && !!onList?.resolution && onMain.pageKey === "main" && onList.pageKey === "list"
+      && onMain.id.startsWith("main#") && onList.id.startsWith("list#"); },
+  () => ({ emptyId: lpEmptyConfirm?.id, listId: lpListConfirm?.id }));
+check("ENG-95503: the PUBLISHED ID is accepted as an alternative key — it is the string `--units.preflight` puts in front of the operator to copy, so pasting it must work even though `kind`+`item` is the stable key",
+  () => { const byId = { resolutions: [{ id: lpEmptyConfirm?.id, answer: "keyed by the id" }] };
+    const hit = pageUnits(lpEmptySection, { ...lpOpts, resolutions: byId }).preflight.find((p) => p.id === lpEmptyConfirm?.id);
+    return hit?.resolution?.answer === "keyed by the id"; },
+  () => ({ id: lpEmptyConfirm?.id }));
+check("ENG-95503: an answer matching NO published question is REPORTED in `resolutionsUnmatched`, never dropped — it means the manifest moved under a recorded decision or the kind/item was mistyped, and the operator believes it is answered",
+  () => { const u = pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [
+      { kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "matches" },
+      { kind: KIND_LIST_COLUMNS, item: RES_ORPHAN_ITEM, answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === RES_ORPHAN_ITEM
+      && u.preflight.some((p) => p.resolution?.answer === "matches"); },
+  () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [{ kind: KIND_LIST_COLUMNS, item: "nope", answer: "orphan" }] } }).resolutionsUnmatched);
+check("ENG-95503: one answer carrying BOTH keys is not double-reported as unmatched — the id-keyed half is skipped once its own kind/item pair has matched",
+  () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [
+    { id: lpEmptyConfirm?.id, kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "both keys" }] } }).resolutionsUnmatched.length === 0,
+  () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [{ id: lpEmptyConfirm?.id, kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "both keys" }] } }).resolutionsUnmatched);
+// THE SYMMETRIC CASE, and the one a regenerated manifest produces: the id still resolves but the recorded `item`
+// text has moved. The answer IS applied (id is a legal key), so reporting it unmatched would be a false alarm about
+// the one report whose whole value is being trustworthy.
+check("ENG-95503: an answer matched through its ID is NOT reported unmatched because its `kind`/`item` pair went stale — both guards are symmetric, so neither key form alone raises a false alarm",
+  () => { const withStalePair = { resolutions: [
+      { id: lpEmptyConfirm?.id, kind: lpEmptyConfirm?.kind, item: "text that has since changed", answer: RES_STALE_ANSWER }] };
+    const u = pageUnits(lpEmptySection, { ...lpOpts, resolutions: withStalePair });
+    const hit = u.preflight.find((p) => p.id === lpEmptyConfirm?.id);
+    return hit?.resolution?.answer === RES_STALE_ANSWER && u.resolutionsUnmatched.length === 0; },
+  () => { const u = pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [{ id: lpEmptyConfirm?.id, kind: lpEmptyConfirm?.kind, item: "text that has since changed", answer: RES_STALE_ANSWER }] } });
+    return { applied: !!u.preflight.find((p) => p.id === lpEmptyConfirm?.id)?.resolution, unmatched: u.resolutionsUnmatched }; });
+check("ENG-95503: the PUBLISHED side is trimmed on lookup too — an item carrying surrounding whitespace still finds the answer on file, because the index trims what the operator wrote",
+  () => !!matchResolution(buildResolutionIndex({ resolutions: [{ kind: KIND_LIST_COLUMNS, item: "cols", answer: "A" }] }),
+    { kind: " list-columns ", item: "  cols  " }),
+  () => "published kind/item with surrounding whitespace must still match");
+/* The executor routes a `list-*` answer to the unit that BUILDS the grid, and it recognises that family by the
+   `list-` PREFIX — a copy of knowledge that lives in `LIST_DECISION_KIND` here. The workflow script is evaluated as
+   a function body and can import nothing, so the copy cannot be removed; this asserts the invariant it depends on,
+   which is what makes the copy safe. Add a list decision kind without the prefix and the executor would route its
+   answer to the wrong unit silently — this test fails instead. */
+/* ONE question answered TWICE through the two key forms. Neither map collides, so the duplicate detector cannot see
+   it, and `matchResolution` prefers the pair — which silently discards the id-keyed answer. There is no precedence
+   worth guessing between two answers an operator wrote deliberately, so the discard is NAMED. */
+check("ENG-95503: a question answered BOTH by `id` and by `kind`+`item` reports the conflict and names the DISCARDED answer — the pair is applied, and the operator is told which entry lost rather than losing it silently",
+  () => { const id = lpEmptyConfirm?.id;
+    const u = pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [
+      { id, answer: "VIA ID" },
+      { kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "VIA PAIR" }] } });
+    const applied = u.preflight.find((p) => p.id === id)?.resolution?.answer;
+    const c = u.resolutionsConflicts;
+    return applied === "VIA PAIR" && c.length === 1 && c[0].used === "VIA PAIR" && c[0].discarded === "VIA ID"
+      && c[0].id === id && u.resolutionsUnmatched.length === 0; },
+  () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [{ id: lpEmptyConfirm?.id, answer: "VIA ID" }, { kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "VIA PAIR" }] } }).resolutionsConflicts);
+check("ENG-95503: ONE entry carrying both key forms is NOT a conflict — the two forms resolve to the same answer, and a plan publishing the same id twice still reports the conflict once",
+  () => { const one = pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [
+      { id: lpEmptyConfirm?.id, kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "one entry" }] } });
+    return one.resolutionsConflicts.length === 0; },
+  () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [{ id: lpEmptyConfirm?.id, kind: lpEmptyConfirm?.kind, item: lpEmptyConfirm?.item, answer: "one entry" }] } }).resolutionsConflicts);
+check("ENG-95503: with no resolutions at all, both reports are EMPTY arrays rather than absent — a caller must not have to tell \"no conflicts\" apart from \"this engine does not check\"",
+  () => { const u = pageUnits(lpEmptySection, lpOpts);
+    return Array.isArray(u.resolutionsConflicts) && u.resolutionsConflicts.length === 0
+      && Array.isArray(u.resolutionsUnmatched) && u.resolutionsUnmatched.length === 0; },
+  () => ({ conflicts: pageUnits(lpEmptySection, lpOpts).resolutionsConflicts, unmatched: pageUnits(lpEmptySection, lpOpts).resolutionsUnmatched }));
+check("ENG-95503: EVERY value in `LIST_DECISION_KIND` starts with `list-` — the executor's prefix test is a copy of this knowledge and cannot import it, so the invariant is pinned where the strings actually live",
+  () => LIST_DECISION_KINDS.length >= 8 && LIST_DECISION_KINDS.every((k) => typeof k === "string" && k.startsWith("list-")),
+  () => LIST_DECISION_KINDS.filter((k) => !String(k).startsWith("list-")).join(", ") || LIST_DECISION_KINDS.join(", "));
+check("ENG-95503: TWO answers to the SAME question are reported in `duplicates` (last one wins, but the discarded one is never silent) while staying out of `bad`, which is the exit-1 list",
+  () => { const i = buildResolutionIndex({ resolutions: [
+      { kind: KIND_LIST_COLUMNS, item: "cols", answer: "FIRST" },
+      { kind: KIND_LIST_COLUMNS, item: "cols", answer: "SECOND" }] });
+    return i.duplicates.length === 1 && i.duplicates[0] === "list-columns:cols" && i.bad.length === 0
+      && matchResolution(i, { kind: KIND_LIST_COLUMNS, item: "cols" }).answer === "SECOND"; },
+  () => buildResolutionIndex({ resolutions: [{ kind: KIND_LIST_COLUMNS, item: "cols", answer: "FIRST" }, { kind: KIND_LIST_COLUMNS, item: "cols", answer: "SECOND" }] }));
+check("ENG-95503: an UNUSABLE entry is collected, not silently skipped — a blank answer, or an entry naming neither an `id` nor both `kind` and `item`, is what the CLI turns into an exit 1 rather than a run that reads as \"unanswered\"",
+  () => { const i = buildResolutionIndex({ resolutions: [
+      { kind: "k", item: "i" },                       // no answer
+      { answer: "orphaned answer" },                  // no key at all
+      { kind: "k2", item: "i2", answer: "   " },      // blank answer
+      { kind: "ok", item: "ok", answer: "usable" }] });
+    return i.bad.length === 3 && i.count === 1 && /no non-blank `answer`/.test(i.bad[0]) && /neither an `id` nor both/.test(i.bad[1]); },
+  () => buildResolutionIndex({ resolutions: [{ kind: "k", item: "i" }, { answer: "x" }] }).bad);
+check("ENG-95503: a file that is neither an array nor `{resolutions:[…]}` is reported as unusable rather than read as empty — the two must not look alike, because \"broken file\" and \"no answers yet\" have opposite fixes",
+  () => buildResolutionIndex({ answers: { some: "thing" } }).bad.length === 1
+    && buildResolutionIndex(null).bad.length === 0 && buildResolutionIndex(null).count === 0
+    && buildResolutionIndex([{ kind: "k", item: "i", answer: "a bare array is legal" }]).count === 1,
+  () => ({ wrongShape: buildResolutionIndex({ answers: {} }).bad, nullInput: buildResolutionIndex(null) }));
+check("ENG-95503: `matchResolution` prefers the `kind`+`item` pair over the id, and returns null for an unanswered question — the pair is the identity that survives a pageKey shift",
+  () => { const i = buildResolutionIndex({ resolutions: [
+      { kind: KIND_LIST_COLUMNS, item: "cols", answer: "from the pair" },
+      { id: RES_ID_COLS, answer: "from the id" }] });
+    return matchResolution(i, { id: RES_ID_COLS, kind: KIND_LIST_COLUMNS, item: "cols" }).answer === "from the pair"
+      && matchResolution(i, { id: RES_ID_COLS }).answer === "from the id"
+      && matchResolution(i, { kind: "other", item: "z" }) === null
+      && matchResolution(null, { kind: KIND_LIST_COLUMNS, item: "cols" }) === null; },
+  () => "see matchResolution precedence");
 check("ENG-95218: under `pages-only-no-menu` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
   () => { const spec = renderDesignSpec(lpRun, lpNoMenuOpts);
     const at = spec.indexOf("### List page");
@@ -6162,6 +6320,57 @@ try {
   check("ENG-94975 D2: the `--units` CLI output is the SAME queue `pageUnits()` returns in-process (one producer — the CLI cannot drift from the engine)",
     !!uParsed && JSON.stringify(uParsed) === JSON.stringify(pgUnits),
     () => ({ cliKeys: (uParsed?.pages || []).map((p) => p.key), libKeys: pgUnitKeys }));
+  /* ---- ENG-95503 — the `--resolutions` flag END TO END through the CLI. The in-process tests above prove the
+     matching; these prove the flag reaches it, that the file's THREE outcomes stay distinguishable, and that a
+     path in the positional-argument position is not read as the manifest (the failure `VALUE_FLAGS` exists for). ---- */
+  const resPath = path.join(os.tmpdir(), `c2f_res_${process.pid}.json`);
+  const cliUnits = (extra = []) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--units", ...extra], { encoding: "utf8" });
+  try {
+    const asked = (uParsed?.preflight || [])[0];
+    fs.writeFileSync(resPath, JSON.stringify({ resolutions: [
+      { kind: asked?.kind, item: asked?.item, answer: "answered through the CLI" },
+      { kind: KIND_LIST_COLUMNS, item: RES_ORPHAN_ITEM, answer: "orphan" }] }));
+    const withRes = cliUnits([RES_FLAG, resPath]);
+    const parsed = (() => { try { return JSON.parse(withRes.stdout); } catch { return null; } })();
+    check("ENG-95503: `--units --resolutions <file>` attaches the answer through the CLI, exits 0, and reports the unmatched entry on stderr — the operator's own check that an answer landed is this one command",
+      !!parsed && parsed.preflight.some((p) => p.id === asked?.id && p.resolution?.answer === "answered through the CLI")
+      && parsed.resolutionsUnmatched.length === 1
+      && /matched NO ⚠ Confirm question/.test(withRes.stderr || "")
+      && !/not valid JSON/.test(withRes.stderr || ""),
+      () => ({ status: withRes.status, err: (withRes.stderr || "").slice(0, 300), unmatched: parsed?.resolutionsUnmatched }));
+    check("ENG-95503: the resolutions PATH is not mistaken for the manifest — `--resolutions` is in `VALUE_FLAGS`, so the positional-manifest search skips its value instead of parsing the answers file as a manifest",
+      !!parsed && !/not valid JSON|cannot read manifest/i.test(withRes.stderr || "")
+      && JSON.stringify(parsed.pages.map((p) => p.key)) === JSON.stringify(pgUnits.pages.map((p) => p.key)),
+      () => ({ err: (withRes.stderr || "").slice(0, 300) }));
+    // A MISSING file is the normal first-run state and must NOT fail; a MALFORMED one must. The two look alike to a
+    // caller that only checks for output, and they have opposite fixes — write the file vs repair it.
+    const absent = cliUnits([RES_FLAG, path.join(os.tmpdir(), `c2f_res_absent_${process.pid}.json`)]);
+    fs.writeFileSync(resPath, "{ not json");
+    const broken = cliUnits([RES_FLAG, resPath]);
+    fs.writeFileSync(resPath, JSON.stringify({ resolutions: [{ kind: "k", item: "i" }] }));
+    const noAnswer = cliUnits([RES_FLAG, resPath]);
+    // The exit code is compared against the SAME manifest's run WITHOUT the flag, not against 0: this manifest
+    // exits 2 on its own plan gates, and hard-coding 0 would assert something about the fixture rather than about
+    // `--resolutions`. What must hold is that an absent file changes NOTHING — the run behaves as if the flag were
+    // not passed. The two failure legs exit 1 (bad input) and so override the gate exit, which is the point:
+    // "you wrote a broken answers file" must not be reportable as "your plan has gaps".
+    check("ENG-95503: an ABSENT resolutions file changes nothing — same exit code as the run without the flag, because nobody having answered yet is the normal first run — while an UNPARSEABLE file and an entry with no `answer` are both a hard exit 1",
+      absent.status === uPathFirst.status && /does not exist/.test(absent.stderr || "")
+      && broken.status === 1 && /cannot read --resolutions/.test(broken.stderr || "")
+      && noAnswer.status === 1 && /unusable entr/.test(noAnswer.stderr || "")
+      // the two failure legs are genuinely distinguishable from the tolerated one
+      && broken.status !== absent.status && noAnswer.status !== absent.status,
+      () => ({ noFlag: uPathFirst.status,
+        absent: { st: absent.status, err: (absent.stderr || "").slice(0, 160) },
+        broken: { st: broken.status, err: (broken.stderr || "").slice(0, 160) },
+        noAnswer: { st: noAnswer.status, err: (noAnswer.stderr || "").slice(0, 160) } }));
+    const wrongMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--checklist", RES_FLAG, resPath], { encoding: "utf8" });
+    check("ENG-95503: `--resolutions` outside `--units` is refused rather than ignored — in any other mode there is no queue item to attach an answer to, and silently accepting it would leave a caller believing answers had been applied",
+      wrongMode.status === 1 && /only applies to `--units`/.test(wrongMode.stderr || ""),
+      () => ({ status: wrongMode.status, err: (wrongMode.stderr || "").slice(0, 200) }));
+  } finally {
+    fs.rmSync(resPath, { force: true });
+  }
 } finally {
   fs.rmSync(unitsManifestPath, { force: true });
 }

@@ -240,6 +240,23 @@ primary package and could not host a section at all. What each mode changes here
 A plan written before placement was gated publishes `sectionHost: null`, and every predicate keeps
 its pre-placement behaviour exactly.
 
+**An operator's ANSWER travels as data, in `resolutions.json`.** The operator records each answered ⚠ Confirm
+item in `resolutions.json` beside the plan in the migration folder —
+`{ "resolutions": [ { "kind", "item", "answer", "decidedBy?", "date?" } ] }`,
+keyed on `kind` + `item` (the published `id` also works; its `pageKey` half moves between runs). `--units
+--resolutions` attaches each to the item that asked it, Reconcile carries it through, Preflight files the evidence
+record FROM it instead of re-deriving, and the build agent for that page is handed it verbatim. A `list-*` answer
+goes to the `list` unit when that key is published and to `main` when it is withheld.
+**An answer is an INPUT: it closes no `--verify` row.** It supplies the CONTENT of the evidence record; the record
+is still filed by Preflight and still ruled on by the judge, and the deliverable is still built and read back off
+the stand. Do NOT use `findings` to carry an answer — `findings` re-opens a unit the gate called complete, which is
+a different job. An item with no answer is resolved on-stand exactly as before: the file is a shortcut for the few
+questions a human already settled, never a precondition for the rest.
+**A discarded answer is never silent** — the run logs, and returns, both `resolutionsUnmatched` (matched no question
+this plan asks: a mistyped `item`, or a regenerated manifest shifting an item's text) and `resolutionsConflicts` (one
+question answered by both an `id` entry and a `kind`+`item` entry — the pair is applied, the `id` one is discarded).
+Both name the `resolutions.json` path, and both are re-reported when a later Reconcile replaces the run state.
+
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand
 all of it back to the fan-out — measured on a real folder, 107 evidence records were on file and every

@@ -1,7 +1,15 @@
 # 02 — The queue file and the built file
 
 Two JSON files in the migration folder carry the whole run — plus `verify.json`, the engine's machine
-verdict, and one short-lived `preflight-<n>.json` per ⚠ Confirm agent. Everything else is derivable.
+verdict, one short-lived `preflight-<n>.json` per ⚠ Confirm agent, and `resolutions.json`, the one file
+here that a HUMAN writes. Everything else is derivable.
+
+`resolutions.json` holds the operator's answers to this plan's ⚠ Confirm questions:
+`{ "resolutions": [ { "kind": "list-columns", "item": "…", "answer": "…", "decidedBy": "…", "date": "…" } ] }`.
+Keyed on `kind` + `item` (the published `id` also works; its `pageKey` half moves between runs). It is read by
+the ENGINE — `--units --resolutions` publishes each answer on the queue item that asked it — never parsed by an
+agent. Absent means nobody has answered yet, which is the normal first run. **It closes no `--verify` row:** an
+answer is an input to the build, and the evidence record is still filed and still judged.
 They exist because a run is interrupted routinely — a usage limit, a session end, a new
 agent picking the work up in the same folder tomorrow. Nothing about "where we are" may live
 only in an agent's context.
