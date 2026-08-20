@@ -80,7 +80,8 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    - **Freedom UI (`freedom-web`):** continue — the guide already analyzed components, layout,
      fields, actions, and (detected) business rules.
 4. **Generate the conversion plan.** From the guide, produce a SHORT, plain-language plan — NOT
-   technical detail. State: what will be transferred, what will be adapted (e.g. *"grid → mobile
+   technical detail. Lead with the Beta-release notice (see "Conversion plan" below) — verbatim at the
+   very top. Then state: what will be transferred, what will be adapted (e.g. *"grid → mobile
    list"*, *"checkbox → toggle"*), what is unsupported / will be dropped, what needs a decision, the
    recommended mobile template, and the section/workplace registration intent. For each unsupported /
    manual-decision item use this message shape: *"Component X is not supported in Freedom UI Mobile
@@ -207,6 +208,13 @@ make. Section/workplace writes (`odata-update` on `SysModule`, `odata-create` on
 
 Show a SHORT, plain-language plan — no JSON, no page body, no per-property detail. Cover:
 
+- **Beta-release notice (show FIRST, verbatim)** — print this notice at the very top of the plan,
+  before anything else, exactly as written (do not paraphrase or drop it). It is temporary and names
+  the feature it applies to — converting a **web Freedom UI page** into a **mobile Freedom UI page**:
+  > ⚠️📱 You are using the **web-Freedom-page → mobile-Freedom-page conversion** in **Beta mode**: some functionality may be limited or subject to change, and the Converter currently supports the **Mobile canvas** only — Tablet support is on the roadmap and will be available in a future release.
+
+  (The separate "enabling this feature activates Beta mode" heads-up is shown by clio at the moment the
+  `mobile-page-converter` feature is enabled, not here.)
 - **Target** — the registered environment, the target page name (**with the environment
   `SchemaNamePrefix`**), the recommended mobile template, and the target package (propose one; the
   developer makes the final choice).
