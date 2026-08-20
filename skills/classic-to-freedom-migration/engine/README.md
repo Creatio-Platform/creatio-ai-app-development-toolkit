@@ -135,8 +135,9 @@ see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a
 disposition: `mapped` (the ChangeSet has a Freedom artifact for it), `decision` (it is on a `⚠` worklist),
-`resolved` (the agent recorded one in `manifest.memberDispositions`), `chrome` (pure decoration — a menu separator,
-a tooltip, a control's own label, a designer-only editor: recorded and COUNTED, never a `⚠` and never a block),
+`resolved` (the agent recorded one in `manifest.memberDispositions`), `chrome` (pure decoration — a **menu separator**, and only
+that: recorded and COUNTED, never a `⚠` and never a block; a tooltip, a control's label and the grid-settings
+editor each carry content or children and raise a normal ⚠ instead),
 `context` (inherited base-template content, excluded by design but COUNTED) — or `unaccounted`, which blocks.
 Precedence runs `mapped` > `decision` > `chrome` > `context`: a real artifact or a recorded answer is the stronger
 statement, and base-template decoration counts as `chrome` rather than `context`. Kinds with no members are reported as counted

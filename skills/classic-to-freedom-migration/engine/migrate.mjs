@@ -61,7 +61,8 @@ import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes } from "./designspec.mjs";
+  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes,
+  IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -1023,6 +1024,40 @@ const diagTag = (pkg, role) => (role === "section" ? `section::${pkg}` : String(
 // `profile:<name>` and section layers all reach the plan. Previously this took `schemas` alone, so four of the five
 // layer kinds stayed console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
 // `diff.<n>` path back to its element name; a layer that is not in the map still routes by `diff[<n>]`.
+// AC22: the owning member's OWN row must say the value could not be read. The `⚠ Imperative members` table prints
+// `needsDecision[].detail` (designspec `imperativeMemberRows` filters `needsDecision`, so the ledger's `SOURCES`
+// detail closures are NOT what feeds that cell — worth stating, because it is the obvious wrong place to look).
+// Without this the reader saw an EMPTY Detail cell, which reads as "no default", while the correction sat in a
+// different section of the plan as a separate `parse-gap` line. Both surfaces now carry it: the worklist line stays
+// (it names the body and position to open), and the member's row stops asserting something false about itself.
+// Derived from the ownership `reportRemainingDiagnostics` has already computed — ownership is not re-derived here.
+const IMPERATIVE_KINDS = new Set(IMPERATIVE_MEMBER_KINDS);
+const GAP_PROP_LABEL = { value: "default" };
+// The member KIND a diagnostic path belongs to. Matching on the bare owner NAME is not enough and the trap is real,
+// not theoretical: a classic diff item is usually named for the column or attribute it binds, so on
+// ContentSmartHtmlEditPage a gap at `diff.19.values.itemType` (a diff ITEM) landed on the same-named virtual
+// ATTRIBUTE and rendered "⚠ itemType unreadable" on a member that has no itemType at all. A path with no entry
+// here (`diff.…`, `properties.…`) marks NOTHING: diff items carry no imperative-member row, and inventing one
+// would be worse than the empty cell this is fixing.
+const GAP_OWNER_SCOPE = [
+  [/^attributes\./, (k) => k.startsWith("attribute")],
+  [/^messages\./, (k) => k === "message"],
+  [/^mixins\./, (k) => k === "mixin"],
+];
+function markOwnerRowWithGap(changeSet, owner, gapPath) {
+  const path = String(gapPath || "");
+  const scope = GAP_OWNER_SCOPE.find(([rx]) => rx.test(path))?.[1];
+  if (!scope) return;
+  const seg = path.split(".").filter(Boolean).pop() || "value";
+  const marker = `⚠ ${GAP_PROP_LABEL[seg] || seg} unreadable`;
+  for (const n of (changeSet.needsDecision || [])) {
+    if (n.item !== owner || !IMPERATIVE_KINDS.has(n.kind) || !scope(n.kind)) continue;
+    const cur = n.detail ? String(n.detail) : "";
+    if (cur.includes(marker)) continue;           // two gaps on one property must not double the same marker
+    n.detail = cur ? `${cur} · ${marker}` : marker;
+  }
+}
+
 function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
   const seen = new Set();                                        // one row per owner+kind+path+LAYER
   for (const d of parseDiagnostics) {
@@ -1041,6 +1076,7 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
     const where = d.pkg ? ` in \`${d.pkg}\`${sectionNote}` : "";
     changeSet.needsDecision.push({ kind: "parse-gap", item,
       reason: `${ownerNote}${where} ${diagnosticGapText(d, p)}. Read the classic body at that position and record the real value/behaviour — this is NOT a resolved default, and nothing downstream can see it unless it is answered here.` });
+    markOwnerRowWithGap(changeSet, item, p);
   }
 }
 

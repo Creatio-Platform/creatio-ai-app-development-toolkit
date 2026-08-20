@@ -1074,6 +1074,10 @@ function normalizeDiffOp(op, i) {
     // "key present but not statically a number" into the same `null`, and the runtime treats those two as
     // opposites (see `replayMerge`). Without this the merge rule cannot be implemented at all.
     valuesKeys: new Set(safeKeys(v)),
+    // `remove` with a `properties` array is a DIFFERENT operation from a plain remove: it deletes the named keys
+    // and KEEPS the element (core `json-applier.js` L726-730). Carried here because dropping it made the engine
+    // tombstone an element the runtime still renders — the one divergence in this family that HIDES real UI.
+    properties: Array.isArray(op.properties) ? op.properties.filter(isStr) : null,
     // The body STATED a kind and this engine could not resolve it to a number (a member `AST_VIEW_ITEM_TYPE`
     // lacks, or a non-static expression). Distinct from "stated no kind": the remedy is to extend the engine's
     // pinned table, not to go read the page.
@@ -1206,9 +1210,14 @@ function makeItem(op, seed, pkg) {
 function replayDiffOp(op, items, { seed, pkg }, warnings) {
   const cur = items.get(op.name);
   if (op.operation === "insert") { items.set(op.name, makeItem(op, seed, pkg)); return; }
+  if (op.operation === "set") return replaySet(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
-  if (op.operation === "remove") return replayRemove(op, cur, items, { seed, pkg }, warnings);
+  if (op.operation === "remove") {
+    // the `properties` form is a different operation wearing the same name — and only when the item exists
+    if (cur && op.properties?.length) return replayRemoveProperties(op, cur, { seed, pkg }, warnings);
+    return replayRemove(op, cur, items, { seed, pkg }, warnings);
+  }
 }
 
 // The three IDENTITY properties, merged by the RUNTIME's rule — which is key PRESENCE, never the value.
@@ -1220,11 +1229,11 @@ function replayDiffOp(op, items, { seed, pkg }, warnings) {
 // (CrtNUI 7.8.0 L626-628) with no throw and no log. The engine's old value-based guard hid that behaviour change.
 // Its own function so `replayMerge` keeps its guard chain at nesting level 0 (S3776 ceiling), same reason as
 // `isStructuralDiag` / `methodLedgerDetail`.
-function mergeIdentityProps(op, cur, pkg, warnings) {
+function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
   for (const k of ["contentType", "itemType", "dataValueType"]) {
     if (!op.valuesKeys?.has(k)) continue;
     if (k === "itemType" && cur.itemType != null && op.itemType == null) {
-      warnings.push({ op: "merge", name: op.name, schema: pkg,
+      warnings.push({ op: opName, name: op.name, schema: pkg,
         hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
     }
     cur[k] = op[k];
@@ -1265,6 +1274,14 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
   // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
   // (previously only the parent was updated, so a pure reorder silently kept the old position).
   if (op.order != null) { cur.order = op.order; }
+  // A `move` also carries its OWN `values`, and the runtime applies them: `convertMoveOperationToRemove` turns the
+  // move into a remove + an insert and then does `Ext.apply(insertOperationItem, operationItem)` (core
+  // `json-applier.js` L283-289), so every key the move op states lands on the reinserted item. Applying only
+  // parent/order dropped an `itemType` restated by a move — a real occurrence: ContactPageV2's `SiteEventDetail` is
+  // moved by `EventTracking` with `values: { itemType: Terrasoft.ViewItemType.DETAIL }`. There the value merely
+  // repeats what `SiteEvent`'s insert already set, so nothing was visibly wrong; a move that states a DIFFERENT
+  // kind was silently ignored. Same key-presence rule as `merge`, same helper, so the two cannot drift apart.
+  mergeIdentityProps(op, cur, pkg, warnings, "move");
   if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
@@ -1276,6 +1293,60 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
   items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
   warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+}
+
+// `remove` carrying a `properties` array: delete ONLY those keys, keep the element (core `json-applier.js`
+// L719-732, and it runs in a LATER group than plain removes at L304). The engine models a subset of a view item's
+// keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
+// alternative is telling the reader a property was cleared when nothing happened.
+const REMOVABLE_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
+  "layout", "tip", "hint", "generator", "visible", "caption"]);
+function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
+  const unmodelled = [];
+  for (const k of op.properties) {
+    if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
+    // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
+    // "absent vs unreadable" ambiguity this ticket removed elsewhere.
+    cur[k] = null;
+    if (k === "itemType") cur.itemTypeUnresolved = false;
+  }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true;
+  if (unmodelled.length) {
+    warnings.push({ op: "remove", name: op.name, schema: pkg,
+      hint: `this remove deletes propert(ies) the engine does not model on an item: ${unmodelled.join(", ")}. The element is KEPT (correct), but the effect of clearing those keys is not represented — read the classic body if the plan depends on them.` });
+  }
+}
+
+// `set` = remove-then-reinsert-from-`values` (core `json-applier.js` L660-677): the element keeps its POSITION but
+// loses every property the op does not restate AND every child, because the runtime rebuilds it from `values` alone
+// and recovers only `index`/`parentName`/`propertyName` from the item it removed (L670-673).
+// LIMIT, stated because a golden must not imply otherwise: the runtime runs the whole `set` GROUP after every other
+// group (L299-306), while this engine replays in diff-array order. So a `set` whose page also relies on that
+// ordering is still not mirrored — see engine-internals.md. No real occurrence of `set` was found in a corpus of
+// 130 schema bodies across 5 real Classic pages, so this path is exercised only by goldens.
+function replaySet(op, cur, items, { seed, pkg }, warnings) {
+  if (!cur) {
+    items.set(op.name, makeItem(op, seed, pkg));
+    warnings.push({ op: "set", name: op.name, schema: pkg, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
+    return;
+  }
+  // Direct children are tombstoned here; `cascadeRemove` sweeps the deeper levels on its fixpoint pass, and marks
+  // them `cascadeRemoved` so they read as structural cleanup rather than as a client decision to drop them.
+  let dropped = 0;
+  for (const it of items.values()) {
+    if (it.parent === op.name && !it.removed) {
+      it.removed = true; it.removedBy = pkg; it.removedBySeed = seed; it.cascadeRemoved = true; dropped++;
+    }
+  }
+  const fresh = makeItem(op, seed, pkg);
+  items.set(op.name, { ...fresh,
+    // position is recovered from the item being replaced, not from the op
+    parent: cur.parent, propertyName: cur.propertyName, order: cur.order,
+    templateOwned: cur.templateOwned, provenance: [...cur.provenance, pkg],
+    schemaTouched: seed ? cur.schemaTouched : true });
+  warnings.push({ op: "set", name: op.name, schema: pkg,
+    hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${dropped ? `, and ${dropped} direct child(ren) were dropped with it` : ""}. If the classic page still shows content here, it must be restated in this op.` });
 }
 
 // businessRules + legacy rules (merge by attribute::ruleKey)

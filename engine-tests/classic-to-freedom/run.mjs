@@ -182,6 +182,100 @@ const c2 = mergeHierarchy([
 check("C2: merge introduces contentType (5=lookup) on an existing item — carried, not dropped",
   c2.items.find(i => i.name === "F")?.contentType === 5);
 
+/* ---- ENG-95412: `set` and `remove`-with-`properties`, the two operations the engine did not implement ----
+   Driven through a REAL schema body and `parseSchema`, not the testkit's pre-normalized ops, because half of what
+   is being pinned is that the PARSER carries `op.properties` and the `set` operation name at all — a `makeOp`-based
+   golden would pass even if `normalizeDiffOp` dropped them (which is how the `valuesKeys` gap slipped through).
+   HONEST LIMIT: no occurrence of either operation was found in 130 schema bodies across 5 real Classic pages, so
+   these are synthetic cases validated against core `json-applier.js`, not against observed data. Group ordering is
+   still not mirrored, so nothing here asserts anything about the order operations run in. ---- */
+const realBody = (diff) => `define("T",[],function(){return{entitySchemaName:"X",diff:[${diff}]};});`;
+const realRun = (...ops) => mergeHierarchy([parseSchema(realBody(ops.join(",")), "T")]);
+
+// `remove` + `properties` deletes the NAMED keys and KEEPS the element (json-applier.js L726-730). The engine used
+// to tombstone it, so an element the runtime still renders went missing from the plan entirely — the one
+// divergence in this family that HIDES real UI rather than over-reporting.
+const rmProps = realRun(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.C1",itemType:6}}`,
+  `{operation:"remove",name:"Fld",properties:["caption"]}`);
+const rmPropsItem = rmProps.items.find((i) => i.name === "Fld");
+check("ENG-95412: `remove` with a `properties` array clears ONLY those keys and KEEPS the element — caption gone, bindTo and itemType intact, and it is not in removed[]",
+  !!rmPropsItem && rmPropsItem.caption === null && rmPropsItem.bindTo === "Name" && rmPropsItem.itemType === 6
+  && !rmProps.removed.some((r) => r.name === "Fld"),
+  () => ({ item: rmPropsItem, removed: rmProps.removed.map((r) => r.name) }));
+// The control arm: a plain `remove` must still tombstone. Without it, "keeps the element" could be implemented by
+// making every remove a no-op.
+const rmPlain = realRun(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
+  `{operation:"remove",name:"Fld"}`);
+check("ENG-95412: a plain `remove` (no `properties`) still tombstones the element — the two forms stay distinct operations",
+  !rmPlain.items.some((i) => i.name === "Fld") && rmPlain.removed.some((r) => r.name === "Fld"),
+  () => ({ items: rmPlain.items.map((i) => i.name), removed: rmPlain.removed.map((r) => r.name) }));
+
+// `set` is a wholesale replace: position is recovered from the replaced item, every unrestated property is gone,
+// and so are the children (json-applier.js L660-677).
+const setRun = realRun(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`,
+  `{operation:"set",name:"Box",values:{itemType:7}}`);
+const setBox = setRun.items.find((i) => i.name === "Box");
+check("ENG-95412: `set` replaces the element wholesale — the unrestated caption is gone, the position is recovered from the replaced item, and the child is dropped with it",
+  !!setBox && setBox.caption === null && setBox.parent === "Header" && setBox.itemType === 7
+  && !setRun.items.some((i) => i.name === "Kid"),
+  () => ({ box: setBox, items: setRun.items.map((i) => i.name) }));
+check("ENG-95412: a child dropped by `set` is structural cleanup, not a client decision — it does not appear in removed[] alongside deliberate removals",
+  !setRun.removed.some((r) => r.name === "Kid"),
+  () => setRun.removed.map((r) => r.name));
+// The control arm that gives `set` its meaning: the SAME values via `merge` must keep both the caption and the child.
+const mergeControl = realRun(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`,
+  `{operation:"merge",name:"Box",values:{itemType:7}}`);
+// Compared against a run with NO third op rather than against a literal: whatever normalization the engine applies
+// to a caption resource key is a separate concern, and hard-coding the normalized form here would make this test
+// fail for a reason that has nothing to do with set-vs-merge.
+const noThirdOp = realRun(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`);
+const baselineCaption = noThirdOp.items.find((i) => i.name === "Box")?.caption;
+check("ENG-95412: the same `values` via `merge` keeps BOTH the caption and the child — this is the whole difference between the two operations, so pinning one without the other pins nothing",
+  baselineCaption != null
+  && mergeControl.items.find((i) => i.name === "Box")?.caption === baselineCaption
+  && mergeControl.items.some((i) => i.name === "Kid"),
+  () => ({ baselineCaption, merged: mergeControl.items.find((i) => i.name === "Box"), items: mergeControl.items.map((i) => i.name) }));
+
+/* ---- ENG-95412: a `move` carries its own `values`, and the runtime applies them ----
+   Grounded in real data: ContactPageV2's `SiteEventDetail` is inserted by package `SiteEvent` with
+   `values: { itemType: Terrasoft.ViewItemType.DETAIL }` and then MOVED by package `EventTracking` restating the
+   same `itemType`. That real occurrence is REDUNDANT — the value repeats what the insert already set — so it can
+   never witness the bug. The pin therefore uses the identical code path with a DIFFERING value, which is the only
+   way to observe it, and the redundant real shape is pinned separately as the no-regression arm. ---- */
+const moveApplies = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 7 }]),
+  synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab", itemType: 2 }]),
+]);
+const movedItem = moveApplies.items.find((i) => i.name === "SiteEventDetail");
+check("ENG-95412: a `move` that restates `itemType` APPLIES it (7 -> 2) — the runtime Ext.applies the move op onto the reinserted item, so ignoring its values reported a stale kind",
+  movedItem?.itemType === 2 && movedItem?.parent === "HistoryTab",
+  () => ({ itemType: movedItem?.itemType, parent: movedItem?.parent }));
+// The real ContactPageV2 shape: the move repeats the insert's kind. Must stay a no-op, or the fix would be
+// "apply something" rather than "apply what the op states".
+const moveRedundant = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 2 }]),
+  synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab", itemType: 2 }]),
+]);
+check("ENG-95412: the REAL shape (a move restating the kind the insert already set) stays a no-op on the kind — this is what ContactPageV2 actually does",
+  moveRedundant.items.find((i) => i.name === "SiteEventDetail")?.itemType === 2,
+  () => moveRedundant.items.find((i) => i.name === "SiteEventDetail"));
+// A move that states NO itemType must leave the kind alone — key presence, same as merge.
+const moveSilent = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 2 }]),
+  synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab" }]),
+]);
+check("ENG-95412: a `move` that carries no `itemType` key leaves the kind intact — presence decides here too",
+  moveSilent.items.find((i) => i.name === "SiteEventDetail")?.itemType === 2,
+  () => moveSilent.items.find((i) => i.name === "SiteEventDetail"));
+
 /* ---- ENG-95412: the merge rule is key PRESENCE, not value — verified against core `json-applier.js` ----
    `JsonApplier.merge` takes `Object.keys(config.values)` (L583-585) and assigns unconditionally (L702-705), so a
    later layer that carries an `itemType` key AT ALL overwrites the base — including with a value this engine cannot

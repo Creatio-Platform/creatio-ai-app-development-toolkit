@@ -7231,11 +7231,21 @@ try {
   // The DISTRIBUTION, not just presence: a member silently re-classified (structural → unmapped) keeps every
   // presence check green, and that is exactly the drift the dispatch table exists to prevent.
   const roleTally = rolesByMember.reduce((a, [, r]) => ({ ...a, [r]: (a[r] || 0) + 1 }), {});
-  check("ENG-95412: the role distribution over the pinned table is exactly 5 structural / 4 decoration / 1 field / 1 container / 18 unmapped",
-    roleTally[ITEM_ROLES.STRUCT] === 5 && roleTally[ITEM_ROLES.DECOR] === 4 && roleTally[ITEM_ROLES.FIELD] === 1
-    && roleTally[ITEM_ROLES.CONTAINER] === 1 && roleTally[ITEM_ROLES.UNMAPPED] === 18
+  // The decoration count is 1, not 4, and that is the point: the other three provisional entries were checked
+  // against `ViewGeneratorV2` and each carries content the reader would lose — TIP_LABEL an author caption
+  // (Classic logs an ERROR when it is empty), TIP a recursively generated `tools`/`items` subtree,
+  // GRID_LAYOUT_EDIT a raw `items` array on a live control. MENU_SEPARATOR is the only information-free kind.
+  check("ENG-95412: the role distribution over the pinned table is exactly 5 structural / 1 decoration / 1 field / 3 container / 19 unmapped",
+    roleTally[ITEM_ROLES.STRUCT] === 5 && roleTally[ITEM_ROLES.DECOR] === 1 && roleTally[ITEM_ROLES.FIELD] === 1
+    && roleTally[ITEM_ROLES.CONTAINER] === 3 && roleTally[ITEM_ROLES.UNMAPPED] === 19
     && Object.values(roleTally).reduce((a, b) => a + b, 0) === 29,
     () => roleTally);
+  // MENU_SEPARATOR is named explicitly, so a future reclassification cannot quietly restore a second decoration
+  // kind while keeping the count at 1.
+  check("ENG-95412: MENU_SEPARATOR is the ONLY decoration kind — named, not merely counted",
+    Object.values(VIEW_ITEM_TYPE).filter((v) => itemRoleOf(v) === ITEM_ROLES.DECOR).length === 1
+    && itemRoleOf(VIEW_ITEM_TYPE.MENU_SEPARATOR) === ITEM_ROLES.DECOR,
+    () => Object.entries(VIEW_ITEM_TYPE).filter(([, v]) => itemRoleOf(v) === ITEM_ROLES.DECOR));
   // A member added to the enum without a role must FAIL, not degrade: set-equality between the two tables is what
   // makes the next enum bump a test failure instead of a silent reclassification.
   check("ENG-95412: the dispatch table's keys are exactly the pinned ViewItemType values — a member added to the enum without a role fails here",
@@ -7276,12 +7286,21 @@ try {
   ].join(","));
   const chromeRows = (decRun.coverage?.rows || []).filter((r) => r.disposition === "chrome")
     .map((r) => r.name).sort((a, b) => a.localeCompare(b));
-  check("ENG-95412: pure decoration (MENU_SEPARATOR / TIP) is recorded as `chrome` in the ledger and raises NO ⚠",
-    chromeRows.join(",") === "SepA,TipA"
-    && !decRun.changeSet.needsDecision.some((d) => d.item === "SepA" || d.item === "TipA"),
+  // REWRITTEN, not merely re-tuned: this pinned `TipA` as `chrome`, which is the policy the CrtNUI read reverses.
+  // `generateTip` generates a TIP's `tools` and `items` recursively through `generateItem`, so a TIP is a container
+  // that can hold buttons — auto-accounting it discarded that subtree. MENU_SEPARATOR is unaffected and still
+  // carries the original invariant: recorded as a disposition, never suppressed and never a ⚠.
+  check("ENG-95412: MENU_SEPARATOR is recorded as `chrome` in the ledger and raises NO ⚠ — a disposition, not a filter",
+    chromeRows.join(",") === "SepA"
+    && !decRun.changeSet.needsDecision.some((d) => d.item === "SepA"),
     () => ({ chromeRows, nd: decRun.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`) }));
+  // The other half of the same run, asserted positively so the reclassification cannot regress into silence.
+  check("ENG-95412: a TIP with no mapped subtree is NO LONGER `chrome` — it leaves the auto-accounted path and surfaces as a typed ⚠",
+    !chromeRows.includes("TipA")
+    && decRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && d.item === "TipA" && d.itemKind === "TIP"),
+    () => ({ chromeRows, nd: decRun.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}:${d.itemKind}`) }));
   check("ENG-95412: decoration is not `unaccounted` — it never blocks the coverage gate over a menu separator",
-    !(decRun.coverage?.issues || []).some((i) => /SepA|TipA/.test(i)),
+    !(decRun.coverage?.issues || []).some((i) => /SepA/.test(i)),
     () => decRun.coverage?.issues);
   // PRECEDENCE between the two auto-accounted dispositions, pinned by a test rather than left to branch order in
   // `disposition()`. `chrome` is ranked ABOVE `fromTemplate`, so a base-template separator or tooltip — which most
@@ -7373,6 +7392,71 @@ try {
     !!secCtl && ["H", "S", "I", "B"].every((n) => new RegExp(String.raw`\b${n}\b`).test(secCtl.reason)),
     () => ({ needsDecision: secRun.changeSet.needsDecision.filter((d) => d.kind === "field-control"),
       emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I", "B"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
+
+  // ---- ENG-95412 / AC22: the owning member's OWN row says the value could not be read ----
+  // The correction used to live ONLY in a separate `parse-gap` worklist line, so the attribute's Detail cell stayed
+  // empty — which a reader takes as "no default". Both surfaces must carry it: the worklist line names the body and
+  // position to open, the member's row stops asserting something false about itself.
+  const gapAttr = gmRun("", `attributes:{Flag:{dataValueType:12,value:this.getDefault()}},`);
+  const gapAttrRow = gapAttr.changeSet.needsDecision.find((d) => d.kind === "attribute-virtual" && d.item === "Flag");
+  const gapAttrLine = gapAttr.changeSet.needsDecision.filter((d) => d.kind === "parse-gap" && d.item === "Flag");
+  check("ENG-95412 AC22: an attribute whose default could not be parsed carries the marker on its OWN row — and the separate parse-gap worklist line SURVIVES, so both surfaces state it",
+    /⚠ default unreadable/.test(String(gapAttrRow?.detail || "")) && gapAttrLine.length === 1,
+    () => ({ detail: gapAttrRow?.detail, parseGapRows: gapAttrLine.length }));
+  // Negative control: a readable default must render normally, with no marker bolted on.
+  const okAttr = gmRun("", `attributes:{Flag:{dataValueType:12,value:false}},`);
+  const okAttrRow = okAttr.changeSet.needsDecision.find((d) => d.kind === "attribute-virtual" && d.item === "Flag");
+  check("ENG-95412 AC22: an attribute with a READABLE default gets no marker — the cell reports the default, not a warning",
+    !/unreadable/.test(String(okAttrRow?.detail || "")) && /default false/.test(String(okAttrRow?.detail || "")),
+    () => ({ detail: okAttrRow?.detail }));
+  // REGRESSION, found on a real page (ContentSmartHtmlEditPage): a classic diff item is usually named for the
+  // attribute or column it binds, so keying the marker on the bare owner NAME put "⚠ itemType unreadable" on a
+  // virtual ATTRIBUTE — a member that has no itemType at all. The gap's path decides which member kind it belongs
+  // to; a `diff.…` path marks nothing, because a diff item carries no imperative-member row.
+  const twin = gmRun(`{operation:"insert",name:"Twin",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.TEXT}}`,
+    `attributes:{Twin:{dataValueType:12,value:false}},`);
+  const twinRow = twin.changeSet.needsDecision.find((d) => d.kind === "attribute-virtual" && d.item === "Twin");
+  check("ENG-95412 AC22: a gap on a DIFF ITEM does not leak onto a same-named ATTRIBUTE row — the path's member kind gates the marker, not the bare name",
+    !!twinRow && !/unreadable/.test(String(twinRow.detail || ""))
+    && twin.parseDiagnostics.some((d) => d.kind === "unknown-enum-member" && /^diff\./.test(d.path)),
+    () => ({ detail: twinRow?.detail, diags: twin.parseDiagnostics.map((d) => d.kind + "@" + d.path) }));
+
+  // ---- ENG-95412: PROGRESS_BAR, the one kind Classic itself has no branch for ----
+  const pbRun = gmRun(`{operation:"insert",name:"StageBar",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.PROGRESS_BAR}}`);
+  const pbDec = pbRun.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "StageBar");
+  check("ENG-95412: PROGRESS_BAR's ⚠ says Classic has no branch for it and that it rendered by the COLUMN's type — not that Freedom lacks a counterpart for an indicator Classic never drew",
+    !!pbDec && pbDec.itemKind === "PROGRESS_BAR"
+    && /NO dispatch branch/.test(pbDec.reason) && /STAGE_INDICATOR/.test(pbDec.reason)
+    && !/missing MAPPING rather than unknown UI/.test(pbDec.reason),
+    () => ({ itemKind: pbDec?.itemKind, reason: pbDec?.reason }));
+  // Negative control: the generic typed text must survive for every OTHER known kind, or the branch above would
+  // just have replaced the message for all of them.
+  const rgRun = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP}}`);
+  const rgDec = rgRun.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "IsPrimary");
+  check("ENG-95412: a RADIO_GROUP still gets the GENERIC typed text — the PROGRESS_BAR branch is one kind, not a rewrite of every kind's message",
+    !!rgDec && rgDec.itemKind === "RADIO_GROUP"
+    && /missing MAPPING rather than unknown UI/.test(rgDec.reason)
+    && !/NO dispatch branch/.test(rgDec.reason),
+    () => ({ itemKind: rgDec?.itemKind, reason: rgDec?.reason }));
+
+  // ---- ENG-95412: the reclassified decoration kinds, BOTH arms ----
+  // Arm A: a TIP_LABEL whose subtree produced nothing now SURFACES. As `chrome` it was auto-accounted by
+  // `dropVerdict` before any subtree check ran, so an author-written caption was dropped with no ⚠ and no ledger
+  // trace. Arm B is the control: a TIP whose subtree DID produce Freedom elements must stay SILENT — otherwise
+  // "surfaces" would just mean "everything is now a warning", which is the failure mode a one-sided pin misses.
+  const decLabel = gmRun(`{operation:"insert",name:"StandaloneHint",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.TIP_LABEL,caption:"Resources.Strings.HintCaption"}}`);
+  const decLabelDec = decLabel.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "StandaloneHint");
+  check("ENG-95412: a standalone TIP_LABEL now raises a typed ⚠ naming its kind — as `chrome` it was auto-accounted before any subtree check, so its author caption vanished silently",
+    !!decLabelDec && decLabelDec.itemKind === "TIP_LABEL",
+    () => ({ itemKind: decLabelDec?.itemKind, reason: decLabelDec?.reason,
+      allUnmapped: decLabel.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component").map((d) => d.item) }));
+  const tipMapped = gmRun([
+    `{operation:"insert",name:"HelpTip",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.TIP}}`,
+    `{operation:"insert",name:"TipField",parentName:"HelpTip",propertyName:"items",values:{bindTo:"Name"}}`,
+  ].join(","));
+  check("ENG-95412: a TIP whose subtree DID produce Freedom elements stays SILENT — reclassifying it out of `chrome` must not turn every container into a warning",
+    !tipMapped.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && d.item === "HelpTip"),
+    () => tipMapped.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component").map((d) => ({ item: d.item, kind: d.itemKind })));
 
   // ---- ENG-95412 handover item 3: "stated a kind we cannot resolve" is NOT "stated no kind" ----
   // Both produced byte-identical output before this: `numOrNull` yields null for an unresolvable member, and every

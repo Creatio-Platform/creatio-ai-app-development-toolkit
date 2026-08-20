@@ -22,16 +22,30 @@ import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./en
 const ROLE = { FIELD: "field", STRUCT: "structural", CONTAINER: "container", DECOR: "decoration", UNMAPPED: "unmapped" };
 const ITEM_ROLE = {
   [VIEW_ITEM_TYPE.GRID_LAYOUT]: ROLE.STRUCT,
-  [VIEW_ITEM_TYPE.GRID_LAYOUT_EDIT]: ROLE.DECOR,   // design-time grid-settings editor, not page content
+  // NOT decoration: `generateGridLayoutEdit` (ViewGeneratorV2 L741-749) builds a LIVE `Terrasoft.GridLayoutEdit`
+  // and hands it `items: config.items || []` RAW, without recursing through `generateItem`. Calling it design-time
+  // discarded its whole child subtree, and because the children never go through the generator they exist only in
+  // the raw view config this engine itself walks — so this engine was the only thing that could have reported them.
+  [VIEW_ITEM_TYPE.GRID_LAYOUT_EDIT]: ROLE.CONTAINER,
   [VIEW_ITEM_TYPE.TAB_PANEL]: ROLE.STRUCT,
   [VIEW_ITEM_TYPE.IMAGE_TAB_PANEL]: ROLE.STRUCT,
   [VIEW_ITEM_TYPE.DETAIL]: ROLE.STRUCT,
   [VIEW_ITEM_TYPE.CONTROL_GROUP]: ROLE.STRUCT,
   [VIEW_ITEM_TYPE.MODEL_ITEM]: ROLE.FIELD,
   [VIEW_ITEM_TYPE.CONTAINER]: ROLE.CONTAINER,
+  // The ONE genuinely information-free kind: `generateSeparatorMenuItem` (L1289-1296) emits
+  // `{className: "Terrasoft.MenuSeparator"}` and pass-through props — no caption, no children, nothing to port.
   [VIEW_ITEM_TYPE.MENU_SEPARATOR]: ROLE.DECOR,
-  [VIEW_ITEM_TYPE.TIP]: ROLE.DECOR,                // a tooltip; a field's own `tip` is carried on the field
-  [VIEW_ITEM_TYPE.TIP_LABEL]: ROLE.DECOR,          // the LABEL of a control — Freedom fields label themselves
+  // NOT decoration: `generateTip` (L1369-1391) merges the author's own tip config and generates BOTH `config.tools`
+  // (L1349-1360) and `config.items` (L1382-1389) RECURSIVELY through `generateItem`. A TIP can therefore contain
+  // buttons and arbitrary child items; treating it as a tooltip dropped that subtree unseen.
+  [VIEW_ITEM_TYPE.TIP]: ROLE.CONTAINER,
+  // NOT decoration: `TIP_LABEL` routes to `generateControlLabel` (L569 -> L1738-1760), whose caption comes from
+  // `getLabelCaption` (L1675-1689) — `config.caption`, then `labelConfig.caption`, then the column's. Classic logs
+  // an ERROR when that caption is empty (L986-992), which is the platform itself asserting the text is meant to be
+  // there. "Freedom fields label themselves" holds only while the label IS a field's own; a standalone TIP_LABEL
+  // whose caption differs from its control is author-written copy, and `chrome` deleted it with no ⚠ and no trace.
+  [VIEW_ITEM_TYPE.TIP_LABEL]: ROLE.UNMAPPED,
   [VIEW_ITEM_TYPE.MODULE]: ROLE.UNMAPPED,        // widget / profile-card builders claim the ones they know first
   [VIEW_ITEM_TYPE.BUTTON]: ROLE.UNMAPPED,
   [VIEW_ITEM_TYPE.LABEL]: ROLE.UNMAPPED,
@@ -1623,6 +1637,16 @@ function mapUnmappedDrop(eff, accountedFor) {
     let reason;
     if (isBtn) {
       reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
+    } else if (i.itemType === VIEW_ITEM_TYPE.PROGRESS_BAR) {
+      // PROGRESS_BAR is the ONE member of the 29 that `generateStandardItem` has no `case` for — the name does not
+      // appear in ViewGeneratorV2 at all — so Classic sends it to `default -> generateModelItem` (L626-628) and it
+      // renders by its COLUMN's type, not as an indicator. The real Classic indicator arrives from the other
+      // direction entirely: `DataValueType.STAGE_INDICATOR` (37) -> `generateStageIndicator` ->
+      // `Terrasoft.BaseProgressBar` (L2520-2521, L2347-2358). So "no Freedom counterpart for PROGRESS_BAR" would
+      // send the operator hunting for an analog of something Classic never drew. Keeping the role UNMAPPED rather
+      // than mirroring the field path is a DELIBERATE divergence (engine-internals.md): mirroring would emit a
+      // silent `crt.Input`, and hiding the element is the one thing this engine must not do.
+      reason = `classic PROGRESS_BAR '${i.name}'${captionNote}${generatorNote} produced no Freedom element, and Classic has NO dispatch branch for this kind either — \`generateStandardItem\` falls through to the field path, so on the classic page this element rendered by its COLUMN's type, not as an indicator. Check what that column is before porting: a real classic progress bar comes from a \`STAGE_INDICATOR\` column, not from this itemType. If the column is ordinary, this element was very likely already inert on the classic page — confirm drop`;
     } else if (kind) {
       reason = `classic ${kind} '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — the element's KIND is known, so this is a missing MAPPING rather than unknown UI: map ${kind} to its Freedom counterpart, or confirm drop`;
     } else if (i.itemTypeUnresolved) {
