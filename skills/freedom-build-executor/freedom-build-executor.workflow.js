@@ -630,6 +630,8 @@ const BUILD_SCHEMA_APP = {
     starterListPage: { type: 'string' },
   },
 }
+// Keyed by what `buildSchemaKind` returns, so the dispatch site holds a lookup rather than a chain of ternaries.
+const BUILD_SCHEMAS = { app: BUILD_SCHEMA_APP, page: BUILD_SCHEMA_PAGE, 'page-no-guidelines': BUILD_SCHEMA_PAGE_NO_GUIDELINES, reach: BUILD_SCHEMA_REACH }
 
 const REFS_SCHEMA = {
   type: 'object',
@@ -1170,9 +1172,22 @@ const qualityGateId = (key) => `${key}#quality-gates`
 // child (`#childpage`) and a reuse child carry no quality-gates row, so demanding one from them is unsatisfiable.
 // An EMPTY published list owes nothing either — an absent list is not evidence that this unit's id is wrong.
 function owesGuidelines(unit, evidenceIds) {
-  if (!unit || unit.kind !== 'page') return false
+  if (unit?.kind !== 'page') return false
   return (evidenceIds || []).includes(qualityGateId(unit.key))
 }
+// WHICH RETURN SCHEMA a unit is held to, as a LABEL rather than the object: the label is decided here, where it can
+// be tested, and mapped to a schema at the dispatch site. `guidelines` is required only of a page that owes the id.
+function buildSchemaKind(unit, evidenceIds) {
+  if (unit?.kind === 'app') return 'app'
+  if (unit?.kind !== 'page') return 'reach'
+  return owesGuidelines(unit, evidenceIds) ? 'page' : 'page-no-guidelines'
+}
+// The builder's return obligation for this unit — empty for one that owes no record. A function so the prompt
+// assembly carries no branch of its own (Sonar CC).
+const guidelinesReturnFor = (unit, evidenceIds) => (owesGuidelines(unit, evidenceIds) ? GUIDELINES_RETURN : '')
+// One rendered instruction as a claims-block SUFFIX. Built outside the row template so the row does not nest one
+// template literal inside another.
+const guidelinesSuffix = (line) => (line ? `\n  ${line}` : '')
 // THE `ran: false` HALF, its own function so the close row below gains no nested branch (Sonar CC).
 // FAIL CLOSED on an UNKNOWN earned set (`null` — Reconcile published none): filing `false` is destructive, so "we
 // do not know what is on file" must refuse it. An EMPTY set is different — nothing is filed yet, which is every
@@ -1191,7 +1206,7 @@ function notRunMiss(g, earnedIds) {
 // work that is done, so it is a miss rather than an answer.
 function guidelinesCloseMiss(unit, res, evidenceIds, earnedIds) {
   if (!owesGuidelines(unit, evidenceIds)) return null
-  const g = res && res.guidelines
+  const g = res?.guidelines
   if (!g || typeof g !== 'object') return 'no `guidelines` record returned'
   if (!nonBlank(g.evidenceId)) return 'no `guidelines.evidenceId`'
   if (g.evidenceId !== qualityGateId(unit.key)) return `${JSON.stringify(g.evidenceId)} is not this unit's published quality-gates id`
@@ -1938,7 +1953,7 @@ RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this
   return composeBuildPrompt({
     rules: RULES, behaviour: BEHAVIOUR_BLOCK, worklogPath: worklogFile(unit.key),
     kindBlock, repair,
-    guidelinesReturn: owesGuidelines(unit, state.evidenceIds) ? GUIDELINES_RETURN : '',
+    guidelinesReturn: guidelinesReturnFor(unit, state.evidenceIds),
     resolutions: resolutionsPromptBlock(unit.key),
     findings: findingsPromptBlock(unit.key),
     checkFirst: checkFirstPromptBlock(unit.key),
@@ -1996,12 +2011,31 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
 // One BUILD round, extracted so the round loop below stays flat (Sonar cognitive complexity).
 // SEQUENTIAL, deliberately: the stand is a shared mutable resource, and two agents creating pages
 // and re-binding objects at once produce a state neither of them can attribute a failure to.
+// THE CLOSE ROW'S REPORT, out of the dispatch loop so that loop gains no branch of its own (Sonar CC). The row runs
+// in the round that BUILT the unit — not after the verifier, where an unfiled record reads as a page defect and
+// costs a repair round to rediscover. It reports; the engine still owns the verdict.
+// Deduped per unit: `blockedItems` only ever grows and is serialised into every report payload, so a row repeated
+// each round is re-billed. The log still fires every round, so "it missed again" is not lost.
+function reportGuidelinesMiss(unitKey, gateMiss) {
+  if (!gateMiss) return
+  if (blockedItems.some((b) => b.unit === unitKey && b.what === GUIDELINES_BLOCKED_WHAT)) {
+    log(`close row FAILED again for \`${unitKey}\`: ${gateMiss}`)
+    return
+  }
+  log(`close row FAILED for \`${unitKey}\`: ${gateMiss} — the record cannot be filed as returned; the quality-gates row stays unverified`)
+  blockedItems = [...blockedItems, { unit: unitKey, what: GUIDELINES_BLOCKED_WHAT, why: gateMiss }]
+}
+
+// One run-level note, not one miss per unit: with no published ids nothing can be keyed off them, and reporting
+// every page as owing an unpublished record would be the false negative this gate exists to remove.
+function logMissingEvidenceIds() {
+  if (!(state.evidenceIds || []).length) log('no evidence ids were published this round — the UI-guidelines close row is inert; check that Reconcile returned `evidenceIds`')
+}
+
 async function buildRound(open) {
   phase('Build')
   log(`round ${round}: ${open.length} open unit(s) — ${open.map((u) => u.key).join(', ')}`)
-  // ONE run-level note, not one miss per unit: with no published ids nothing can be keyed off them, and reporting
-  // every page as owing an unpublished record would be the false negative this gate exists to remove.
-  if (!(state.evidenceIds || []).length) log('no evidence ids were published this round — the UI-guidelines close row is inert; check that Reconcile returned `evidenceIds`')
+  logMissingEvidenceIds()
   const built = []
   const noSchema = []
   // THE BUILDERS' CLAIMS, kept so the Verify phase can be handed them: it compares a CLAIM against an
@@ -2023,14 +2057,11 @@ async function buildRound(open) {
     const nth = Math.max(state.roundOf?.[unit.key] ?? 0, localRounds[unit.key])
     const res = await agent(buildPrompt(unit, st, nth), {
       agentType: 'general-purpose', phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
-      // Three obligations, three schemas. A PAGE unit must return `schemaName`; a reachability unit has no page and
-      // must not be asked for one; the APP unit must return the package it actually produced.
-      // `guidelines` is required only of a page that OWES the record — an unfolded or reuse child publishes no
-      // quality-gates id, so requiring it there would force the builder to fabricate the one thing it must copy.
-      schema: unit.kind === 'app' ? BUILD_SCHEMA_APP
-        : (unit.kind === 'page'
-          ? (owesGuidelines(unit, state.evidenceIds) ? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_PAGE_NO_GUIDELINES)
-          : BUILD_SCHEMA_REACH),
+      // Four obligations, four schemas, one decision. A PAGE unit must return `schemaName`; a reachability unit has
+      // no page and must not be asked for one; the APP unit must return the package it produced; and `guidelines` is
+      // required only of a page that OWES the record — an unfolded or reuse child publishes no quality-gates id, so
+      // requiring it there would force the builder to fabricate the one thing it must copy.
+      schema: BUILD_SCHEMAS[buildSchemaKind(unit, state.evidenceIds)],
     })
     if (!res) {
       log(`build agent returned nothing for ${unit.key} — it stays open`)
@@ -2056,15 +2087,7 @@ async function buildRound(open) {
       owesGuidelines: owesGuidelines(unit, state.evidenceIds),
       reboundFrom: res.reboundFrom || null,
     })
-    // The close row runs HERE, in the round that built the unit — not after the verifier, where an unfiled record
-    // reads as a page defect and costs a repair round to rediscover. It reports; the engine still owns the verdict.
-    const gateMiss = claims.at(-1).guidelinesMiss
-    if (gateMiss && !blockedItems.some((b) => b.unit === unit.key && b.what === GUIDELINES_BLOCKED_WHAT)) {
-      log(`close row FAILED for \`${unit.key}\`: ${gateMiss} — the record cannot be filed as returned; the quality-gates row stays unverified`)
-      blockedItems = [...blockedItems, { unit: unit.key, what: GUIDELINES_BLOCKED_WHAT, why: gateMiss }]
-    } else if (gateMiss) {
-      log(`close row FAILED again for \`${unit.key}\`: ${gateMiss}`)
-    }
+    reportGuidelinesMiss(unit.key, claims.at(-1).guidelinesMiss)
     // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report. The equality is the whole
     // point: an app created under a different package name unblocks nothing, because every page unit's placement
     // row gates on the plan's package. A mismatch leaves `packageState` untouched — so the unit stays open, the
@@ -2160,8 +2183,10 @@ function claimsBlock(claims) {
   const line = (c) => {
     // A unit whose builder answered nothing still gets the UI-guidelines instruction if it owes the id: it HAS a
     // line, so the standing "no line in this block" rule would not cover it, and the id would be left unruled.
-    if (c.noAnswer) return `- \`${c.unit}\` — **the build agent returned NOTHING**. This is not "it claimed nothing built": nobody answered for this unit. Fetch it like any other and file what you find; do not treat an absent claim as a claim of absence.${
-      c.owesGuidelines ? `\n  ${guidelinesLine(null, 'the build agent returned nothing', true, dataFence)}` : ''}`
+    if (c.noAnswer) {
+      const owed = c.owesGuidelines ? guidelinesLine(null, 'the build agent returned nothing', true, dataFence) : ''
+      return `- \`${c.unit}\` — **the build agent returned NOTHING**. This is not "it claimed nothing built": nobody answered for this unit. Fetch it like any other and file what you find; do not treat an absent claim as a claim of absence.${guidelinesSuffix(owed)}`
+    }
     const bits = [
       c.schemaName ? `schema \`${c.schemaName}\`` : 'no schema named',
       c.packageName ? `package \`${c.packageName}\`` : null,
@@ -2172,7 +2197,7 @@ function claimsBlock(claims) {
     // Only a page claim that OWES the record gets the line: the app and reachability kinds carry no such id, and an
     // instruction to file nothing for an id that does not exist is noise in the surface the run judges shortness on.
     const gl = guidelinesLine(c.guidelines, c.guidelinesMiss, c.owesGuidelines, dataFence)
-    return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${claimed}${gl ? `\n  ${gl}` : ''}`
+    return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${claimed}${guidelinesSuffix(gl)}`
   }
   return `WHAT THE BUILD AGENTS CLAIMED THIS ROUND — a CLAIM, never evidence. Your job includes checking it against what \`get-page\` actually returns:\n${claims.map(line).join('\n')}\n\nA claimed component the page does not carry, and a component on the page nobody claimed, are BOTH \`discrepancies\`.`
 }

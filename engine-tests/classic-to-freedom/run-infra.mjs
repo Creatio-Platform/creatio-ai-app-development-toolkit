@@ -141,6 +141,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
+  "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
@@ -376,20 +377,42 @@ check("ENG-95471 review fix: a quote inside a builder value cannot reshape the f
 
 check("ENG-95471: `guidelines` is REQUIRED on the page build schema — optional is what let a builder close on silence",
   /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines'\]/.test(wfSrc));
+// EXECUTED, not matched: the schema decision is a pure helper now, so the four outcomes are run rather than
+// regexed, and the dispatch site is pinned separately as a seam.
 check("ENG-95471 review fix: the schema is selected by whether the unit OWES the record, not by kind alone",
-  /owesGuidelines\(unit, state\.evidenceIds\) \? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_PAGE_NO_GUIDELINES/.test(wfSrc)
+  () => (wf.buildSchemaKind(gUnit, gIds) === "page"
+    && wf.buildSchemaKind({ key: "child:U1", kind: "page" }, gIds) === "page-no-guidelines"
+    && wf.buildSchemaKind(gUnit, []) === "page-no-guidelines"
+    && wf.buildSchemaKind({ key: "app", kind: "app" }, gIds) === "app"
+    && wf.buildSchemaKind({ key: "sectionRegistered", kind: "reach" }, gIds) === "reach"),
+  () => ({ page: wf.buildSchemaKind(gUnit, gIds), child: wf.buildSchemaKind({ key: "child:U1", kind: "page" }, gIds) }));
+check("ENG-95471 review fix: every schema label maps to a declared schema, and only the `page` one requires `guidelines`",
+  /const BUILD_SCHEMAS = \{ app: BUILD_SCHEMA_APP, page: BUILD_SCHEMA_PAGE, 'page-no-guidelines': BUILD_SCHEMA_PAGE_NO_GUIDELINES, reach: BUILD_SCHEMA_REACH \}/.test(wfSrc)
+    && /schema: BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\]/.test(wfSrc)
     && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName'\]/.test(wfSrc));
 check("ENG-95471: the close row runs at DISPATCH and its decision is CARRIED to the claim, not recomputed",
   /guidelinesMiss: guidelinesCloseMiss\(unit, res, state\.evidenceIds, earnedEvidenceIds\(\)\)/.test(wfSrc)
     && /owesGuidelines: owesGuidelines\(unit, state\.evidenceIds\)/.test(wfSrc)
     && /guidelinesLine\(c\.guidelines, c\.guidelinesMiss, c\.owesGuidelines, dataFence\)/.test(wfSrc));
 check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list only ever grows and is re-billed into every report payload",
-  /!blockedItems\.some\(\(b\) => b\.unit === unit\.key && b\.what === GUIDELINES_BLOCKED_WHAT\)/.test(wfSrc));
+  /function reportGuidelinesMiss\(unitKey, gateMiss\)[\s\S]{0,500}blockedItems\.some\(\(b\) => b\.unit === unitKey && b\.what === GUIDELINES_BLOCKED_WHAT\)/.test(wfSrc)
+    && /reportGuidelinesMiss\(unit\.key, claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
 check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
   !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
 check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
   /guidelines: res\.guidelines \|\| null/.test(wfSrc)
     && !/guidelinesRun: res\.guidelinesRun/.test(wfSrc) && !/guidelinesRun: \{ type/.test(wfSrc));
+// The removed scalars are a breaking field-name change. Sweep the WHOLE executor skill — prompt text, references and
+// docs included — so a consumer left behind in a file this suite does not otherwise read cannot survive silently.
+const EXECUTOR_DIR = fileURLToPath(new URL("../../skills/freedom-build-executor/", import.meta.url));
+const executorFiles = (function walk(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]);
+})(EXECUTOR_DIR).filter((f) => /\.(mjs|js|md)$/.test(f));
+const staleScalarHits = executorFiles.filter((f) => /\bguidelinesRun\b/.test(readFileSync(f, "utf8")));
+check("ENG-95471 review fix: NO file in the freedom-build-executor skill still names the removed `guidelinesRun` scalar — the field rename is swept repo-side, not just at the two sites this suite reads",
+  executorFiles.length > 4 && staleScalarHits.length === 0,
+  () => ({ scanned: executorFiles.length, hits: staleScalarHits.map((f) => path.basename(f)) }));
 check("ENG-95471 review fix: the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two",
   /required: \['approval'[\s\S]{0,1400}'evidenceIds', 'evidenceFiled', 'evidenceRejected'\]/.test(wfSrc));
 check("ENG-95471 review fix: an ABSENT `evidenceFiled` yields the UNKNOWN set, not an empty one — the two must not collapse, or the overwrite guard silently stops firing",
@@ -400,9 +423,18 @@ check("ENG-95471 re-review: no surface tells an agent that `ran: false` CLOSES a
   () => (!/valid close/.test(wf.GUIDELINES_RETURN) && !/valid close/.test(wfSrc)
     && /valid ANSWER, not a pass/.test(wf.GUIDELINES_RETURN) && /your unit stays open/.test(wf.GUIDELINES_RETURN)));
 check("ENG-95471 review fix: the PROMPT obligation is gated on owing the record, exactly as the schema is — a regression to `unit.kind` alone reinstates the unsatisfiable guard for a child page",
-  /guidelinesReturn: owesGuidelines\(unit, state\.evidenceIds\) \? GUIDELINES_RETURN : ''/.test(wfSrc));
+  () => (wf.guidelinesReturnFor(gUnit, gIds) === wf.GUIDELINES_RETURN
+    && wf.guidelinesReturnFor({ key: "child:U1", kind: "page" }, gIds) === ""
+    && wf.guidelinesReturnFor({ key: "app", kind: "app" }, gIds) === ""
+    && wf.guidelinesReturnFor(gUnit, []) === ""),
+  () => ({ owed: wf.guidelinesReturnFor(gUnit, gIds).length, child: wf.guidelinesReturnFor({ key: "child:U1", kind: "page" }, gIds).length }));
+check("ENG-95471 review fix: the prompt seam calls the gated helper, so the obligation cannot be re-gated at the call site",
+  /guidelinesReturn: guidelinesReturnFor\(unit, state\.evidenceIds\)/.test(wfSrc));
+check("ENG-95471 review fix: the claims-block suffix is built OUTSIDE the row template (no nested template) and is empty when there is no line",
+  () => (wf.guidelinesSuffix("") === "" && wf.guidelinesSuffix(null) === "" && wf.guidelinesSuffix("X") === "\n  X"));
 check("ENG-95471 review fix: a builder that answered NOTHING still gets the UI-guidelines instruction when it owes the id — it HAS a line, so the standing no-line rule would not cover it",
-  /c\.noAnswer[\s\S]{0,600}c\.owesGuidelines \? `\\n  \$\{guidelinesLine\(null, 'the build agent returned nothing', true, dataFence\)\}`/.test(wfSrc));
+  /c\.noAnswer[\s\S]{0,400}c\.owesGuidelines \? guidelinesLine\(null, 'the build agent returned nothing', true, dataFence\) : ''/.test(wfSrc)
+    && /noAnswer: true, owesGuidelines: owesGuidelines\(unit, state\.evidenceIds\)/.test(wfSrc));
 check("ENG-95471 review fix: neither non-page schema requires `guidelines` — BOTH are asserted, not just the reachability one",
   /const BUILD_SCHEMA_REACH = \{[^}]*required: \['unit', 'claimedBuilt'\]/.test(wfSrc)
     && /required: \['unit', 'packageName'\]/.test(wfSrc)
