@@ -25,7 +25,19 @@ def _base_env() -> dict:
     return {
         k: v
         for k, v in os.environ.items()
-        if k not in {"TMPDIR", "TMP", "TEMP", "CLIO_TELEMETRY_HOME", "CLIO_HOME"}
+        if k
+        not in {
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "CLIO_TELEMETRY_HOME",
+            "CLIO_HOME",
+            # A developer's leftover override must not decide what these tests observe: the
+            # identity fields are resolved from the installed manifest, and an inherited
+            # CAADT_TELEMETRY_PLUGIN_VERSION would hide that resolution behind its own value.
+            "CAADT_TELEMETRY_PLUGIN_VERSION",
+            "CAADT_TELEMETRY_AGENT",
+        }
     }
 
 
@@ -202,6 +214,52 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
         for stage in ("plan_approved", "workflow_completed", "changes_applied"):
             self.assertNotIn(stage, residue)
+
+    def test_names_the_installed_plugin_version_and_never_a_placeholder(self):
+        # The routing text tells the agent to send no plugin_version at all rather than the
+        # placeholder `unknown` — and the hook used to default to exactly that placeholder, so it
+        # broke its own rule and, before clio made the field optional, was rejected outright. The
+        # version now comes from the manifest beside this hook, which IS the installed version.
+        manifest = json.loads(
+            (Path(HOOK).parent.parent / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        session = str(uuid.uuid4())
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__list-apps",
+                "cwd": _TMP,
+            },
+            telemetry_home=telemetry_home("granted"),
+        )
+
+        self.assertEqual(result.returncode, 0)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(f'plugin_version="{manifest["version"]}"', context)
+        for placeholder in ('plugin_version="unknown"', 'plugin_version="null"',
+                            'plugin_version="undefined"', 'coding_agent="null"'):
+            self.assertNotIn(placeholder, context)
+
+    def test_coding_agent_names_the_host_that_is_running_the_hook(self):
+        # One default for every host would report a Codex run as Claude Code — a cohort that never
+        # ran, and indistinguishable in the data from a real Claude Code session.
+        session = str(uuid.uuid4())
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__list-apps",
+                "cwd": _TMP,
+            },
+            telemetry_home=telemetry_home("granted"),
+            host="codex",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        context = json.loads(result.stdout)["systemMessage"]
+        self.assertIn('coding_agent="Codex"', context)
+        self.assertNotIn("Claude Code", context)
 
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns

@@ -224,6 +224,14 @@ needs `clio` on `PATH` and stored consent of `granted` — an `unknown` or `deni
 it silent, and it never prompts. `CAADT_TELEMETRY_HOOK_HOST` selects how the routing text is
 handed back; the floor event itself is identical on every host.
 
+The two identity fields resolve themselves, so nothing has to be configured for them to be right:
+`plugin_version` is read from `.claude-plugin/plugin.json` beside the hook — that manifest IS the
+installed version — and `coding_agent` follows `CAADT_TELEMETRY_HOOK_HOST`, because the host running
+the hook is the coding agent. `CAADT_TELEMETRY_PLUGIN_VERSION` and `CAADT_TELEMETRY_AGENT` override
+them for a non-standard layout. Neither is ever guessed: if a value cannot be resolved the field is
+omitted, which clio accepts, rather than sent as `unknown` — a placeholder lands real runs in a
+cohort that never existed, and one installation was measured reporting five versions, four invented.
+
 | Host | Wired by | Floor | Routing text |
 | --- | --- | --- | --- |
 | Claude Code | the plugin manifest — nothing to do | yes | `hookSpecificOutput.additionalContext` |

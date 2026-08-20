@@ -24,6 +24,7 @@
 //
 // Never blocks, never fails the originating call. Any error exits 0 with no output.
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,8 +41,56 @@ import path from 'node:path';
 //             ignored and at worst read as a hook failure.
 const HOST = (process.env.CAADT_TELEMETRY_HOOK_HOST || 'claude').toLowerCase();
 const CLIO = process.env.CAADT_TELEMETRY_CLIO || 'clio';
-const CODING_AGENT = process.env.CAADT_TELEMETRY_AGENT || 'Claude Code';
-const PLUGIN_VERSION = process.env.CAADT_TELEMETRY_PLUGIN_VERSION || 'unknown';
+// The host this hook is wired into IS the coding agent, so defaulting to one host's name would
+// report every Codex or Cursor run as Claude Code — a cohort that never ran.
+const HOST_AGENT_NAMES = {
+	claude: 'Claude Code',
+	codex: 'Codex',
+	cursor: 'Cursor',
+	copilot: 'GitHub Copilot CLI'
+};
+const CODING_AGENT = process.env.CAADT_TELEMETRY_AGENT || HOST_AGENT_NAMES[HOST] || null;
+// Resolved from the installed manifest rather than defaulted to a placeholder: this file ships
+// inside the plugin, so the manifest beside it IS the installed version. `unknown` is what the
+// routing text below tells the agent never to send, and a hook that sends it while instructing
+// otherwise is the instruction's own counter-example. clio accepts the field's absence.
+const PLUGIN_VERSION = process.env.CAADT_TELEMETRY_PLUGIN_VERSION || readInstalledPluginVersion();
+
+function readInstalledPluginVersion() {
+	// hooks/telemetry-routing.mjs -> <plugin root>/.claude-plugin/plugin.json
+	const manifest = path.join(
+		path.dirname(path.dirname(fileURLToPath(import.meta.url))),
+		'.claude-plugin', 'plugin.json');
+	try {
+		const version = JSON.parse(fs.readFileSync(manifest, 'utf8')).version;
+		return typeof version === 'string' && version.trim() && version !== 'unknown' ? version.trim() : null;
+	} catch {
+		return null;
+	}
+}
+
+// The identity fields are named only when they resolved. Interpolating an unresolved value would
+// print `plugin_version="null"` into the instruction that exists to stop placeholders being sent.
+function identityRoutingLines() {
+	const resolved = [
+		...(CODING_AGENT ? [`coding_agent="${CODING_AGENT}"`] : []),
+		...(PLUGIN_VERSION ? [`plugin_version="${PLUGIN_VERSION}"`] : [])
+	];
+	if (resolved.length === 0) {
+		return [
+			'  - send NO coding_agent and NO plugin_version: nothing here resolved them, and a guessed',
+			'    value lands real runs in a cohort that never existed. Measured runs on ONE installation',
+			'    reported five different versions, four of them invented. clio accepts their absence;'
+		];
+	}
+	return [
+		`  - send ${resolved.join(' and ')} VERBATIM, on every stage. Resolved here from the`,
+		'    installation itself — do not read it from anywhere else and do not substitute a value you',
+		'    inferred. Measured runs on ONE installation reported five different versions, four of them',
+		'    invented. Anything not named on this line is sent NOT AT ALL rather than as a placeholder',
+		'    such as `unknown`;'
+	];
+}
 const CALL_TIMEOUT_MS = 15_000;
 
 // clio's telemetry surface: reminding a session that is already sending telemetry is circular, and
@@ -76,11 +125,7 @@ const reminder = sessionId => [
 	'    stage first, then open this one. A measured session let a second request close the first one,',
 	'    so a task that actually succeeded was recorded as blocked;',
 	'  - send `model` with your own model id, lowercased, on every stage;',
-	`  - send coding_agent="${CODING_AGENT}" and plugin_version="${PLUGIN_VERSION}" VERBATIM, on every`,
-	'    stage. These are the installed values, already resolved — do not read them from anywhere else',
-	'    and do not substitute a version you inferred. Measured runs on ONE installation reported five',
-	`    different versions, four of them invented. If "${PLUGIN_VERSION}" is literally "unknown", send`,
-	'    no plugin_version at all rather than that placeholder;',
+	...identityRoutingLines(),
 	'  - send `input_tokens` / `output_tokens` / `cached_input_tokens` as running session totals when',
 	'    you can see them, and omit them when you cannot rather than guessing a number.',
 	'',
@@ -372,8 +417,10 @@ function emitEvent(sessionId, usage, eventName) {
 							session_id: sessionId,
 							event_name: eventName,
 							workflow: FLOOR_WORKFLOW,
-							coding_agent: CODING_AGENT,
-							plugin_version: PLUGIN_VERSION,
+							// Omitted rather than guessed: clio requires neither, and a placeholder lands a
+							// real installation in a cohort that never existed.
+							...(CODING_AGENT ? { coding_agent: CODING_AGENT } : {}),
+							...(PLUGIN_VERSION ? { plugin_version: PLUGIN_VERSION } : {}),
 							// Omitted rather than sent empty when the transcript was unreadable: a zero
 							// would be indistinguishable from a session that genuinely spent nothing.
 							...(usage.model ? { model: usage.model } : {}),
