@@ -7357,17 +7357,48 @@ try {
   // control, so the loud `field-control` decision still fires. HASH_TEXT (23) / SECURE_TEXT (24) are the cases that
   // matter most — binding an encrypted or hashed column to a plain editable `crt.Input` would put a secret on a
   // cleartext field, and `fieldTypeLabel` renders both as `Text`, so plan.md could not tell the operator either.
-  const secCols = { H: { type: "23" }, S: { type: "24" }, I: { type: "37" } };
+  // BLOB (13) is the exemplar of "Classic itself refuses to render it" — `generateEditControl` has no case, so it
+  // hits `default` and throws `UnsupportedTypeException` (ViewGeneratorV2 L2523-2529). STAGE_INDICATOR (37) is NOT
+  // such a type, though the earlier version of this pin claimed it was: Classic renders it via
+  // `generateStageIndicator` (L2520-2521). It stays in the case because the invariant being pinned is the ENGINE's
+  // ("identified, but no control asserted -> the loud decision fires"), not a claim about what Classic refuses.
+  const secCols = { H: { type: "23" }, S: { type: "24" }, I: { type: "37" }, B: { type: "13" } };
   const secRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: secCols,
     schemas: [{ pkg: "P", body: gmBody("", Object.keys(secCols).map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")) }] }, { baseDir: FIX });
   // `field-control` is emitted as ONE aggregated row naming its columns in the reason, so assert against that.
   // The field still defaults to `crt.Input` in the ChangeSet — the invariant is that the DECISION fires, so a human
   // confirms the control on-stand rather than the engine quietly claiming it knows one.
   const secCtl = secRun.changeSet.needsDecision.find((d) => d.kind === "field-control");
-  check("ENG-95412: HASH_TEXT / SECURE_TEXT / STAGE_INDICATOR are identified but keep raising the loud `field-control` decision — never silently mapped to a control the engine claims to know",
-    !!secCtl && ["H", "S", "I"].every((n) => new RegExp(`\\b${n}\\b`).test(secCtl.reason)),
+  check("ENG-95412: HASH_TEXT / SECURE_TEXT / STAGE_INDICATOR / BLOB are identified but keep raising the loud `field-control` decision — never silently mapped to a control the engine claims to know (this pins the ENGINE's rule; only BLOB is a type Classic itself refuses to render)",
+    !!secCtl && ["H", "S", "I", "B"].every((n) => new RegExp(String.raw`\b${n}\b`).test(secCtl.reason)),
     () => ({ needsDecision: secRun.changeSet.needsDecision.filter((d) => d.kind === "field-control"),
-      emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
+      emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I", "B"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
+
+  // ---- ENG-95412 handover item 3: "stated a kind we cannot resolve" is NOT "stated no kind" ----
+  // Both produced byte-identical output before this: `numOrNull` yields null for an unresolvable member, and every
+  // mapper predicate keyed off `itemType == null`. Two consequences were wrong at once — the ⚠ told the operator the
+  // schema "states NO itemType" (sending them to the page instead of to the engine's table), and the
+  // `endsWith("Button")` fallback that Change 4 reserves for genuinely untyped items fired on an element whose kind
+  // WAS stated. `FUTURE_KIND_9000` stands in for a member a newer platform line has and this table does not.
+  const unresBtn = gmRun(`{operation:"insert",name:"FancyButton",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.FUTURE_KIND_9000}}`);
+  const untypedBtn = gmRun(`{operation:"insert",name:"FancyButton",parentName:"Header",propertyName:"items",values:{caption:"x"}}`);
+  const unresDec = unresBtn.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "FancyButton");
+  const untypedDec = untypedBtn.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "FancyButton");
+  check("ENG-95412: an element whose stated kind the engine CANNOT resolve does not take the `endsWith(\"Button\")` name fallback — that fallback is reserved for a genuinely untyped item",
+    !!unresDec && !/custom button/.test(unresDec.reason),
+    () => ({ reason: unresDec?.reason }));
+  check("ENG-95412: the unresolved-kind ⚠ points at the ENGINE's pinned table, not at the page — it must not claim the schema `states NO itemType`",
+    !!unresDec && /could not resolve/.test(unresDec.reason) && /AST_VIEW_ITEM_TYPE/.test(unresDec.reason)
+      && !/states NO itemType/.test(unresDec.reason),
+    () => ({ reason: unresDec?.reason }));
+  // The twin is the control: a GENUINELY untyped `FancyButton` must STILL take the suffix fallback — Change 4 kept it
+  // for exactly this case, so the pin has to show the fallback firing on one side and not the other. Asserting the
+  // pair (rather than the unresolved side alone) is what makes this bite: both arms passing through one code path
+  // was the defect, so a regression that re-merges them fails here even if each arm's own text still looks right.
+  check("ENG-95412: unresolved-kind and genuinely-untyped no longer produce the SAME reason — the two were byte-identical before, which is what hid the defect",
+    !!unresDec && !!untypedDec && unresDec.reason !== untypedDec.reason
+      && /custom button/.test(untypedDec.reason) && !/custom button/.test(unresDec.reason),
+    () => ({ unresolved: unresDec?.reason, untyped: untypedDec?.reason }));
 
   // The echo is UNTRUSTED input. `in` would let an inherited `Object.prototype` key count as a pinned member and
   // compare it against a native function, so a malformed echo produced a BLOCKING mismatch reading

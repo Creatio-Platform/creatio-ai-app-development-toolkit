@@ -135,8 +135,11 @@ see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a
 disposition: `mapped` (the ChangeSet has a Freedom artifact for it), `decision` (it is on a `⚠` worklist),
-`resolved` (the agent recorded one in `manifest.memberDispositions`), `context` (inherited base-template content,
-excluded by design but COUNTED) — or `unaccounted`, which blocks. Kinds with no members are reported as counted
+`resolved` (the agent recorded one in `manifest.memberDispositions`), `chrome` (pure decoration — a menu separator,
+a tooltip, a control's own label, a designer-only editor: recorded and COUNTED, never a `⚠` and never a block),
+`context` (inherited base-template content, excluded by design but COUNTED) — or `unaccounted`, which blocks.
+Precedence runs `mapped` > `decision` > `chrome` > `context`: a real artifact or a recorded answer is the stronger
+statement, and base-template decoration counts as `chrome` rather than `context`. Kinds with no members are reported as counted
 zeros, so "the plan says nothing about messages" cannot mean "nobody looked". Methods additionally carry body
 evidence read from the AST (framework calls made, attributes read/written, messages published/subscribed, line
 span, passthrough-vs-real, assigned-from-another-module) — the parser still never EXECUTES a body.

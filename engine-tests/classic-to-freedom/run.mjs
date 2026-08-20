@@ -182,6 +182,34 @@ const c2 = mergeHierarchy([
 check("C2: merge introduces contentType (5=lookup) on an existing item — carried, not dropped",
   c2.items.find(i => i.name === "F")?.contentType === 5);
 
+/* ---- ENG-95412: the merge rule is key PRESENCE, not value — verified against core `json-applier.js` ----
+   `JsonApplier.merge` takes `Object.keys(config.values)` (L583-585) and assigns unconditionally (L702-705), so a
+   later layer that carries an `itemType` key AT ALL overwrites the base — including with a value this engine cannot
+   resolve. The engine used to guard on `op.itemType != null`, which silently kept the base kind and reported a
+   RADIO_GROUP the runtime had already turned into a plain bound field (`generateStandardItem` default →
+   `generateModelItem`). Both directions are pinned, because a one-sided pin passes with the guard put back. ---- */
+const mergeCleared = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", itemType: 16 }]),
+  synth("top", [{ operation: "merge", name: "F", itemType: null, itemTypeUnresolved: true }]),
+]);
+const clearedItem = mergeCleared.items.find((i) => i.name === "F");
+check("ENG-95412: a merge that RESTATES `itemType` with a value the engine cannot resolve CLEARS the base kind (16) — keeping it asserts a kind the runtime already overwrote",
+  clearedItem?.itemType === null && clearedItem?.itemTypeUnresolved === true,
+  () => ({ itemType: clearedItem?.itemType, unresolved: clearedItem?.itemTypeUnresolved }));
+check("ENG-95412: clearing a resolved kind is WARNED, not silent — the element changed behaviour and the operator has to see it",
+  (mergeCleared.warnings || []).some((w) => w.name === "F" && /CLEARED/.test(w.hint || "")),
+  () => (mergeCleared.warnings || []).map((w) => w.hint));
+// The other direction: a merge that does NOT carry the key must leave the base kind alone. This is the arm that
+// fails if key-presence is implemented as "always overwrite".
+const mergeKept = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", itemType: 16 }]),
+  synth("top", [{ operation: "merge", name: "F", caption: "Renamed" }]),
+]);
+const keptItem = mergeKept.items.find((i) => i.name === "F");
+check("ENG-95412: a merge whose `values` does NOT carry `itemType` leaves the base kind intact (16) — presence decides, so absence must be a no-op",
+  keptItem?.itemType === 16 && keptItem?.itemTypeUnresolved === false,
+  () => ({ itemType: keptItem?.itemType, unresolved: keptItem?.itemTypeUnresolved }));
+
 /* ---- F9/C6 origin: a base field the client only MOVES stays templateOwned (insert origin = seed),
    so it is NOT re-emitted as client payload — the client only repositioned template content. ---- */
 const mvSeed = makeSchema("Tpl", { diff: [{ operation: "insert", name: "BF", parentName: "Header", propertyName: "items", bindTo: "BCol" }] });

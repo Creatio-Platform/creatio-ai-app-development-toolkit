@@ -135,9 +135,22 @@ const DVT_TYPE_NAME = {
   MONEY: "money", MONEY0: "money", MONEY1: "money", MONEY3: "money",
   DATE_TIME: "datetime", DATE: "date", TIME: "time",
   LOOKUP: "lookup", ENUM: "enum", BOOLEAN: "boolean", IMAGELOOKUP: "imagelookup",
-  // Identified, deliberately WITHOUT a field control: Classic's own `generateEditControl` throws
-  // `UnsupportedTypeException` for these, so there is no classic field behaviour to port. Naming them keeps the
-  // decision honest ("STAGE_INDICATOR, no field analog") instead of reporting an unreadable type.
+  // Identified, deliberately WITHOUT a field control HERE — but read the two sub-cases below, because they are
+  // NOT the same thing and the earlier wording conflated them (verified against `ViewGeneratorV2.generateEditControl`,
+  // CrtNUI 7.8.0 L2459-2532):
+  //   * Classic RENDERS these, so classic field behaviour DOES exist to port: MAPPING -> `generateMappingEdit`
+  //     (`Terrasoft.MappingEdit`, L2511-2512) and STAGE_INDICATOR -> `generateStageIndicator`
+  //     (`Terrasoft.BaseProgressBar`, L2520-2521). Choosing the Freedom counterpart is the mapping task
+  //     (ENG-95543); until it lands, no control is asserted here — but the decision must not tell the operator
+  //     there is nothing to port.
+  //   * Classic THROWS `UnsupportedTypeException` for these (they have no case, so they hit `default` L2523-2529):
+  //     BLOB, IMAGE, FILE, FILE_LOCATOR, COLLECTION, ENTITY, ENTITY_COLLECTION, CUSTOM_OBJECT, COMPOSITE_OBJECT,
+  //     OBJECT_LIST, COMPOSITE_OBJECT_LIST, ENTITY_COLUMN_MAPPING_COLLECTION, LOCALIZABLE_PARAMETER_VALUES_LIST —
+  //     and ALSO the upper-group entries HASH_TEXT, SECURE_TEXT, IMAGELOOKUP, LOCALIZABLE_STRING, METADATA_TEXT.
+  //     Because it THROWS, a working classic page cannot carry such a column as a plain model item at all;
+  //     encountering one is evidence of a custom generator, an item-level `dataValueType`, or a grid column.
+  // So the two comment groups here document IDENTIFICATION only; what Classic renders is a different partition and
+  // it does not line up with this split. `scalarControl` below decides the control, and this map decides nothing.
   MAPPING: "mapping", STAGE_INDICATOR: "stageindicator", BLOB: "blob", IMAGE: "image", FILE: "file",
   FILE_LOCATOR: "file", COLLECTION: "collection", ENTITY: "entity", ENTITY_COLLECTION: "entitycollection",
   CUSTOM_OBJECT: "customobject", COMPOSITE_OBJECT: "compositeobject", OBJECT_LIST: "objectlist",
@@ -158,10 +171,13 @@ function scalarControl(t) {
   // arrive as a numeric DataValueType code (Date "8", Money "6", Decimal "31", Phone "42", Web link "44", …) —
   // normalized above.
   //
-  // COVERAGE is Classic's own: `ViewGeneratorV2.generateEditControl` switches over dataValueType and throws
-  // `UnsupportedTypeException` outside its set, so that set defines "a classic field control" and this mirrors it.
-  // A type Classic refuses to render has no field behaviour to port, so it returns null and the caller raises the
-  // loud field-control decision — naming a type it identified (STAGE_INDICATOR, BLOB, …), not an unreadable one.
+  // COVERAGE is NOT Classic's own, and the earlier comment claiming it was is wrong in both directions (checked
+  // against `ViewGeneratorV2.generateEditControl`, CrtNUI 7.8.0 L2459-2532): Classic RENDERS two types this table
+  // gives no control (MAPPING L2511, STAGE_INDICATOR L2520), and Classic THROWS for five this table does map
+  // (HASH_TEXT, SECURE_TEXT, IMAGELOOKUP, LOCALIZABLE_STRING, METADATA_TEXT — no case, so `default` throws at
+  // L2523-2529). What this table actually encodes is "which types the engine can bind a Freedom control for",
+  // which is a Freedom-side judgement; returning null raises the loud field-control decision so a human confirms
+  // the control on-stand. Use BLOB as the exemplar of "Classic refuses to render it" — STAGE_INDICATOR is not one.
   t = DATAVALUETYPE_CODE[t] || t;
   if (t === "imagelookup") return { type: "crt.ImageInput", image: true }; // binds via `value`, not `control`
   if (t === "boolean") return { type: "crt.Checkbox" };
@@ -189,7 +205,11 @@ function scalarControl(t) {
   // with no trace on the only reader-facing surface: `fieldTypeLabel` renders both as `Text`, indistinguishable
   // from an ordinary text column, so nothing would tell the operator what was just exposed. Falling through to
   // `null` raises the loud `field-control` decision instead, which is what AC 3 reserves for a type with no safe
-  // field behaviour to port — the same treatment `stageindicator`/`blob`/`file` get. Whether Freedom offers a
+  // field behaviour to port — the same treatment `blob`/`file` get. (NOT `stageindicator`: Classic renders that one
+  // via `generateStageIndicator`, so it is not a peer here; see the COVERAGE note above.) The security argument is
+  // now the SECONDARY reason to withhold a control — the primary one is that Classic's `generateEditControl` has no
+  // case for HASH_TEXT/SECURE_TEXT either and throws `UnsupportedTypeException`, so no classic field existed to
+  // port in the first place. Whether Freedom offers a
   // masked component (a `crt.PasswordInput` is reported to exist, but only on a community answer — not Academy
   // docs) is the mapping task's call, so no target is asserted here.
   // Phone / Email / Web link are TEXT-storage columns carrying a FORMAT on the column (verified on-stand: Contact.
@@ -1586,7 +1606,12 @@ function mapUnmappedDrop(eff, accountedFor) {
   for (const i of (eff.items || [])) {
     if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
     // A BUTTON is recognised by its stated kind; the name suffix is the fallback for an untyped item only.
-    const isBtn = i.itemType === VIEW_ITEM_TYPE.BUTTON || (itemRole(i) === null && i.name.endsWith("Button"));
+    // `itemTypeUnresolved` gates the name fallback: the schema DID state a kind, the engine's pinned table just
+    // could not resolve it, so this is not the untyped case Change 4 reserves the suffix for. Without the gate an
+    // element named `FancyButton` stating an unknown member produced output byte-identical to a genuinely untyped
+    // `FancyButton`, and the ⚠ sent the operator to read the page instead of to extend the table.
+    const isBtn = i.itemType === VIEW_ITEM_TYPE.BUTTON
+      || (itemRole(i) === null && !i.itemTypeUnresolved && i.name.endsWith("Button"));
     const captionNote = i.caption ? ` (caption ${i.caption})` : "";
     const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
     // Lead with the element's real classic kind, so the reader can tell a known kind without a mapping (a
@@ -1600,6 +1625,13 @@ function mapUnmappedDrop(eff, accountedFor) {
       reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
     } else if (kind) {
       reason = `classic ${kind} '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — the element's KIND is known, so this is a missing MAPPING rather than unknown UI: map ${kind} to its Freedom counterpart, or confirm drop`;
+    } else if (i.itemTypeUnresolved) {
+      // Third arm, and the one handover item 3 is about: the body DID state a kind. Saying "states NO itemType"
+      // here points the operator at the page, when the thing to fix is this engine's table. Note the runtime does
+      // not distinguish these two either — `generateStandardItem`'s `default` sends both to `generateModelItem`
+      // (CrtNUI 7.8.0 L626-628) — so the engine is deliberately LOUDER than Classic here, which is the point of a
+      // migration analyser: what the runtime silently swallows is exactly what a reader must be told.
+      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema STATES a kind this engine could not resolve — the gap is the engine's pinned \`AST_VIEW_ITEM_TYPE\` table (engine.mjs), NOT the page: add the member for this platform version and re-run, then map the kind it turns out to be. Do not port this by hand until the kind is known`;
     } else {
       reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema states NO itemType — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
     }

@@ -1035,7 +1035,10 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
     const key = `${item}|${d.kind}|${p}|${tag}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const where = d.pkg ? ` in \`${d.pkg}\`${d.role === "section" ? " (section schema)" : ""}` : "";
+    // Named rather than nested inside `where`: the section note is a second, independent condition, and reading two
+    // ternaries in one template made the package arm look like it depended on the role.
+    const sectionNote = d.role === "section" ? " (section schema)" : "";
+    const where = d.pkg ? ` in \`${d.pkg}\`${sectionNote}` : "";
     changeSet.needsDecision.push({ kind: "parse-gap", item,
       reason: `${ownerNote}${where} ${diagnosticGapText(d, p)}. Read the classic body at that position and record the real value/behaviour — this is NOT a resolved default, and nothing downstream can see it unless it is answered here.` });
   }

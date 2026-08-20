@@ -1039,8 +1039,13 @@ function normalizeDiffOp(op, i) {
     bindTo: strOrNull(v.bindTo),
     itemType: numOrNull(v.itemType),      // the element KIND — the whole ViewItemType vocabulary (see AST_VIEW_ITEM_TYPE)
     contentType: numOrNull(v.contentType),
-    // The item's OWN declared data type. The entity column wins where there is one; this is the only type
-    // evidence a VIRTUAL field has.
+    // The item's OWN declared data type. PRECEDENCE, verified against the runtime and the reverse of what this
+    // comment said before: `ViewGeneratorV2.getItemDataValueType` (CrtNUI 7.8.0 L1796-1810) returns
+    // `config.dataValueType` FIRST and only consults the view-model column when the item declares none — so the
+    // item's own value OVERRIDES the column, it is not a fallback to it. The guard there is `Ext.isEmpty`, and
+    // `Ext.isEmpty(0)` is false, so `dataValueType: 0` (GUID) is a legal declared value: test with `!= null` /
+    // `Object.hasOwn`, never with truthiness. Reading it is still the mapping task's business (ENG-95543); what
+    // changes here is only that the recorded precedence is now the right way round.
     dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
     hasCaption: !!(v.caption),
@@ -1065,6 +1070,14 @@ function normalizeDiffOp(op, i) {
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
     handlers: handlerBindings(v),
     astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
+    // Which keys this op's `values` actually CARRIES. Required because `numOrNull` collapses "key absent" and
+    // "key present but not statically a number" into the same `null`, and the runtime treats those two as
+    // opposites (see `replayMerge`). Without this the merge rule cannot be implemented at all.
+    valuesKeys: new Set(safeKeys(v)),
+    // The body STATED a kind and this engine could not resolve it to a number (a member `AST_VIEW_ITEM_TYPE`
+    // lacks, or a non-static expression). Distinct from "stated no kind": the remedy is to extend the engine's
+    // pinned table, not to go read the page.
+    itemTypeUnresolved: Object.hasOwn(v, "itemType") && numOrNull(v.itemType) === null,
   };
 }
 
@@ -1184,6 +1197,7 @@ function makeItem(op, seed, pkg) {
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
     handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
+    itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
 }
@@ -1197,6 +1211,27 @@ function replayDiffOp(op, items, { seed, pkg }, warnings) {
   if (op.operation === "remove") return replayRemove(op, cur, items, { seed, pkg }, warnings);
 }
 
+// The three IDENTITY properties, merged by the RUNTIME's rule — which is key PRESENCE, never the value.
+// `JsonApplier.merge` takes `Object.keys(config.values)` (core `utils/common/json-applier.js` L583-585) and assigns
+// unconditionally (L702-705). So a later layer carrying an `itemType` key AT ALL overwrites the base — including with
+// `null`/`undefined`/a member this engine cannot resolve. Keeping the lower layer's kind is the one provably wrong
+// answer: it reports a RADIO_GROUP the runtime has ALREADY turned into a plain bound field, because
+// `ViewGeneratorV2.generateStandardItem` routes every unrecognised itemType to `default -> generateModelItem`
+// (CrtNUI 7.8.0 L626-628) with no throw and no log. The engine's old value-based guard hid that behaviour change.
+// Its own function so `replayMerge` keeps its guard chain at nesting level 0 (S3776 ceiling), same reason as
+// `isStructuralDiag` / `methodLedgerDetail`.
+function mergeIdentityProps(op, cur, pkg, warnings) {
+  for (const k of ["contentType", "itemType", "dataValueType"]) {
+    if (!op.valuesKeys?.has(k)) continue;
+    if (k === "itemType" && cur.itemType != null && op.itemType == null) {
+      warnings.push({ op: "merge", name: op.name, schema: pkg,
+        hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
+    }
+    cur[k] = op[k];
+  }
+  if (op.valuesKeys?.has("itemType")) cur.itemTypeUnresolved = !!op.itemTypeUnresolved;
+}
+
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
 // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
 function replayMerge(op, cur, items, { seed, pkg }, warnings) {
@@ -1208,7 +1243,8 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
     return;
   }
-  for (const k of ["order", "contentType", "itemType", "dataValueType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  mergeIdentityProps(op, cur, pkg, warnings);
+  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
@@ -1515,7 +1551,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     // (defining insert came from a seed schema): payload = client-authored items, structural identity =
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema schema contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
-      itemType: i.itemType, contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
+      // `?? null` because an item built from an op whose `itemType` key was absent used to project as `undefined`,
+      // which no consumer could tell from "the key was there and we could not read it".
+      itemType: i.itemType ?? null, itemTypeUnresolved: !!i.itemTypeUnresolved,
+      contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
       visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
