@@ -360,6 +360,12 @@ const RECONCILE_SCHEMA = {
     // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
     // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
     // run that predates this field behaves exactly as it did before.
+    // DEFERRED (ENG-95468 Scope, tracked as a follow-up — see the PR body): resolution is NOT yet checked BY KIND
+    // (`component` / `composite` / `compositeOnly`) and the mapper's `FEATURE_CATALOG` does not yet carry a typed
+    // `{ kind, id }` intent. Until it does, the stop cannot branch its guidance by cause (a type that is not a
+    // component type at all vs a real component whose package/feature is un-installed), and the correct-target
+    // half of the message depends on the free-text `note` the agent put here — its quality is agent-dependent by
+    // design for now, not an engine-published fact.
     componentResolution: {
       type: 'array',
       items: {
@@ -965,15 +971,24 @@ function componentTypeMismatches(componentResolution, publishedTypes) {
 // The operator-facing renderings of the unresolved types, shared by every stop and log that reports them so the
 // wording (and its fix instruction) has ONE home — and built with plain concatenation so no call site carries a
 // nested template literal. `componentTypeList` is the bare `type, type` list for a log; `componentMismatchList` is
-// the `` `type` (note) `` detail; `planInvalidNext` is the whole re-plan instruction, parameterised only by the
-// trailing clause that differs between a pre-build stop ('Nothing was built.') and a mid-run one.
+// the `` `type` (note) `` detail. `note` is stand-derived text (the Reconcile agent relayed `get-component-info`'s
+// reason). It is NOT `dataFence`d here, unlike the stand-derived values SKILL.md rule 8 fences, because it never
+// re-enters an agent prompt: it reaches only these TERMINAL operator-facing `next`/log strings, is absent from
+// `carryNow()` and `PERSIST_SCHEMA`, and so dies at the run's terminal return without ever round-tripping to a
+// stand-writing agent. A future change that carries `note` into a prompt or persists it must fence it there.
 const componentTypeList = (mismatches) => (mismatches || []).map((c) => c.type).join(', ')
 const componentMismatchList = (mismatches) => (mismatches || []).map((c) => '`' + c.type + '` (' + c.note + ')').join('; ')
+// The re-plan instruction for unresolved component types — the ONE home for this wording, shared by the standalone
+// `plan-invalid-against-stand` stop (`planInvalidNext`) and the combined package+component stop below, so the two
+// cannot drift. `planInvalidNext` adds only the trailing clause that differs between a pre-build stop ('Nothing was
+// built.') and a mid-run one ('Anything already built this run is on disk.').
+const componentReplanClause = (mismatches) =>
+  componentMismatchList(mismatches) + '. This is a PLAN assertion untrue of the stand — fix the '
+  + 'mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), '
+  + 're-run `--plan --out`, re-approve, then re-run this build.'
 const planInvalidNext = (mismatches, tail) =>
   'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
-  + 'These do not: ' + componentMismatchList(mismatches) + '. This is a PLAN assertion untrue of the stand — fix the '
-  + 'mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), '
-  + 're-run `--plan --out`, re-approve, then re-run this build. ' + tail
+  + 'These do not: ' + componentReplanClause(mismatches) + ' ' + tail
 
 // WHICH ⚠ CONFIRM ITEMS PREFLIGHT ACTUALLY HAS TO RESOLVE. `--units.preflight` is the PLAN's list of open
 // questions, not a list of unanswered ones, and the run used to hand all of it to the fan-out on every start. So a
@@ -1114,6 +1129,13 @@ function carryBlock(carry) {
   return `\n${CARRY_DATA_RULE}${out.join('')}`
 }
 
+// The `componentResolution` sweep (step 2 below) runs on EVERY Reconcile, not only the baseline, and is not
+// conditioned on the round — this is CHOSEN FRESHNESS, not an un-optimised cache miss (ENG-95468 / PR #102 review,
+// under the ENG-94859 "optimise the engine" epic). The mid-run component gate in `acceptReconciled` exists precisely
+// to catch a stand that CHANGED after the baseline — a package uninstalled during a long run — so it must see the
+// stand as it is NOW; reusing the baseline `${REFS_DIR}/components.md` cache would defeat that guarantee. The sweep
+// is read-only `get-component-info` over the plan's small deduped `componentTypes` set, so the per-round re-fetch is
+// cheap next to the repair round it prevents; a plan-time / cached variant is a possible later optimisation.
 function reconcilePrompt(round, carry) {
   const first = round === 0
   return `You are the RECONCILE phase of a Freedom build run — round ${round + 1}. ${first
@@ -1228,6 +1250,14 @@ if ((state.planGaps || []).length) {
 // Applicant run stopped on placement in round 1 and only hit the fabricated component type rounds later, so a
 // re-plan that sees BOTH at once fixes them in one pass.
 const componentMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
+// Non-gating VISIBILITY (ENG-95468, PR #102 review): a published type with NO resolution entry at all is not a
+// failure — the gate deliberately stops only on an explicit `resolved: false` (absence is not evidence). But an
+// incomplete sweep that resolved only some of the plan's types would otherwise leave no trace, and the builder
+// would still hit the wall mid-Build on the un-swept one. Name the un-swept published types once, here, WITHOUT
+// stopping, so a partial sweep is visible in the log instead of surfacing as a repair round later.
+const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
+const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
+if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
 const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
@@ -1240,8 +1270,7 @@ if (stopOnPackage) {
     // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
     next: componentMismatches.length
       ? stopOnPackage.next + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
-        + componentMismatchList(componentMismatches) + '; each must resolve (clio `get-component-info component-type=<type>`). '
-        + 'Fix both in one re-plan (`--plan --out`), re-approve, then re-run.'
+        + componentReplanClause(componentMismatches)
       : stopOnPackage.next,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,

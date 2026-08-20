@@ -425,6 +425,13 @@ check("componentTypeMismatches: malformed/absent signals never gate — no `type
     null, undefined,                           // junk entries survive the `c &&` guard
   ]).length === 0,
   () => JSON.stringify(wf.componentTypeMismatches([{ resolved: false }, { type: 42, resolved: false }, { type: "crt.A" }, { type: "crt.B", resolved: "false" }, { type: "crt.C", resolved: 0 }, null, undefined])));
+// The malformed-signal contract above LEANS ON the schema: `componentTypeMismatches` treats a missing `type` or
+// `resolved` as "not a mismatch", which is only safe if a genuinely-unresolved type is guaranteed to carry both —
+// i.e. `RECONCILE_SCHEMA.componentResolution.items` marks `type` and `resolved` `required`. The execution tests
+// inject `componentResolution` into state directly and bypass the schema, so pin it here in the source, the same
+// way the placement fields are pinned (`/'targetPackage', 'packageState'\]/` below). (PR #102 review, RC-10.)
+check("RECONCILE_SCHEMA: `componentResolution` items mark BOTH `type` and `resolved` required — the guarantee the malformed-signal contract leans on (a real unresolved type is never silently dropped for a missing field)",
+  /componentResolution:[\s\S]*?required: \['type', 'resolved'\]/.test(wfSrc));
 // The Applicant replay (ENG-95468 done-criterion): the two round-1 blockers are BOTH reproducible through the
 // pre-build checks — the fabricated component type via componentTypeMismatches, and new-app-over-existing via
 // packagePreconditionStop — so a re-plan sees both instead of paying repair rounds to rediscover them.
