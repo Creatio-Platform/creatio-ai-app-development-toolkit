@@ -1588,7 +1588,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     // Every free variable `buildPrompt` reads, as DECLARATIONS — they are prepended to the sliced function and the
     // whole thing is imported as a real module. No `new Function`, no eval: the same route the pure-helper block
     // above takes, and for the same reason.
-    const STUBS = `
+    const STUBS = String.raw`
 const MAX_ROUNDS = 3
 const REFS_DIR = "/m/refs"
 const REFS_INDEX = "/m/refs/index.md"
@@ -1608,7 +1608,7 @@ const cliChecklistPage = (k) => "node e.mjs m.json --checklist --page " + k
 const cliUnitsPage = (k) => "node e.mjs m.json --units --page " + k
 const cliBuiltPage = (k) => "node e.mjs m.json --verify --built b.json --page " + k
 const openRowPrompt = (r) => r.deliverable
-const composeBuildPrompt = (parts) => Object.values(parts).join("\\n\\n")
+const composeBuildPrompt = (parts) => Object.values(parts).join("\n\n")
 const resolutionsPromptBlock = () => ""
 const findingsPromptBlock = () => ""
 const checkFirstPromptBlock = () => ""
