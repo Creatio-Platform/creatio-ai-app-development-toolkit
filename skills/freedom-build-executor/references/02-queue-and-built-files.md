@@ -1,8 +1,9 @@
 # 02 — The queue file and the built file
 
 Two JSON files in the migration folder carry the whole run — plus `verify.json`, the engine's machine
-verdict, one short-lived `preflight-<n>.json` per ⚠ Confirm agent, and `resolutions.json`, the one file
-here that a HUMAN writes. Everything else is derivable.
+verdict, one short-lived `preflight-<n>.json` per ⚠ Confirm agent, one `slices/queue-<n>.json` and
+`slices/built-<n>.json` per build unit, and `resolutions.json`, the one file here that a HUMAN writes.
+Everything else is derivable.
 
 `resolutions.json` holds the operator's answers to this plan's ⚠ Confirm questions:
 `{ "resolutions": [ { "kind": "list-columns", "item": "…", "answer": "…", "decidedBy": "…", "date": "…" } ] }`.
@@ -169,6 +170,67 @@ than restating it. `planGaps` is the plan-versus-build split (`03-failure-and-pa
 already classified, and it is independent of `complete`: a run with nothing left to build still
 stops when that array is non-empty.
 
+## The per-unit slices — `slices/queue-<n>.json` and `slices/built-<n>.json`
+
+A build agent owns ONE unit, so it needs one row out of each of these two files. It gets that row as a
+FILE. Nothing hand-cuts a row: no whole-file read, and no `grep`/`jq`/`sed`/`python` one-liner.
+
+The engine writes them. `--slices <dir>` on `--units` writes `queue-<n>.json` for every published key,
+and on `--verify` writes `built-<n>.json` for the same keys — so the reconcile step's two existing engine
+runs produce them and nothing extra is invoked. They are written on **exit 2** as well, which is precisely
+the round a builder needs its row.
+
+```json
+// queue-3.json — the run-level fields a single unit still needs, plus its own row
+{
+  "pageKey": "child:Education",
+  "entity": "Applicant", "planVersion": "plan-4f9c2ab17e03",
+  "sectionSchema": "Applicant1Section", "sectionHost": "existing-app", "applicationCode": "UsrHrApp",
+  "page": { "key": "child:Education", "role": "child", "schema": "UsrEducationPage",
+            "expectedTemplate": "…", "targetPackage": "CustomHrApp", "expect": { "fields": 7, "fieldNames": ["…"] } },
+  "parent": "main",
+  "reachability": [], "preflight": [], "evidenceRows": [ { "id": "child:Education#childpage", "…": "…" } ]
+}
+```
+
+```json
+// built-3.json — this page's row of the built file, and only its own ids
+{
+  "pageKey": "child:Education", "planVersion": "plan-4f9c2ab17e03",
+  "pages": { "child:Education": { "viewConfig": "…", "schemaUId": "…" } },
+  "reachability": {},
+  "evidence": { "child:Education#childpage": { "referencePage": "ContactPage", "components": ["…"] } },
+  "judge":    { "child:Education#childpage": { "convincing": false, "why": "no prop diff" } }
+}
+```
+
+Rules:
+
+- **The slice is a narrowing, never a projection.** Every value is copied verbatim, so a consumer reads the
+  same bytes it would have read out of the whole file.
+- **Which ids belong to a page is `--units`' answer, not the built file's.** `built.json` is keyed by evidence
+  id and says nothing about pages; `--units.evidenceRows` is the only place that mapping exists. The same holds
+  for reachability: a key applies to a page only when `--units` names it there.
+- **Absent stays absent.** A key the source does not carry is left OUT of the slice, never written as `null` —
+  absent, `false` and a filed record are three different answers, and the gate reads them differently.
+- **The filename is the page's 1-based POSITION in `pages[]`, never its key.** A key is not a legal filename, and
+  sanitising one is many-to-one — every non-Latin caption strips to the same characters, so two keys would land
+  on one file and a builder would read another page's rows. A position cannot collide.
+- **A position can still be composed wrong, so every slice names its own page in `pageKey`.** A builder checks
+  that field against its own key before building, and reports a mismatch instead of working from the file.
+- **BOTH slices carry `planVersion`, and a builder checks they agree.** A matching `pageKey` proves the file is the
+  right PAGE, not the right ROUND — numbers are reused, so a leftover can carry the right key and stale contents.
+- **A plan that publishes fewer pages PRUNES the slices above its count.** A numbered file left from a longer plan
+  would sit there claiming to be a page the current plan does not publish.
+- **A missing slice is cut on demand, never replaced by a whole-file read:** `--units --page <key>` prints the
+  queue row, `--verify --built <file> --page <key>` prints the built row.
+- **They are NOT in `refs/`.** That cache is keyed on the plan version, and a slice goes stale on an operator's
+  answer or on any round that writes the stand — neither of which moves the plan version.
+- **A missing slice is a report, not a workaround.** It means the reconcile step did not write one; the agent
+  says so and the next unit would hit the same thing.
+- **Reconcile is the only writer, and reads the WHOLE files itself.** It aggregates across every unit, so it has
+  no row to be sliced to. So do the verifier, the judge and the preflight merge step.
+
 ## Who writes what
 
 | File / key | Written by | Never written by |
@@ -178,6 +240,7 @@ stops when that array is non-empty.
 | `built.json` → `evidence`, at preflight time | the preflight **merge** step (one agent, after the fan-out) | the preflight agents themselves |
 | `built.json` → `pages`, `reachability`, `evidence` | the read-only verifier | the builder, the judge |
 | `built.json` → `judge` | the judge | everyone else |
+| `slices/queue-<n>.json`, `slices/built-<n>.json` | the ENGINE, via `--slices` on the reconcile step's `--units` / `--verify` runs | every agent — a build agent READS its two, and writes neither |
 | the Freedom pages on the stand | the builder | the verifier, the judge |
 
 **`built.json` has THREE writers, in sequence, never at the same time:** the preflight merge step, then the
