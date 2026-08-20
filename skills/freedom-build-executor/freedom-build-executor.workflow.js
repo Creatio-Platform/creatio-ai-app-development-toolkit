@@ -937,6 +937,57 @@ const isUnitOpen = (unit, verify, reachState, packageState) => {
 const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState) =>
   parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key))
 
+// ENG-95469 — the ONE self-check outcome that PARKS a page IN-CONTEXT, as a predicate `buildRound` can test (PR
+// review T3): the builder ran its scoped gate (`ran: true`), the engine's single-unit verdict is still NOT complete
+// (`complete: false`), AND the builder has already spent its ONE bounded fix (`fixAttempted: true`). A shortfall
+// whose bounded fix is NOT YET attempted (`fixAttempted: false`) is deliberately NOT collected — the unit still has
+// its one attempt owed to it, so parking it now would skip the very fix the gate promises; it stays open for that
+// attempt instead. A gate that could not run (`ran: false`) and a complete gate collect nothing. Pinned as its own
+// function so a case that must NOT park (`fixAttempted: false`) is proven distinct from the one that does.
+function selfCheckStillShort(sc) {
+  return !!sc && sc.ran === true && sc.complete === false && sc.fixAttempted === true
+}
+
+// ENG-95469 — WHICH self-check-short units this round actually parks IN-CONTEXT (PR review T2): the builder reported
+// the unit still short after its one bounded fix (`selfCheckShort`), the INDEPENDENT post-hoc verifier (`verify`,
+// just refreshed by the read-only agent that did NOT build the page) ALSO finds the unit open, AND it is not already
+// parked. The verifier guard is the whole point of the double-guard — the self-check is the engine's own scoped
+// arithmetic reported THROUGH the builder, so a builder that mis-reported "still short" on a page the independent
+// verifier finds GREEN is NOT parked here. Same shape and openness predicate as `parkableKeys`, so the two park
+// paths cannot disagree about what "open" means. Pure: `unitFor` maps a key to its unit (the impure `schedule`
+// lookup is injected), and `alreadyParked` is handed in, so the whole decision is unit-testable without run state.
+const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachState, packageState, alreadyParked) =>
+  (selfCheckShort || [])
+    .filter((s) => s && s.key && !(alreadyParked && alreadyParked.has(s.key)))
+    .filter((s) => isUnitOpen(unitFor(s.key), verify, reachState, packageState))
+    .map((s) => s.key)
+
+// ENG-95469 — the INDEPENDENT-SIGNAL cross-check on the in-context gate (PR review T5). The gate's `selfCheck` is the
+// builder's OWN report that it ran the scoped `--verify --page` gate; nothing in the builder's WORD proves the gate
+// actually ran or that its verdict is honest — enforcement was prompt-compliance only. This reconciles each page
+// unit's self-report against the INDEPENDENT post-hoc verifier (`verify`, produced by the read-only agent that did
+// NOT build the page — the run's authoritative oracle) and names the two ways a self-report and the independent
+// detector can disagree, for a unit the verifier finds still OPEN:
+//   · `reported-complete-but-verifier-open` — the builder reported the gate PASSED (`ran` + `complete`) but the
+//     independent verifier finds the unit still open. The in-context park never catches this (it fires only on
+//     `complete: false`), so a fabricated / mis-run green would otherwise pass silently; surfaced here it is not
+//     trusted and the post-hoc verifier governs.
+//   · `gate-not-run` — the builder returned `ran: false` (the documented escape hatch) on a unit the verifier finds
+//     open: legitimate, but surfaced (never silently accepted) so an operator can see which open units bypassed the
+//     scoped gate. A unit the verifier confirms complete needs no such note.
+// Pure: the verdict and the self-reports are handed in; `unitFor` injects the schedule lookup. It changes NO verdict
+// — it only names a discrepancy for the run's audit trail; the post-hoc verifier remains the authoritative evidence.
+const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageState) =>
+  (selfChecks || [])
+    .filter((c) => c && c.key && isUnitOpen(unitFor(c.key), verify, reachState, packageState))
+    .map((c) => {
+      const sc = c.sc
+      if (sc && sc.ran === true && sc.complete === true) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
+      if (!sc || sc.ran === false) return { key: c.key, kind: 'gate-not-run' }
+      return null
+    })
+    .filter(Boolean)
+
 // WHY a unit parked from the IN-CONTEXT gate (ENG-95469) — distinct from `parkWhy`'s "still short after N round(s)".
 // The in-context completeness gate gives a unit EXACTLY ONE bounded fix in its own build context; still short after
 // that, the unit parks HERE, after one round, without spending the ${MAX_ROUNDS}-round post-hoc budget. Pure: the
@@ -1793,12 +1844,12 @@ function applyParks() {
 // green does NOT park it. The reason is `inContextParkWhy` (distinct from the round-budget park), and the record
 // flows through the SAME `parked`/`parkedSet`/`blockedByParked` machinery so ancestors block identically.
 function applyInContextParks(selfCheckShort) {
-  const fresh = []
-  for (const s of selfCheckShort || []) {
-    if (!s?.key || parkedSet.has(s.key)) continue
-    if (!isUnitOpen(unitOf(s.key), state.verify, state.reachabilityState, packageState)) continue
-    fresh.push(parkRecord(s.key, inContextParkWhy(s.shortRows), roundsRun(state.roundOf, localRounds, s.key)))
-  }
+  // The DECISION — short-after-one-fix AND independently still open AND not already parked — is the pure
+  // `inContextParkableKeys` (unit-tested behaviourally). This wrapper only turns the chosen keys into park records
+  // and mutates run state, mirroring how `applyParks` wraps `parkableKeys`.
+  const shortByKey = new Map((selfCheckShort || []).filter((s) => s && s.key).map((s) => [s.key, s]))
+  const keys = inContextParkableKeys(selfCheckShort, unitOf, state.verify, state.reachabilityState, packageState, parkedSet)
+  const fresh = keys.map((k) => parkRecord(k, inContextParkWhy(shortByKey.get(k).shortRows), roundsRun(state.roundOf, localRounds, k)))
   if (!fresh.length) return []
   parked = [...parked, ...fresh]
   for (const p of fresh) { parkedSet.add(p.key) }
@@ -2214,6 +2265,10 @@ async function buildRound(open) {
   // IN-CONTEXT gate parks (ENG-95469): units whose builder ran the scoped self-check, made its ONE bounded fix, and
   // is STILL short. Collected here and applied after the verifier confirms them open — one-bounded-fix→park.
   const selfCheckShort = []
+  // EVERY page unit's raw self-report (ENG-95469, PR review T5), kept so the round can cross-check each against the
+  // INDEPENDENT post-hoc verifier — a self-report that claims the gate passed on a page the verifier finds open, or
+  // that the gate never ran, is a discrepancy the run names rather than trusting on the builder's word alone.
+  const selfChecks = []
   // THE CHECKPOINT STOP. Once a unit that is a checkpoint has been BUILT, the rest of this round's units are not
   // dispatched — they are DEFERRED and reported, never silently dropped. The round still runs Verify, Judge and
   // Reconcile afterwards: stopping before those would hand the operator the PREVIOUS round's numbers for a stand
@@ -2323,7 +2378,9 @@ async function buildRound(open) {
       // its one in-context attempt and parks (confirmed against the post-hoc verifier below). A `ran: false` or a
       // gate that came back complete records nothing here — only a genuine still-short-after-one-fix does.
       const sc = res.selfCheck
-      if (sc && sc.ran === true && sc.complete === false && sc.fixAttempted === true) {
+      // Kept for the independent cross-check at the bottom of the round (T5), where `state.verify` is fresh.
+      selfChecks.push({ key: unit.key, sc })
+      if (selfCheckStillShort(sc)) {
         selfCheckShort.push({ key: unit.key, shortRows: sc.stillShortRows || [] })
         log(`in-context gate: \`${unit.key}\` is still short after its one bounded fix (${sc.missing ?? '?'} MISSING + ${sc.unverified ?? '?'} unconfirmed) — it will park once the verifier confirms it open`)
       }
@@ -2341,7 +2398,7 @@ async function buildRound(open) {
   if (pausedAfter) {
     log(`CHECKPOINT after \`${pausedAfter}\` (mode: ${MODE}) — ${deferred.length} unit(s) deferred to the next run: ${deferred.join(', ') || '(none)'}`)
   }
-  return { built, claims, pausedAfter, deferred, checkFirst, selfCheckShort }
+  return { built, claims, pausedAfter, deferred, checkFirst, selfCheckShort, selfChecks }
 }
 
 // The read-only VERIFIER. A DIFFERENT agent from the ones that built these pages, and that
@@ -2632,7 +2689,7 @@ while (true) {
   if (!open.length) break
   round += 1
 
-  const { built: builtThisRound, claims, pausedAfter, deferred, checkFirst, selfCheckShort } = await buildRound(open)
+  const { built: builtThisRound, claims, pausedAfter, deferred, checkFirst, selfCheckShort, selfChecks } = await buildRound(open)
 
   // PERSIST THE BUILDERS' ANSWER IMMEDIATELY, before the verifier runs. It used to wait until after Verify, and a
   // stop in that window took the whole round's blockers, proposals and discrepancies with it — measured on a real
@@ -2731,6 +2788,19 @@ while (true) {
     })
   }
 
+  // INDEPENDENT-SIGNAL CROSS-CHECK on the in-context gate (ENG-95469, PR review T5). Run here, at the bottom of the
+  // round, where `state.verify` is the FRESH post-hoc verdict from the read-only agent that did NOT build these
+  // pages. A builder's `selfCheck` is its own word that the scoped gate ran and passed; this names each page whose
+  // self-report the independent verifier contradicts (claimed complete but the verifier finds it open; or the gate
+  // never ran and the unit is still open) as a discrepancy — it changes no verdict (the post-hoc verifier still
+  // governs), it removes the "nothing independently checks the gate ran" gap by recording where the two disagree.
+  for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
+    const claim = m.kind === 'reported-complete-but-verifier-open'
+      ? 'selfCheck reported the in-context completeness gate PASSED (ran + complete)'
+      : 'selfCheck reported the in-context completeness gate did NOT run (ran:false)'
+    log(`in-context gate ${m.kind === 'reported-complete-but-verifier-open' ? 'MISMATCH' : 'NOT RUN'}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
+    discrepancies = [...discrepancies, { round, unit: m.key, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
+  }
   // IN-CONTEXT PARKS FIRST (ENG-95469): a unit whose builder spent its one bounded fix and stayed short parks after
   // ONE round, with its own gate's open rows as the reason — before the round-budget park runs, so the same unit is
   // never double-parked and its reason names the bounded fix rather than a round count. Confirmed against the fresh

@@ -2282,6 +2282,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // same hard done-gate the full `--verify` applies, so the builder's bounded self-check fails loudly rather than
       // closing a short unit. Without `--verify-json` the `--page` path stays the pure built-slice read (below).
       const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
+      // `--page` is already guarded by `requirePublishedKey` above, so this normally cannot fire — but a `verifyUnit`
+      // that returns an explicit `error` (an unknown/mismatched page key, PR review T4) must fail LOUDLY and
+      // distinctly here rather than be written to the verdict file as a false green, in case the two key notions ever
+      // diverge. A broken gate is an exit-1 diagnosis, never a complete verdict.
+      if (unitVerdict.error) fail(`--verify --page '${pageArg}': ${unitVerdict.error} — this key is not a page this plan reconciles. Run \`--units\` on this manifest for the exact page keys.`);
       try { fs.writeFileSync(verifyJsonFile, JSON.stringify(unitVerdict, null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
       verifyRes = renderVerify(result, { ...checklistOpts(manifest), scopePageKey: pageArg }, built);

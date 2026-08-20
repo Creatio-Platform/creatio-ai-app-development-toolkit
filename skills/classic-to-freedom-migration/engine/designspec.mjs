@@ -3131,7 +3131,18 @@ export function renderVerify(result, opts = {}, built = {}) {
 export function verifyUnit(result, opts = {}, built = {}, pageKey = "main") {
   const p = renderVerify(result, opts, built).pages[pageKey];
   const gaps = planGaps(result);
-  if (!p) return { pageKey, complete: true, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
+  if (!p) {
+    // A page can be absent from `.pages` for TWO different reasons, and a completeness GATE must never read them
+    // alike (PR review T4): (1) the key IS a real page of this plan whose rows all resolved complete/☐-skip, so it
+    // emitted no gated row — a legitimate complete-empty verdict; or (2) the key is UNKNOWN to this plan — a typo'd
+    // or mismatched pageKey. Returning `complete: true` for the UNKNOWN case silently masks a broken gate (a caller
+    // asking about a page nobody planned is told "all good"). So the two are split on the plan's OWN page-key set —
+    // the same `checklistGroups` `renderVerify` reconciled over — and the unknown case returns a LOUD error verdict
+    // (`error`, `complete: false`) instead so the caller / CLI fails distinctly rather than reading a false green.
+    const known = new Set(checklistGroups(result, opts).map((g) => g.pageKey));
+    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
+    return { pageKey, complete: true, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
+  }
   return { pageKey, complete: p.complete, missing: p.missing, unverified: p.unverified, openRows: p.openRows, planGaps: gaps };
 }
 

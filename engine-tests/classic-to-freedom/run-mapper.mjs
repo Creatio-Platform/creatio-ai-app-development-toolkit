@@ -7962,13 +7962,20 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
       agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, round1Built).pages.main }));
   }
 
-  // A scoped entrypoint must NARROW, never leak: an unknown key returns a complete-empty verdict (no rows), so a
-  // caller that asks about a page the plan does not carry is never handed another unit's shortfall.
+  // A scoped entrypoint must NARROW, never leak: an unknown key never returns another unit's rows. And it must
+  // distinguish a page-this-plan-does-not-carry from a page that emitted zero gated rows — the first is a BROKEN
+  // GATE and must be LOUD (PR review T4), not a silent complete verdict a caller reads as "all good".
   {
     const u = verifyUnit(applicantR1, {}, a3Complete, "child:Nope");
-    check("ENG-95469: verifyUnit on an unpublished key returns a complete-empty verdict (0/0), never another unit's rows",
-      u.complete === true && u.missing === 0 && u.unverified === 0 && (u.openRows || []).length === 0,
+    check("ENG-95469 (review T4): verifyUnit on a key the plan does NOT carry returns a LOUD error verdict (error:'unknown page', complete:false) — never a false complete-empty green that masks a broken gate",
+      u.error === "unknown page" && u.complete === false && u.missing === 0 && u.unverified === 0 && (u.openRows || []).length === 0,
       () => u);
+    // The distinction must NOT false-positive on a real page of this plan: `main` is a known page, so it is verdict'd
+    // for real (never the unknown-page error), whether it is complete or short.
+    const known = verifyUnit(applicantR1, {}, a3Complete, "main");
+    check("ENG-95469 (review T4): a KNOWN page of the plan (`main`) is verdict'd for real and is NEVER flagged unknown — the loud path fires only for an unplanned key",
+      known.error === undefined && known.complete === true,
+      () => known);
   }
 }
 

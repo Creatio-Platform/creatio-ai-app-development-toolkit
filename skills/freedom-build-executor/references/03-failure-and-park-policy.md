@@ -76,14 +76,21 @@ gate's still-short rows. It does **not** spend the 3-round post-hoc budget below
 then park, so a unit that cannot be completed in its own context does not burn three stand-writing
 rounds re-learning the same shortfall.
 
-Two guards keep this honest. The builder trusts the engine, not itself: `selfCheck.complete` /
+Three guards keep this honest. The builder trusts the engine, not itself: `selfCheck.complete` /
 `missing` / `unverified` are copied **verbatim** from the engine's single-unit verdict file, never a
-self-graded claim. And the script trusts neither blindly: an in-context park fires only when the
+self-graded claim. The script trusts neither blindly: an in-context park fires only when the
 **post-hoc verifier** (a separate read-only agent, re-reading the stand that round) also reports the
 unit open — a builder that mis-reported "still short" on a page the verifier finds green does not
-park it. The `--verify` sweep remains the authoritative evidence; the in-context gate only moves the
-*discovery* of a shortfall earlier and caps the fix at one attempt. Never weaken the build to make
-the gate pass — a fabricated green is unrecoverable (see "Never weaken a gate to reach green" below).
+park it. And the script does not take the *self-report itself* on trust: at the bottom of the round
+it **cross-checks every page unit's `selfCheck` against that same independent verifier** and records
+a discrepancy where they disagree — a builder that self-reported the gate *passed* on a page the
+verifier finds open (a fabricated green the in-context park would miss, since it only fires on
+`complete: false`), or one that returned `ran: false` on a still-open unit (the gate bypassed). The
+cross-check changes no verdict — the `--verify` sweep remains the authoritative evidence — it only
+removes the "nothing independently checks the scoped gate ran" gap by naming where the self-report
+and the independent detector part ways. The in-context gate only moves the *discovery* of a shortfall
+earlier and caps the fix at one attempt. Never weaken the build to make the gate pass — a fabricated
+green is unrecoverable (see "Never weaken a gate to reach green" below).
 
 ## Park, and why the run does not stop at the first stuck unit
 
