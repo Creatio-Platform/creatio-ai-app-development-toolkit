@@ -475,5 +475,41 @@ class FriendlyLabelTest(unittest.TestCase):
         self.assertIsNone(by_run["wf_null"].agents_meta)
 
 
+class SymlinkConfinementTest(unittest.TestCase):
+    """A file that resolves outside the export root (symlink escape) is skipped,
+    while a genuine in-tree file is kept -- discovery stays confined to the
+    directory the caller named (export.within_root)."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="cc-confine-")
+        self.outside = tempfile.mkdtemp(prefix="cc-outside-")
+        self.wf_dir = os.path.join(self.root, "sess-1", "subagents", "workflows", "wf_a")
+        os.makedirs(self.wf_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.outside, ignore_errors=True)
+
+    def _agent_line(self):
+        return _line({"message": {"role": "user", "content": "You are a BUILD agent."}})
+
+    def test_symlinked_agent_pointing_outside_root_is_skipped(self):
+        # a genuine agent transcript living inside the export
+        with open(os.path.join(self.wf_dir, "agent-in.jsonl"), "w", encoding="utf-8") as f:
+            f.write(self._agent_line())
+        # a foreign transcript outside the export, linked in under a matching name
+        foreign = os.path.join(self.outside, "secret.jsonl")
+        with open(foreign, "w", encoding="utf-8") as f:
+            f.write(self._agent_line())
+        try:
+            os.symlink(foreign, os.path.join(self.wf_dir, "agent-esc.jsonl"))
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symlink creation not permitted here: {exc}")
+
+        session = export_mod.discover(self.root)
+        names = sorted(os.path.basename(p) for p in session.agent_files)
+        self.assertEqual(names, ["agent-in.jsonl"])  # escaping symlink dropped
+
+
 if __name__ == "__main__":
     unittest.main()

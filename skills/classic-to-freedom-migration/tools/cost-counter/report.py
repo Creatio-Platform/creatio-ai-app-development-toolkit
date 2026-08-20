@@ -59,7 +59,10 @@ def _result_bytes(content, offloaded_dir: Optional[str]) -> int:
         # in the captured name, so this cannot escape offloaded_dir -- it keeps
         # the join provably confined and satisfies SAST taint analysis.
         path = os.path.join(offloaded_dir, os.path.basename(name))
-        if os.path.isfile(path):
+        # within_root() additionally rejects the case where the offloaded file
+        # is itself a symlink pointing out of tool-results/; such an escape
+        # falls back to the inline stub length rather than sizing a foreign file.
+        if os.path.isfile(path) and export_mod.within_root(offloaded_dir, path):
             return os.path.getsize(path)
     return len(text.encode("utf-8"))
 
