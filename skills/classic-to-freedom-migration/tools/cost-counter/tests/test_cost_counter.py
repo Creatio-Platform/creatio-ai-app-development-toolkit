@@ -191,7 +191,10 @@ class CompareAndSummaryTest(unittest.TestCase):
                                    "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
             ])
         with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
-            f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
+            # page=None models a schema-only / rule-only run: a journal that
+            # records no built page schemas, so built_pages stays empty.
+            if page is not None:
+                f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
         return root
 
     def setUp(self):
@@ -228,6 +231,17 @@ class CompareAndSummaryTest(unittest.TestCase):
         rc, out = self._out(counter.compare, base, cand, metrics.CostConfig())
         self.assertEqual(rc, 0)
         self.assertIn("comparison void", out)
+
+    def test_compare_empty_sections_are_the_same_section(self):
+        # Two schema-only runs (no built pages recorded) are structurally the
+        # same section: the compare must NOT be voided just because both
+        # built_pages sets are empty.
+        base = self._export(1000, 100, None)
+        cand = self._export(500, 50, None)
+        rc, out = self._out(counter.compare, base, cand, metrics.CostConfig())
+        self.assertEqual(rc, 0)
+        self.assertNotIn("comparison void", out)
+        self.assertIn("same section", out)
 
     def test_compare_json_has_deltas_and_verdict(self):
         base = self._export(1000, 100, "PageA")

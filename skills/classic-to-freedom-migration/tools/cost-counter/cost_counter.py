@@ -378,7 +378,11 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
             return 2
     base = Report(sessions["baseline"], cfg).summary()
     cand = Report(sessions["candidate"], cfg).summary()
-    same_section = bool(base["built_pages"]) and base["built_pages"] == cand["built_pages"]
+    # Two runs are the same section when their built-page sets are equal --
+    # including when both are empty (a schema-only / rule-only run records no
+    # page schemas). A bool() short-circuit here would wrongly void the compare
+    # for two structurally identical empty-page runs.
+    same_section = base["built_pages"] == cand["built_pages"]
     rows = _compare_rows(base, cand)
     verdict = _compare_verdict(base, cand, same_section)
 

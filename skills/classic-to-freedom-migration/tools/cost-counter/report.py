@@ -213,7 +213,10 @@ def _built_pages(session: export_mod.SessionExport) -> set:
             schemas = result.get("pageSchemas")
             if isinstance(schemas, dict):
                 for value in schemas.values():
-                    if value:
+                    # Only string schema names belong in the set. A non-string
+                    # value (dict/list, if the journal format ever nests) would
+                    # later crash sorted(self.built_pages) with a TypeError.
+                    if isinstance(value, str) and value:
                         pages.add(value)
     return pages
 

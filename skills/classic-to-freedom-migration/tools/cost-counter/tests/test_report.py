@@ -193,6 +193,22 @@ class NormalizationTest(unittest.TestCase):
         report = Report(export_mod.discover(self.fx.root), metrics.CostConfig(), pages_override=4)
         self.assertEqual(report.page_count(), 4)
 
+    def test_non_string_page_schema_values_are_ignored(self):
+        # A journal whose pageSchemas carries a nested object (not a plain
+        # schema-name string) must not leak into built_pages, or sorted()
+        # in summary()/page_count() would raise TypeError on mixed types.
+        self.fx.write_journal([
+            _line({"type": "result", "result": {"pageSchemas": {
+                "main": "Applicant_FormPage",
+                "nested": {"unexpected": "object"},
+                "list": ["also", "unexpected"],
+            }}}),
+        ])
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        self.assertEqual(report.built_pages, {"Applicant_FormPage"})
+        # sorted() over the set must not raise.
+        self.assertEqual(report.summary()["built_pages"], ["Applicant_FormPage"])
+
 
 class MultiSessionTest(unittest.TestCase):
     """Two session UUID subdirectories under one export root.
