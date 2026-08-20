@@ -50,8 +50,23 @@ migrations/<app-or-section-slug>/
   behaviour-index.json # the same run's row → card/AC index, merged into the manifest as `behaviourIndex`
   roadmap.md           # living execution tracker (status of every task)
   decisions.md         # decision and approval log (append-only; the plan approval lives here at BOTH scopes)
+  resolutions.json     # the operator's ANSWERS to the ⚠ Confirm questions, machine-read by the build
   worklog.md           # session log and runtime read-back evidence (append-only)
 ```
+
+**An answered ⚠ Confirm item goes in `resolutions.json`, not only in `decisions.md` prose.** `decisions.md`
+remains the human decision log and the home of the plan approval; the build reads it for the approval entry
+alone. An answer a build agent must ACT on needs a machine home, keyed to the question the engine published:
+
+```jsonc
+{ "resolutions": [ { "kind": "list-columns", "item": "no list columns resolved",
+                     "answer": "Name, Status, Owner, DueDate", "decidedBy": "…", "date": "2026-08-19" } ] }
+```
+
+Take `kind` and `item` verbatim from `--units.preflight` (the published `id` also works as a key, but its
+`pageKey` half moves between runs). Record the decision in `decisions.md` as usual for the humans, and put the
+answer here for the build — the engine attaches it to the queue item that asked it, and the build agent for that
+page is handed it. An answer here closes no `--verify` row; the deliverable is still built, verified and judged.
 
 Use a stable slug, for example `gdpr-for-creatio`. Do not rename the folder mid-project.
 

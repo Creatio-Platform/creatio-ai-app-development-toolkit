@@ -347,8 +347,8 @@ export const FEATURE_CATALOG = {
   // Means-of-communication ("Средства связи контакта" / ContactCommunication) is the NATIVE Communication-options
   // component, NOT a generic list. A real agent downgraded it to a plain Expanded-list because the composite
   // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
-  ContactCommunicationDetail: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.ContactCommunication)", uiShape: "component",
-    note: "means of communication = the NATIVE Communication-options component (crt.ContactCommunication) — read get-component-info for its contract/wiring; it may require the CrtCustomer360App package. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid." },
+  ContactCommunicationDetail: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.CommunicationOptions)", uiShape: "component",
+    note: "means of communication = the NATIVE Communication-options component (crt.CommunicationOptions, the compositeOnly widget the \"Communication options\" composite assembles — NOT `crt.ContactCommunication`, which is not a real component type; `ContactCommunication` is the ENTITY the data lives in) — read get-component-info for its contract/wiring; it requires the CrtCustomer360App package AND the CommonCommunicationsBehavior feature. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package/feature is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid." },
 };
 // Match a classic detail schema to a standard feature by exact name OR entity-prefixed suffix — e.g.
 // `ApplicantEmailDetailV2` → `EmailDetailV2`, `ApplicantVisaDetail` → (no)…: prefixed variants of the

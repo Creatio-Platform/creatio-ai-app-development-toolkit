@@ -1,7 +1,15 @@
 # 02 — The queue file and the built file
 
 Two JSON files in the migration folder carry the whole run — plus `verify.json`, the engine's machine
-verdict, and one short-lived `preflight-<n>.json` per ⚠ Confirm agent. Everything else is derivable.
+verdict, one short-lived `preflight-<n>.json` per ⚠ Confirm agent, and `resolutions.json`, the one file
+here that a HUMAN writes. Everything else is derivable.
+
+`resolutions.json` holds the operator's answers to this plan's ⚠ Confirm questions:
+`{ "resolutions": [ { "kind": "list-columns", "item": "…", "answer": "…", "decidedBy": "…", "date": "…" } ] }`.
+Keyed on `kind` + `item` (the published `id` also works; its `pageKey` half moves between runs). It is read by
+the ENGINE — `--units --resolutions` publishes each answer on the queue item that asked it — never parsed by an
+agent. Absent means nobody has answered yet, which is the normal first run. **It closes no `--verify` row:** an
+answer is an input to the build, and the evidence record is still filed and still judged.
 They exist because a run is interrupted routinely — a usage limit, a session end, a new
 agent picking the work up in the same folder tomorrow. Nothing about "where we are" may live
 only in an agent's context.
@@ -28,7 +36,7 @@ there is no "resume" command: there is one command, and it does the next undone 
     "child:VisaRequest": { "rounds": 2, "parked": false, "schemaName": "UsrVisaRequestPage",
                            "lastNote": "ApprovalList added; style diff pending" },
     "child:Education":   { "rounds": 3, "parked": true,  "schemaName": "UsrEducationPage",
-                           "parkedWhy": "still short after 3 round(s) — the engine's open rows: Communication options (`crt.ContactCommunication`) — ❌ MISSING — component type absent from the built page" },
+                           "parkedWhy": "still short after 3 round(s) — the engine's open rows: Communication options (`crt.CommunicationOptions`) — ❌ MISSING — component type absent from the built page" },
     "mini:ApplicantMiniPage": { "rounds": 1, "parked": false, "schemaName": "UsrApplicantMiniPage" },
     "main":              { "rounds": 0, "parked": false, "schemaName": "UsrApplicantFormPage" }
   },
@@ -42,7 +50,7 @@ there is no "resume" command: there is one command, and it does the next undone 
   ],
   "blocked": [
     { "unit": "child:Education", "what": "the Communication options block",
-      "why": "crt.ContactCommunication is not registered on this stand" }
+      "why": "crt.CommunicationOptions is not registered on this stand" }
   ],
   "discrepancies": [
     { "round": 2, "unit": "main", "claim": "crt.ApprovalList added",

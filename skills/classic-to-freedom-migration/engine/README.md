@@ -14,6 +14,7 @@ node migrate.mjs <manifest.json> --plan   # render the migration plan (Markdown)
 node migrate.mjs <manifest.json> --spec   # render just the per-page design spec (Markdown)
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --units  # the per-page BUILD QUEUE + the exact keys --built must use (JSON)
+node migrate.mjs <manifest.json> --units --resolutions r.json # …with the operator's ⚠ Confirm ANSWERS attached
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --verify-json v.json # …plus the MACHINE-READABLE verdict (JSON)
@@ -49,6 +50,25 @@ leaf-first `buildOrder`. A key identifies exactly ONE physical page: when two di
 same key (two related lists opening the same entity, or two same-entity child pages on different branches) the
 engine appends a disambiguator — `@<Via>`, `@<Schema>`, `#2` — while one page reached along two paths keeps a
 single key. The suffix is derived by the engine, so **read every key from `--units`; never construct one.**
+
+`--resolutions <file>` (⚠ **`--units` only**) attaches the operator's ANSWERS to that run's ⚠ Confirm questions,
+publishing each on its own queue item as `preflight[].resolution = { answer, decidedBy?, date? }` — `null` when the
+question is unanswered. **An answer is an INPUT to the build and closes no `--verify` row:** the row still needs a
+filed evidence record and a judge verdict. Key each entry on `kind` + `item` (the published `id` also works, but its
+`pageKey` half moves — a list-page question rides on `list` when that key is published and on `main` when it is
+withheld, so `kind`+`item` is what survives). An absent file means "nobody has answered yet" and is not an error;
+an unparseable file, or an entry without a non-blank `answer` and without either an `id` or both `kind` and `item`,
+is exit 1. Matching trims both sides, and an entry carrying both key forms counts as matched if EITHER form matched.
+Three reports keep a discarded answer from being silent, none of them fatal:
+`resolutionsUnmatched` (answers matching no question this plan asks), `resolutionsConflicts` (one question answered
+by BOTH an `id` entry and a `kind`+`item` entry — the pair is applied and the `id` one is discarded), and a stderr
+warning for two entries under the SAME key form (the last wins). All three are named on stderr as well.
+
+```jsonc
+{ "resolutions": [ { "kind": "list-columns", "item": "no list columns resolved",
+                     "answer": "Name, Status, Owner, DueDate", "decidedBy": "…", "date": "2026-08-19" } ] }
+```
+
 Those page keys are the ONLY valid keys of the `--built` payload:
 
 ```jsonc

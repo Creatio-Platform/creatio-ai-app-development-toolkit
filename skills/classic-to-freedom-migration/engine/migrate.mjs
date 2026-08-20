@@ -61,7 +61,7 @@ import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes,
+  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
   IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2119,7 +2119,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2180,6 +2180,47 @@ function outFileNote(label, outFile, notReady, verifyMode) {
   return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
 }
 
+// The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
+const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
+  " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`";
+// THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
+// absent ⇒ a stderr note and `null` (the normal first run, NOT an error) · unparseable ⇒ exit 1 · unusable
+// entries ⇒ exit 1, each named. Never let either failure degrade into the absent case.
+// Own fn so the CLI block gains no nesting, like `valueFlagArg` and `outFileNote` above.
+function readResolutions(file, fail) {
+  if (!file) return null;
+  if (!fs.existsSync(file)) {
+    process.stderr.write(`migrate.mjs: --resolutions '${file}' does not exist — no ⚠ Confirm answers applied; every item publishes \`resolution: null\`.\n`);
+    return null;
+  }
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (e) { fail(`cannot read --resolutions '${file}': ${e.message}. Expected ${RESOLUTIONS_SHAPE}.`); }
+  const idx = buildResolutionIndex(raw);
+  if (idx.bad.length) fail(`--resolutions '${file}' has ${idx.bad.length} unusable entr${idx.bad.length === 1 ? "y" : "ies"}: ${idx.bad.join(" | ")}. Expected ${RESOLUTIONS_SHAPE} — nothing was applied.`);
+  // A duplicate is NOT fatal — the later entry wins, which is the likelier intent after an edit — but it is said
+  // out loud, because discarding an operator's answer in silence is the failure this channel exists to remove.
+  if (idx.duplicates.length) {
+    const named = idx.duplicates.slice(0, 5).join(" | ");
+    const more = idx.duplicates.length > 5 ? ` | …and ${idx.duplicates.length - 5} more` : "";
+    process.stderr.write(`migrate.mjs: ⚠ --resolutions '${file}' answers the same question more than once: ${named}${more}. The LAST entry for each wins; delete the others so the file says one thing.\n`);
+  }
+  return idx;
+}
+// ONE question answered twice through the two key forms. Named, not silent: the pair wins and the id-keyed answer is
+// discarded, and there is no precedence worth guessing between two answers the operator wrote deliberately.
+function conflictingResolutionsNote(conflicts) {
+  const named = conflicts.map((c) => `${c.kind}:${c.item}`).slice(0, 5).join(" | ");
+  const more = conflicts.length > 5 ? ` | …and ${conflicts.length - 5} more` : "";
+  return `migrate.mjs: ⚠ ${conflicts.length} ⚠ Confirm question(s) are answered TWICE in --resolutions — once by \`id\` and once by \`kind\`+\`item\`: ${named}${more}. The \`kind\`+\`item\` entry is the one applied; the \`id\` one is DISCARDED. Delete whichever is stale so the file answers each question once.\n`;
+}
+// An answer matching no published question is REPORTED, never dropped: the operator believes it is answered.
+function unmatchedResolutionsNote(unmatched) {
+  const named = unmatched.map((u) => u.id || `${u.kind}:${u.item}`).slice(0, 5).join(" | ");
+  const more = unmatched.length > 5 ? ` | …and ${unmatched.length - 5} more` : "";
+  return `migrate.mjs: ⚠ ${unmatched.length} --resolutions entr${unmatched.length === 1 ? "y" : "ies"} matched NO ⚠ Confirm question this plan asks: ${named}${more}. Check kind/item against \`preflight[]\` in this output — an answer nobody asked for reaches no builder.\n`;
+}
+
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
 // stdout = the result JSON (parseable); diagnostics go to stderr. Bad input exits 1 with a clear message
 // (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
@@ -2214,6 +2255,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifyDigestFile = valueFlagArg(argv, "--verify-digest", "--verify-digest verify-digest.json", fail);
   if (verifyDigestFile && !verifyMode)
     fail("`--verify-digest <file>` only applies to `--verify` — it writes THAT run's scheduling digest. Add `--verify --built <file>`, or drop `--verify-digest`.");
+  // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
+  // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
+  // still needs a filed evidence record and a judge verdict.
+  // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
+  // to, and accepting the flag silently would leave a caller believing answers had been applied.
+  const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
+  if (resolutionsFile && !unitsMode)
+    fail("`--resolutions <file>` only applies to `--units` — it attaches the operator's answers to that run's ⚠ Confirm queue items. Add `--units`, or drop `--resolutions`.");
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
@@ -2280,7 +2329,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // silently "not checked", so nothing here may be guessed. Takes NO value (a MODE flag, like `--plan`), and is
   // therefore deliberately absent from the positional-argument exclusion above: adding it there would make
   // `--units <manifest>` lose its manifest and die with a misleading JSON error.
-  else if (unitsMode) output = JSON.stringify(pageUnits(result, checklistOpts(manifest)), null, 2) + "\n";
+  else if (unitsMode) {
+    const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: readResolutions(resolutionsFile, fail) });
+    output = JSON.stringify(units, null, 2) + "\n";
+    if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
+    if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
+  }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
