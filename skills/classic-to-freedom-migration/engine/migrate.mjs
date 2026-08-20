@@ -58,10 +58,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
-import { mapToFreedom, STANDARD_CLASSIC_METHODS, isScaffoldingMethod } from "./mapper.mjs";
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes } from "./designspec.mjs";
+  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -1061,16 +1061,25 @@ function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSche
 // shape, so the evidence must be there or absent by design, never forgotten. A non-array `schemas` is coerced
 // instead, because "no section chain" is already a first-class STRUCTURE issue that designspec renders with its
 // own cause + remedy — a gate reason, not an abort.
+// `rowActions` — one entry per `DataGridActiveRow…` item the section declares, `{ name, caption?, condition?, package? }`.
+// Supplied on the manifest for the same reason a resolved list-column read is: it is evidence the layer parse does not
+// produce yet (the section view `diff` is not folded), and the plan must be able to carry it the moment someone reads
+// it off the section. Unioned with anything the layers do produce, so the automated source supersedes nothing.
+function suppliedRowActions(section) {
+  const list = Array.isArray(section?.rowActions) ? section.rowActions : [];
+  return list.filter((ra) => ra && typeof ra === "object" && typeof ra.name === "string" && ra.name.trim());
+}
 function sectionInput(section, manifest) {
-  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null, listColumnIssue: null };
-  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null, listColumnIssue: null };
+  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
+  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
   if (!Object.hasOwn(section, "listColumns")) {
     throw new Error("object-shaped section requires listColumns evidence; use a bare array only for the legacy manifest shape");
   }
   const schemas = Array.isArray(section.schemas) ? section.schemas : [];
+  const rowActions = suppliedRowActions(section);
   const resolved = normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema);
-  if (resolved.error) return { schemas, resolvedListColumns: null, listColumnIssue: resolved.error };
-  return { schemas, resolvedListColumns: resolved, listColumnIssue: null };
+  if (resolved.error) return { schemas, resolvedListColumns: null, listColumnIssue: resolved.error, rowActions };
+  return { schemas, resolvedListColumns: resolved, listColumnIssue: null, rowActions };
 }
 
 // Provenance of the columns the plan will actually RENDER: the resolver's own `source` when its set is the one
@@ -1127,7 +1136,25 @@ function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns
   return notes;
 }
 
-function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false) {
+// Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
+// section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
+// EXPORTED because the layer arm is unreachable until the section view `diff` is folded — without a seam here the
+// precedence rule would ship with no way to test it.
+export function mergeRowActions(fromLayers = [], fromManifest = []) {
+  const byName = new Map();
+  for (const ra of [...fromLayers, ...fromManifest]) {
+    // A name is the element's identity, so a blank or non-string one is not a deliverable: it would reach the
+    // plan and the gate as an unnamed row nothing can match. Guarded HERE, not only at the manifest edge,
+    // because this is the exported seam both sources go through.
+    const name = typeof ra?.name === "string" ? ra.name.trim() : "";
+    // Store the TRIMMED name, not just key on it: the stored object's `name` is what reaches the Row actions table
+    // and `expect.rowActionNames`, and the gate matches element names EXACTLY — so a padded `" Foo "` deduped under
+    // `Foo` would still be published padded and fail against a built `Foo`, the very mismatch this guard exists for.
+    if (name && !byName.has(name)) byName.set(name, { ...ra, name });
+  }
+  return [...byName.values()];
+}
+function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false, suppliedRows = []) {
   if (!sectionSchemas.length && !resolvedListColumns && !listColumnReadRejected) return null;
   const quickFilters = unionQuickFilters(sectionSchemas);
   const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
@@ -1150,6 +1177,7 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,
     quickFilters,
+    rowActions: mergeRowActions(sectionSchemas.flatMap((l) => l.rowActions || []), suppliedRows),
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
   };
@@ -1686,7 +1714,16 @@ export function runMigration(manifest, opts = {}) {
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
   reportDynamicMappingProps(schemas, changeSet);
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
-  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null);
+  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
+  // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,
+  // so the list page is a deliverable on the same footing as the form page. Signals alone render only as prose, which
+  // no build step can consume. `null` when the run has no section (mini/child scope).
+  // THE run's entity, resolved once: the manifest's own value when it named a real one, else the entity the merged
+  // schema chain reports. Hoisted rather than repeated at each consumer, because the list page's data-source op and
+  // the result's `entity` must name the SAME object — a ChangeSet that binds PDS to a different schema than the plan
+  // states is a page built on the wrong table.
+  const resolvedEntity = manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
+  const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section, entityColumns: manifest.entityColumns });
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
@@ -1798,7 +1835,7 @@ export function runMigration(manifest, opts = {}) {
     typedPages.some((t) => t.cyclic || t.treeCyclic) ||
     !!(miniPage && (miniPage.cyclic || miniPage.treeCyclic));
   const out = {
-    entity: manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity,
+    entity: resolvedEntity,
     treeCyclic,   // internal: drives the acyclic-only child-page memo (diamond reuse)
     memoStats,    // internal: { hits, misses } — child/typed/mini fold cache hits across the whole tree
     gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal
@@ -1837,6 +1874,7 @@ export function runMigration(manifest, opts = {}) {
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
+    listChangeSet,   // the LIST page's own ChangeSet: positioned grid columns / quick filters / command-bar actions
     childPages,      // custom-detail child entities whose edit page is a recursive sub-migration
     typedPages,      // per-type Classic edit-page family (typed entity) — first-class scope + precedence trap
     miniPage,        // add-record mini page (quick-add form) folded from manifest.miniPageSchemas, or null
@@ -1874,7 +1912,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at `--units` because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…" }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
@@ -1939,7 +1977,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2000,6 +2038,47 @@ function outFileNote(label, outFile, notReady, verifyMode) {
   return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
 }
 
+// The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
+const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
+  " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`";
+// THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
+// absent ⇒ a stderr note and `null` (the normal first run, NOT an error) · unparseable ⇒ exit 1 · unusable
+// entries ⇒ exit 1, each named. Never let either failure degrade into the absent case.
+// Own fn so the CLI block gains no nesting, like `valueFlagArg` and `outFileNote` above.
+function readResolutions(file, fail) {
+  if (!file) return null;
+  if (!fs.existsSync(file)) {
+    process.stderr.write(`migrate.mjs: --resolutions '${file}' does not exist — no ⚠ Confirm answers applied; every item publishes \`resolution: null\`.\n`);
+    return null;
+  }
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (e) { fail(`cannot read --resolutions '${file}': ${e.message}. Expected ${RESOLUTIONS_SHAPE}.`); }
+  const idx = buildResolutionIndex(raw);
+  if (idx.bad.length) fail(`--resolutions '${file}' has ${idx.bad.length} unusable entr${idx.bad.length === 1 ? "y" : "ies"}: ${idx.bad.join(" | ")}. Expected ${RESOLUTIONS_SHAPE} — nothing was applied.`);
+  // A duplicate is NOT fatal — the later entry wins, which is the likelier intent after an edit — but it is said
+  // out loud, because discarding an operator's answer in silence is the failure this channel exists to remove.
+  if (idx.duplicates.length) {
+    const named = idx.duplicates.slice(0, 5).join(" | ");
+    const more = idx.duplicates.length > 5 ? ` | …and ${idx.duplicates.length - 5} more` : "";
+    process.stderr.write(`migrate.mjs: ⚠ --resolutions '${file}' answers the same question more than once: ${named}${more}. The LAST entry for each wins; delete the others so the file says one thing.\n`);
+  }
+  return idx;
+}
+// ONE question answered twice through the two key forms. Named, not silent: the pair wins and the id-keyed answer is
+// discarded, and there is no precedence worth guessing between two answers the operator wrote deliberately.
+function conflictingResolutionsNote(conflicts) {
+  const named = conflicts.map((c) => `${c.kind}:${c.item}`).slice(0, 5).join(" | ");
+  const more = conflicts.length > 5 ? ` | …and ${conflicts.length - 5} more` : "";
+  return `migrate.mjs: ⚠ ${conflicts.length} ⚠ Confirm question(s) are answered TWICE in --resolutions — once by \`id\` and once by \`kind\`+\`item\`: ${named}${more}. The \`kind\`+\`item\` entry is the one applied; the \`id\` one is DISCARDED. Delete whichever is stale so the file answers each question once.\n`;
+}
+// An answer matching no published question is REPORTED, never dropped: the operator believes it is answered.
+function unmatchedResolutionsNote(unmatched) {
+  const named = unmatched.map((u) => u.id || `${u.kind}:${u.item}`).slice(0, 5).join(" | ");
+  const more = unmatched.length > 5 ? ` | …and ${unmatched.length - 5} more` : "";
+  return `migrate.mjs: ⚠ ${unmatched.length} --resolutions entr${unmatched.length === 1 ? "y" : "ies"} matched NO ⚠ Confirm question this plan asks: ${named}${more}. Check kind/item against \`preflight[]\` in this output — an answer nobody asked for reaches no builder.\n`;
+}
+
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
 // stdout = the result JSON (parseable); diagnostics go to stderr. Bad input exits 1 with a clear message
 // (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
@@ -2034,6 +2113,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifyDigestFile = valueFlagArg(argv, "--verify-digest", "--verify-digest verify-digest.json", fail);
   if (verifyDigestFile && !verifyMode)
     fail("`--verify-digest <file>` only applies to `--verify` — it writes THAT run's scheduling digest. Add `--verify --built <file>`, or drop `--verify-digest`.");
+  // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
+  // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
+  // still needs a filed evidence record and a judge verdict.
+  // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
+  // to, and accepting the flag silently would leave a caller believing answers had been applied.
+  const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
+  if (resolutionsFile && !unitsMode)
+    fail("`--resolutions <file>` only applies to `--units` — it attaches the operator's answers to that run's ⚠ Confirm queue items. Add `--units`, or drop `--resolutions`.");
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
@@ -2100,7 +2187,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // silently "not checked", so nothing here may be guessed. Takes NO value (a MODE flag, like `--plan`), and is
   // therefore deliberately absent from the positional-argument exclusion above: adding it there would make
   // `--units <manifest>` lose its manifest and die with a misleading JSON error.
-  else if (unitsMode) output = JSON.stringify(pageUnits(result, checklistOpts(manifest)), null, 2) + "\n";
+  else if (unitsMode) {
+    const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: readResolutions(resolutionsFile, fail) });
+    output = JSON.stringify(units, null, 2) + "\n";
+    if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
+    if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
+  }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }

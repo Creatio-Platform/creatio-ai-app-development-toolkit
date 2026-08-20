@@ -10,6 +10,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -137,7 +139,8 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches"];
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
+  "resolutionsForUnit", "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -315,9 +318,13 @@ check("workflow: an unknown checkpoint key REFUSES the run before anything is bu
   /stopped: 'unknown-checkpoint-key'/.test(wfSrc)
     && /unknownCheckpointKeys\(CHECKPOINT_AFTER, schedulableKeys\)/.test(wfSrc)
     && /appUnitFor\(state\.targetPackage, state\.packageState\) \? \['app'\] : \[\]/.test(wfSrc));
+// The block is no longer interpolated inline: `buildPrompt` hands every rendered block to `composeBuildPrompt`,
+// which orders them. Same guarantee, checked on both halves of the new seam — the caller passes the findings block
+// and the composer interpolates it.
 check("workflow: operator findings reach the BUILD prompt, and are marked as the operator's instructions rather than untrusted stand text",
   /function findingsPromptBlock\(/.test(wfSrc) && /OPERATOR'S words, not stand-derived content/.test(wfSrc)
-    && /\$\{findingsPromptBlock\(unit\.key\)\}/.test(wfSrc));
+    && /findings: findingsPromptBlock\(unit\.key\)/.test(wfSrc)
+    && /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc));
 check("workflow: `checkFirst` is asked for ONLY at a checkpoint, and is sourced from the card's acceptance criteria including the negative ones",
   /function checkFirstPromptBlock\(/.test(wfSrc) && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unitKey\)/.test(wfSrc)
     && /NEGATIVE ones/.test(wfSrc));
@@ -496,8 +503,13 @@ check("behaviour analysis: completion requires a Merge that actually produced th
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
 
-check("workflow: the refs cache is invalidated on a DIFFERENT plan version or environment, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch",
-  /records BOTH \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
+check("workflow: the refs cache is invalidated on a DIFFERENT plan version, environment OR CLI HOST, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch, and a slice built through another machine's clio describes that machine's stand",
+  // Pins the SHIPPED wording, and the escaping is load-bearing: the phrase lives inside a template
+  // literal, so the backticks around each key are backslash-escaped in the source and the pattern has
+  // to match that. A pattern without the escape silently never matches, which is a pin that passes
+  // nothing while looking like it passes something.
+  /records ALL THREE of \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
+    && /\\`cliHost:\\` line whose value equals THIS machine's/.test(wfSrc)
     && /REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc)
     && /planVersion: \$\{state\.planVersion/.test(wfSrc));
 check("workflow: the index is written LAST, so a half-built cache cannot read as a finished one",
@@ -547,6 +559,172 @@ check("preflightToRun: an item with no id is dropped rather than dispatched as a
   () => (wf.preflightToRun(pfItems, [], []).every((p) => !!p.id)));
 check("preflightToRun: an empty or missing item list is an empty run, not a throw",
   () => (wf.preflightToRun([], ["a"], []).length === 0 && wf.preflightToRun(undefined, undefined, undefined).length === 0));
+
+/* ---- ENG-95503 — an operator's ANSWER reaching the BUILD UNIT'S INPUTS. This is the acceptance criterion the
+   ticket states last and the half the engine cannot cover: `--units` publishes the answer on the item that ASKED
+   it, and the question's `pageKey` is NOT always the key of the unit that BUILDS the deliverable. A list-page
+   question rides on `list` when that key is published and on `main` when it is withheld — so a build prompt that
+   filtered on the published `pageKey` would hand the list builder nothing on exactly the runs whose columns no
+   parse can recover, which is the case this whole channel exists for. ---- */
+const RES_BLOCK_FN = "function resolutionsBlockText";
+const RES_WRAPPER_FN = "function resolutionsPromptBlock";
+const resAns = { answer: "Name, Status, Owner, DueDate" };
+const KIND_LIST_COLS = "list-columns";
+const CHILD_KEY = "child:Ed";
+const resOnMain = [{ id: "main#confirm:list-columns:x", pageKey: "main", kind: KIND_LIST_COLS, resolution: resAns }];
+const resOnList = [{ id: "list#confirm:list-columns:x", pageKey: "list", kind: KIND_LIST_COLS, resolution: resAns }];
+check("ENG-95503 resolutionsForUnit: with the `list` key WITHHELD (empty section — the headline case), a list-column answer published on `main` reaches the `main` builder",
+  () => wf.resolutionsForUnit(resOnMain, "main", new Set(["main"])).length === 1);
+check("ENG-95503 resolutionsForUnit: with the `list` key PUBLISHED, the answer reaches the `list` builder and NOT `main` — the grid is built there, so the answer must arrive there",
+  () => wf.resolutionsForUnit(resOnList, "list", new Set(["main", "list"])).length === 1
+    && wf.resolutionsForUnit(resOnList, "main", new Set(["main", "list"])).length === 0);
+check("ENG-95503 resolutionsForUnit: THE CROSS CASE a naive `pageKey === unit.key` filter breaks — an answer published on `main` while a `list` unit EXISTS is still routed to the `list` builder, and is not also handed to `main`",
+  () => wf.resolutionsForUnit(resOnMain, "list", new Set(["main", "list"])).length === 1
+    && wf.resolutionsForUnit(resOnMain, "main", new Set(["main", "list"])).length === 0);
+check("ENG-95503 resolutionsForUnit: a NON-list answer keys on its own page — a child page's decision goes to that child's builder and nowhere else",
+  () => { const items = [{ id: "child:Ed#confirm:visibility-rule:F", pageKey: CHILD_KEY, kind: "visibility-rule", resolution: resAns }];
+    return wf.resolutionsForUnit(items, CHILD_KEY, new Set(["main", CHILD_KEY])).length === 1
+      && wf.resolutionsForUnit(items, "main", new Set(["main", CHILD_KEY])).length === 0; });
+check("ENG-95503 resolutionsForUnit: an UNANSWERED item is never handed to a builder — `resolution: null` and a blank answer both read as \"nobody answered\", so no prompt claims a decision that was not made",
+  () => wf.resolutionsForUnit([{ id: "i", pageKey: "main", kind: KIND_LIST_COLS, resolution: null }], "main", new Set(["main"])).length === 0
+    && wf.resolutionsForUnit([{ id: "i", pageKey: "main", kind: KIND_LIST_COLS, resolution: { answer: "" } }], "main", new Set(["main"])).length === 0);
+check("ENG-95503 resolutionsForUnit: a DUPLICATE published id is handed over once — `--units.preflight` does publish one id twice, and a builder must not be told the same decision twice",
+  () => wf.resolutionsForUnit([resOnMain[0], resOnMain[0]], "main", new Set(["main"])).length === 1);
+check("ENG-95503 resolutionsForUnit: empty/missing inputs are an empty result, not a throw — a run with no answers at all is the normal first run",
+  () => wf.resolutionsForUnit(undefined, "main", undefined).length === 0
+    && wf.resolutionsForUnit([], "main", new Set()).length === 0
+    && wf.resolutionsForUnit(resOnMain, "main", ["main"]).length === 1);
+/* AC4, EXECUTED — a resolved list-column set reaching a build unit's INPUTS. The two halves are run end to end here:
+   real queue items (the shape `--units.preflight` publishes, resolution object included) → `resolutionsForUnit`
+   routing → `resolutionsBlockText` rendering → and the assertion reads the OPERATOR'S OWN COLUMN TEXT out of the
+   string a build agent receives. Previously this hop was covered by source regexes only, which cannot show that the
+   answer survives the journey. */
+const AC4_COLUMNS = "Full name, Stage, Request, Responsible, Source, Modified on";
+const ac4Items = [
+  { id: "main#confirm:list-columns:no list columns resolved", pageKey: "main", kind: KIND_LIST_COLS,
+    item: "no list columns resolved",
+    resolution: { answer: AC4_COLUMNS, decidedBy: "operator", date: "2026-08-19" } },
+  { id: "main#confirm:visibility-rule:Name", pageKey: "main", kind: "visibility-rule", item: "Name", resolution: null },
+];
+const ac4Fence = (s) => `<<DATA ${s} DATA>>`;
+check("ENG-95503 AC4: the operator's resolved LIST-COLUMN SET reaches the build unit's inputs — routed to the `list` unit and rendered verbatim into the text that build agent receives",
+  () => { const mine = wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"]));
+    const text = wf.resolutionsBlockText(mine, ac4Fence);
+    return mine.length === 1 && text.includes(AC4_COLUMNS) && /ANSWER: /.test(text)
+      && text.includes("operator, 2026-08-19"); },
+  () => ({ routed: wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])).length,
+    text: wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(0, 300) }));
+check("ENG-95503 AC4: the same set reaches `main` when no `list` key is published — the empty-section run, whose columns no parse can recover, is the case this exists for",
+  () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "main", new Set(["main"])), ac4Fence).includes(AC4_COLUMNS),
+  () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "main", new Set(["main"])), ac4Fence).slice(0, 200));
+check("ENG-95503 AC4: an UNANSWERED item contributes nothing to the text — `resolution: null` must not render an empty ANSWER line a builder could act on",
+  () => { const onlyNull = ac4Items.filter((p) => p.resolution === null);
+    return wf.resolutionsBlockText(wf.resolutionsForUnit(onlyNull, "main", new Set(["main"])), ac4Fence) === ""; },
+  () => JSON.stringify(wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items.filter((p) => !p.resolution), "main", new Set(["main"])), ac4Fence)));
+check("ENG-95503 AC4: the stand-derived QUESTION text is passed through the caller's fencer while the ANSWER is not — the trust split is in the rendered string, not only in the prose about it",
+  () => { const text = wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
+    return text.includes("<<DATA no list columns resolved DATA>>") && !text.includes(`<<DATA ${AC4_COLUMNS}`); },
+  () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(0, 260));
+/* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
+   answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
+   deciding WHICH batches receive it is executable logic — and as an inline expression nothing referenced it, so a
+   gate stuck at '' would drop the instructions from every prompt with all three suites still green. */
+const NOTE = "ANSWERED-ITEMS-INSTRUCTIONS";
+check("ENG-95503: a preflight batch carrying an answered item RECEIVES the answered-items instructions, and a batch carrying none does not — the gate that decides this is executed here, not merely present in the source",
+  () => wf.answeredNoteFor([{ id: "a", resolution: { answer: "x" } }], NOTE) === NOTE
+    && wf.answeredNoteFor([{ id: "a", resolution: null }, { id: "b" }], NOTE) === ""
+    // one answered item among unanswered ones is still enough — that batch's unanswered items are the ones the
+    // instructions protect from being reported unresolvable
+    && wf.answeredNoteFor([{ id: "a", resolution: null }, { id: "b", resolution: { answer: "y" } }], NOTE) === NOTE,
+  () => ({ answered: wf.answeredNoteFor([{ id: "a", resolution: { answer: "x" } }], NOTE),
+    none: JSON.stringify(wf.answeredNoteFor([{ id: "a", resolution: null }], NOTE)) }));
+check("ENG-95503: the batch gate treats a blank answer as no answer, and empty/missing input as no answer — neither may pull in instructions about an answer that is not there",
+  () => wf.answeredNoteFor([{ id: "a", resolution: { answer: "" } }], NOTE) === ""
+    && wf.answeredNoteFor([], NOTE) === "" && wf.answeredNoteFor(undefined, NOTE) === "",
+  () => "blank/empty/missing must all yield ''");
+/* THE CALL SITE, EXECUTED. The regexes below prove the composer is CALLED with the resolutions block; they cannot
+   prove the block survives into the string the agent is handed — a reordering, a stray truncation, or a block
+   interpolated into a value that is not returned would all keep them green. So the assembly itself is run here with
+   a real routed resolution, and the operator's answer is read back out of the composed prompt. */
+const CBP_ANSWER = "Full name, Stage, Request, Responsible, Source, Modified on";
+const cbpBlock = wf.resolutionsBlockText(
+  wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
+const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md",
+  kindBlock: "KIND-BLOCK", repair: "", resolutions: cbpBlock, findings: "", checkFirst: "" };
+check("ENG-95503: the operator's answer survives into the COMPOSED build prompt — the assembly is executed and the answer text read back out, not matched in the source",
+  () => { const prompt = wf.composeBuildPrompt(cbpArgs);
+    return typeof prompt === "string" && prompt.includes(CBP_ANSWER)
+      && prompt.includes("ALREADY ANSWERED THESE") && prompt.includes("KIND-BLOCK")
+      && prompt.includes("RULES-BLOCK") && prompt.includes("BEHAVIOUR-BLOCK"); },
+  () => { const t = wf.composeBuildPrompt(cbpArgs); return { len: t.length, hasAnswer: t.includes(CBP_ANSWER), tail: t.slice(-160) }; });
+check("ENG-95503: an EMPTY resolutions block leaves the composed prompt intact and mentions no answer — the block is additive, so a page with no recorded decision is unaffected",
+  () => { const prompt = wf.composeBuildPrompt({ ...cbpArgs, resolutions: "" });
+    return !prompt.includes(CBP_ANSWER) && !prompt.includes("ALREADY ANSWERED THESE")
+      && prompt.includes("KIND-BLOCK") && prompt.includes("Return the schema."); },
+  () => wf.composeBuildPrompt({ ...cbpArgs, resolutions: "" }).slice(-200));
+check("ENG-95503: the composed prompt keeps the resolutions block BEFORE the closing instruction, so it is inside the prompt the agent reads rather than appended past its end",
+  () => { const prompt = wf.composeBuildPrompt(cbpArgs);
+    return prompt.indexOf(CBP_ANSWER) > 0 && prompt.indexOf(CBP_ANSWER) < prompt.indexOf("Return the schema."); },
+  () => { const t = wf.composeBuildPrompt(cbpArgs);
+    return { answerAt: t.indexOf(CBP_ANSWER), closingAt: t.indexOf("Return the schema.") }; });
+// The wiring that connects the executed helpers above to the real prompt. Pinned on the shipped source because the
+// wrapper reads run state and this host's fencer, neither of which the harness can supply.
+const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf("// OPERATOR FINDINGS from an earlier checkpoint"));
+check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
+  buildPromptSrc.length > 200
+    && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
+    && /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc),
+  () => ({ passesBlock: /resolutions: resolutionsPromptBlock/.test(buildPromptSrc),
+    composerOrders: /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc), sliceLen: buildPromptSrc.length }));
+check("ENG-95503 wiring: `resolutionsPromptBlock` reads the run's OWN queue items and published keys — a block fed from somewhere else would render answers the engine never matched to a question",
+  /function resolutionsPromptBlock\(unitKey\)\s*\{[\s\S]{0,400}?resolutionsForUnit\(state\.preflightItems, unitKey, new Set\(state\.unitKeys \|\| \[\]\)\)/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 260));
+check("ENG-95503 wiring: the answer text itself is interpolated into the block, and the block states the input-not-evidence rule the builder must not mistake",
+  () => { const b = wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 2600);
+    return /p\.resolution\.answer/.test(b) && /does not close any checklist row/.test(b) && /is the OPERATOR'S OWN/.test(b); },
+  () => wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 900));
+// THE TRUST BOUNDARY INSIDE THE BLOCK. `item` is stand-derived — it comes off the customer's schema — and the block
+// hands the builder both halves on one line, so the exemption has to be scoped to the ANSWER or it launders the
+// question text into an instruction for an agent holding stand write access. Preflight fences the same value.
+check("ENG-95503 wiring: the QUESTION half is fenced as untrusted stand data while only the ANSWER carries the instruction exemption — an unfenced `item` would launder a customer's schema string into a directive",
+  () => { const b = wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 2600);
+    // The renderer fences through the INJECTED fencer (it is imported standalone and cannot reach `dataFence`)…
+    return /const question = p\.item \? wrap\(p\.item\) :/.test(b)
+      && /question: \$\{question\}/.test(b)
+      && !/question: \$\{p\.item\}/.test(b)                      // …and never interpolates it raw
+      && /and only that text — IS an instruction to you/.test(b)  // the exemption names the answer alone
+      && /stays DATA under the rule above/.test(b)
+      // …and the ONE caller in the real run supplies this host's actual fencer, or the fencing is theoretical.
+      // Sliced, not regexed across nested parens: `[^)]*` stops at the `)` inside `new Set(…)`.
+      && (() => { const at = wfSrc.indexOf(RES_WRAPPER_FN);
+        const call = wfSrc.slice(at, at + 260);
+        return /resolutionsBlockText\(/.test(call) && /\bdataFence\b/.test(call); })(); },
+  () => ({ renderer: wfSrc.slice(wfSrc.indexOf("  const lines = mine.map"), wfSrc.indexOf("  const lines = mine.map") + 320),
+    caller: wfSrc.slice(wfSrc.indexOf(RES_WRAPPER_FN), wfSrc.indexOf(RES_WRAPPER_FN) + 260) }));
+check("ENG-95503 wiring: the answer's authority is BOUNDED — it may name what to build and may NOT redirect the agent, because an operator commonly assembles one by copying captions out of the Classic UI",
+  () => { const b = wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 2600);
+    return /may NOT redirect your work/.test(b) && /read another file/.test(b)
+      && /change the target package/.test(b) && /belongs in \\`proposals\\` unbuilt/.test(b); },
+  () => wfSrc.slice(wfSrc.indexOf("**The \\`ANSWER:\\` text"), wfSrc.indexOf("**The \\`ANSWER:\\` text") + 700));
+check("ENG-95503 wiring: `--units` is invoked WITH `--resolutions`, or the queue the executor reads carries no answers at all",
+  /const CLI_UNITS = cli\(`--units --resolutions \$\{q\(RESOLUTIONS_FILE\)\}`\)/.test(wfSrc)
+    && /RESOLUTIONS_FILE = input\.resolutionsFile \|\| `\$\{input\.outDir\}\/resolutions\.json`/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("const RESOLUTIONS_FILE"), wfSrc.indexOf("const RESOLUTIONS_FILE") + 260));
+check("ENG-95503 wiring: Preflight is told to build the record FROM an operator's answer and NOT to report it unresolved — otherwise an answered question is re-asked every run",
+  /THE OPERATOR ALREADY ANSWERED THIS/.test(wfSrc) && /Do NOT return it in \\`unresolved\\`/.test(wfSrc),
+  () => ({ hasMarker: /THE OPERATOR ALREADY ANSWERED THIS/.test(wfSrc), hasRule: /Do NOT return it in/.test(wfSrc) }));
+// MEASURED REGRESSION, pinned. On a live dry run the batches that contained an answered item reported their
+// UNANSWERED items as `unresolved` with the reason "No operator answer exists for this item", while the batch with
+// no answered item resolved all of its own from the stand as before. Explaining what to do WITH an answer, without
+// saying that an item WITHOUT one is unchanged, reads as "an answer is a precondition" — which would leave most
+// confirm rows open on any run where a single answer exists.
+check("ENG-95503 wiring: the answered-items block ALSO states that an item with NO operator answer is resolved from the stand exactly as before, and that a missing answer is not a reason to report `unresolved`",
+  /RESOLVED EXACTLY AS IT WOULD BE IF NO ANSWER FILE EXISTED AT ALL/.test(wfSrc)
+    && /NOT a reason to return it in \\`unresolved\\`/.test(wfSrc)
+    && /never a precondition for the rest/.test(wfSrc),
+  () => ({ hasBaseline: /RESOLVED EXACTLY AS IT WOULD BE/.test(wfSrc),
+    hasNotAReason: /NOT a reason to return it in/.test(wfSrc),
+    hasShortcut: /never a precondition/.test(wfSrc) }));
 // The helper deciding correctly is not the same as the run USING it. Pinned at the source level because the call
 // site closes over run state: without this, deleting the filter and passing the plan's whole list straight through
 // passed every case above — the helper stayed right while the run went back to re-deriving 107 answers.
@@ -790,6 +968,49 @@ const execSkill = readFileSync(fileURLToPath(new URL("../../skills/freedom-build
 check("executor SKILL.md: carries the untrusted-data rule across the delegation boundary (the parent skill states it; this side used not to mention it at all)",
   /untrusted DATA/i.test(execSkill) && /<<UNTRUSTED-DATA>>/.test(execSkill),
   () => execSkill.split("\n").filter((l) => /untrusted/i.test(l)).slice(0, 3).join("\n"));
+
+/* --- THE `list` UNIT'S BUILD PROMPT, pinned against the engine constants it DESCRIBES. The prompt is prose, so no
+   behavioural test reaches it, and prose that restates a constant is a second copy of it — free to disagree. A
+   prompt naming fewer `expect` fields than the unit publishes tells the builder to read fewer expectations than the
+   gate enforces; one naming fewer evidence surfaces than `listRow` makes leaves the unnamed rows unclosable. So
+   derive both facts from the constants rather than restating them, the way `carryBlock`'s data rule is pinned
+   above. --- */
+const LIST_EXPECT_FIELDS = LIST_EXPECT_KINDS.flatMap(([, countKey, namesKey]) => [countKey, namesKey]);
+// Matched with a WORD BOUNDARY, not as a bare substring: a plain `includes` is also satisfied by any longer name
+// that merely STARTS with a real field, so a prompt naming a superstring of one would read as naming the field.
+const namesField = (k) => new RegExp(String.raw`\b${k}\b`).test(wfSrc);
+check("workflow: the `list` unit's build prompt names EVERY field `LIST_EXPECT_KINDS` publishes — a prompt one pair short tells the builder to read fewer expectations than the gate enforces",
+  LIST_EXPECT_FIELDS.every(namesField),
+  () => ({ missing: LIST_EXPECT_FIELDS.filter((k) => !namesField(k)), all: LIST_EXPECT_FIELDS }));
+// WHICH rows close on a filed record is mechanical: `listRow` measures only the kinds in `LIST_ROW_VK` and every
+// other kind gets an evidence vk. A prompt naming fewer evidence surfaces than that leaves the unnamed ones with no
+// route to closed at all, so the `list` unit can never complete on a page that has one.
+const LIST_EVIDENCE_KINDS = LIST_EXPECT_KINDS.map(([kind]) => kind).filter((k) => !LIST_MEASURED_KINDS.includes(k));
+check("workflow: the build prompt names the ROW-ACTION rows as evidence rows too, not the command-bar rows alone — `LIST_ROW_VK` measures columns and filters only, so both of the other two kinds close on a filed record",
+  LIST_EVIDENCE_KINDS.join(",") === "action,rowaction"
+    && /command-bar action and row-action rows are evidence rows/.test(wfSrc)
+    && !/Only the command-bar action rows are evidence rows/.test(wfSrc),
+  () => ({ evidenceKinds: LIST_EVIDENCE_KINDS, measured: LIST_MEASURED_KINDS,
+    lines: wfSrc.split("\n").filter((l) => /evidence rows/.test(l)).map((l) => l.slice(0, 170)) }));
+
+/* --- THE REFERENCE DOC'S ⚠ Confirm LIST, pinned to the engine's closed kind set. The doc states the set is closed —
+   "a kind absent from a run's plan means the run had nothing to ask, never that the question went unasked" — which a
+   reader ACTS on: a kind the engine raises while the doc names a smaller set reads as spurious rather than as a
+   question they must answer. That makes the list load-bearing prose, so it is pinned like the prompt's above. --- */
+const specDoc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/page-design-spec.md", import.meta.url)), "utf8");
+const docKinds = [...new Set([...specDoc.matchAll(/\*\*\[(list-[a-z-]+)\]\*\*/g)].map((m) => m[1]))].sort((a, b) => a.localeCompare(b));
+const engineKinds = [...LIST_DECISION_KINDS].sort((a, b) => a.localeCompare(b));
+check("page-design-spec.md: documents EVERY `list-*` decision kind the engine can raise, and no kind it cannot — the doc calls the set closed, so a reader treats an undocumented item as spurious instead of answering it",
+  docKinds.join(",") === engineKinds.join(","),
+  () => ({ missingFromDoc: engineKinds.filter((k) => !docKinds.includes(k)),
+    notEmittedByEngine: docKinds.filter((k) => !engineKinds.includes(k)) }));
+// …and the registry has to BE the source. A push site that inlines the string would grow the emitted set without
+// growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
+const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
+check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
+  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 8,
+  () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
+    registrySize: LIST_DECISION_KINDS.length }));
 
 // --- blockedByParked: exact with the parent edge, honestly approximated without it. ---
 const parents = { "child:Leaf": "child:Mid", "child:Mid": "main", main: null, "child:Other": "main" };

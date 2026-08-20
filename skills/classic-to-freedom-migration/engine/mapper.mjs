@@ -1831,3 +1831,248 @@ function categorize(facts) {
   if (facts?.writesAttrs.length) return "set-values";
   return "unclassified";
 }
+
+// ===== LIST PAGE — the second ChangeSet ======================================================================
+// The list page is a build artifact on the same footing as the form page: its contents must be POSITIONED ops, not
+// prose, because the engine ChangeSet IS the mapping and a concern absent from a ChangeSet is not built.
+//
+// This builds from the analyzed `section` signals, NEVER through `mapToFreedom`: the section chain is deliberately
+// excluded from the effective page merge so a non-parsing section body cannot block the form-page plan.
+//
+// The op shapes are fixed by what a Freedom list page actually carries: columns are ONE `merge` on `DataTable`
+// holding `values.columns[]` (never one insert per column), each quick filter is its own `insert` under
+// `LeftFilterContainerInner`, and every column needs a matching `PDS_*` view-model attribute path.
+// EXPORTED because the gate must read the built page's columns from the SAME node this ChangeSet writes them to. A
+// list page carries more than one node with a `columns` array (a stock page ships `DataTable_Summaries` beside the
+// grid), so a page-wide search would accept another node's columns as this deliverable's.
+export const LIST_GRID = "DataTable";                // the starter list page's grid — holds `values.columns[]`
+const LIST_FILTER_PARENT = "LeftFilterContainerInner"; // where a quick filter is inserted (registry filter bar)
+// EXPORTED for the same reason as `LIST_GRID`: the gate must require the control this ChangeSet asks for.
+export const LIST_FILTER_TYPE = "crt.QuickFilter";
+const LIST_ITEMS_ATTR = "Items";                     // the grid's view-model collection attribute
+// `dataValueType` is a platform enum a Freedom column REQUIRES. Map ONLY values confirmed against a built page —
+// Text→1, Float→5, DateTime→7, Lookup→10. Any other classic type resolves to null and raises a decision item rather
+// than a guessed number: a wrong enum renders the column with the wrong editor, and a plausible guess is the kind of
+// defect review cannot catch. Extend this map from evidence, never by inferring the enum's order.
+const LIST_DATA_VALUE_TYPE = {
+  Text: 1, ShortText: 1, MediumText: 1, LongText: 1, MaxSizeText: 1, RichText: 1, SecureText: 1,
+  Float: 5, Float1: 5, Float2: 5, Float3: 5, Float4: 5, Float8: 5,
+  DateTime: 7,
+  Lookup: 10,
+};
+// A classic list column may be a display PATH (`Stage.Name`) — Freedom binds the LOOKUP column itself and renders
+// its display value, so the path collapses to its root. Reported, never silently rewritten.
+function listColumnParts(raw) {
+  const name = String(raw || "").trim();
+  const root = name.split(".")[0];
+  return { name, root, isPath: name !== root && root !== "" };
+}
+const pdsCode = (root) => `PDS_${root}`;
+// ONE grid column spec. `dataValueType` null ⇒ unresolved (see LIST_DATA_VALUE_TYPE) and the caller raises the
+// decision item. `id` is deliberately NOT minted here: the platform wants a GUID per column and the engine has no
+// stable source for one, so the builder assigns it — stated in the spec rather than filled with a fake.
+function listColumnSpec(raw, entityColumns) {
+  const { name, root, isPath } = listColumnParts(raw);
+  const classicType = entityColumns?.[root]?.type || null;
+  const dvt = classicType ? (LIST_DATA_VALUE_TYPE[classicType] ?? null) : null;
+  return {
+    name, root, isPath, code: pdsCode(root), caption: `#ResourceString(${pdsCode(root)})#`,
+    classicType, dataValueType: dvt, ref: entityColumns?.[root]?.ref || null,
+  };
+}
+// Freedom name for a classic quick filter. Deterministic (the same section always yields the same name) and read as
+// a filter on its column, matching the built page's `QuickFilterByDate` / `QuickFilterByOwner`.
+const FILTER_TYPE_MAP = { DATE: "date", DATETIME: "date", LOOKUP: "lookup", ENUM: "lookup" };
+// A Freedom element name must be UNIQUE on the page: two classic filters on ONE column (a period filter and a
+// due-week filter on the same date, say) would otherwise both derive `QuickFilterBy<Column>` — two page elements with
+// one name, which is an unbuildable diff, a doubled `filterAttributes` entry, and two checklist rows that one built
+// element closes. `taken` carries the names already issued, so a collision falls back to the CLASSIC filter name and,
+// only if that also collides, to the position.
+function listFilterSpec(qf, index, entityColumns, taken = new Set()) {
+  const column = qf?.column ? listColumnParts(qf.column).root : null;
+  const classicType = (qf?.type || (column ? entityColumns?.[column]?.type : null) || "").toUpperCase();
+  const clean = (v) => String(v || "").replace(/[^A-Za-z0-9]/g, "");
+  const positional = `Filter${index + 1}`;
+  const classic = clean(qf?.name);
+  const candidates = [
+    `QuickFilterBy${column || classic || positional}`,
+    `QuickFilterBy${classic || positional}`,
+    `QuickFilterBy${column || classic}${index + 1}`,
+  ];
+  const name = candidates.find((c) => !taken.has(c)) || `QuickFilterByFilter${index + 1}`;
+  taken.add(name);
+  return {
+    classicName: qf?.name || null,
+    name,
+    column, classicType: qf?.type || entityColumns?.[column]?.type || null,
+    quickFilterType: FILTER_TYPE_MAP[classicType] || null,
+    parentName: LIST_FILTER_PARENT, index: index + 1,
+  };
+}
+// The positioned ops. Columns first (one merge), then one insert per filter — the order a builder applies them.
+function listViewOps(columns, filters) {
+  const ops = [];
+  if (columns.length) {
+    ops.push({
+      operation: "merge", name: LIST_GRID,
+      values: { columns: columns.map((c) => ({ code: c.code, caption: c.caption, dataValueType: c.dataValueType })) },
+    });
+  }
+  // A filter op carries the facts the ENGINE can resolve — the element name, where it goes, which column it filters
+  // and which control renders it. It is NOT the component's complete config: a real `crt.QuickFilter` also carries
+  // nested filter config and a `from` binding, and the component is `compositeOnly` with no published composite
+  // recipe, so the builder completes it from `crt.QuickFilter`'s own documentation. That limit is published as
+  // `quickFilterConfigCompletedByBuilder` and stated in the spec's build notes — never as a key on the op itself,
+  // which a builder may apply verbatim and which a real Freedom diff op would not carry.
+  for (const f of filters) {
+    ops.push({
+      operation: "insert", name: f.name, parentName: f.parentName, propertyName: "items", index: f.index,
+      values: { type: LIST_FILTER_TYPE, quickFilterType: f.quickFilterType, filterColumn: f.column, targetAttribute: LIST_ITEMS_ATTR },
+    });
+  }
+  return ops;
+}
+// The view-model half. Without the `PDS_*` attribute paths the grid columns bind to nothing, so it is not optional
+// decoration. `filterAttributes` is a MERGE, and a merge REPLACES the whole array — the entries a starter list page
+// already registers (folder tree, predefined filter, tag lookup, search, filter builder) are not knowable here, so
+// publish only this ChangeSet's own contribution plus the instruction to re-list the rest. Without that instruction
+// search and the folder tree break on the built page, with no error.
+function listViewModelOps(columns, filters) {
+  const ops = [];
+  if (columns.length) {
+    const attrs = {};
+    for (const c of columns) attrs[c.code] = { modelConfig: { path: `PDS.${c.root}` } };
+    ops.push({ operation: "merge", path: ["attributes", LIST_ITEMS_ATTR, "viewModelConfig", "attributes"], values: attrs });
+  }
+  if (filters.length) {
+    // NO engine-only metadata on the op itself — a builder may apply these ops verbatim, and a real Freedom diff op
+    // carries no such key. That a merge replaces the array is published as `filterAttributes.mustRelistExisting`
+    // (and stated in the spec's build notes), where it is guidance rather than something that ships into a page body.
+    ops.push({
+      operation: "merge", path: ["attributes", LIST_ITEMS_ATTR, "modelConfig"],
+      values: { filterAttributes: filters.map((f) => ({ name: `${f.name}_${LIST_ITEMS_ATTR}`, loadOnChange: true })) },
+    });
+  }
+  return ops;
+}
+// A ROW ACTION is the fourth list-page surface: a per-row command, usually carrying a visibility/enablement condition
+// that must become Freedom state rather than an always-enabled button.
+//
+// INPUT CONTRACT — `section.rowActions`, one entry per `DataGridActiveRow…` item the section declares:
+//   { name, caption?, condition?, package? }
+// Empty until the section view `diff` is folded, so this surface is inert rather than absent: the moment entries
+// arrive they are positioned, rendered and gated with no further change here.
+//
+// NO OP IS EMITTED. Every other op in this ChangeSet reproduces a shape measured on a built Freedom page; no such
+// measurement exists for a row action, and a guessed `values`/`propertyName` would be indistinguishable from a
+// resolved one while being unbuildable. So the destination carries the FACTS (name, condition, the grid it belongs to)
+// and states that the control and its placement are resolved on-stand. Fill this in from a built page, never by
+// inference.
+function listRowActionSpec(ra) {
+  return {
+    name: ra?.name || null,
+    caption: ra?.caption || null,
+    condition: ra?.condition || null,
+    sourcePackage: ra?.package || null,
+    grid: LIST_GRID,
+    freedomControl: null,     // unresolved by design — see above
+  };
+}
+// THE CLOSED SET of questions a list page can raise. Exported as the ONE source of these strings because each is
+// three things at once: the plan's `[kind]` label, half the `<pageKey>#confirm:<kind>:<item>` evidence id an
+// executor reproduces verbatim, and a documented item in `references/page-design-spec.md`, whose "the set is
+// closed" claim a reader ACTS on — an undocumented ninth kind reads to them as spurious rather than as a question
+// they must answer. A test pins the doc against this object AND rejects a push site that inlines the string instead
+// of reading it from here, so the set cannot grow in one place only.
+export const LIST_DECISION_KIND = {
+  columns: "list-columns",
+  columnType: "list-column-type",
+  columnPath: "list-column-path",
+  filterType: "list-filter-type",
+  filterAttributes: "list-filter-attributes",
+  commandBar: "list-command-bar",
+  rowAction: "list-row-action",
+  process: "list-process",
+};
+export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
+// The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
+// Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
+// presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
+function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
+  const out = [];
+  if (!columns.length) {
+    out.push({ kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
+      reason: "the Freedom grid would ship empty — confirm the column set the list should show" });
+  }
+  for (const c of columns.filter((x) => x.dataValueType == null)) {
+    out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
+      reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });
+  }
+  for (const c of columns.filter((x) => x.isPath)) {
+    out.push({ kind: LIST_DECISION_KIND.columnPath, item: c.name,
+      reason: `a display path, bound as the lookup column \`${c.root}\` — confirm the list should show that lookup's display value` });
+  }
+  for (const f of filters.filter((x) => x.quickFilterType == null)) {
+    out.push({ kind: LIST_DECISION_KIND.filterType, item: f.classicName || f.name,
+      reason: `classic filter type ${f.classicType || "UNKNOWN"} maps to no known \`quickFilterType\` — resolve which Freedom control renders it` });
+  }
+  // The `filterAttributes` merge REPLACES the whole array, so every entry the starter list page already registers has
+  // to be re-listed alongside this ChangeSet's contribution. That is an on-stand query with a recordable answer (read
+  // the starter page's `Items` model config), which is what makes it a ⚠ Confirm item rather than a note: an entry
+  // omitted here disables search, the folder tree or the filter builder with no error anywhere.
+  if (filters.length) {
+    // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
+    // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
+    out.push({ kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
+      reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` });
+  }
+  // ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
+  // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
+  if (section) {
+    const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
+    out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
+      reason: "only `getSectionActions()` items are read; a button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar" });
+  }
+  for (const ra of rowActions) {
+    const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
+    out.push({ kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
+      reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` });
+  }
+  if (section?.processLaunch) {
+    out.push({ kind: LIST_DECISION_KIND.process, item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
+      reason: "the Classic section launches it — wire it as a list-page run-process action" });
+  }
+  return out;
+}
+// THE LIST-PAGE CHANGESET. `null` when the run has no section at all (a mini/child page migration): a list page
+// that does not exist must not appear as a build deliverable.
+export function buildListChangeSet({ entity, section, entityColumns } = {}) {
+  if (!section) return null;
+  // `"?"` is the schema parser's stub for "the merged chain named no entity" — a name, not an entity. It must not
+  // reach an op: `entitySchemaName: "?"` reads as configured and binds the grid's data source to a schema that does
+  // not exist, which is worse than emitting no op at all. So a stub is absent, exactly as `undefined` is.
+  const boundEntity = entity && entity !== "?" ? entity : null;
+  const columns = (section.listColumns || []).map((c) => listColumnSpec(c, entityColumns));
+  const takenFilterNames = new Set();
+  const filters = (section.quickFilters || []).map((qf, i) => listFilterSpec(qf, i, entityColumns, takenFilterNames));
+  const actions = (section.sectionActions || []).map((a) => ({ name: a, source: "getSectionActions" }));
+  const rowActions = (section.rowActions || []).map(listRowActionSpec);
+  return {
+    entity: boundEntity,
+    columns, quickFilters: filters, commandBarActions: actions, rowActions,
+    listViewConfigDiff: listViewOps(columns, filters),
+    listViewModelConfigDiff: listViewModelOps(columns, filters),
+    listModelConfigDiff: boundEntity ? [{ operation: "merge", path: ["dataSources", "PDS", "config"], values: { entitySchemaName: boundEntity } }] : [],
+    // The five entries a starter list page already registers are NOT knowable here — see `listViewModelOps`.
+    filterAttributes: {
+      contributed: filters.map((f) => `${f.name}_${LIST_ITEMS_ATTR}`),
+      mustRelistExisting: filters.length > 0,
+    },
+    columnIdsAssignedByBuilder: columns.length > 0,
+    // The two places this ChangeSet is deliberately PARTIAL, published so a build agent cannot mistake it for a
+    // finished page body: a grid column still needs its GUID `id` (above), and a quick-filter op carries placement
+    // facts only — the component's own nested config comes from `crt.QuickFilter`'s documentation.
+    quickFilterConfigCompletedByBuilder: filters.length > 0,
+    needsDecision: listNeedsDecision(section, columns, filters, actions, rowActions),
+  };
+}
