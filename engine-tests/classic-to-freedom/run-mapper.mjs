@@ -7364,6 +7364,41 @@ try {
     () => rowOf(agree));
 }
 
+/* ================================================================================================
+   ENG-95471 — the `#quality-gates` row END TO END, so the builder-facing prompt's claim is backed by
+   the engine rather than asserted. The prompt tells a builder that `ran: false` files `false` and its
+   unit STAYS OPEN. Nothing on the executor side can prove that: `blockedItems` never reaches
+   `isUnitOpen`, so the guarantee lives here, in what `--verify` computes for the page.
+   Three recordings of ONE id, one assertion each: omitted ⇒ unverified, `false` ⇒ MISSING, complete
+   record + judge ⇒ closed. In every open case the page must NOT be complete.
+   ================================================================================================== */
+{
+  const qgRes = { changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [], needsDecision: [] }, signals: {} };
+  const qgPage = { viewConfig: { items: [] }, parentSchemaName: "T", schemaUId: "22222222-2222-4222-8222-222222222222" };
+  const qgId = "main#quality-gates";
+  const qgRun = (evidence, judge) => renderVerify(qgRes, {}, { pages: { main: qgPage }, evidence, judge });
+  const qgRow = (r) => (r.markdown.split("\n").find((l) => /creatio-ui-guidelines/.test(l)) || "");
+
+  const omitted = qgRun({}, {});
+  check("ENG-95471: an OMITTED quality-gates record reads ⚠ unverified — nobody looked — and the page is not complete",
+    () => /⚠/.test(qgRow(omitted)) && omitted.unverified >= 1 && omitted.complete !== true,
+    () => ({ row: qgRow(omitted), unverified: omitted.unverified, complete: omitted.complete }));
+
+  const filedFalse = qgRun({ [qgId]: false }, {});
+  check("ENG-95471: `ran: false` filed as `false` is a hard ❌ MISSING and the page STAYS OPEN — this is what the builder prompt's 'your unit stays open' rests on",
+    () => /❌ MISSING/.test(qgRow(filedFalse)) && filedFalse.missing >= 1 && filedFalse.complete !== true,
+    () => ({ row: qgRow(filedFalse), missing: filedFalse.missing, complete: filedFalse.complete }));
+
+  check("ENG-95471: `false` and OMITTED are DIFFERENT verdicts on the same id — one is 'checked, not done', the other 'nobody looked', and they route different repairs",
+    () => qgRow(filedFalse) !== qgRow(omitted) && /❌/.test(qgRow(filedFalse)) && /⚠/.test(qgRow(omitted)),
+    () => ({ false: qgRow(filedFalse), omitted: qgRow(omitted) }));
+
+  const closed = qgRun({ [qgId]: { referencePage: "AccountPage", components: ["crt.Input"] } },
+    { [qgId]: { convincing: true, why: "prop-level diff against AccountPage" } });
+  check("ENG-95471: a complete record PLUS a judge verdict is the only thing that closes the quality-gates row — no false positive on the honest path",
+    () => /✅/.test(qgRow(closed)) && !/❌|⚠/.test(qgRow(closed)),
+    () => qgRow(closed));
+}
 
 // ---------------------------------------------------------------------------
 // ENG-95472 — the PER-UNIT slice of the build queue and the built file.
