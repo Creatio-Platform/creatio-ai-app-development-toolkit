@@ -191,6 +191,113 @@ check("C2: merge introduces contentType (5=lookup) on an existing item — carri
    still not mirrored, so nothing here asserts anything about the order operations run in. ---- */
 const realBody = (diff) => `define("T",[],function(){return{entitySchemaName:"X",diff:[${diff}]};});`;
 const realRun = (...ops) => mergeHierarchy([parseSchema(realBody(ops.join(",")), "T")]);
+// Two LAYERS, which is the realistic shape and the only one that can express "a later schema changes this".
+// Within ONE layer the runtime runs all merges BEFORE any insert, so a single-layer insert+merge pair tests
+// array-order semantics that the runtime does not have — see the group-ordering pins below.
+const realRun2 = (opsA, opsB) => mergeHierarchy([parseSchema(realBody(opsA), "A"), parseSchema(realBody(opsB), "B")]);
+
+/* ---- ENG-95412: aliases ----
+   `saveAlias` (json-applier.js L554-566) keys the table by the ALIAS name and stores the REAL item name on it, which
+   is what lets a later op target the element by the alias. It also carries `excludeOperations` (a whole op on that
+   name becomes a no-op, L601-608) and `excludeProperties` (individual merge keys never apply, L583-591). The table
+   survives every layer — `applyDiff` resets it only on an empty source object, i.e. once.
+   HONEST LIMIT: no `alias` appears anywhere in the harvested corpus, so all of this is synthetic. */
+const aliasResolved = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Orig"},alias:{name:"OldFld"}}`,
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.ViaAlias"}}`);
+check("ENG-95412: a later op targeting the ALIAS name reaches the real element — the table is keyed by the alias and carries the real name, so `OldFld` resolves to `RealFld`",
+  aliasResolved.items.find((i) => i.name === "RealFld")?.caption === "Resources.Strings.ViaAlias"
+  && !aliasResolved.items.some((i) => i.name === "OldFld"),
+  () => aliasResolved.items.map((i) => `${i.name}:${i.caption}`));
+// Control: WITHOUT the alias the same merge finds nothing and produces the engine-only stub instead. Without this,
+// "resolution works" could be satisfied by resolving every unknown name to something.
+const aliasAbsent = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Orig"}}`,
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.ViaAlias"}}`);
+check("ENG-95412: with NO alias registered the same merge does NOT reach the element — it falls through to the engine-only stub, so resolution is driven by the table and not by name guessing",
+  aliasAbsent.items.find((i) => i.name === "RealFld")?.caption === "Resources.Strings.Orig"
+  && aliasAbsent.items.find((i) => i.name === "OldFld")?.engineOnlyStub === true,
+  () => aliasAbsent.items.map((i) => `${i.name}:${i.caption}:stub=${i.engineOnlyStub}`));
+const aliasExclOp = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"},alias:{name:"OldFld",excludeOperations:["remove"]}}`,
+  `{operation:"remove",name:"OldFld"}`);
+check("ENG-95412: an alias `excludeOperations` entry makes that operation a no-op — the remove never runs and the element is not tombstoned",
+  !!aliasExclOp.items.find((i) => i.name === "RealFld") && !aliasExclOp.removed.some((r) => r.name === "RealFld"),
+  () => ({ items: aliasExclOp.items.map((i) => i.name), removed: aliasExclOp.removed.map((r) => r.name) }));
+// The runtime's carve-out: a `remove` carrying `properties` is a DIFFERENT operation and is never excluded.
+const aliasExclCarveOut = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"},alias:{name:"OldFld",excludeOperations:["remove"]}}`,
+  `{operation:"remove",name:"OldFld",properties:["caption"]}`);
+check("ENG-95412: `excludeOperations:['remove']` does NOT block a `remove` carrying `properties` — the runtime carves that out explicitly, because the two forms are different operations",
+  aliasExclCarveOut.items.find((i) => i.name === "RealFld")?.caption === null,
+  () => aliasExclCarveOut.items.find((i) => i.name === "RealFld"));
+const aliasExclProp = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Keep"},alias:{name:"OldFld",excludeProperties:["caption"]}}`,
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.Blocked",tip:{content:{bindTo:"Resources.Strings.T"}}}}`);
+const aep = aliasExclProp.items.find((i) => i.name === "RealFld");
+check("ENG-95412: an alias `excludeProperties` entry drops just that key from the merge — the caption is held back while a non-excluded property on the same op still applies (both arms, or 'excluded' could mean 'merge does nothing')",
+  aep?.caption === "Resources.Strings.Keep" && aep?.tip === "Resources.Strings.T",
+  () => aep);
+
+/* ---- ENG-95412: a layer's diff runs in the runtime's BUCKET order, not in array order ----
+   `applyOperations` (json-applier.js L299-306): all `merge`, then the position group, then remove-properties, then
+   `set`. Pinned in both directions, because "the merge did nothing" is also what a broken merge looks like.
+   HONEST LIMIT: no layer in the harvested corpus (130 schema bodies, 5 real pages) contains an `insert X` + `merge X`
+   pair, so this behaviour is synthetic — validated against json-applier.js, not observed on a page. */
+const sameLayerMerge = realRun(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Ins"}}`,
+  `{operation:"merge",name:"Fld",values:{caption:"Resources.Strings.Merged"}}`);
+check("ENG-95412: within ONE layer a `merge` runs BEFORE the `insert` that defines its target, so the merge is a NO-OP — replaying in array order applied it and reported a caption the page does not have",
+  sameLayerMerge.items.find((i) => i.name === "Fld")?.caption === "Resources.Strings.Ins",
+  () => sameLayerMerge.items.find((i) => i.name === "Fld"));
+const crossLayerMerge = realRun2(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Ins"}}`,
+  `{operation:"merge",name:"Fld",values:{caption:"Resources.Strings.Merged"}}`);
+check("ENG-95412: the SAME pair across two layers DOES apply — bucket ordering is per layer, so this proves merges still work rather than having been switched off",
+  crossLayerMerge.items.find((i) => i.name === "Fld")?.caption === "Resources.Strings.Merged",
+  () => crossLayerMerge.items.find((i) => i.name === "Fld"));
+// `set` is the LAST bucket, so its array position is irrelevant: written first, it still lands after the merge.
+const setLastRun = realRun2(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  [`{operation:"set",name:"Box",values:{itemType:7}}`,
+   `{operation:"merge",name:"Box",values:{caption:"Resources.Strings.Merged"}}`].join(","));
+check("ENG-95412: `set` is the LAST bucket — written BEFORE the merge in the array it still runs after it, so the merge's caption is wiped by the wholesale replace",
+  setLastRun.items.find((i) => i.name === "Box")?.caption === null,
+  () => setLastRun.items.find((i) => i.name === "Box"));
+
+/* ---- ENG-95412: the content properties follow the same key-presence rule as the identity ones ----
+   The runtime writes whatever `values` carries, `""` and `false` included (json-applier.js L702-705). A truthiness
+   guard here dropped a layer that deliberately BLANKS a caption or UNBINDS a control, so the plan kept reporting a
+   caption the page no longer shows. Both arms are pinned: the blanking case must apply, the untouched case must not. */
+const blanked = realRun2(
+  `{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"}}`,
+  `{operation:"merge",name:"F",values:{caption:""}}`);
+const blankedItem = blanked.items.find((i) => i.name === "F");
+check("ENG-95412: a merge that RESTATES `caption` as empty blanks it — presence decides for the content properties too, and the base caption is not kept",
+  blankedItem?.caption === null && blankedItem?.bindTo === "Name",
+  () => blankedItem);
+const untouchedCap = realRun2(
+  `{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"}}`,
+  `{operation:"merge",name:"F",values:{visible:false}}`);
+check("ENG-95412: a merge that does NOT carry `caption` leaves it intact — otherwise 'presence decides' would just mean 'always overwrite'",
+  untouchedCap.items.find((i) => i.name === "F")?.caption === "Resources.Strings.Cap",
+  () => untouchedCap.items.find((i) => i.name === "F"));
+
+/* ---- ENG-95412: a merge onto an item nothing defined is an ENGINE-ONLY stub, and now says so ----
+   The runtime finds no item, returns false (json-applier.js L688) and `applyOperations` throws that away (L301) —
+   a silent no-op. The engine records a stub instead, deliberately, because a merge onto nothing means a missing base
+   seed or schemas out of order. Unmarked, though, every consumer reads that stub as an element on the rendered page. */
+const stubRun = realRun(`{operation:"merge",name:"Ghost",values:{bindTo:"Name"}}`);
+const ghost = stubRun.items.find((i) => i.name === "Ghost");
+check("ENG-95412: a merge-onto-missing stub is flagged `engineOnlyStub` and its warning states the runtime does nothing there — the stub is a diagnostic, not a claim about the page",
+  ghost?.engineOnlyStub === true
+  && (stubRun.warnings || []).some((w) => w.name === "Ghost" && /runtime silently does nothing/.test(w.hint || "")),
+  () => ({ ghost, warnings: (stubRun.warnings || []).map((w) => w.hint) }));
+check("ENG-95412: an ordinary insert is NOT flagged as an engine-only stub — the marker has to distinguish, not decorate everything",
+  realRun(`{operation:"insert",name:"Real",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`)
+    .items.find((i) => i.name === "Real")?.engineOnlyStub === false,
+  () => realRun(`{operation:"insert",name:"Real",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`).items);
+
 
 // `remove` + `properties` deletes the NAMED keys and KEEPS the element (json-applier.js L726-730). The engine used
 // to tombstone it, so an element the runtime still renders went missing from the plan entirely — the one
@@ -205,7 +312,7 @@ check("ENG-95412: `remove` with a `properties` array clears ONLY those keys and 
   () => ({ item: rmPropsItem, removed: rmProps.removed.map((r) => r.name) }));
 // The control arm: a plain `remove` must still tombstone. Without it, "keeps the element" could be implemented by
 // making every remove a no-op.
-const rmPlain = realRun(
+const rmPlain = realRun2(
   `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
   `{operation:"remove",name:"Fld"}`);
 check("ENG-95412: a plain `remove` (no `properties`) still tombstones the element — the two forms stay distinct operations",
@@ -227,9 +334,11 @@ check("ENG-95412: a child dropped by `set` is structural cleanup, not a client d
   !setRun.removed.some((r) => r.name === "Kid"),
   () => setRun.removed.map((r) => r.name));
 // The control arm that gives `set` its meaning: the SAME values via `merge` must keep both the caption and the child.
-const mergeControl = realRun(
-  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
-  `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`,
+// Two layers on purpose: in ONE layer the merge bucket runs before the inserts, so the merge would be a no-op and
+// this control would pass without contrasting anything with `set` — the exact tautology it exists to rule out.
+const mergeControl = realRun2(
+  [`{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+   `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`].join(","),
   `{operation:"merge",name:"Box",values:{itemType:7}}`);
 // Compared against a run with NO third op rather than against a literal: whatever normalization the engine applies
 // to a caption resource key is a separate concern, and hard-coding the normalized form here would make this test

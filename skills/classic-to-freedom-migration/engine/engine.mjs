@@ -1078,6 +1078,14 @@ function normalizeDiffOp(op, i) {
     // and KEEPS the element (core `json-applier.js` L726-730). Carried here because dropping it made the engine
     // tombstone an element the runtime still renders — the one divergence in this family that HIDES real UI.
     properties: Array.isArray(op.properties) ? op.properties.filter(isStr) : null,
+    // An `insert` may register an ALIAS (a top-level op property, not inside `values`): core `json-applier.js` calls
+    // `saveAlias` from `insert` (L629). A later op may then target the element by the alias name, and the alias can
+    // also EXCLUDE whole operations or individual merge properties from ever applying (L583-591, L601-608).
+    alias: op.alias && isStr(op.alias.name) ? {
+      name: op.alias.name,
+      excludeProperties: Array.isArray(op.alias.excludeProperties) ? op.alias.excludeProperties.filter(isStr) : [],
+      excludeOperations: Array.isArray(op.alias.excludeOperations) ? op.alias.excludeOperations.filter(isStr) : [],
+    } : null,
     // The body STATED a kind and this engine could not resolve it to a number (a member `AST_VIEW_ITEM_TYPE`
     // lacks, or a non-static expression). Distinct from "stated no kind": the remedy is to extend the engine's
     // pinned table, not to go read the page.
@@ -1207,9 +1215,42 @@ function makeItem(op, seed, pkg) {
 }
 
 // diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
-function replayDiffOp(op, items, { seed, pkg }, warnings) {
-  const cur = items.get(op.name);
-  if (op.operation === "insert") { items.set(op.name, makeItem(op, seed, pkg)); return; }
+// ALIASES. `saveAlias` (core `json-applier.js` L554-566) keys the table by the ALIAS's declared name and stores the
+// REAL item name on it — an inversion worth stating, because it is what lets a later op refer to the element by the
+// alias. Two further effects: `excludeOperations` makes a whole operation on that name a no-op (L601-608, with the
+// carve-out that a `remove` carrying `properties` is never excluded), and `excludeProperties` drops individual keys
+// from a merge (L583-591). The table is singleton state that survives every layer — `applyDiff` resets it only when
+// the source object is empty (L793-795), i.e. once — so an alias registered in layer 1 keeps acting in layer 9.
+// No `alias` appears in the harvested corpus (130 schema bodies, 5 real pages), so this path is synthetic.
+function saveAlias(aliases, op) {
+  if (op.alias) aliases.set(op.alias.name, { ...op.alias, realName: op.name });
+}
+function aliasFor(aliases, name) { return aliases.get(name) || null; }
+// The item an op targets, resolving the alias when the literal name is not in the map.
+function resolveTarget(items, aliases, name) {
+  if (items.has(name)) return name;
+  const a = aliasFor(aliases, name);
+  return a && items.has(a.realName) ? a.realName : name;
+}
+function isExcludedByAlias(aliases, op) {
+  if (op.operation === "remove" && op.properties?.length) return false; // never excluded — runtime carve-out
+  const a = aliasFor(aliases, op.name);
+  return !!a && a.excludeOperations.includes(op.operation);
+}
+
+function replayDiffOp(op, items, { seed, pkg, aliases }, warnings) {
+  const target = aliases ? resolveTarget(items, aliases, op.name) : op.name;
+  const cur = items.get(target);
+  if (op.operation === "insert") {
+    if (aliases) saveAlias(aliases, op);
+    items.set(op.name, makeItem(op, seed, pkg));
+    return;
+  }
+  // An aliased op works on the REAL item, so every branch below must see the resolved name, not the written one.
+  // The excluded-property set is captured HERE, while the written name is still available: the table is keyed by the
+  // ALIAS name, so looking it up after the rewrite would find nothing.
+  const aliasExcluded = aliases ? (aliasFor(aliases, op.name)?.excludeProperties || []) : [];
+  if (target !== op.name || aliasExcluded.length) op = { ...op, name: target, aliasExcluded };
   if (op.operation === "set") return replaySet(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
@@ -1232,6 +1273,7 @@ function replayDiffOp(op, items, { seed, pkg }, warnings) {
 function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
   for (const k of ["contentType", "itemType", "dataValueType"]) {
     if (!op.valuesKeys?.has(k)) continue;
+    if (op.aliasExcluded?.includes(k)) continue;   // the alias forbids this key (json-applier.js L583-591)
     if (k === "itemType" && cur.itemType != null && op.itemType == null) {
       warnings.push({ op: opName, name: op.name, schema: pkg,
         hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
@@ -1248,13 +1290,25 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
     // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
     // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
-    items.set(op.name, makeItem(op, seed, pkg));
-    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
+    // ENGINE-ONLY, and now marked as such. The runtime does NOT do this: `JsonApplier.merge` finds no item, returns
+    // `false` (core `json-applier.js` L688) and `applyOperations` discards that return value (L301) — a silent no-op.
+    // The stub is a deliberate diagnostic (a merge onto nothing means a missing base seed or schemas out of order),
+    // but without the flag a consumer reads it as an element that is actually on the rendered page.
+    const stub = makeItem(op, seed, pkg);
+    stub.engineOnlyStub = true;
+    items.set(op.name, stub);
+    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
     return;
   }
   mergeIdentityProps(op, cur, pkg, warnings);
   for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
-  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
+  // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
+  // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
+  // caption or UNBINDS a control — the engine then reported a caption the page no longer shows. Same rule as
+  // `mergeIdentityProps`, so content and identity properties stop behaving differently for no reason.
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
+    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
+  }
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
   if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
@@ -1467,12 +1521,46 @@ function mergeModules(L, seed, components) {
 
 // Replay each tagged schema (seed-template first, then the page's own schemas) into the merge stores: diff ops
 // into `items`, and the keyed rule/detail/method/module blocks into their maps. Extracted for Sonar CC 15.
+// A layer's `diff` is NOT applied in array order by the runtime. `applyOperations` (core `json-applier.js`
+// L299-306) splits it into buckets and runs them in a fixed sequence: all `merge`, then the position group
+// (removes — move sources included — then the inserts, `applyChangePositionOperationGroup` L329-364), then
+// `remove`-with-`properties`, then `set`. The headline consequence: a layer that does `insert X` then `merge X`
+// has its merge applied to NOTHING at runtime, because the merge bucket runs before X exists. Replaying in array
+// order applied it, so the engine reported properties the page does not have.
+//
+// TWO runtime behaviours deliberately NOT copied here, both recorded in engine-internals.md:
+//   * `filterMoveOperation` (L313-320) drops a `move` whose name also appears in the SAME layer's removes, leaving
+//     the element removed. This engine keeps the classic reposition idiom instead (a move onto a tombstone
+//     RESURRECTS it) because a real page motivated it — Product's IsArchive/"Inactive" checkbox — and dropping the
+//     move there made a displayed field vanish. Neither reading can be settled without a fixture for that page, so
+//     the safer of the two is kept. No layer in the harvested corpus contains such a pair, so nothing observed
+//     depends on the choice.
+//   * insert ordering WITHIN the bucket (by parent-chain depth, then `index`, L359/L513-545) is not reproduced;
+//     sibling order is carried by the item's own `order`, and the projections do not promise array position.
+// An unrecognized operation name lands in no bucket and is dropped — which is what the runtime's empty `default:`
+// (L244) does too, so that arm needed no special case.
+const DIFF_OP_BUCKETS = ["merge", "remove", "insert", "move", "removeProperties", "set"];
+function splitDiffOps(diff, aliases) {
+  const b = { merge: [], remove: [], insert: [], move: [], removeProperties: [], set: [] };
+  for (const op of diff || []) {
+    if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
+    // Checked at SPLIT time, as the runtime does (`getSplittedOperations` L220-222), so the table an op is tested
+    // against holds only aliases registered by EARLIER layers — an alias cannot exclude an op in its own layer.
+    if (aliases && isExcludedByAlias(aliases, op)) continue;
+    if (op.operation === "remove") { (op.properties?.length ? b.removeProperties : b.remove).push(op); continue; }
+    if (b[op.operation]) b[op.operation].push(op);
+  }
+  return b;
+}
+
 function replayTagged(tagged, stores, warnings) {
   const { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps } = stores;
+  // Singleton across the whole fold, matching the runtime's one-reset lifetime.
+  const aliases = new Map();
   for (const { L, seed } of tagged) {
-    for (const op of L.diff) {
-      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
+    const buckets = splitDiffOps(L.diff, aliases);
+    for (const bucket of DIFF_OP_BUCKETS) {
+      for (const op of buckets[bucket]) replayDiffOp(op, items, { seed, pkg: L.pkg, aliases }, warnings);
     }
     mergeRuleBlocks(L, seed, rules);
     mergeDetails(L, seed, details);
@@ -1628,6 +1716,9 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // `?? null` because an item built from an op whose `itemType` key was absent used to project as `undefined`,
       // which no consumer could tell from "the key was there and we could not read it".
       itemType: i.itemType ?? null, itemTypeUnresolved: !!i.itemTypeUnresolved,
+      // `engineOnlyStub` marks an item the RUNTIME does not have (see `replayMerge`). It must reach consumers, or
+      // the flag exists only inside the fold and every reader still treats the stub as a rendered element.
+      engineOnlyStub: !!i.engineOnlyStub,
       contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
       visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),

@@ -17,7 +17,12 @@ export const makeOp = (o) => ({
   isTab: !!o.isTab, order: o.order ?? null,
   layout: o.layout ?? null, tip: o.tip ?? null, hint: o.hint ?? null, generator: o.generator ?? null, visible: o.visible ?? null,
   caption: o.caption ?? null,
-  valuesKeys: new Set(Object.keys(o).filter((k) => VALUE_KEYS.has(k))),
+  // IDEMPOTENT, and it has to be: tests call `makeOp` themselves (imported as `di`) and then hand the result to
+  // `makeSchema`, which maps `makeOp` over the diff AGAIN. Every other field here survives that double pass because
+  // `o.x ?? null` twice equals once — `valuesKeys` does NOT, because on the second pass `o` is a fully normalized op
+  // with EVERY key present, so recomputing gave all eleven and a `merge` then cleared every property the base had.
+  // Reusing an already-computed set is what keeps "the caller supplied this key" meaning what it says.
+  valuesKeys: o.valuesKeys instanceof Set ? o.valuesKeys : new Set(Object.keys(o).filter((k) => VALUE_KEYS.has(k))),
   itemTypeUnresolved: !!o.itemTypeUnresolved,
 });
 export const makeSchema = (pkg, o = {}) => ({
