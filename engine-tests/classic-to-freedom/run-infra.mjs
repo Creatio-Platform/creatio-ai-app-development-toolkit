@@ -1585,23 +1585,37 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     markersOk, () => ({ bpStart, bpEnd, head: BP_HEAD, end: BP_END_MARKER }));
   if (markersOk) {
     const fnSrc = wfSrc.slice(bpStart, bpEnd).trimEnd();
-    const free = {
-      MAX_ROUNDS: 3, REFS_DIR: "/m/refs", REFS_INDEX: "/m/refs/index.md", BUILT_FILE: "/m/built.json",
-      REF_BLOCK: "<refs>", RULES: "<rules>", BEHAVIOUR_BLOCK: "<behaviour>",
-      input: { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" },
-      state: { applicationCode: "UsrApp" }, pageSchemas: { main: "UsrMainPage" },
-      sliceKeys: new Set(["main"]),
-      specFile: (k) => "/m/refs/spec-" + k + ".md",
-      worklogFile: (k) => "/m/worklog/" + k + ".md",
-      queueSliceFile: (k) => "/m/slices/queue-" + k + ".json",
-      builtSliceFile: (k) => "/m/slices/built-" + k + ".json",
-      cliChecklistPage: (k) => "node e.mjs m.json --checklist --page " + k,
-      cliUnitsPage: (k) => "node e.mjs m.json --units --page " + k,
-      cliBuiltPage: (k) => "node e.mjs m.json --verify --built b.json --page " + k,
-      openRowPrompt: (r) => r.deliverable,
-      composeBuildPrompt: (parts) => Object.values(parts).join("\n\n"),
-      resolutionsPromptBlock: () => "", findingsPromptBlock: () => "", checkFirstPromptBlock: () => "",
-    };
+    // Every free variable `buildPrompt` reads, as DECLARATIONS — they are prepended to the sliced function and the
+    // whole thing is imported as a real module. No `new Function`, no eval: the same route the pure-helper block
+    // above takes, and for the same reason.
+    const STUBS = `
+const MAX_ROUNDS = 3
+const REFS_DIR = "/m/refs"
+const REFS_INDEX = "/m/refs/index.md"
+const BUILT_FILE = "/m/built.json"
+const REF_BLOCK = "<refs>"
+const RULES = "<rules>"
+const BEHAVIOUR_BLOCK = "<behaviour>"
+const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
+const state = { applicationCode: "UsrApp" }
+const pageSchemas = { main: "UsrMainPage" }
+const sliceKeys = new Set(["main"])
+const specFile = (k) => "/m/refs/spec-" + k + ".md"
+const worklogFile = (k) => "/m/worklog/" + k + ".md"
+const queueSliceFile = (k) => "/m/slices/queue-" + k + ".json"
+const builtSliceFile = (k) => "/m/slices/built-" + k + ".json"
+const cliChecklistPage = (k) => "node e.mjs m.json --checklist --page " + k
+const cliUnitsPage = (k) => "node e.mjs m.json --units --page " + k
+const cliBuiltPage = (k) => "node e.mjs m.json --verify --built b.json --page " + k
+const openRowPrompt = (r) => r.deliverable
+const composeBuildPrompt = (parts) => Object.values(parts).join("\\n\\n")
+const resolutionsPromptBlock = () => ""
+const findingsPromptBlock = () => ""
+const checkFirstPromptBlock = () => ""
+`;
+    // ONE source of truth for what is stubbed: the names are read back out of the declarations above, so the
+    // guard below cannot drift from them.
+    const stubbed = new Set([...STUBS.matchAll(/^const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
     // A free variable with no stub FAILS here; auto-stubbing would swallow the typo this check exists to catch.
     // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
@@ -1609,15 +1623,18 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     const params = new Set(["unit", "st", "roundNo"]);
     const locals = new Set([...fnSrc.matchAll(/(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]));
     const roots = [...new Set([...fnSrc.matchAll(/\$\{([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]))];
-    const unstubbed = roots.filter((r) => !params.has(r) && !locals.has(r) && !Object.hasOwn(free, r));
+    const unstubbed = roots.filter((r) => !params.has(r) && !locals.has(r) && !stubbed.has(r));
     check("ENG-95472: every interpolation that OPENS with an identifier resolves to a param, a local or a stub here — a new free variable is added to the list, never auto-stubbed, or this check stops catching typos",
       unstubbed.length === 0, () => ({ unstubbed, roots }));
 
-    const names = Object.keys(free);
     const rendered = {};
     let renderThrew = null;
+    let tmpBp;
     try {
-      const buildPrompt = new Function(...names, fnSrc + "\nreturn buildPrompt;")(...names.map((n) => free[n]));
+      tmpBp = mkdtempSync(path.join(os.tmpdir(), "bp-render-"));
+      const modPath = path.join(tmpBp, "buildPrompt.mjs");
+      writeFileSync(modPath, `${STUBS}\n${fnSrc}\nexport { buildPrompt };\n`);
+      const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
       rendered.list = buildPrompt({ key: "list", kind: "page" }, null, 1);
@@ -1627,6 +1644,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
       rendered.appNoMenu = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", sectionHost: "pages-only-no-menu" }, null, 1);
       rendered.reach = buildPrompt({ key: "sectionRegistered", kind: "reach", pages: ["main"] }, null, 1);
     } catch (e) { renderThrew = e.message; }
+    finally { if (tmpBp) rmSync(tmpBp, { recursive: true, force: true }); }
     check("ENG-95472: `buildPrompt` RENDERS for every unit shape it branches on — page, repair round, list, both app arms and reachability",
       () => !renderThrew && Object.keys(rendered).length === 6 && Object.values(rendered).every((t) => t.length > 200),
       () => renderThrew || Object.fromEntries(Object.entries(rendered).map(([k, v]) => [k, v.length])));

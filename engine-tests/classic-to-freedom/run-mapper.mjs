@@ -7522,7 +7522,7 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   check("ENG-95472: an UNANSWERED item still publishes `resolution: null` in the slice — an omitted field cannot be told apart from an engine that publishes no answers at all",
     () => { const slice = n2ReadSlice(resDir, N2_Q, publishedKeys, answered.pageKey);
       const others = (slice.preflight || []).filter((r) => r.id !== answered.id);
-      return others.length === 0 || others.every((r) => Object.hasOwn(r, "resolution") && r.resolution === null); },
+      return others.every((r) => Object.hasOwn(r, "resolution") && r.resolution === null); },
     () => n2ReadSlice(resDir, N2_Q, publishedKeys, answered.pageKey).preflight.map((r) => [r.id, r.resolution]));
   fs.rmSync(resDir, { recursive: true, force: true });
 
