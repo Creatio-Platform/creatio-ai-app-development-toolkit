@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, LIST_DECISION_KINDS} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1436,9 +1436,9 @@ check("ENG-95218: `--units` publishes a `list` build unit — role, the classic 
     && lpList.expect.quickFilters === 2 && lpList.expect.commandBarActions === 1
     && !("fields" in lpList.expect),
   () => JSON.stringify(lpList));
-check("ENG-95218: the FORM page's `expect` shape is untouched by the list vocabulary — an executor reading a form unit sees exactly what it saw before",
+check("ENG-95218: the FORM page's `expect` shape is untouched by the list vocabulary — an executor reading a form unit sees exactly what it saw before (plus the form-page `rules`/`ruleNames`, ENG-95470 — NOT list vocabulary)",
   () => { const m = lpUnits.pages.find((p) => p.key === "main");
-    return Object.keys(m.expect).join(",") === "fields,fieldNames,tabs,details,images"; },
+    return Object.keys(m.expect).join(",") === "fields,fieldNames,tabs,details,images,rules,ruleNames"; },
   () => JSON.stringify(lpUnits.pages.find((p) => p.key === "main")?.expect));
 check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — columns and filters are MEASURED off the built page (like a form field), while a command-bar action, whose Freedom container is unresolved until ENG-94714, stays an evidence row; closing a body-answerable row on a filed record would let the builder's own claim stand in for the page",
   () => { const ids = lpUnits.evidenceRows.filter((e) => e.pageKey === "list").map((e) => e.id);
@@ -1545,7 +1545,7 @@ check("ENG-95218: an approved `pages-only-no-menu` plan publishes NO `list` unit
       && rows.some((r) => /Deliberately NOT built/.test(r.label))
       && rows.some((r) => r.label.startsWith("List columns") && !r.vk)
       // …and the FORM unit keeps its own vocabulary: the degraded rows carry no `list` marker
-      && Object.keys(u.pages.find((p) => p.key === "main").expect).join(",") === "fields,fieldNames,tabs,details,images"; },
+      && Object.keys(u.pages.find((p) => p.key === "main").expect).join(",") === "fields,fieldNames,tabs,details,images,rules,ruleNames"; },
   () => ({ keys: pageUnits(lpRun, lpNoMenuOpts).pages.map((p) => p.key),
     order: pageUnits(lpRun, lpNoMenuOpts).buildOrder,
     mainExpect: pageUnits(lpRun, lpNoMenuOpts).pages.find((p) => p.key === "main")?.expect }));
@@ -6825,10 +6825,12 @@ check("ENG-94975 P3 (D3, EXPECTED side) + ENG-95218: with a SECTION named in the
    this fixture's tree yields (which a mutation faking both sides cannot satisfy), and against the very `vk`s the
    queue is derived from (which a mutation that only empties the queue cannot satisfy). ---- */
 const PG_EXPECT_LITERAL = {
-  main: { fields: 1, fieldNames: ["MainF"], tabs: 0, details: 3, images: 0 },
-  "child:C1@R1D": { fields: 1, fieldNames: ["C1F"], tabs: 0, details: 1, images: 0 },
-  "child:G1": { fields: 1, fieldNames: ["G1F"], tabs: 0, details: 0, images: 0 },
-  "child:U1": { fields: 0, fieldNames: [], tabs: 0, details: 0, images: 0 },   // never folded — nothing is derivable
+  // `rules`/`ruleNames` (ENG-95470) — this fixture's pages carry no business rules, so both are empty; the KEY ORDER
+  // matches `pageExpect` (fields…images then rules,ruleNames) because `sameJson` compares the serialized string.
+  main: { fields: 1, fieldNames: ["MainF"], tabs: 0, details: 3, images: 0, rules: 0, ruleNames: [] },
+  "child:C1@R1D": { fields: 1, fieldNames: ["C1F"], tabs: 0, details: 1, images: 0, rules: 0, ruleNames: [] },
+  "child:G1": { fields: 1, fieldNames: ["G1F"], tabs: 0, details: 0, images: 0, rules: 0, ruleNames: [] },
+  "child:U1": { fields: 0, fieldNames: [], tabs: 0, details: 0, images: 0, rules: 0, ruleNames: [] },   // never folded — nothing is derivable
 };
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 check("ENG-94975 P4 --units content: every page's `expect` is EXACTLY what this tree yields — per-page field names, field/tab/detail/image counts (an all-zero queue is not a queue: the executor's fields check matches by NAME and cannot run without them)",
@@ -7701,6 +7703,116 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
       () => keys.map((k, i) => { try { return JSON.parse(fs.readFileSync(n2SliceFile(d, N2_Q, i + 1), "utf8")).pageKey; }
         catch (e) { return "(" + e.code + ")"; } }));
     fs.rmSync(d, { recursive: true, force: true });
+  }
+}
+
+// ===== ENG-95470 — N1: make --verify trustworthy (business rules gated, component role/analog) ================
+// The shared detector's verdict contract, fixed by unit tests BEFORE the engine code (TDD). resolveRuleVk gates a
+// page's business rules against the read-page-business-rules slot; resolveComponentVk accepts a curated Freedom
+// analog; the not-checkable tri-state keeps a rule/component the payload cannot see distinct from MISSING; resolveVk
+// dispatches a `rule` vk to resolveRuleVk and the Business rules checklist row now carries that vk (no longer skip).
+{
+  // A built page carrying a businessRules slot — the read-page-business-rules `{ count, rules }` result. Each rule
+  // GOVERNS a column: its caption / condition / actions name the attribute, which is what the tool returns.
+  const ruleRoot = { pages: { main: { viewConfig: { items: [] }, businessRules: { count: 2, rules: [
+    { name: "BR_Contact", caption: "Contact required", enabled: true, condition: { leftExpression: { attribute: "Contact" } }, actions: [{ property: "required", element: "Contact" }] },
+    { name: "BR_Owner", caption: "Owner filter", enabled: true, condition: { leftExpression: { attribute: "Account" } }, actions: [{ kind: "filter", element: "Owner" }] },
+  ] } } } };
+  const ruleCtx = verifyCtx(ruleRoot, "main");
+  // T1 (R3) — resolveRuleVk: expected identities present in the slot resolve the row to ✅ Done, not skip, not ❌.
+  {
+    const [mark, ev, outcome] = resolveRuleVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, ruleCtx);
+    check("T1 (R3): resolveRuleVk — expected rule identities present in the businessRules slot resolve to ✅/ok (not skip, not MISSING)",
+      mark === "✅ Done" && outcome === "ok" && /2 of 2 business rule/.test(ev),
+      () => ({ mark, ev, outcome }));
+  }
+  // T2 (R4) — resolveComponentVk role/analog: expected crt.ContactCommunication, built crt.CommunicationOptions → ✅.
+  {
+    const compRoot = { pages: { main: { viewConfig: { items: [{ name: "Comm", type: "crt.CommunicationOptions" }] } } } };
+    const [mark, ev, outcome] = resolveComponentVk({ type: "feature", ftype: "crt.ContactCommunication" }, verifyCtx(compRoot, "main"));
+    check("T2 (R4): resolveComponentVk — a built crt.CommunicationOptions satisfies a planned crt.ContactCommunication via the analog table",
+      mark === "✅ Done" && outcome === "ok" && /crt\.CommunicationOptions/.test(ev) && /analog/.test(ev),
+      () => ({ mark, ev, outcome }));
+    check("T2 (R4): componentAnalogsOf is the ONE table both matching and --units publication read (crt.ContactCommunication → crt.CommunicationOptions)",
+      componentAnalogsOf("crt.ContactCommunication").includes("crt.CommunicationOptions") && componentAnalogsOf("crt.Unknown").length === 0);
+  }
+  // T3 (R5) — not-checkable tri-state, distinct from MISSING, for BOTH a rule and an analog component the payload
+  // cannot see. A rule row whose page entry carries NO businessRules slot is nobody-read-the-rules (⚠ unverified);
+  // a component row for a page with NO entry is nobody-fetched-it (⚠ unverified). Neither is ❌ MISSING.
+  {
+    const noRuleSlot = verifyCtx({ pages: { main: { viewConfig: { items: [] } } } }, "main");
+    const [rm, rev, ro] = resolveRuleVk({ type: "rule", n: 1, names: ["Contact"] }, noRuleSlot);
+    check("T3 (R5): a rule the payload cannot see (no businessRules slot) is ⚠ not-checkable — unverified, distinct from MISSING",
+      ro === "unverified" && rm !== "❌ MISSING" && /not checkable/i.test(rev),
+      () => ({ rm, rev, ro }));
+    const absent = verifyCtx({ pages: {} }, "main");   // page entry absent — nobody fetched it
+    const [cm, , co] = resolveComponentVk({ type: "feature", ftype: "crt.ContactCommunication" }, absent);
+    check("T3 (R5): an analog component the payload cannot see (no page entry) is ⚠ unverified, distinct from MISSING",
+      co === "unverified" && cm !== "❌ MISSING",
+      () => ({ cm, co }));
+    // A page that WAS fetched but is genuinely missing the component AND its analog stays a hard ❌ MISSING —
+    // not-checkable must not swallow a real miss (or the gate stops being trustworthy in the other direction).
+    const built = verifyCtx({ pages: { main: { viewConfig: { items: [{ name: "X", type: "crt.Input" }] } } } }, "main");
+    const [bm, , bo] = resolveComponentVk({ type: "feature", ftype: "crt.ContactCommunication" }, built);
+    check("T3 (R5): a fetched page genuinely missing the component (and its analog) is still ❌ MISSING — not-checkable does not swallow a real miss",
+      bo === "missing" && bm === "❌ MISSING",
+      () => ({ bm, bo }));
+  }
+  // F1 (ENG-95470 review) — resolveRuleVk's OTHER two verdict branches, the ones T1/T3 do not touch, pinned so a
+  // regression flipping either one cannot ship green. The whole ticket is MISSING-vs-not-checkable, so both edges
+  // of that distinction must be asserted: (a) a page entry reported `false` (NOT BUILT) is a hard ❌ MISSING — its
+  // rules cannot exist — never the ⚠ not-checkable of a page nobody read; (b) a CONFIRMED-EMPTY `businessRules: []`
+  // slot on a page that WAS expected to own rules is an unverified shortfall (0/N matched), NEVER a hard MISSING.
+  {
+    const pageFalse = verifyCtx({ pages: { main: false } }, "main");   // reported NOT BUILT (distinct from omitted)
+    const [fm, fev, fo] = resolveRuleVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, pageFalse);
+    check("F1 (R5): resolveRuleVk — a page entry reported `false` (NOT BUILT) with expected rule identities is a HARD ❌ MISSING (its rules cannot exist), distinct from ⚠ not-checkable",
+      fm === "❌ MISSING" && fo === "missing" && /NOT BUILT/.test(fev),
+      () => ({ fm, fev, fo }));
+    const emptySlot = verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: [] } } }, "main");  // confirmed-empty
+    const [em, eev, eo] = resolveRuleVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, emptySlot);
+    check("F1 (R5): resolveRuleVk — a confirmed-empty `businessRules: []` slot on a page that WAS expected to own rules is an unverified shortfall (0/N matched), NEVER ❌ MISSING",
+      eo === "unverified" && em !== "❌ MISSING" && /0\/2 business rule/.test(eev),
+      () => ({ em, eev, eo }));
+  }
+  // T4 (R3) — resolveVk dispatch: a `rule` vk routes to resolveRuleVk, and the Business rules checklist row carries
+  // a `rule` vk (a REGRESSION against the previous vk-less `skip` row that closed on prose).
+  {
+    const [mark, , outcome] = resolveVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, ruleCtx);
+    check("T4 (R3): resolveVk routes a `rule` vk to resolveRuleVk (same ✅/ok verdict as calling it directly)",
+      mark === "✅ Done" && outcome === "ok");
+    check("T4 (R3): resolveVk still returns `skip` for a vk-LESS row — the dispatch change did not disturb the ☐ default",
+      resolveVk(undefined, ruleCtx)[2] === "skip");
+    const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+      pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
+      entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
+    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => /^Business rules ×/.test(r.label));
+    check("T4 (R3): the Business rules checklist row now carries a `rule` vk (no longer a vk-less skip) with the expected identities",
+      ruleRow?.vk?.type === "rule" && ruleRow.vk.names.includes("Contact") && ruleRow.vk.names.includes("Owner"),
+      () => ruleRow);
+  }
+  // Applicant-case contract fixture — a built payload mirroring the real Applicant page: 11 business rules read off
+  // the slot and the native crt.CommunicationOptions. The whole point of N1: NONE of this reads ❌ MISSING now.
+  {
+    const cols = ["Contact", "Owner", "Stage", "Salary", "StartDate", "Department", "JobTitle", "Source", "Recruiter", "Priority", "Status"];
+    const applicant = { changeSet: {
+      viewConfigDiff: cols.map((c) => ({ name: c, values: { control: "$" + c } })),
+      images: [], details: [], cardActions: [],
+      standardFeatures: [{ feature: "Communication options", uiShape: "component" }],
+      pageBusinessRules: cols.map((c) => ({ action: "show", element: c, inverseAction: "hide" })),
+      entityBusinessRules: [],
+    }, signals: {} };
+    const built = { pages: { main: {
+      viewConfig: { items: [...cols.map((c) => ({ name: c, type: "crt.Input" })), { name: "Comm", type: "crt.CommunicationOptions" }] },
+      businessRules: { count: cols.length, rules: cols.map((c) => ({ name: "BR_" + c, caption: c + " rule", enabled: true, condition: { leftExpression: { attribute: c } }, actions: [{ element: c }] })) },
+    } }, ...QG_EVIDENCE };
+    const rv = renderVerify(applicant, {}, built);
+    check("Applicant fixture: 11 business rules read off the slot + native crt.CommunicationOptions → NO false MISSING (missing === 0)",
+      rv.missing === 0,
+      () => ({ missing: rv.missing, unverified: rv.unverified, openRows: rv.pages?.main?.openRows }));
+    check("Applicant fixture: the Business rules row reads ✅ Done (11 of 11 present) rather than ☐ skip",
+      /Business rules × 11 \| ✅ Done \| 11 of 11 business rule/.test(rv.markdown),
+      () => rv.markdown.split("\n").filter((l) => /Business rules/.test(l)).join(" | "));
   }
 }
 

@@ -2029,7 +2029,18 @@ export function checklistGroups(result, opts = {}) {
   // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
-  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}` });
+  // The rule IDENTITIES — each rule's target element/attribute, the column its logic governs (a page rule's
+  // `element`, an entity rule's `targetAttribute`). Published in the vk so `--verify` and `--units` have the same
+  // expected set to match a built page's rules against, exactly as `fields` publishes its expected element names.
+  // Business rules used to be a vk-LESS row: it rendered `☐ confirm on-stand` (a `skip`), tallied in nothing, and
+  // closed by asserting it in prose — the false MISSING/skip this ticket removes. It now carries a `rule` vk and is
+  // gated against `--built.pages[<key>].businessRules` (the read-page-business-rules result), because a page's
+  // rules persist as separate BusinessRule_* schemas INVISIBLE to a page-body grep.
+  const ruleIds = [...new Set([
+    ...(cs.pageBusinessRules || []).map((r) => r.element),
+    ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
+  ].filter(Boolean))];
+  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
   // artifact and the two documents would disagree about what "done" means for it.
@@ -2124,9 +2135,14 @@ function listExpect(rows) {
 function pageExpect(rows) {
   const n = (t) => vkOfType(rows, t)?.n || 0;
   const f = vkOfType(rows, "fields");
+  // The expected BUSINESS-RULE identities, off THIS page's `rule` vk, mirroring `fieldNames`: `--verify` matches a
+  // built page's rules against these (`resolveRuleVk`), so the executor needs the same list `--units` publishes to
+  // know which rules a page owes. `rules` is the display count (the folded `× N`); `ruleNames` the identities.
+  const r = vkOfType(rows, "rule");
   const list = listExpect(rows);
   if (list) return list;
-  return { fields: n("fields"), fieldNames: [...(f?.names || [])], tabs: n("tabs"), details: n("details"), images: n("image") };
+  return { fields: n("fields"), fieldNames: [...(f?.names || [])], tabs: n("tabs"), details: n("details"), images: n("image"),
+    rules: n("rule"), ruleNames: [...(r?.names || [])] };
 }
 // ONE page entry. `expectedTemplate` is the SCHEMA NAME (via CHILD_TEMPLATE_SCHEMA at fold time), taken from the
 // `template` vk's `exp` — so it is the exact string the gate compares `parentSchemaName` against. The field is
@@ -2153,7 +2169,9 @@ function componentTypesOf(rows) {
   for (const r of rows || []) {
     const vk = r.vk;
     if (!vk) continue;
-    if (vk.type === "feature" && typeof vk.ftype === "string") out.add(vk.ftype);
+    // The planned type AND its curated Freedom analog (ENG-95470): a migration builds the native analog, so the
+    // executor must fetch ITS documentation and `--verify` accepts it — the typed component intent both sides match on.
+    if (vk.type === "feature" && typeof vk.ftype === "string") { out.add(vk.ftype); for (const a of componentAnalogsOf(vk.ftype)) out.add(a); }
     else if (vk.type === "dcm-bar") out.add("crt.EntityStageProgressBar");
     else if (vk.type === "dcm-next") out.add("crt.NextSteps");
     else if (vk.type === "card") out.add("crt.Button");
@@ -2636,22 +2654,89 @@ function componentNoun(vk) {
   if (vk.type === "feature") return esc(String(vk.ftype || "the standard feature"));
   return COMPONENT_NOUN[vk.type] || "this page's components";
 }
-function resolveComponentVk(vk, ctx) {
+// The INTERIM role/analog table (ENG-95470). A planned Classic-derived component type is SATISFIED by its curated
+// Freedom analog: a migration builds the NATIVE Freedom component, not a literal of the Classic name, so a row that
+// expected `crt.ContactCommunication` (the ContactCommunication entity with a `crt.` prefix) is Done when the built
+// page carries `crt.CommunicationOptions` (the native Communication-options component). Without this the analog read
+// ❌ MISSING on a correctly built page — the false MISSING this ticket removes. Matched STRICTLY against curated
+// pairs (never a fuzzy family), so a wrong component cannot falsely satisfy a row. Sourced by hand from
+// `classic-to-freedom-mapping.md` until ENG-95543's registry lands, then repointed there (same expected set, one
+// call site). Keys and values are `crt.*` component types.
+const COMPONENT_ANALOGS = {
+  "crt.ContactCommunication": ["crt.CommunicationOptions"],
+};
+// The Freedom analog types accepted for a planned component type — the curated pair, or `[]` when none. Own fn so
+// both `resolveComponentVk` (matching) and `componentTypesOf` (publishing the expected set) read ONE table.
+export function componentAnalogsOf(ftype) {
+  return COMPONENT_ANALOGS[ftype] || [];
+}
+// ROLE/ANALOG match (ENG-95470): the expected component type first, then its curated Freedom analog — a migration
+// builds the NATIVE Freedom component, so `crt.CommunicationOptions` satisfies a planned `crt.ContactCommunication`
+// row. Own fn so `resolveComponentVk` keeps one level of nesting (Sonar CC 15). The not-checkable (⚠ unverified)
+// case is `ctx.entryAbsent`, handled by the caller before this runs — a page the payload cannot see is never ❌.
+function resolveFeatureVk(vk, ctx) {
+  if (ctx.hasType(vk.ftype)) return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  const alts = componentAnalogsOf(vk.ftype);
+  const analog = alts.find((t) => ctx.hasType(t));
+  if (analog) return ["✅ Done", `found ${analog} — the Freedom analog of ${vk.ftype}`, "ok"];
+  const also = alts.length ? ` (nor its analog ${alts.map((t) => esc(t)).join("/")})` : "";
+  return ["❌ MISSING", `NO ${vk.ftype}${also} on the built page`, "missing"];
+}
+export function resolveComponentVk(vk, ctx) {
   const { hasType, parentTpl } = ctx;
   // D6 tri-state, the same one `resolveFormPageVk` / `resolveImageVk` / `resolveCountVk` apply: NO
   // `--built.pages[<key>]` entry means nobody fetched this page, which is NOT the same as fetching it and finding
   // the component absent. Without this branch every COMPONENT row read ❌ MISSING — "you built it wrong" — for a
-  // page the verifier simply never looked at, and the executor was sent to rebuild instead of to re-read.
+  // page the verifier simply never looked at, and the executor was sent to rebuild instead of to re-read. This IS
+  // R5's not-checkable for an analog component: a page the payload cannot see resolves ⚠ unverified, never MISSING.
   // `false` (reported absent) and a present-but-empty entry still fall through to the hard ❌ below.
   if (ctx.entryAbsent) return absentEntry(ctx, componentNoun(vk));
-  if (vk.type === "feature") return hasType(vk.ftype) ? ["✅ Done", `found ${vk.ftype}`, "ok"] : ["❌ MISSING", `NO ${vk.ftype} on the built page`, "missing"];
+  if (vk.type === "feature") return resolveFeatureVk(vk, ctx);
   if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`, "ok"] : ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``, "missing"]; }
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
   return hasType("crt.Button") ? ["✅ Done", "a crt.Button is present — confirm it triggers the action", "ok"] : ["⚠ verify", "no crt.Button found — confirm the action", "unverified"]; // card
 }
+// BUSINESS RULES (ENG-95470). A page's declarative rules do NOT live in its body: each persists as a separate
+// BusinessRule_* schema, invisible to `viewConfig`, so the row's evidence is `--built.pages[<key>].businessRules` —
+// the read-page-business-rules result (`{ count, rules }`, or a bare `rules` array), NOT a page-body walk. Match is
+// by IDENTITY the same way fields match by name: an expected target attribute (a page rule's `element` / an entity
+// rule's `targetAttribute`, published in `vk.names`) is SATISFIED when a built rule GOVERNS that column — its
+// serialized form carries the attribute as a whole token (a name in its condition/actions), never a loose substring
+// (so `Contact` does not match `ContactName`). Shape-agnostic on purpose: the tool contract fixes `name` / `caption`
+// / `condition` / `actions` but not their inner shape, so tokenizing the whole rule survives a shape change.
+// The rule's tokens, or `null` when the slot was never populated (nobody read the rules). Own fn so `resolveRuleVk`
+// stays under Sonar CC 15.
+function builtRuleTokens(built) {
+  const rules = Array.isArray(built) ? built : (Array.isArray(built?.rules) ? built.rules : null);
+  if (rules == null) return null;
+  return rules.map((r) => new Set(String(JSON.stringify(r)).match(/[A-Za-z_][A-Za-z0-9_]*/g) || []));
+}
+export function resolveRuleVk(vk, ctx) {
+  const want = [...new Set(vk.names || [])];
+  if (!want.length) return ["⚠ verify", "no expected business-rule identity was published — nothing to match against", "unverified"];
+  // D6 tri-state + R5's not-checkable, in this order: no page entry = nobody fetched the page (⚠ unverified);
+  // `false` = the page is reported NOT BUILT, so its rules cannot exist (❌ MISSING); an entry with NO
+  // `businessRules` slot = the page was fetched but its rules were never READ — NOT-CHECKABLE (⚠ unverified, and
+  // said so, distinct from MISSING), the case this ticket adds so a rule the payload cannot see is never a false ❌.
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected business rule(s)`);
+  if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so none of the ${want.length} expected business rule(s) exist`, "missing"];
+  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules);
+  if (tokenSets == null) return ["⚠ verify",
+    `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
+  const missing = want.filter((name) => !tokenSets.some((toks) => toks.has(name)));
+  const b = want.length - missing.length;
+  // A shortfall is ⚠ unverified, not ❌ MISSING — the same conservative choice `resolveFieldsByIdentity` makes for a
+  // by-identity match: this ticket's whole point is to STOP built work reading as MISSING, and a rule matched by a
+  // whole-token heuristic must not cry ❌ on a rule the builder named so the column token does not literally appear.
+  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built page rule`, "ok"];
+  const overflow = missing.length > 8 ? "…" : "";
+  const miss = ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}`;
+  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute${miss}`, "unverified"];
+}
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
+const VK_RULE = new Set(["rule"]);
 // A REACHABILITY / wiring deliverable (per-type routing, mini-page "+ New" binding, section registration, typed-form
 // existence) is a configuration record NOT derivable from a single page's get-page ownBodySummary — but it MUST still
 // gate: an unproven one may leave built pages unreachable. So it reads an explicit on-stand EVIDENCE boolean the agent
@@ -2819,12 +2904,13 @@ const VK_ENTITY = new Set(["entity"]);
 const VK_CHILDPAGE = new Set(["childpage"]);
 const VK_EVIDENCE = new Set(["evidence"]);
 const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
-function resolveVk(vk, ctx) {
+export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
   if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
   if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
+  if (VK_RULE.has(vk.type)) return resolveRuleVk(vk, ctx);
   if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
   if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
   if (VK_ENTITY.has(vk.type)) return resolveEntityVk(vk, ctx);
@@ -2933,7 +3019,7 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
 // records are run-level, not page-level). `parentTpl` has NO plan fallback — reading the PLANNED template here
 // let `dcm-bar` show ✅ Done off a template nobody built while the `template` row went ⚠ on the same input.
-function verifyCtx(root, pageKey) {
+export function verifyCtx(root, pageKey) {
   const page = pageEntryOf(root, pageKey);
   const ops = pageOpsOf(page);
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;

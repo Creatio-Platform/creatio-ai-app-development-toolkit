@@ -127,6 +127,27 @@ Keep an engine-matched standard feature AS its shape unless you confirm on-stand
 that feature's infrastructure. Build the native component up front — never build a generic list first and
 "switch" it later.
 
+### Verify-side role/analog acceptance (the interim hand table)
+
+A migration builds the **native Freedom component**, not a literal of the Classic name — so when a plan row
+expects a Classic-derived component type, `--verify` (`migrate.mjs`, `resolveComponentVk`) must accept the
+Freedom **analog** that a correct build actually produces, or a built page reads ❌ MISSING against its own
+plan. The accepted pairs are a small **curated hand table** (`COMPONENT_ANALOGS` in
+`../engine/designspec.mjs`), sourced from the rows above; `--units` publishes the analog alongside the
+planned type (`pages[].componentTypes`) so the executor fetches the right component's documentation, and
+`--verify` matches either one.
+
+| Planned (Classic-derived) type | Accepted Freedom analog | Source row |
+| --- | --- | --- |
+| `crt.ContactCommunication` (the `ContactCommunication` entity name with a `crt.` prefix — never a real component) | `crt.CommunicationOptions` (the native Communication-options component) | *Means of communication*, above |
+
+> **Interim, and deliberately so.** This table is the **hand-maintained** role/analog source until the
+> ENG-95543 component registry lands; at that point `resolveComponentVk` / `componentTypesOf` repoint to the
+> registry (same expected set, one call site) and this table is retired. Until then, keep it in sync with the
+> rows above **in the same commit** — the engine constant and this table must not drift. Match STRICTLY against
+> a curated pair; a Freedom analog is never inferred from a name family, so a wrong component cannot falsely
+> satisfy a planned row.
+
 ### Build recipes for the components agents get wrong (verified on-stand)
 
 **Approvals = TWO components, not one.** `get-component-info` for the approval feature returns **two** parts and
