@@ -59,6 +59,13 @@ const itemRole = (i) => (i?.itemType == null ? null : ITEM_ROLE[i.itemType] || R
 export const itemKindName = (i) => (i?.itemType == null ? null : ITEM_KIND_NAME[i.itemType] || `itemType ${i.itemType}`);
 // Pure decoration. Exported: the member ledger records it as `chrome` rather than letting it fall to `unaccounted`.
 export const isDecorationItem = (i) => itemRole(i) === ROLE.DECOR;
+// The role a KIND carries in the dispatch table, with NO fallback — `undefined` means the table has no entry for it.
+// Exported for the coverage golden only: `itemRole`'s `|| ROLE.UNMAPPED` tail and `itemKindName`'s `|| \`itemType n\``
+// tail both return something truthy for a member that was never listed, so neither can witness a member dropped
+// from `ITEM_ROLE`. This accessor can, which is what lets the suite assert the 29-member coverage AC 2 claims
+// instead of leaving it to a reader's tally.
+export const itemRoleOf = (itemType) => ITEM_ROLE[itemType];
+export const ITEM_ROLES = ROLE;
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -177,8 +184,14 @@ function scalarControl(t) {
   // COLOR is text-storage on a classic text edit. A Freedom colour component would be a design upgrade, not a
   // migration of what the classic page did.
   if (t === "color") return { type: "crt.Input" };
-  // HASH / SECURE text are text-storage on classic text edits; masking is a column property, not a field prop.
-  if (["hashtext", "securetext"].includes(t)) return { type: "crt.Input" };
+  // HASH / SECURE text are IDENTIFIED (they have a `DVT_TYPE_NAME` entry) but deliberately get NO control here.
+  // Binding an encrypted or hashed column to a plain editable `crt.Input` would put a secret on a cleartext field
+  // with no trace on the only reader-facing surface: `fieldTypeLabel` renders both as `Text`, indistinguishable
+  // from an ordinary text column, so nothing would tell the operator what was just exposed. Falling through to
+  // `null` raises the loud `field-control` decision instead, which is what AC 3 reserves for a type with no safe
+  // field behaviour to port — the same treatment `stageindicator`/`blob`/`file` get. Whether Freedom offers a
+  // masked component (a `crt.PasswordInput` is reported to exist, but only on a community answer — not Academy
+  // docs) is the mapping task's call, so no target is asserted here.
   // Phone / Email / Web link are TEXT-storage columns carrying a FORMAT on the column (verified on-stand: Contact.
   // Phone/MobilePhone = 42, Account.Web = 44, Contact.Email = "Email"). The Freedom field is a plain crt.Input bound
   // to the column — the phone/email/web-link rendering is inherited from the column's format, there is NO field-level

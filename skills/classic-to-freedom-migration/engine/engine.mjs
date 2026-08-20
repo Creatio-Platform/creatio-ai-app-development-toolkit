@@ -217,6 +217,10 @@ export const CONTENT_TYPE = {
 };
 // `Terrasoft.DataValueType`, complete. A diff item may declare its own `dataValueType`; for a VIRTUAL field (no
 // entity column behind it) that declaration is the only type evidence there is.
+// GROUNDWORK, deliberately unread: the item's own `dataValueType` is projected onto `items[]`/`fields[]` but has NO
+// consumer yet — `control()` is still called with the ENTITY column's type only, so a virtual field keeps raising
+// the loud `field-control` decision rather than being typed from its own declaration. Wiring that fallback is the
+// mapping task's business (ENG-95543); the projection lands here so the evidence is already carried when it does.
 export const DATA_VALUE_TYPE = {
   GUID: 0, TEXT: 1, INTEGER: 4, FLOAT: 5, MONEY: 6, DATE_TIME: 7, DATE: 8, TIME: 9, LOOKUP: 10, ENUM: 11,
   BOOLEAN: 12, BLOB: 13, IMAGE: 14, CUSTOM_OBJECT: 15, IMAGELOOKUP: 16, COLLECTION: 17, COLOR: 18,
@@ -250,7 +254,10 @@ export function enumDriftIssues(vocabulary) {
     if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
     for (const [member, standValue] of Object.entries(standTable)) {
       if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
-      if (!(member in pinned)) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
+      // `Object.hasOwn`, never `in`: the echo is UNTRUSTED input, and `in` walks the prototype chain — an echoed
+      // `toString`/`constructor`/`valueOf` key would count as pinned and be compared against a native function,
+      // producing a BLOCKING mismatch whose text names `function toString() { [native code] }`.
+      if (!Object.hasOwn(pinned, member)) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
       if (pinned[member] !== standValue) mismatches.push(`${enumName}.${member}: engine ${pinned[member]}, stand ${standValue}`);
     }
   }
@@ -356,7 +363,10 @@ function walkTagAutomaton(tag, path) {
     if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) {                                             // terminal: the next key indexes the enum table
-      if (k in enumTable) return { value: enumTable[k] };
+      // `Object.hasOwn`, never `in`: the body is UNTRUSTED, and `in` walks the prototype chain — a body naming
+      // `Terrasoft.ViewItemType.constructor` would resolve to a native function instead of raising the
+      // `unknown-enum-member` advisory, so the member would go unreported rather than fail loud.
+      if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
       return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
     }
     const next = TAG_TRANSITIONS[tag];

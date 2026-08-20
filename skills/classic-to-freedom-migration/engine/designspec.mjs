@@ -1115,8 +1115,10 @@ const LEDGER_PREAMBLE = [
   "| Member kind | Mapped | Decision | Resolved | Context | Decoration | Unaccounted |",
   "| --- | --- | --- | --- | --- | --- | --- |",
 ];
-// Column order = the header above, and the order `disposition()` (migrate.mjs) ranks them in: strongest statement
-// first, `unaccounted` last because it is the absence of any.
+// Column order = the header above, and nothing else — this list is a RENDERING order, not a rank. It deliberately
+// does NOT mirror `disposition()` (migrate.mjs), which returns `chrome` ahead of `context`: the table reads better
+// with the two auto-accounted columns in template-then-decoration order, and the header is the only contract a
+// reader can check. Claiming the two orders coincide would be a claim a reader can falsify in thirty seconds.
 const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "chrome", "unaccounted"];
 // explicit locale-aware comparator (Array#sort's default coerces to string and orders by code unit) — the same
 // determinism discipline engine.mjs applies to its own diagnostic lists, and a golden test asserts byte-identical

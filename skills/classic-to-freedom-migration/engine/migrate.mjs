@@ -962,11 +962,15 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
   }
 }
 
+// The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
+// that `reportDynamicMappingProps` already reported it, so the two readers must be the same set: a property dropped
+// from one copy and not the other would be reported by NEITHER and vanish from plan.md entirely. Same reason
+// `ITEM_KIND_NAME`/`DATAVALUETYPE_CODE` are derived rather than hand-listed — a second literal is drift waiting.
+const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
 // A dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is not structural
 // (it doesn't block the gate) but silently collapsed to a DEFAULT in the ChangeSet — surface each as a
 // `dynamic-property` decision so the agent wires the real behaviour. Extracted to keep runMigration under CC 15.
 function reportDynamicMappingProps(schemas, changeSet) {
-  const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
   for (const s of schemas) {
     for (const d of (s.astDiagnostics || [])) {
       const m = /^diff\.(\d+)\.values\.(\w+)$/.exec(d.path || "");
@@ -986,12 +990,12 @@ function reportDynamicMappingProps(schemas, changeSet) {
 // deciding what the reader may see, and anything outside it is visible only on the console.
 const DIAG_OWNER_ROOTS = { attributes: "attribute", details: "detail", modules: "module", messages: "message",
   businessRules: "business rule", rules: "business rule", mixins: "mixin" };
-const DIAG_MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
-// Which member a diagnostic path belongs to, as `{ item, ownerNote }`.
+// Which member a diagnostic path belongs to, as `{ item, ownerNote }`. `schema` may be undefined — a pooled
+// diagnostic from a layer whose body is not on hand still routes, it just names `diff[<n>]` instead of the element.
 function diagnosticOwner(p, schema) {
   const seg = String(p).split(".");
   if (seg[0] === "diff" && seg[1] !== undefined) {
-    const el = (schema.diff || []).find((o) => o.astIndex === +seg[1]);
+    const el = (schema?.diff || []).find((o) => o.astIndex === +seg[1]);
     const item = el?.name || el?.bindTo || `diff[${seg[1]}]`;
     return { item, ownerNote: `element '${item}'` };
   }
@@ -999,29 +1003,41 @@ function diagnosticOwner(p, schema) {
   return { item: p || "(root)", ownerNote: `\`${p || "(root)"}\`` };
 }
 // Already reported in full by another surface: the mapping-property reporter above, or a named gate reason.
+// The structural arm MIRRORS the gate's own filter (`computeGate`: `d.role !== "section" && isStructuralDiag(d)`).
+// Without the role test this function suppresses every SECTION diagnostic as "the gate reports it" while the gate
+// has already excluded sections by design — so a structural section gap would be reported by nobody.
 function reportedElsewhere(d, p) {
   const mapped = /^diff\.(\d+)\.values\.(\w+)$/.exec(p);
-  return (mapped && DIAG_MAPPING_PROPS.has(mapped[2])) || isStructuralDiag(d);
+  return (mapped && MAPPING_PROPS.has(mapped[2])) || (d.role !== "section" && isStructuralDiag(d));
 }
 // The enum-member case names the member it identified (the actionable part); every other kind names the construct.
 function diagnosticGapText(d, p) {
-  return d.detail
-    ? `names \`${d.detail}\`, a member this engine's pinned enum table does not carry — the KIND is known and only its numeric value is missing, so the element is identified but unmapped`
-    : `carries a construct the parser could not read statically (${d.kind}${p ? ` at \`${p}\`` : ""})`;
+  if (d.detail) return `names \`${d.detail}\`, a member this engine's pinned enum table does not carry — the KIND is known and only its numeric value is missing, so the element is identified but unmapped`;
+  const at = p ? " at `" + p + "`" : "";
+  return `carries a construct the parser could not read statically (${d.kind}${at})`;
 }
-function reportRemainingDiagnostics(schemas, changeSet) {
-  const seen = new Set();                                        // one row per member+kind+path, not one per layer
-  for (const s of schemas) {
-    for (const d of (s.astDiagnostics || [])) {
-      const p = String(d.path || "");
-      if (reportedElsewhere(d, p)) continue;
-      const { item, ownerNote } = diagnosticOwner(p, s);
-      const key = `${item}|${d.kind}|${p}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      changeSet.needsDecision.push({ kind: "parse-gap", item,
-        reason: `${ownerNote} ${diagnosticGapText(d, p)}. Read the classic body at that position and record the real value/behaviour — this is NOT a resolved default, and nothing downstream can see it unless it is answered here.` });
-    }
+// The pool tag for a schema, matching how `parseDiagnostics` tags its entries. Sections are namespaced because a
+// section schema and a main schema can legitimately carry the same `pkg`, and they are different bodies to open.
+const diagTag = (pkg, role) => (role === "section" ? `section::${pkg}` : String(pkg ?? ""));
+// Routes the pkg-tagged diagnostic POOL (not just the main-page chain): main + seed, `detail:<name>`,
+// `profile:<name>` and section layers all reach the plan. Previously this took `schemas` alone, so four of the five
+// layer kinds stayed console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
+// `diff.<n>` path back to its element name; a layer that is not in the map still routes by `diff[<n>]`.
+function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
+  const seen = new Set();                                        // one row per owner+kind+path+LAYER
+  for (const d of parseDiagnostics) {
+    const p = String(d.path || "");
+    if (reportedElsewhere(d, p)) continue;
+    const tag = diagTag(d.pkg, d.role);
+    const { item, ownerNote } = diagnosticOwner(p, schemaByTag.get(tag));
+    // The layer is part of the key, not just the text: two genuinely different occurrences at the same path in
+    // different packages are two gaps, and collapsing them hides the base-layer one behind the client layer.
+    const key = `${item}|${d.kind}|${p}|${tag}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const where = d.pkg ? ` in \`${d.pkg}\`${d.role === "section" ? " (section schema)" : ""}` : "";
+    changeSet.needsDecision.push({ kind: "parse-gap", item,
+      reason: `${ownerNote}${where} ${diagnosticGapText(d, p)}. Read the classic body at that position and record the real value/behaviour — this is NOT a resolved default, and nothing downstream can see it unless it is answered here.` });
   }
 }
 
@@ -1538,7 +1554,9 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
         fromTemplate: src.tpl(entry),
         mapped: src.mapped(entry),
         decided: decided.has(name) || (src.extraDecided ? src.extraDecided(entry) : false),
-        chrome: src.chrome ? src.chrome(entry) : false,
+        // `?.()` rather than a ternary: only one source row supplies `chrome`, and a conditional here sits two
+        // loops deep, where it costs more complexity than the fact it carries.
+        chrome: !!src.chrome?.(entry),
         provenance: src.prov(entry),
         detail: src.detail ? src.detail(entry) : null,
       });
@@ -1778,8 +1796,26 @@ export function runMigration(manifest, opts = {}) {
   // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
   reportDynamicMappingProps(schemas, changeSet);
-  // …and every OTHER recorded diagnostic, routed to its owning member.
-  reportRemainingDiagnostics(schemas, changeSet);
+  // …and every OTHER recorded diagnostic in the POOL, routed to its owning member. Keyed the same way
+  // `parseDiagnostics` tags its entries, so a `diff.<n>` path resolves against the body it actually came from.
+  const diagSchemaByTag = new Map([
+    ...[...schemas, ...seedTemplate].map((l) => [diagTag(l.pkg), l]),
+    ...Object.entries(detailSchemas).map(([name, d]) => [diagTag(`detail:${name}`), d]),
+    ...Object.entries(profileSchemas).map(([name, p]) => [diagTag(`profile:${name}`), p]),
+    ...sectionSchemas.map((l) => [diagTag(l.pkg, "section"), l]),
+  ]);
+  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet);
+  // ENUM DRIFT, advisory arm. `computeGate` consumes `mismatches` (the arm that BLOCKS); this is the other severity
+  // the drift guard is specified to have: a member only the STAND carries. It must NOT block — blocking would stop
+  // every migration the day a platform release adds a member — but it must reach the plan, because it is the only
+  // PROACTIVE staleness signal there is. The per-element `unknown-enum-member` ⚠ fires only once some page body
+  // happens to name the member; this fires on the vocabulary itself, so an operator on a newer platform is told the
+  // engine's table is short before a page depends on it. Computed here rather than in `computeGate` precisely so it
+  // cannot be mistaken for a gate reason.
+  const driftAdvisory = enumDriftIssues(manifest.enumVocabulary);
+  if (driftAdvisory.newMembers.length)
+    changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
+      reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
   // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,

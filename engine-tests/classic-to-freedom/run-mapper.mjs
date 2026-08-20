@@ -5,7 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -441,7 +441,13 @@ const umCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", refModules:
   di({ name: "EscalateButton", parentName: "Header", propertyName: "items" }),                        // custom button → unmapped
   di({ name: "SlaGroup", parentName: "Header", propertyName: "items", caption: "getSla" }),           // childless + struct NAME + content → must surface
   di({ name: "RealGroup", parentName: "Header", propertyName: "items", itemType: 7 }),                 // CONTAINER whose whole subtree maps to nothing → surfaces ONCE
-  di({ name: "RealGroupLabel", parentName: "RealGroup", propertyName: "items", caption: "x" })] })])); // its only child, itself unmapped
+  di({ name: "RealGroupLabel", parentName: "RealGroup", propertyName: "items", caption: "x" }),        // its only child, itself unmapped
+  // The retired-heuristic case, restored: `RealGroup` gained an explicit `itemType: 7` in this ticket, which took
+  // the ORIGINAL scenario (struct-shaped NAME + NO itemType + unmapped children) out of the suite. `SlaGroup` above
+  // covers struct-name + no itemType while CHILDLESS; this covers it with a subtree, which is the combination the
+  // removed `SOFT_STRUCT_RX` used to silence.
+  di({ name: "LegacyGroup", parentName: "Header", propertyName: "items" }),
+  di({ name: "LegacyGroupLabel", parentName: "LegacyGroup", propertyName: "items", caption: "y" })] })]));
 check("unmapped-component: a client LABEL/container with no Freedom element is surfaced (LOUD, not silent)",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "TimerLabel"));
 check("unmapped-component: a custom *Button is surfaced with card-action guidance",
@@ -459,6 +465,12 @@ check("unmapped-component: a CHILDLESS struct-named content item (SlaGroup) IS s
 check("unmapped-component: a CONTAINER whose whole subtree maps to nothing surfaces ONCE, at the block root",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroup")
   && !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroupLabel"),
+  () => umCs.needsDecision.filter(n => n.kind === "unmapped-component").map(n => n.item));
+// …and the same rule with NO stated itemType and a struct-shaped name: the name is behaviourally inert now, so this
+// takes the identical path. Pinned separately because it is the exact input the removed name heuristic silenced.
+check("unmapped-component: a struct-NAMED container that states NO itemType and whose subtree maps to nothing also surfaces ONCE, at the block root",
+  umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "LegacyGroup")
+  && !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "LegacyGroupLabel"),
   () => umCs.needsDecision.filter(n => n.kind === "unmapped-component").map(n => n.item));
 // review (s-vanislemarina #2/#5): a CONTAINER whose children were MAPPED (a photo wrapper, a profile island, a
 // header column block) is a real layout container — NOT an unmapped micro-widget — even when its NAME misses the
@@ -7198,9 +7210,39 @@ try {
   check("ENG-95412: the pinned enums are complete — ViewItemType 29, ContentType 7, DataValueType 49 members",
     Object.keys(VIEW_ITEM_TYPE).length === 29 && Object.keys(CONTENT_TYPE).length === 7 && Object.keys(DATA_VALUE_TYPE).length === 49,
     () => ({ vit: Object.keys(VIEW_ITEM_TYPE).length, ct: Object.keys(CONTENT_TYPE).length, dvt: Object.keys(DATA_VALUE_TYPE).length }));
-  check("ENG-95412: every ViewItemType member has a role in the item-kind dispatch (a member with no role would fall through unnamed)",
-    Object.values(VIEW_ITEM_TYPE).every((v) => itemKindName({ itemType: v })),
-    () => Object.values(VIEW_ITEM_TYPE).filter((v) => !itemKindName({ itemType: v })));
+  // No numeric value may repeat: BOTH reverse maps derived from these tables (`ITEM_KIND_NAME` in mapper.mjs and
+  // `DATAVALUETYPE_CODE`) are built with `Object.fromEntries`, which silently keeps the LAST writer — a duplicate
+  // would mis-label a kind in every typed ⚠ and route a data type to the wrong control while the count check above
+  // still passed. Since the pinned numbers cannot be checked against core `sysenums.js` from this repo, this and
+  // the count are the only standing detectors the transcription has.
+  const dupValues = (t) => Object.entries(t).filter(([, v], _i, all) => all.filter(([, w]) => w === v).length > 1);
+  check("ENG-95412: no pinned enum repeats a numeric value — the derived reverse maps keep the LAST writer, so a duplicate would silently mis-label a kind",
+    [VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE].every((t) => new Set(Object.values(t)).size === Object.keys(t).length),
+    () => ({ vit: dupValues(VIEW_ITEM_TYPE), ct: dupValues(CONTENT_TYPE), dvt: dupValues(DATA_VALUE_TYPE) }));
+  // AC 2's central claim, asserted rather than tallied by a reader. It must be checked through `itemRoleOf`, which
+  // has NO fallback: `itemRole`'s `|| ROLE.UNMAPPED` tail and `itemKindName`'s `|| \`itemType n\`` tail both return
+  // something truthy for a member that was never listed, so a check written against either passes even if
+  // `ITEM_ROLE` were `{}` — and a GRID_LAYOUT dropped from the table would silently stop being structural.
+  const rolesByMember = Object.entries(VIEW_ITEM_TYPE).map(([name, v]) => [name, itemRoleOf(v)]);
+  const unroled = rolesByMember.filter(([, r]) => r === undefined).map(([name]) => name);
+  check("ENG-95412: every one of the 29 ViewItemType members has an EXPLICIT role in the dispatch table (no member relies on the unmapped fallback)",
+    unroled.length === 0 && rolesByMember.length === 29,
+    () => ({ membersWithNoRole: unroled, counted: rolesByMember.length }));
+  // The DISTRIBUTION, not just presence: a member silently re-classified (structural → unmapped) keeps every
+  // presence check green, and that is exactly the drift the dispatch table exists to prevent.
+  const roleTally = rolesByMember.reduce((a, [, r]) => ({ ...a, [r]: (a[r] || 0) + 1 }), {});
+  check("ENG-95412: the role distribution over the pinned table is exactly 5 structural / 4 decoration / 1 field / 1 container / 18 unmapped",
+    roleTally[ITEM_ROLES.STRUCT] === 5 && roleTally[ITEM_ROLES.DECOR] === 4 && roleTally[ITEM_ROLES.FIELD] === 1
+    && roleTally[ITEM_ROLES.CONTAINER] === 1 && roleTally[ITEM_ROLES.UNMAPPED] === 18
+    && Object.values(roleTally).reduce((a, b) => a + b, 0) === 29,
+    () => roleTally);
+  // A member added to the enum without a role must FAIL, not degrade: set-equality between the two tables is what
+  // makes the next enum bump a test failure instead of a silent reclassification.
+  check("ENG-95412: the dispatch table's keys are exactly the pinned ViewItemType values — a member added to the enum without a role fails here",
+    new Set(Object.values(VIEW_ITEM_TYPE)).size === 29
+    && Object.values(VIEW_ITEM_TYPE).every((v) => itemRoleOf(v) !== undefined)
+    && Object.values(VIEW_ITEM_TYPE).every((v) => itemKindName({ itemType: v }) !== `itemType ${v}`),
+    () => Object.values(VIEW_ITEM_TYPE).filter((v) => itemRoleOf(v) === undefined));
 
   // A RADIO_GROUP: recognised, and reported BY KIND. The old text ("classic component 'X' produced no Freedom
   // element — non-standard UI") told the reader nothing they could act on although the schema stated the kind.
@@ -7232,7 +7274,8 @@ try {
     `{operation:"insert",name:"SepA",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU_SEPARATOR}}`,
     `{operation:"insert",name:"TipA",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.TIP}}`,
   ].join(","));
-  const chromeRows = (decRun.coverage?.rows || []).filter((r) => r.disposition === "chrome").map((r) => r.name).sort();
+  const chromeRows = (decRun.coverage?.rows || []).filter((r) => r.disposition === "chrome")
+    .map((r) => r.name).sort((a, b) => a.localeCompare(b));
   check("ENG-95412: pure decoration (MENU_SEPARATOR / TIP) is recorded as `chrome` in the ledger and raises NO ⚠",
     chromeRows.join(",") === "SepA,TipA"
     && !decRun.changeSet.needsDecision.some((d) => d.item === "SepA" || d.item === "TipA"),
@@ -7240,6 +7283,26 @@ try {
   check("ENG-95412: decoration is not `unaccounted` — it never blocks the coverage gate over a menu separator",
     !(decRun.coverage?.issues || []).some((i) => /SepA|TipA/.test(i)),
     () => decRun.coverage?.issues);
+  // PRECEDENCE between the two auto-accounted dispositions, pinned by a test rather than left to branch order in
+  // `disposition()`. `chrome` is ranked ABOVE `fromTemplate`, so a base-template separator or tooltip — which most
+  // real pages carry — counts as `chrome`, not `context`. That shift went in unasserted; both sides are pinned here
+  // so a future reordering is a failure rather than a silent change in every ledger total. Driven through
+  // `buildCoverage` directly: the precedence is a property of the disposition function, and a synthetic `eff` states
+  // the one input combination that discriminates (templateOwned AND decoration) without a bespoke seed fixture.
+  const decEff = { items: [
+    { name: "TplSep", itemType: VIEW_ITEM_TYPE.MENU_SEPARATOR, templateOwned: true, provenance: ["BasePageV2"] },
+    { name: "OwnSep", itemType: VIEW_ITEM_TYPE.MENU_SEPARATOR, templateOwned: false, provenance: ["P"] },
+    { name: "TplField", bindTo: "Name", templateOwned: true, provenance: ["BasePageV2"] },
+  ], methods: [], attributes: [], messages: [], mixins: [], moduleDeps: [], details: [] };
+  const decCov = buildCoverage({ eff: decEff, changeSet: { needsDecision: [], viewConfigDiff: [] }, manifest: {} });
+  const dispOf = (n) => decCov.rows.find((r) => r.name === n)?.disposition;
+  check("ENG-95412: `chrome` outranks `context` — a TEMPLATE-OWNED decoration row is `chrome`, while a template-owned NON-decoration row stays `context`",
+    dispOf("TplSep") === "chrome" && dispOf("OwnSep") === "chrome" && dispOf("TplField") === "context",
+    () => decCov.rows.map((r) => `${r.name}:${r.disposition}(fromTemplate=${r.fromTemplate})`));
+  check("ENG-95412: a template-owned decoration row keeps `fromTemplate: true` — the disposition changes, the provenance is not rewritten",
+    decCov.rows.find((r) => r.name === "TplSep")?.fromTemplate === true
+    && decCov.rows.find((r) => r.name === "OwnSep")?.fromTemplate === false,
+    () => decCov.rows.map((r) => ({ name: r.name, disposition: r.disposition, fromTemplate: r.fromTemplate })));
 
   // An enum member the pinned table does not carry: identified BY NAME, advisory, and on the plan. Blocking here
   // produced an instruction nobody could act on (the body is correct; the table is short a member).
@@ -7289,6 +7352,52 @@ try {
     && cf("T")?.type === "crt.DateTimePicker" && cf("T")?.pickerType === "time"
     && cf("C")?.type === "crt.Input" && cf("E")?.type === "crt.ComboBox",
     () => ({ G: cf("G"), T: cf("T"), C: cf("C"), E: cf("E") }));
+
+  // …and the other half of AC 3: a type Classic's own `generateEditControl` refuses is IDENTIFIED but gets NO
+  // control, so the loud `field-control` decision still fires. HASH_TEXT (23) / SECURE_TEXT (24) are the cases that
+  // matter most — binding an encrypted or hashed column to a plain editable `crt.Input` would put a secret on a
+  // cleartext field, and `fieldTypeLabel` renders both as `Text`, so plan.md could not tell the operator either.
+  const secCols = { H: { type: "23" }, S: { type: "24" }, I: { type: "37" } };
+  const secRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: secCols,
+    schemas: [{ pkg: "P", body: gmBody("", Object.keys(secCols).map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")) }] }, { baseDir: FIX });
+  // `field-control` is emitted as ONE aggregated row naming its columns in the reason, so assert against that.
+  // The field still defaults to `crt.Input` in the ChangeSet — the invariant is that the DECISION fires, so a human
+  // confirms the control on-stand rather than the engine quietly claiming it knows one.
+  const secCtl = secRun.changeSet.needsDecision.find((d) => d.kind === "field-control");
+  check("ENG-95412: HASH_TEXT / SECURE_TEXT / STAGE_INDICATOR are identified but keep raising the loud `field-control` decision — never silently mapped to a control the engine claims to know",
+    !!secCtl && ["H", "S", "I"].every((n) => new RegExp(`\\b${n}\\b`).test(secCtl.reason)),
+    () => ({ needsDecision: secRun.changeSet.needsDecision.filter((d) => d.kind === "field-control"),
+      emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
+
+  // The echo is UNTRUSTED input. `in` would let an inherited `Object.prototype` key count as a pinned member and
+  // compare it against a native function, so a malformed echo produced a BLOCKING mismatch reading
+  // "engine function toString() { [native code] }" — and a genuine stand member with such a name never reached
+  // `newMembers`. `Object.hasOwn` is what makes both arms correct; these pin it.
+  const protoEcho = enumDriftIssues({ ViewItemType: { toString: 5, constructor: 9, valueOf: 1 } });
+  check("ENG-95412: drift — inherited Object.prototype keys in the echo are NOT pinned members (no bogus blocking mismatch)",
+    protoEcho.mismatches.length === 0 && protoEcho.newMembers.length === 3,
+    () => protoEcho);
+  const protoRun = gmRun(null, "", { enumVocabulary: JSON.parse('{"ViewItemType":{"toString":5}}') });
+  check("ENG-95412: drift — a prototype-key echo does not block the gate, and surfaces as the non-blocking `enum-drift-advisory`",
+    !protoRun.gate.reasons.some((r) => /enum drift/.test(r))
+    && protoRun.changeSet.needsDecision.some((d) => d.kind === "enum-drift-advisory" && /ViewItemType\.toString/.test(d.reason)),
+    () => ({ reasons: protoRun.gate.reasons, advisory: protoRun.changeSet.needsDecision.filter((d) => d.kind === "enum-drift-advisory") }));
+
+  // AC 7's ADVISORY arm, end to end. `enumDriftIssues` computed `newMembers` from the start, but nothing consumed
+  // it — two of the three specified severities were implemented. This is the PROACTIVE staleness signal: it fires on
+  // the vocabulary itself, without waiting for some page body to happen to name the new member.
+  const advRun = gmRun(null, "", { enumVocabulary: { ViewItemType: { BRAND_NEW: 77 } } });
+  // Asserted as "contributes NO gate reason", not "gate is unblocked": this fixture blocks for an unrelated reason
+  // (`unresolvedParents: Header`, no seed), and `!blocked` would pass for the wrong reason on any fixture that
+  // happens to be clean — the claim under test is that the advisory arm never adds a reason of its own.
+  check("ENG-95412: a member only the STAND carries reaches the plan as `enum-drift-advisory` and contributes NO gate reason",
+    !advRun.gate.reasons.some((r) => /enum drift/.test(r))
+    && advRun.changeSet.needsDecision.some((d) => d.kind === "enum-drift-advisory" && /ViewItemType\.BRAND_NEW \(77\)/.test(d.reason) && /does not block/.test(d.reason)),
+    () => ({ blocked: advRun.gate.blocked, reasons: advRun.gate.reasons, nd: advRun.changeSet.needsDecision.filter((d) => d.kind === "enum-drift-advisory") }));
+  const noDriftRun = gmRun(null, "", { enumVocabulary: { ViewItemType: { DETAIL: 2 } } });
+  check("ENG-95412: a member only the ENGINE carries raises no advisory either — the arm is silent, not merely non-blocking",
+    !noDriftRun.changeSet.needsDecision.some((d) => d.kind === "enum-drift-advisory"),
+    () => noDriftRun.changeSet.needsDecision.filter((d) => d.kind === "enum-drift-advisory"));
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
