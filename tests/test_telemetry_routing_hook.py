@@ -26,12 +26,23 @@ _TMP = tempfile.mkdtemp(prefix="caadt-hook-tests-")
 NEWLINE = chr(10)
 STUB_CAPTURE_SOURCE = NEWLINE.join([
     "const fs = require('fs');",
-    "fs.appendFileSync(process.env.CAADT_STUB_CAPTURE, fs.readFileSync(0, 'utf8'));",
+    # Capturing is optional: a test that only cares about the ANSWER passes no capture path,
+    # and a stub that threw on the missing variable would die before answering - which then
+    # looks exactly like a clio that never ran.
+    "const capture = process.env.CAADT_STUB_CAPTURE;",
+    "if (capture) { fs.appendFileSync(capture, fs.readFileSync(0, 'utf8')); }",
 ]) + NEWLINE
 # `emitEvent` looks for the substring "recorded" in RAW stdout, so the status has to appear
 # unescaped. Nesting it inside a JSON-encoded text block yields (backslash-quote)recorded and
 # would make the stub look like a rejection - which it silently did until this was checked.
 RECORDED_REPLY = "process.stdout.write(JSON.stringify({result:{structuredContent:{success:true,status:'recorded'}}}));"
+# What clio answers when it refuses: an answer, just not one containing "recorded". A stub that
+# printed nothing instead would be indistinguishable from a clio that never ran, which the hook
+# resolves by the age of the answer rather than by its content.
+REJECTED_REPLY = ("process.stdout.write(JSON.stringify({result:{structuredContent:"
+                  "{success:false,status:'rejected',error:{code:'invalid-token'}}}}));")
+# A clio that hangs: the point of the promptness test, since the hook must not wait for it.
+HANGING_REPLY = "setTimeout(() => {}, 30000);"
 
 def _base_env() -> dict:
     return {
@@ -93,7 +104,7 @@ def run_hook(
     )
 
 
-def stub_clio(*, succeeds: bool = True) -> "tuple[str, Path]":
+def stub_clio(*, answers: str = "recorded") -> "tuple[str, Path]":
     """A stand-in for the clio binary that captures what the hook actually sends.
 
     The suite could assert only that the hook survives a MISSING clio: the default
@@ -105,18 +116,66 @@ def stub_clio(*, succeeds: bool = True) -> "tuple[str, Path]":
     The hook spawns `<clio> mcp-server`, so a file literally named `mcp-server` beside a `node`
     executable is a stub on every platform, with no shell and no real binary: `CAADT_TELEMETRY_CLIO`
     becomes `node`, and node runs an extension-less file as CommonJS.
+
+    `answers` picks what clio says back: `recorded` (stored), `rejected` (refused, e.g. an invalid
+    field), `hangs` (never answers, still running) or `silent` (exits without answering, which is
+    what a missing or broken clio looks like from here).
     """
     directory = Path(tempfile.mkdtemp(prefix="caadt-stub-clio-", dir=_TMP))
     capture = directory / "captured.jsonl"
     # `emitEvent` counts a send as delivered when stdout contains `"recorded"`, which is what clio
     # answers; a stub that prints nothing reproduces a rejection without restating clio's error shape.
-    reply = (
-        RECORDED_REPLY if succeeds else 'process.stdout.write("");'
-    )
+    reply = {"recorded": RECORDED_REPLY, "rejected": REJECTED_REPLY,
+             "hangs": HANGING_REPLY, "silent": ""}[answers]
     (directory / "mcp-server").write_text(
         STUB_CAPTURE_SOURCE + reply + NEWLINE, encoding="utf-8"
     )
     return str(directory), capture
+
+
+def await_payloads(capture: "Path", count: int, timeout: float = 20.0,
+                   event_name: "str | None" = None) -> "list[dict]":
+    """Wait for the detached emit to land, then return the payloads.
+
+    The emit is deliberately fire-and-forget — the hook returns before clio answers, so that a tool
+    call never waits on telemetry — which means a test that reads the capture the moment the hook
+    exits is racing the child it is asserting about.
+    """
+    # `event_name` narrows what is being waited FOR. Waiting on a raw total would be satisfied by
+    # the floor event plus one reading and return before the reading under test has landed.
+    def matching():
+        payloads = sent_payloads(capture)
+        return [p for p in payloads if event_name is None or p["event_name"] == event_name]
+
+    deadline = time.monotonic() + timeout
+    while len(matching()) < count and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return matching()
+
+
+def await_outcome(session: str, kind: str, timeout: float = 20.0) -> str:
+    """Wait until clio's answer for a dispatch has been written, and return it."""
+    answer = Path(_TMP, "caadt-telemetry-routing", f"{session}.{kind}-outcome")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if answer.exists() and answer.read_text(encoding="utf-8").strip():
+            return answer.read_text(encoding="utf-8")
+        time.sleep(0.05)
+    return ""
+
+
+def age_out_outcome(session: str, kind: str) -> None:
+    """Backdate an unanswered dispatch past the hook's grace period.
+
+    An empty answer is ambiguous — a child still starting looks exactly like a clio that never ran —
+    so the hook resolves it by age. Backdating makes that deterministic instead of a sleep.
+    """
+    answer = Path(_TMP, "caadt-telemetry-routing", f"{session}.{kind}-outcome")
+    answer.parent.mkdir(parents=True, exist_ok=True)
+    if not answer.exists():
+        answer.write_text("", encoding="utf-8")
+    old = time.time() - 60
+    os.utime(answer, (old, old))
 
 
 def sent_payloads(capture: "Path") -> "list[dict]":
@@ -359,7 +418,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-        floor = sent_payloads(capture)
+        floor = await_payloads(capture, 1)
         self.assertEqual(len(floor), 1)
         self.assertEqual(floor[0]["event_name"], "workflow_started")
         self.assertEqual(floor[0]["workflow"], "unattributed")
@@ -381,7 +440,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(sent_payloads(capture)[0]["coding_agent"], "Cursor")
+        self.assertEqual(await_payloads(capture, 1)[0]["coding_agent"], "Cursor")
 
     def test_omits_a_model_the_validator_would_refuse(self):
         # Claude Code writes synthetic assistant messages carrying model "<synthetic>". clio rejects
@@ -413,25 +472,27 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-        floor = sent_payloads(capture)[0]
+        floor = await_payloads(capture, 1)[0]
         # The last REAL model survives instead of being overwritten by the unusable one, and nothing
         # outside clio's token shape is ever sent.
         self.assertEqual(floor["model"], "claude-opus-5")
         self.assertNotIn("<", floor["model"])
 
-    def test_a_failed_floor_emit_is_retried_on_the_next_clio_call(self):
-        # The claim is taken before the emit, so a rejected send used to spend the one marker that
+    def test_a_refused_floor_emit_is_retried_on_the_next_clio_call(self):
+        # The claim is taken before the emit, so a refused send used to spend the one marker that
         # allows the floor and lose it permanently — the same failure mode the consent check above
-        # already guards against.
+        # already guards against. The refusal is now noticed on a later call rather than awaited,
+        # because the emit is fire-and-forget: see `dispatch` in the hook.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
-        failing, _ = stub_clio(succeeds=False)
+        failing, _ = stub_clio(answers="rejected")
         recording, capture = stub_clio()
 
         rejected = run_hook(
             {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
             telemetry_home=home, clio=NODE, capture_dir=failing,
         )
+        self.assertIn("rejected", await_outcome(session, "floor"))
         retried = run_hook(
             {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
             telemetry_home=home, clio=NODE, capture=capture, capture_dir=recording,
@@ -439,44 +500,98 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         for result in (rejected, retried):
             self.assertEqual(result.returncode, 0)
-        floor = [p for p in sent_payloads(capture) if p["event_name"] == "workflow_started"]
+        floor = await_payloads(capture, 1, event_name="workflow_started")
         self.assertEqual(len(floor), 1, "the floor must be re-attempted after a send that stored nothing")
+
+    def test_a_clio_that_never_answers_is_retried_once_the_grace_has_passed(self):
+        # A detached spawn reports nothing to this process: a clio that is not installed produces no
+        # answer and no visible error, so an unanswered dispatch must not wait for one forever. The
+        # answer's age decides, and the test backdates it instead of sleeping.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        silent, _ = stub_clio(answers="silent")
+        recording, capture = stub_clio()
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                 telemetry_home=home, clio=NODE, capture_dir=silent)
+        age_out_outcome(session, "floor")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                 telemetry_home=home, clio=NODE, capture=capture, capture_dir=recording)
+
+        self.assertEqual(
+            len(await_payloads(capture, 1, event_name="workflow_started")), 1,
+            "an answer that never arrives must eventually count as a refusal",
+        )
+
+    def test_returns_promptly_when_clio_hangs(self):
+        # The whole point of the hand-off. This runs inside PostToolUse, so any wait here is time the
+        # developer's own tool call spends blocked — the previous implementation held it for as long
+        # as clio took, up to a 15s timeout, contradicting the invariant AGENTS.md states.
+        session = str(uuid.uuid4())
+        hanging, capture = stub_clio(answers="hangs")
+
+        started = time.monotonic()
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"), clio=NODE,
+            capture=capture, capture_dir=hanging,
+        )
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(result.returncode, 0)
+        self.assertLess(elapsed, 5.0, "the hook must not wait for clio to answer")
+        # And the event was still handed off rather than skipped: the hanging stub captured it.
+        self.assertEqual(len(await_payloads(capture, 1)), 1)
 
     def test_a_clio_that_never_records_stops_being_retried(self):
         # Retrying without end would buy a process spawn on every tool call of the session.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
-        failing, capture = stub_clio(succeeds=False)
+        failing, capture = stub_clio(answers="rejected")
 
-        for _ in range(5):
+        for attempt in range(5):
             result = run_hook(
                 {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
                 telemetry_home=home, clio=NODE, capture=capture, capture_dir=failing,
             )
             self.assertEqual(result.returncode, 0)
+            # Each refusal has to be on disk before the next call can notice it, since the answer
+            # arrives after the hook has already returned.
+            await_outcome(session, "floor")
 
-        attempts = [p for p in sent_payloads(capture) if p["event_name"] == "workflow_started"]
+        attempts = await_payloads(capture, 3, event_name="workflow_started")
         self.assertEqual(len(attempts), 3, "bounded by FLOOR_ATTEMPT_LIMIT")
 
-    def test_a_rejected_reading_is_not_recorded_as_reported(self):
-        # Marking a rejected send as delivered hides the failure behind a series that merely looks
-        # sparse, and a persistently rejected field would end the series in silence.
+    def test_a_refused_reading_is_re_sent_rather_than_remembered(self):
+        # Marking a refused send as delivered hides the failure behind a series that merely looks
+        # sparse, and a persistently refused field would end the series in silence. The reading is
+        # therefore held as pending and only becomes the reported figure once clio confirms it.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
-        failing, _ = stub_clio(succeeds=False)
+        failing, capture = stub_clio(answers="rejected")
         transcript = write_transcript()
 
         run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
                  telemetry_home=home, clio=NODE, capture_dir=failing)
         run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
-            telemetry_home=home, clio=NODE, capture_dir=failing,
+            telemetry_home=home, clio=NODE, capture=capture, capture_dir=failing,
+        )
+        await_outcome(session, "usage")
+        # A second Stop on the SAME transcript: the refused reading was never confirmed, so the
+        # session's reported total has not moved and the reading is sent again.
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
+            telemetry_home=home, clio=NODE, capture=capture, capture_dir=failing,
         )
 
-        self.assertFalse(
-            Path(_TMP, "caadt-telemetry-routing", f"{session}.usage").exists(),
-            "a reading clio did not accept must be retried, not remembered as sent",
-        )
+        readings = await_payloads(capture, 2, event_name="session_usage")
+        self.assertGreaterEqual(len(readings), 2,
+                                "a reading clio did not accept must be re-sent, not remembered as sent")
+        marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
+        if marker.exists():
+            self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 0,
+                             "nothing may be recorded as reported until clio confirms it")
 
     def test_sweeps_stale_markers_but_not_on_every_call(self):
         # Marker files are per session and nothing removes them when a session ends, so they need a
@@ -652,13 +767,11 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         for result in (first, again, reentered):
             self.assertEqual(result.returncode, 0)
-        # The marker carries the last reported figure and the transcript size it was read at, so an
-        # unchanged total is skipped rather than re-sent. The fixture totals 7 output tokens.
-        marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
-        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 7)
-        # And the series itself carries exactly one reading, which is the claim the marker stands for.
-        readings = [p for p in sent_payloads(capture) if p["event_name"] == "session_usage"]
+        # The series carries exactly one reading: the repeats were skipped rather than re-sent. The
+        # fixture totals 7 output tokens.
+        readings = await_payloads(capture, 1, event_name="session_usage")
         self.assertEqual(len(readings), 1)
+        self.assertEqual(readings[0]["output_tokens"], 7)
 
     def test_reports_again_once_the_session_has_spent_more(self):
         # The point of the series: a live session was measured freezing its total at the end of the
@@ -691,8 +804,8 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(later.returncode, 0)
-        marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
-        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 18,
+        readings = await_payloads(capture, 2, event_name="session_usage")
+        self.assertEqual([reading["output_tokens"] for reading in readings], [7, 18],
                          "a grown total must be reported, or every turn after the first goes unmeasured")
 
     def test_stays_silent_on_stop_when_the_session_never_touched_clio(self):

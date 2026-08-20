@@ -23,7 +23,7 @@
 // that spawns a process must not sit in front of the tool it is observing.
 //
 // Never blocks, never fails the originating call. Any error exits 0 with no output.
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -91,13 +91,16 @@ function identityRoutingLines() {
 		'    such as `unknown`;'
 	];
 }
-const CALL_TIMEOUT_MS = 15_000;
 // clio's own validator for `model`, `workflow` and `variant`: 1-64 chars of lowercase letters,
 // digits, '.', '_' or '-'. Restated here because sending a value it refuses costs the event.
 const MODEL_TOKEN = /^[a-z0-9._-]{1,64}$/;
 // A failed floor emit releases its claim so the next clio call retries, but not without end: an
 // installation whose clio refuses every send would otherwise spawn one for every tool call.
 const FLOOR_ATTEMPT_LIMIT = 3;
+// How long an unanswered dispatch stays 'pending' before it is read as a refusal. Comfortably longer
+// than clio's measured start-up (~1.2s for the whole exchange), short enough that a session with a
+// broken clio still retries within itself.
+const OUTCOME_GRACE_MS = 10_000;
 
 // clio's telemetry surface: reminding a session that is already sending telemetry is circular, and
 // emitting a floor event in reaction to a floor event would recurse.
@@ -327,23 +330,44 @@ function claimOnce(sessionId, suffix) {
 // How much output the session had already reported. A turn that spent nothing — the developer typed
 // something the agent answered from context, or a Stop the host repeated — would otherwise re-send an
 // identical row, which is noise in a series whose whole meaning is that it grows.
+//
+// A reading dispatched but not yet confirmed is held as `pending` and only becomes the reported
+// figure once clio says it stored it. Anything else — refused, or an answer still not written — leaves
+// the older confirmed figure in place, so the reading is sent again.
 function lastReported(sessionId) {
+	let stored;
 	try {
-		const stored = JSON.parse(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'));
-		return { output: stored.output || 0, size: stored.size || 0 };
+		stored = JSON.parse(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'));
 	} catch {
 		return { output: 0, size: 0 };
 	}
+	let reported = { output: stored.output || 0, size: stored.size || 0 };
+	if (stored.pending) {
+		const outcome = readOutcome(sessionId, 'usage');
+		if (outcome === 'recorded') {
+			reported = { output: stored.pending.output || 0, size: stored.pending.size || 0 };
+		}
+		if (outcome !== 'pending') {
+			writeUsageMarker(sessionId, reported, null);
+		}
+	}
+	return reported;
 }
 
-function rememberReported(sessionId, outputTokens, transcriptSize) {
+function writeUsageMarker(sessionId, reported, pending) {
 	try {
 		fs.writeFileSync(markerPath(sessionId, 'usage'), JSON.stringify({
-			output: outputTokens, size: transcriptSize
+			output: reported.output, size: reported.size, ...(pending ? { pending } : {})
 		}));
 	} catch {
 		// A marker we cannot write costs one duplicate reading, never a lost one.
 	}
+}
+
+function rememberPending(sessionId, outputTokens, transcriptSize) {
+	// The dispatch just truncated this kind's outcome file, so the reading is unconfirmed by
+	// construction; lastReported promotes it on a later Stop once clio's answer is there.
+	writeUsageMarker(sessionId, lastReported(sessionId), { output: outputTokens, size: transcriptSize });
 }
 
 // Path the transcript is read from, resolved the same way `readSessionUsage` resolves it.
@@ -455,8 +479,8 @@ function isWriteCall(payload) {
 }
 
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
-// line-oriented and processes the messages in order, so the whole exchange fits in a single
-// spawnSync without an async client.
+// line-oriented and processes the messages in order, so the whole exchange is a single write and
+// needs no async client - which is what lets the call be handed off and left to finish on its own.
 function emitEvent(sessionId, usage, eventName) {
 	const request = [
 		{
@@ -508,13 +532,81 @@ function emitEvent(sessionId, usage, eventName) {
 		.map(message => JSON.stringify(message))
 		.join('\n');
 
-	const result = spawnSync(CLIO, ['mcp-server'], {
-		input: `${request}\n`,
-		encoding: 'utf8',
-		timeout: CALL_TIMEOUT_MS,
-		windowsHide: true
-	});
-	return typeof result.stdout === 'string' && result.stdout.includes('"recorded"');
+	return dispatch(sessionId, eventName === 'session_usage' ? 'usage' : 'floor', request);
+}
+
+// Fire-and-forget, deliberately. This runs inside a PostToolUse hook, so anything awaited here is
+// time the developer's own tool call spends waiting: the previous spawnSync blocked the call it was
+// observing for as long as clio took, up to CALL_TIMEOUT_MS, which contradicted the invariant this
+// toolkit states everywhere else — telemetry must never gate or delay the task. A slow spawn (an
+// exe being virus-scanned) or a hung clio made every matching tool call inherit the stall.
+//
+// The request goes through a FILE rather than a pipe: writing to a detached child's stdin and then
+// letting this process exit can drop the buffered bytes, which would lose the event silently. clio's
+// answer is redirected to a second file, so the outcome survives this process and the NEXT hook
+// invocation can act on it — that is what keeps the retry and the usage gating working without
+// waiting here for either.
+function dispatch(sessionId, kind, request) {
+	let stdin;
+	let stdout;
+	try {
+		const requestFile = markerPath(sessionId, `${kind}-request`);
+		fs.writeFileSync(requestFile, `${request}\n`);
+		stdin = fs.openSync(requestFile, 'r');
+		// Truncated on open, so a stale answer from an earlier dispatch is never read as this one's.
+		stdout = fs.openSync(markerPath(sessionId, `${kind}-outcome`), 'w');
+		const child = spawn(CLIO, ['mcp-server'], {
+			detached: true,
+			stdio: [stdin, stdout, 'ignore'],
+			windowsHide: true
+		});
+		child.unref();
+		return true;
+	} catch {
+		return false; // Could not even start: treated exactly like a rejection.
+	} finally {
+		for (const handle of [stdin, stdout]) {
+			try {
+				if (handle !== undefined) {
+					fs.closeSync(handle);
+				}
+			} catch {
+				// The child holds its own duplicate of the descriptor.
+			}
+		}
+	}
+}
+
+// What clio said about the PREVIOUS dispatch of this kind, read on a later invocation.
+//   'recorded'  clio stored the event.
+//   'rejected'  clio answered something else, or the spawn never produced an answer.
+//   'pending'   the answer has not landed yet — the child may still be running.
+//   'none'      nothing was ever dispatched.
+// Anything short of 'recorded' is retried, so an answer that arrives late costs a duplicate reading
+// rather than a lost one, which is the right way round for a series whose meaning is that it grows.
+function readOutcome(sessionId, kind) {
+	const file = markerPath(sessionId, `${kind}-outcome`);
+	let stat;
+	let answer = '';
+	try {
+		stat = fs.statSync(file);
+		answer = fs.readFileSync(file, 'utf8');
+	} catch {
+		return 'none';
+	}
+	if (answer.includes('"recorded"')) {
+		return 'recorded';
+	}
+	if (answer.trim() !== '') {
+		return 'rejected';
+	}
+	// Empty, which is ambiguous: the child may still be starting, or it may never have run at all.
+	// A clio that is not installed produces no answer AND no error this process can see, because the
+	// spawn is detached and its error event would arrive after this process is gone. So an answer
+	// that has not appeared within the grace period counts as a refusal — otherwise a broken install
+	// would leave the floor waiting on an answer that is never coming, which is the failure this
+	// whole outcome mechanism exists to prevent.
+	return Date.now() - stat.mtimeMs < OUTCOME_GRACE_MS ? 'pending' : 'rejected';
 }
 
 function main() {
@@ -579,11 +671,12 @@ function reportSessionUsage(payload, sessionId) {
 	if (!usage.hasData || usage.output_tokens <= previous.output) {
 		return;
 	}
-	// Recorded as reported only when it was actually delivered. Marking a rejected send as delivered
-	// hides the failure behind a series that merely looks sparse, and a persistently rejected field
-	// would end the series silently; gating the marker makes the very next turn retry.
+	// Remembered as PENDING, not as reported: the answer cannot be awaited here, so the reading is
+	// promoted to reported only once a later Stop sees clio confirm it. Marking a refused reading as
+	// delivered hides the failure behind a series that merely looks sparse, and a persistently
+	// refused field would end the series in silence.
 	if (emitEvent(sessionId, usage, 'session_usage')) {
-		rememberReported(sessionId, usage.output_tokens, size);
+		rememberPending(sessionId, usage.output_tokens, size);
 	}
 }
 
@@ -614,20 +707,22 @@ function routeClioCall(payload, sessionId) {
 		// would interrupt the developer's task with a question they did not ask for.
 		return;
 	}
-	const floorClaimed = claimOnce(sessionId, 'claimed');
+	let floorClaimed = claimOnce(sessionId, 'claimed');
+	if (!floorClaimed && readOutcome(sessionId, 'floor') === 'rejected') {
+		// A dispatch this session already made came back refused, so the claim it spent bought
+		// nothing. Give it back and use it here rather than on some later call, so the floor - the
+		// tier this design calls guaranteed - is retried while the session is still running.
+		releaseFloorClaimForRetry(sessionId);
+		floorClaimed = claimOnce(sessionId, 'claimed');
+	}
 	const remind = claimOnce(sessionId, 'turn') || (isWriteCall(payload) && claimOnce(sessionId, 'write'));
 	if (!floorClaimed && !remind) {
 		return;
 	}
 	if (floorClaimed) {
-		// Emitted whether or not the routing reaches the agent: if clio rejected the call (an older clio,
-		// a broken install), the agent's own stages are then the only telemetry there is.
-		//
-		// A failure gives the claim back, for the same reason consent is checked before claiming: a
-		// one-shot marker spent on an attempt that stored nothing loses the floor permanently, and the
-		// causes are transient often enough to be worth one more try (a rejected field, a clio being
-		// replaced mid-session). Bounded by FLOOR_ATTEMPT_LIMIT so a permanently refusing clio does not
-		// buy a process spawn on every tool call for the rest of the session.
+		// Dispatched whether or not the routing reaches the agent: if clio refuses the call (an older
+		// clio, a broken install), the agent's own stages are then the only telemetry there is. The
+		// outcome is read on a later call rather than awaited here — see dispatch().
 		if (!emitEvent(sessionId, readSessionUsage(payload), 'workflow_started')) {
 			releaseFloorClaimForRetry(sessionId);
 		}
