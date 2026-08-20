@@ -13,17 +13,33 @@ Sections: all (default) | summary | stage | tool | role | agent | ttl | check.
 Formats: text (default) | md (Markdown tables for Jira) | json (structured).
 The export directory is the folder that holds ``transcript.jsonl`` and the
 ``<session-id>/`` subtree; nothing about the run is hard-coded.
+
+The path arguments are resolved through ``runtime.path_store``: the string you
+type selects among entries that already exist under your home directory, and
+never itself becomes a path the tool hands to the OS. An export somewhere else
+on the machine is refused rather than read -- move it under your profile.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
+from pathlib import Path
 
 import export as export_mod
 import metrics
 from report import Report
+
+# The shared path-resolution boundary lives with the rest of the repository's
+# Python runtime, not in this tool: `mcp_client.py` and `installer/install.py`
+# take caller-supplied paths the same way and are meant to adopt it next. The
+# release manifest ships `runtime/` and `skills/` together, so this relative
+# hop holds in an installed plugin as well as in a checkout.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from runtime import path_store  # noqa: E402  (needs the sys.path hop above)
 
 _DEFAULTED_TO_1 = " (defaulted to 1)"
 
@@ -92,30 +108,6 @@ def _print_normalization(report: Report) -> None:
           + (f"  {sorted(report.built_pages)}" if report.built_pages else "  (defaulted to 1)"))
     print(f"    weighted cost (total)       : {weighted / 1e6:,.2f}M input-equiv tokens")
     print(f"    weighted cost per built page: {weighted / pages / 1e6:,.2f}M input-equiv tokens")
-
-
-def _confined_export_dir(path: str) -> str:
-    """Resolve an export directory and confine it to the current working dir.
-
-    The working directory is a fixed base that does NOT come from the command
-    line, so requiring the (argument-derived) export path to resolve inside it
-    is a genuine path-injection guard (SonarCloud S8707): the tool will not read
-    a session export that lives outside the directory it was launched from.
-    Run the counter from a parent of your export (e.g. ``cd`` into the folder
-    that holds it) and pass a path beneath that. Returns the resolved path;
-    raises ValueError (with a user-facing message) if the path escapes the base.
-    """
-    base = os.path.realpath(os.getcwd())
-    resolved = os.path.realpath(path)
-    if not export_mod.within_root(base, resolved):
-        raise ValueError(
-            f"export directory must be inside the current working directory\n"
-            f"    export : {resolved}\n"
-            f"    cwd    : {base}\n"
-            f"Run the counter from a parent of the export (cd into it) and pass "
-            f"a path beneath the current directory."
-        )
-    return resolved
 
 
 def _positive_pages(value: str) -> int:
@@ -522,13 +514,17 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
     return 0
 
 
-def main(argv=None) -> int:
+def main(argv=None, store=None) -> int:
     _reconfigure_stdout()
     parser = argparse.ArgumentParser(
         prog="cost-counter",
         description="Report the cost of a Classic->Freedom migration run from a session export.",
     )
-    parser.add_argument("export_dir", help="session-export directory (holds transcript.jsonl)")
+    parser.add_argument(
+        "export_dir",
+        help="session-export directory (holds transcript.jsonl); must live somewhere "
+             "under your home directory",
+    )
     parser.add_argument(
         "section", nargs="?", default="all",
         choices=["all", "summary", "stage", "tool", "role", "agent", "ttl", "check"],
@@ -550,10 +546,16 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
     cfg = metrics.CostConfig()
+    # Everything below reads the file system, and every path it reads comes out
+    # of the store -- the argument only ever selects among entries that are
+    # already there (see runtime/path_store.py). `store` is injectable so the
+    # tests can stand up an export in a temp directory without the suite
+    # depending on where the machine puts a home directory.
+    store = store or path_store.home_store()
     try:
-        export_dir = _confined_export_dir(args.export_dir)
-        compare_dir = _confined_export_dir(args.compare) if args.compare else None
-    except ValueError as exc:
+        export_dir = store.resolve(args.export_dir)
+        compare_dir = store.resolve(args.compare) if args.compare else None
+    except path_store.PathStoreError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     if compare_dir is not None:
