@@ -1549,7 +1549,7 @@ check("ENG-95472: and there is ONE numbering rule, not one per file family — e
     dir = mkdtempSync(path.join(os.tmpdir(), "n2-agree-"));
     const r = spawnSync(process.execPath, [ENGINE_MJS, "-", "--units", "--slices", dir],
       { input: manifest, encoding: "utf8" });
-    const keys = r.stdout && r.stdout.trim().startsWith("{") ? JSON.parse(r.stdout).pages.map((pg) => pg.key) : [];
+    const keys = r.stdout?.trim().startsWith("{") ? JSON.parse(r.stdout).pages.map((pg) => pg.key) : [];
     // What the ENGINE actually wrote: read each slice back and note which number holds which key.
     const engineNo = {};
     for (const f of readdirSync(dir).filter((f) => f.startsWith("queue-"))) {
