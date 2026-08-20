@@ -1375,10 +1375,11 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
 // `set` = remove-then-reinsert-from-`values` (core `json-applier.js` L660-677): the element keeps its POSITION but
 // loses every property the op does not restate AND every child, because the runtime rebuilds it from `values` alone
 // and recovers only `index`/`parentName`/`propertyName` from the item it removed (L670-673).
-// LIMIT, stated because a golden must not imply otherwise: the runtime runs the whole `set` GROUP after every other
-// group (L299-306), while this engine replays in diff-array order. So a `set` whose page also relies on that
-// ordering is still not mirrored — see engine-internals.md. No real occurrence of `set` was found in a corpus of
-// 130 schema bodies across 5 real Classic pages, so this path is exercised only by goldens.
+// Bucket ordering IS mirrored now (`splitDiffOps`): the whole `set` group runs after every other group, exactly as
+// `applyOperations` does (L299-306) — the earlier note here saying the engine replayed in diff-array order is no
+// longer true. What is still NOT reproduced is insert ordering WITHIN a bucket (parent-chain depth, then `index`).
+// No real occurrence of `set` was found in a corpus of 130 schema bodies across 5 real Classic pages, so this path
+// is exercised only by goldens.
 function replaySet(op, cur, items, { seed, pkg }, warnings) {
   if (!cur) {
     items.set(op.name, makeItem(op, seed, pkg));
@@ -1390,7 +1391,14 @@ function replaySet(op, cur, items, { seed, pkg }, warnings) {
   let dropped = 0;
   for (const it of items.values()) {
     if (it.parent === op.name && !it.removed) {
-      it.removed = true; it.removedBy = pkg; it.removedBySeed = seed; it.cascadeRemoved = true; dropped++;
+      it.removed = true; it.removedBy = pkg; it.removedBySeed = seed;
+      // `cascadeRemoved` ONLY for template-owned children (PR #105 review, Major). `cascadeRemove` deliberately
+      // skips non-templateOwned items (see its `!it.templateOwned` guard), and `removed[]` filters out anything
+      // carrying the flag — so setting it unconditionally hid CLIENT-authored children of a replaced container from
+      // the decision rows entirely. The op's own warning counts them but does not name them, which is not the same
+      // thing: this engine's rule is that an element is never hidden, and a count is not an element.
+      if (it.templateOwned) it.cascadeRemoved = true;
+      dropped++;
     }
   }
   const fresh = makeItem(op, seed, pkg);

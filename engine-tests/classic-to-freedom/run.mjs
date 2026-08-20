@@ -196,6 +196,24 @@ const realRun = (...ops) => mergeHierarchy([parseSchema(realBody(ops.join(",")),
 // array-order semantics that the runtime does not have — see the group-ordering pins below.
 const realRun2 = (opsA, opsB) => mergeHierarchy([parseSchema(realBody(opsA), "A"), parseSchema(realBody(opsB), "B")]);
 
+/* ---- PR #105 review, Major: `set` must not hide CLIENT-authored children ----
+   `cascadeRemove` deliberately skips non-templateOwned items (its `!it.templateOwned` guard) so client-authored
+   removals surface individually, and `removed[]` filters out anything carrying `cascadeRemoved`. `replaySet` set that
+   flag on EVERY direct child, so a client element inside a replaced container vanished from the decision rows with no
+   per-element diagnostic — the op's warning counts dropped children but a count is not an element. Mixed ownership is
+   the only shape that discriminates, which is exactly the test the reviewer asked for. */
+const setMixedSeed = parseSchema(realBody([
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7}}`,
+  `{operation:"insert",name:"TplKid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`].join(",")), "Tpl");
+const setMixedClient = parseSchema(realBody([
+  `{operation:"insert",name:"CliKid",parentName:"Box",propertyName:"items",values:{bindTo:"Other"}}`,
+  `{operation:"set",name:"Box",values:{itemType:7}}`].join(",")), "Client");
+const setMixed = mergeHierarchy([setMixedClient], { seedTemplate: [setMixedSeed] });
+const setMixedRemoved = setMixed.removed.map((r) => r.name).sort();
+check("PR#105 Major: a `set` that drops a mixed-ownership child set keeps the CLIENT-authored child in removed[] as its own decision row, while the template-owned one is swept as structural cleanup",
+  setMixedRemoved.join(",") === "CliKid" && !setMixed.items.some((i) => ["TplKid", "CliKid"].includes(i.name)),
+  () => ({ removed: setMixedRemoved, items: setMixed.items.map((i) => i.name) }));
+
 /* ---- ENG-95412: aliases ----
    `saveAlias` (json-applier.js L554-566) keys the table by the ALIAS name and stores the REAL item name on it, which
    is what lets a later op target the element by the alias. It also carries `excludeOperations` (a whole op on that
@@ -330,8 +348,12 @@ check("ENG-95412: `set` replaces the element wholesale — the unrestated captio
   !!setBox && setBox.caption === null && setBox.parent === "Header" && setBox.itemType === 7
   && !setRun.items.some((i) => i.name === "Kid"),
   () => ({ box: setBox, items: setRun.items.map((i) => i.name) }));
-check("ENG-95412: a child dropped by `set` is structural cleanup, not a client decision — it does not appear in removed[] alongside deliberate removals",
-  !setRun.removed.some((r) => r.name === "Kid"),
+// REWRITTEN — this pinned the defect, not the invariant. Its `Kid` is CLIENT-authored (a single client layer), so
+// "does not appear in removed[]" asserted exactly the hiding the PR #105 review caught. That is also why the
+// mutation check passed on it: the pin agreed with the bug. The real invariant is ownership-dependent, and it is
+// pinned on the mixed-ownership fixture above; here the client-authored child must be VISIBLE.
+check("ENG-95412: a CLIENT-authored child dropped by `set` appears in removed[] — it is a decision the reader must see, not structural cleanup",
+  setRun.removed.some((r) => r.name === "Kid"),
   () => setRun.removed.map((r) => r.name));
 // The control arm that gives `set` its meaning: the SAME values via `merge` must keep both the caption and the child.
 // Two layers on purpose: in ONE layer the merge bucket runs before the inserts, so the merge would be a no-op and

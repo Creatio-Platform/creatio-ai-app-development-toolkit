@@ -41,6 +41,15 @@
 // reachability keys with `appliesWhen` already decided, the evidence-record ids, the ⚠ Confirm preflight items and a
 // leaf-first `buildOrder`. Run it BEFORE building: it is the only source of the keys `--built` must use — an
 // invented key is silently "not checked", never an error.
+// `--page <key>` narrows `--spec`, `--checklist` and `--units` to ONE published page key. An unknown key is exit 1,
+// never a silent fall-back to the whole artifact.
+// `--slices <dir>` (with `--units` or `--verify`) ALSO writes one file per published key — `queue-<n>.json` from
+// `--units`, `built-<n>.json` from the `--built` payload — so a build agent that owns one unit reads its own row
+// instead of the whole file. `<n>` is the page's 1-based POSITION in `pages[]`, not its key: a key is not a legal
+// filename and sanitising one is many-to-one. Each slice names its own page in `pageKey`. Additive, and written on
+// exit 2 as well: a run with open rows is exactly the round a builder needs its row.
+// `--page` and `--slices` COMBINE: the directory gets every published key's file AND stdout carries the one
+// page's slice. Neither suppresses the other.
 // `--verify --built <file>` = the VERIFIED done-gate: diff the ACTUALLY BUILT pages against expected deliverables.
 // `--built` is a JSON keyed BY PAGE — `{ pages: { "<key from --units>": { viewConfig, packageName,
 // parentSchemaName } | false }, reachability, evidence, judge }` — where `viewConfig` is clio `get-page`'s
@@ -62,7 +71,7 @@ import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
-  IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
+  pageUnitsSlice, builtSlice, IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2119,7 +2128,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions", "--slices"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2221,6 +2230,49 @@ function unmatchedResolutionsNote(unmatched) {
   return `migrate.mjs: ⚠ ${unmatched.length} --resolutions entr${unmatched.length === 1 ? "y" : "ies"} matched NO ⚠ Confirm question this plan asks: ${named}${more}. Check kind/item against \`preflight[]\` in this output — an answer nobody asked for reaches no builder.\n`;
 }
 
+// An unknown `--page` key FAILS: a caller that asked for one page must never be handed the whole artifact as
+// though it were that page's slice. One message for both slicers below.
+function requirePublishedKey(units, pageKey, fail) {
+  if (!(units.pages || []).some((p) => p.key === pageKey)) {
+    fail(`--page '${pageKey}' matches no page in this plan. Published keys: ${(units.pages || []).map((p) => p.key).join(", ") || "(none)"}. Use a key --units publishes.`);
+  }
+}
+// `--units --page <key>` — the queue slice for ONE key, or exit 1.
+function pageUnitsSliceOrFail(units, pageKey, fail) {
+  requirePublishedKey(units, pageKey, fail);
+  return pageUnitsSlice(units, pageKey);
+}
+// `--slices <dir>` — one file per published page key, so a build agent reads its OWN row and never the whole file.
+// A by-product of the `--units` / `--verify` run the caller already makes, and the payload comes from the same pure
+// slicer `--page` uses, so the two forms cannot disagree.
+// NAMED BY POSITION in `pages[]`, 1-based (`queue-1.json`), never by the page key: a key sanitised into a filename
+// is many-to-one — every non-Latin caption collapses to the same characters — and two keys landing on one file
+// hands a build agent another page's rows. A position cannot collide, and each slice carries its own `pageKey`, so
+// a consumer that composed the wrong number can tell.
+function writePageSlices(dir, prefix, units, sliceOf, fail) {
+  try { fs.mkdirSync(dir, { recursive: true }); }
+  catch (e) { fail(`cannot create the --slices directory '${dir}': ${e.message}`); }
+  // STALE SLICES ARE DELETED, never left behind. Numbers are reused, so a file from a longer plan sits there
+  // claiming to be a page this plan no longer publishes.
+  const keep = new Set((units.pages || []).map((_, i) => `${prefix}-${i + 1}.json`));
+  const isSlice = (f) => f.startsWith(`${prefix}-`) && f.endsWith(".json") && /^\d+$/.test(f.slice(prefix.length + 1, -5));
+  let present;
+  try { present = fs.readdirSync(dir); }
+  catch (e) { fail(`cannot read the --slices directory '${dir}': ${e.message}`); }
+  for (const f of present) {
+    if (isSlice(f) && !keep.has(f)) fs.rmSync(path.join(dir, f), { force: true });
+  }
+  const written = [];
+  (units.pages || []).forEach((pg, i) => {
+    const file = path.join(dir, `${prefix}-${i + 1}.json`);
+    try { fs.writeFileSync(file, JSON.stringify(sliceOf(pg.key), null, 2) + "\n"); }
+    catch (e) { fail(`cannot write the ${prefix} slice '${file}': ${e.message}`); }
+    written.push(file);
+  });
+  process.stderr.write(`migrate.mjs: wrote ${written.length} per-page ${prefix} slice(s) to ${dir} — hand each build agent its own file; nothing else needs to cut a row out of the whole one.\n`);
+  return written;
+}
+
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
 // stdout = the result JSON (parseable); diagnostics go to stderr. Bad input exits 1 with a clear message
 // (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
@@ -2267,8 +2319,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
   const pageArg = valueFlagArg(argv, "--page", "--page main", fail);
-  if (pageArg && !(specMode || checklistMode))
-    fail("`--page <key>` applies to `--spec` and `--checklist` — it renders that page's slice. Add one of them, or drop `--page`.");
+  if (pageArg && !(specMode || checklistMode || unitsMode || verifyMode))
+    fail("`--page <key>` applies to `--spec`, `--checklist`, `--units` and `--verify` — it renders that page's slice. Add one of them, or drop `--page`.");
+  // `--slices <dir>` — the PER-PAGE slice FILES, one per published key. `--units` and `--verify` only: those are the
+  // two runs that hold a whole build-state artifact, and accepting the flag elsewhere would leave a caller believing
+  // slices had been written.
+  const slicesDir = valueFlagArg(argv, "--slices", "--slices slices/", fail);
+  if (slicesDir && !(unitsMode || verifyMode))
+    fail("`--slices <dir>` applies to `--units` and `--verify` — it writes one per-page slice file per published key. Add one of them, or drop `--slices`.");
   if (verifyJsonFile && !verifyMode)
     fail("`--verify-json <file>` only applies to `--verify` — it writes THAT run's machine-readable verdict. Add `--verify --built <file>`, or drop `--verify-json`.");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
@@ -2331,18 +2389,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--units <manifest>` lose its manifest and die with a misleading JSON error.
   else if (unitsMode) {
     const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: readResolutions(resolutionsFile, fail) });
-    output = JSON.stringify(units, null, 2) + "\n";
+    // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
+    // leave a directory of files and a success note behind a failure line.
+    const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
+    if (slicesDir) writePageSlices(slicesDir, "queue", units, (k) => pageUnitsSlice(units, k), fail);
+    output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
   }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
+    // `--verify --built <file> --page <key>` — ONE page's row of the built file, printed. A READ, not the gate:
+    // no table and no verdict files, so a caller that needs one row never has to open the whole payload.
     // VALIDATE BEFORE RENDERING: `renderVerify` is called outside the try above, so a throw inside it surfaces as a
     // raw Node stack instead of a diagnosable message — and a malformed payload must be a loud exit 1, never a
     // table full of ⚠ rows that reads like a half-built page.
     const issue = builtPayloadIssue(built);
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Run `--units` on this manifest for the exact page keys.");
+    const builtUnits = pageUnits(result, checklistOpts(manifest));
+    // VALIDATE `--page` FIRST, before any file is written — the same order `--units` follows. Writing the slice
+    // directory and only then exiting 1 leaves a caller a populated directory to reconcile against a failure.
+    if (pageArg) requirePublishedKey(builtUnits, pageArg, fail);
+    // The PER-PAGE slices, written BEFORE the verdict files below so a bad `--slices` exits 1 with nothing
+    // written at all. They are written on exit 2 as well: a run with open rows is when a builder needs its row.
+    if (slicesDir) writePageSlices(slicesDir, "built", builtUnits, (k) => builtSlice(builtUnits, built, k), fail);
+    if (pageArg) {
+      output = JSON.stringify(builtSlice(builtUnits, built, pageArg), null, 2) + "\n";
+    }
+    else {
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
     verifyRes = renderVerify(result, checklistOpts(manifest), built);
@@ -2360,6 +2435,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // stderr, not stdout: stdout is the artifact itself when there is no `--out`, and a note there would end up
       // inside the table the agent presents verbatim.
       process.stderr.write(`migrate.mjs: wrote the machine-readable verdict to ${verifyJsonFile} — schedule from THAT file (complete / missing / unverified / planGaps / pages[key].openRows), not from the table.\n`);
+    }
     }
   }
   else output = JSON.stringify(result, null, 2) + "\n";
