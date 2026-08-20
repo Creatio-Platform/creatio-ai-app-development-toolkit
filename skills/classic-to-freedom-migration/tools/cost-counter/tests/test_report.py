@@ -456,6 +456,24 @@ class FriendlyLabelTest(unittest.TestCase):
         report = Report(export_mod.discover(self.root), metrics.CostConfig())
         self.assertEqual(report.workflow_labels["wf_nometa"], "wf_nometa")
 
+    def test_non_object_meta_json_degrades_and_does_not_crash(self):
+        # A meta file that is valid JSON but not an object (here ``null``) must
+        # degrade to the raw run id, not raise. _workflow_labels runs in
+        # Report.__init__, so without the isinstance guard EVERY section --
+        # summary included -- would crash with AttributeError. reconcile()
+        # exercises the same guard in _read_meta.
+        self._write_wf("wf_null", None, None)  # writes the agent dir, no meta json
+        meta_dir = os.path.join(self.root, "sess-1", "workflows")
+        with open(os.path.join(meta_dir, "wf_null.json"), "w", encoding="utf-8") as f:
+            f.write("null")
+        report = Report(export_mod.discover(self.root), metrics.CostConfig())
+        self.assertEqual(report.workflow_labels["wf_null"], "wf_null")
+        # _read_meta must also survive the non-object meta (agents/tool counts
+        # simply unknown -> reconcile reports them as None-backed, never raises).
+        by_run = {r.run_id: r for r in report.reconcile()}
+        self.assertIn("wf_null", by_run)
+        self.assertIsNone(by_run["wf_null"].agents_meta)
+
 
 if __name__ == "__main__":
     unittest.main()

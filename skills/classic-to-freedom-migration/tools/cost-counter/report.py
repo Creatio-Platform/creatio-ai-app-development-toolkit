@@ -139,6 +139,11 @@ def _read_meta(path: str) -> tuple[Optional[int], Optional[int]]:
             data = json.load(handle)
     except Exception:
         return (None, None)
+    # A meta file that is valid JSON but not an object (e.g. ``null`` or a bare
+    # array) must degrade to (None, None), not raise on ``.get`` -- callers treat
+    # a missing/unreadable meta as "no counts recorded".
+    if not isinstance(data, dict):
+        return (None, None)
     return (data.get("agentCount"), data.get("totalToolCalls"))
 
 
@@ -175,6 +180,12 @@ def _workflow_name_start(workflow) -> tuple:
         with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
             data = json.load(handle)
     except Exception:
+        return (None, None)
+    # Valid-but-non-object JSON (``null`` / array) degrades to (None, None) so the
+    # run still renders against the raw run id, matching _workflow_sort_key and
+    # _read_meta. Without this guard ``.get`` raises and every section fails,
+    # because _workflow_labels runs in Report.__init__.
+    if not isinstance(data, dict):
         return (None, None)
     return (data.get("workflowName"), data.get("startTime") or data.get("timestamp"))
 
