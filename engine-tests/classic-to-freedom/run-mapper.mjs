@@ -7758,6 +7758,23 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
       bo === "missing" && bm === "❌ MISSING",
       () => ({ bm, bo }));
   }
+  // F1 (ENG-95470 review) — resolveRuleVk's OTHER two verdict branches, the ones T1/T3 do not touch, pinned so a
+  // regression flipping either one cannot ship green. The whole ticket is MISSING-vs-not-checkable, so both edges
+  // of that distinction must be asserted: (a) a page entry reported `false` (NOT BUILT) is a hard ❌ MISSING — its
+  // rules cannot exist — never the ⚠ not-checkable of a page nobody read; (b) a CONFIRMED-EMPTY `businessRules: []`
+  // slot on a page that WAS expected to own rules is an unverified shortfall (0/N matched), NEVER a hard MISSING.
+  {
+    const pageFalse = verifyCtx({ pages: { main: false } }, "main");   // reported NOT BUILT (distinct from omitted)
+    const [fm, fev, fo] = resolveRuleVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, pageFalse);
+    check("F1 (R5): resolveRuleVk — a page entry reported `false` (NOT BUILT) with expected rule identities is a HARD ❌ MISSING (its rules cannot exist), distinct from ⚠ not-checkable",
+      fm === "❌ MISSING" && fo === "missing" && /NOT BUILT/.test(fev),
+      () => ({ fm, fev, fo }));
+    const emptySlot = verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: [] } } }, "main");  // confirmed-empty
+    const [em, eev, eo] = resolveRuleVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, emptySlot);
+    check("F1 (R5): resolveRuleVk — a confirmed-empty `businessRules: []` slot on a page that WAS expected to own rules is an unverified shortfall (0/N matched), NEVER ❌ MISSING",
+      eo === "unverified" && em !== "❌ MISSING" && /0\/2 business rule/.test(eev),
+      () => ({ em, eev, eo }));
+  }
   // T4 (R3) — resolveVk dispatch: a `rule` vk routes to resolveRuleVk, and the Business rules checklist row carries
   // a `rule` vk (a REGRESSION against the previous vk-less `skip` row that closed on prose).
   {

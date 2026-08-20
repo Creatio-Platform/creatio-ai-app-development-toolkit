@@ -144,7 +144,11 @@ attribute. The slot keeps the tri-state every page field has: present with the r
 (nobody read the rules — ⚠ unverified, distinct from a hard MISSING, so a rule the payload cannot see
 is never a false ❌). Write `businessRules: []` only after confirming the page has none; never leave it
 absent as a shortcut, or the row stays open forever. It is REQUIRED for any page whose
-`--units.pages[].expect.rules` is non-zero.
+`--units.pages[].expect.rules` is non-zero. One caveat on the `[]` state: `checked-and-empty` closes
+the row to ✅ only when NO rule identities were expected. On a page that WAS expected to own rules
+(`expect.rules` non-zero), a confirmed-empty `[]` slot is NOT a settled row — it resolves to
+`0/N business rule(s) matched … ⚠ verify`, an unverified shortfall (still never a hard ❌ MISSING), so
+the `Business rules` row stays OPEN until the expected rules are actually present.
 
 The CLI rejects a malformed payload at **exit 1**, naming what is wrong:
 
