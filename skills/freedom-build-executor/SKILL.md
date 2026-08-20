@@ -134,11 +134,27 @@ name, all inside that folder:
 
 | File | What it is |
 | --- | --- |
-| `spec-<key>.md` | that page's design spec (`--spec --page <key>`) **plus the plan's `Adjustments` list in full** |
+| `spec-<name>-<n>.md` | that page's design spec (`--spec --page <key>`) **plus the plan's `Adjustments` list in full**. `<n>` is the unit number: a name built from the page key alone is many-to-one, so two pages could share one file |
 | `contracts.md` | the tool contracts a page build uses, fetched by NAME (never argument-less, which dumps the whole catalogue) |
 | `components.md` | `get-component-info` per component type, headed with the environment it came from |
 | `guidance-<topic>.md` | one file per clio guidance topic a build needs |
 | `index.md` | what was written; its existence is what makes the step skip next run |
+
+Two more per-unit files sit in a **`slices`** folder beside it, written by the engine (`--slices`) as a by-product of
+the reconcile step's own `--units` and `--verify` runs:
+
+| File | What it is |
+| --- | --- |
+| `queue-<n>.json` | that unit's row of the build queue, plus the run-level fields one unit still needs |
+| `built-<n>.json` | that unit's row of the built file — its `pages` entry, and the `evidence` / `judge` entries for its own ids |
+
+`<n>` is the page's 1-based position in `--units.pages[]`, not its key: a key is not a legal filename, and
+sanitising one merges two pages into one file. Each slice names its own page in `pageKey` so a builder can
+confirm the file is its own.
+
+They are NOT in `refs`: that cache is keyed on the plan version, and a slice goes stale on an operator's answer or on
+any round that writes the stand. A build agent reads its two and cuts no row out of a whole file. See
+`./references/02-queue-and-built-files.md`.
 
 Three rules make this safe rather than merely cheaper:
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, LIST_DECISION_KINDS} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -7398,6 +7398,310 @@ try {
   check("ENG-95471: a complete record PLUS a judge verdict is the only thing that closes the quality-gates row — no false positive on the honest path",
     () => /✅/.test(qgRow(closed)) && !/❌|⚠/.test(qgRow(closed)),
     () => qgRow(closed));
+}
+
+// ---------------------------------------------------------------------------
+// ENG-95472 — the PER-UNIT slice of the build queue and the built file.
+// ---------------------------------------------------------------------------
+// A key no plan publishes, shared by the pure and the CLI checks below.
+const N2_NO_SUCH_KEY = "child:NotAPage";
+{
+  const keys = lpUnits.pages.map((pg) => pg.key);
+  const mainSlice = pageUnitsSlice(lpUnits, "main");
+  const listSlice = pageUnitsSlice(lpUnits, "list");
+  check("ENG-95472: `pageUnitsSlice` narrows `--units` to ONE page and keeps the run-level fields a single unit still needs",
+    () => mainSlice.pageKey === "main" && mainSlice.page.key === "main"
+      && mainSlice.planVersion === lpUnits.planVersion && mainSlice.entity === lpUnits.entity
+      && mainSlice.sectionHost === lpUnits.sectionHost && mainSlice.applicationCode === lpUnits.applicationCode,
+    () => JSON.stringify({ got: Object.keys(mainSlice), planVersion: mainSlice.planVersion }));
+  check("ENG-95472: a slice carries NO other page's rows — an executor handing a build agent its slice cannot hand it a sibling's evidence ids",
+    () => mainSlice.evidenceRows.every((r) => r.pageKey === "main")
+      && listSlice.evidenceRows.every((r) => r.pageKey === "list")
+      && mainSlice.preflight.length > 0 && mainSlice.preflight.every((r) => r.pageKey === "main")
+      && mainSlice.reachability.every((r) => (r.pages || []).includes("main"))
+      && listSlice.evidenceRows.length > 0 && mainSlice.evidenceRows.length > 0,
+    () => JSON.stringify({ main: mainSlice.evidenceRows.map((r) => r.pageKey), list: listSlice.evidenceRows.map((r) => r.pageKey) }));
+  check("ENG-95472: every published key slices, and an UNKNOWN key returns `null` rather than the whole queue",
+    () => keys.every((k) => pageUnitsSlice(lpUnits, k)?.page?.key === k) && pageUnitsSlice(lpUnits, N2_NO_SUCH_KEY) === null,
+    () => JSON.stringify({ keys, unknown: pageUnitsSlice(lpUnits, N2_NO_SUCH_KEY) }));
+  check("ENG-95472: the parent edge is copied only when `parents` carries the key — a `null` edge (a root page) and an ABSENT edge (a page whose place in the tree is unknown) stay different answers",
+    () => Object.hasOwn(mainSlice, "parent") && mainSlice.parent === null
+      && !Object.hasOwn(pageUnitsSlice({ ...lpUnits, parents: {} }, "main"), "parent"),
+    () => JSON.stringify({ parents: lpUnits.parents, sliced: mainSlice.parent }));
+
+  const mainIds = lpUnits.evidenceRows.filter((r) => r.pageKey === "main").map((r) => r.id);
+  const listIds = lpUnits.evidenceRows.filter((r) => r.pageKey === "list").map((r) => r.id);
+  const builtAll = {
+    pages: { main: { viewConfig: { items: ["main-body"] }, schemaUId: "u-main" }, list: false },
+    reachability: { sectionRegistered: true },
+    evidence: Object.fromEntries([...mainIds.map((id) => [id, { referencePage: "AccountPage", components: ["crt.Input"] }]),
+      ...listIds.map((id) => [id, { referencePage: "ContactPage", components: ["crt.DataGrid"] }])]),
+    judge: Object.fromEntries(listIds.map((id) => [id, { convincing: false, why: "no prop diff" }])),
+  };
+  const bMain = builtSlice(lpUnits, builtAll, "main");
+  const bList = builtSlice(lpUnits, builtAll, "list");
+  check("ENG-95472: `builtSlice` hands a unit its OWN `pages` row, verbatim, and no other page's",
+    () => Object.keys(bMain.pages).join(",") === "main"
+      && bMain.pages.main.viewConfig.items[0] === "main-body" && bMain.pages.main.schemaUId === "u-main"
+      && bList.pages.list === false,
+    () => JSON.stringify({ main: Object.keys(bMain.pages), list: bList.pages }));
+  check("ENG-95472: evidence and judge entries follow the ids `--units` maps to THAT page — the built file is keyed by id and says nothing about which page an id belongs to",
+    () => Object.keys(bMain.evidence).every((id) => mainIds.includes(id))
+      && Object.keys(bList.evidence).every((id) => listIds.includes(id))
+      && Object.keys(bMain.judge).length === 0 && Object.keys(bList.judge).length === listIds.length
+      && mainIds.length > 0 && listIds.length > 0,
+    () => JSON.stringify({ main: Object.keys(bMain.evidence), list: Object.keys(bList.evidence), mainJudge: Object.keys(bMain.judge) }));
+  check("ENG-95472: the built slice is STAMPED with the same `planVersion` the queue slice carries — a matching `pageKey` says the right page, not the right round",
+    () => bMain.planVersion === lpUnits.planVersion && bMain.planVersion === mainSlice.planVersion
+      && Object.hasOwn(builtSlice(lpUnits, {}, "main"), "planVersion"),
+    () => ({ built: bMain.planVersion, queue: mainSlice.planVersion, units: lpUnits.planVersion }));
+  check("ENG-95472: ABSENT stays absent — a key the payload does not carry is left out, never written as `null`, because the gate reads absent / `false` / record as three different answers",
+    () => { const thin = builtSlice(lpUnits, { pages: {}, reachability: {}, evidence: {}, judge: {} }, "main");
+      return Object.keys(thin.pages).length === 0 && !Object.hasOwn(thin.pages, "main")
+        && Object.keys(builtSlice(lpUnits, {}, "main").evidence).length === 0; },
+    () => JSON.stringify(builtSlice(lpUnits, { pages: {}, reachability: {}, evidence: {}, judge: {} }, "main")));
+}
+
+// The CLI half. Two fixtures, deliberately: a gate-CLEAN single-page manifest pins the exit codes and the flag
+// guards, and a THREE-key tree pins per-key isolation, which one page cannot show.
+const N2_UNITS = "--units", N2_PAGE = "--page", N2_SLICES = "--slices", N2_Q = "queue-", N2_B = "built-";
+// A slice is addressed by the page's 1-based position in `pages[]`, never by its key.
+const n2SliceFile = (dir, prefix, n) => path.join(dir, prefix + n + ".json");
+const n2ReadSlice = (dir, prefix, keys, key) => JSON.parse(fs.readFileSync(n2SliceFile(dir, prefix, keys.indexOf(key) + 1), "utf8"));
+const n2TmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), "n2-" + tag + "-"));
+// A page with TWO children on one entity, disambiguated by their detail CAPTIONS. `title` is what makes the
+// caption resolve, and an unanswered `editPage` is what keeps each child published as its own unit.
+const n2TreeManifest = (titleA, titleB) => JSON.stringify({
+  entity: "Applicant",
+  schemas: [{ pkg: "HRApplicant", body: `define("N2Page", [], function() {
+  return {
+    entitySchemaName: "Applicant",
+    details: /**SCHEMA_DETAILS*/{
+      "DetailA": { "schemaName": "EduADetail", "entitySchemaName": "Education", "filter": { "detailColumn": "Applicant", "masterColumn": "Id" } },
+      "DetailB": { "schemaName": "EduBDetail", "entitySchemaName": "Education", "filter": { "detailColumn": "Applicant", "masterColumn": "Id" } }
+    }/**SCHEMA_DETAILS*/,
+    diff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/
+  };
+});` }],
+  detailSchemas: {
+    EduADetail: { title: titleA, entity: "Education" },
+    EduBDetail: { title: titleB, entity: "Education" },
+  },
+});
+const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
+  [path.join(ENGINE_DIR, "migrate.mjs"), "-", ...flags], { input: manifest, encoding: "utf8" });
+
+// --- fixture 1: gate-clean, one page. Exit codes and flag guards. ----------------------------
+{
+  const MANIFEST = JSON.stringify({ ...placementBase, placement: FULL_PLACEMENT });
+  const runCli = (...flags) => n2RunCli(MANIFEST, ...flags);
+  const whole = runCli(N2_UNITS);
+  // Pinned BEFORE anything parses that stdout: a `--units` regression would otherwise throw at top level and
+  // skip every check below instead of failing one.
+  check("ENG-95472: the CLI fixture's `--units` run succeeds, so the checks below read a real queue",
+    () => whole.status === 0 && whole.stdout.trim().startsWith("{"),
+    () => ({ status: whole.status, stderr: (whole.stderr || "").slice(0, 200) }));
+  const publishedKeys = whole.status === 0 ? JSON.parse(whole.stdout).pages.map((pg) => pg.key) : [];
+  const onePage = runCli(N2_UNITS, N2_PAGE, "main");
+  // "Smaller" is not the property that matters — a slice at 99% of the whole queue passes that. What matters is
+  // that the whole-RUN collections are gone.
+  check("ENG-95472: `--units --page <key>` prints THAT page's slice and OMITS the whole-run collections — `buildOrder`, `resolutionsUnmatched`, `resolutionsConflicts`",
+    () => { const s = JSON.parse(onePage.stdout);
+      return onePage.status === 0 && s.pageKey === "main" && s.page.key === "main"
+        && !("buildOrder" in s) && !("resolutionsUnmatched" in s) && !("resolutionsConflicts" in s)
+        && !Array.isArray(s.pages) && s.evidenceRows.every((r) => r.pageKey === "main"); },
+    () => ({ status: onePage.status, keys: Object.keys(JSON.parse(onePage.stdout || "{}")) }));
+  const badKey = runCli(N2_UNITS, N2_PAGE, N2_NO_SUCH_KEY);
+  check("ENG-95472: `--units --page` on an unknown key EXITS 1 and names the published keys — never a silent fall-back to the whole queue",
+    () => badKey.status === 1 && /matches no page in this plan/.test(badKey.stderr || "") && /Published keys/.test(badKey.stderr || ""),
+    () => ({ status: badKey.status, stderr: (badKey.stderr || "").slice(0, 200) }));
+
+  const dir = n2TmpDir("slices");
+  const wrote = runCli(N2_UNITS, N2_SLICES, dir);
+  const queueFiles = fs.readdirSync(dir).filter((f) => f.startsWith(N2_Q));
+  check("ENG-95472: `--units --slices <dir>` writes ONE queue slice per published key, numbered 1..n by position",
+    () => wrote.status === 0 && queueFiles.length === publishedKeys.length
+      && publishedKeys.every((k, i) => queueFiles.includes(path.basename(n2SliceFile(dir, N2_Q, i + 1)))),
+    () => ({ publishedKeys, queueFiles }));
+  check("ENG-95472: slice number n holds the nth published page, and the file says so in `pageKey` — the one thing a positional name cannot guarantee is therefore checkable",
+    () => publishedKeys.every((k) => n2ReadSlice(dir, N2_Q, publishedKeys, k).pageKey === k),
+    () => queueFiles.map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).pageKey));
+
+  // A bad `--page` finishes argument validation BEFORE anything is written: no files, and no success note ahead
+  // of the failure line.
+  const badDir = n2TmpDir("badpage");
+  const badWithSlices = runCli(N2_UNITS, N2_PAGE, N2_NO_SUCH_KEY, N2_SLICES, badDir);
+  check("ENG-95472: a bad `--page` combined with `--slices` writes NOTHING and prints no success note before exiting 1",
+    () => badWithSlices.status === 1 && fs.readdirSync(badDir).length === 0
+      && !/slice\(s\) to/.test(badWithSlices.stderr || ""),
+    () => ({ status: badWithSlices.status, files: fs.readdirSync(badDir), stderr: (badWithSlices.stderr || "").slice(0, 200) }));
+
+  // THE SHIPPED FLAG COMBINATION. `CLI_UNITS` always carries `--resolutions`, and the queue slice is now the
+  // builder's only queue input, so an answer dropped on the way into the slice would reach no builder at all.
+  const pf = whole.status === 0 ? (JSON.parse(whole.stdout).preflight || []) : [];
+  check("ENG-95472: the fixture publishes at least one ⚠ Confirm item, or the resolution check below proves nothing",
+    () => pf.length > 0, () => ({ preflight: pf.length }));
+  const answered = pf[0];
+  const resFile = path.join(dir, "resolutions.json");
+  fs.writeFileSync(resFile, JSON.stringify({ resolutions: [
+    { kind: answered.kind, item: answered.item, answer: "ANSWERED-BY-THE-OPERATOR", decidedBy: "tester", date: "2026-08-20" }] }));
+  const resDir = n2TmpDir("resolutions");
+  const withRes = runCli(N2_UNITS, "--resolutions", resFile, N2_SLICES, resDir);
+  check("ENG-95472: `--units --resolutions --slices` carries the operator's ANSWER into the page slice, verbatim — the flag combination the executor actually ships",
+    () => { const slice = n2ReadSlice(resDir, N2_Q, publishedKeys, answered.pageKey);
+      const hit = (slice.preflight || []).find((r) => r.id === answered.id);
+      return withRes.status === 0 && !!hit
+        && hit.resolution?.answer === "ANSWERED-BY-THE-OPERATOR" && hit.resolution?.decidedBy === "tester"; },
+    () => ({ status: withRes.status, key: answered.pageKey,
+      preflight: n2ReadSlice(resDir, N2_Q, publishedKeys, answered.pageKey).preflight }));
+  check("ENG-95472: an UNANSWERED item still publishes `resolution: null` in the slice — an omitted field cannot be told apart from an engine that publishes no answers at all",
+    () => { const slice = n2ReadSlice(resDir, N2_Q, publishedKeys, answered.pageKey);
+      const others = (slice.preflight || []).filter((r) => r.id !== answered.id);
+      return others.every((r) => Object.hasOwn(r, "resolution") && r.resolution === null); },
+    () => n2ReadSlice(resDir, N2_Q, publishedKeys, answered.pageKey).preflight.map((r) => [r.id, r.resolution]));
+  fs.rmSync(resDir, { recursive: true, force: true });
+
+  // A plan that shrinks must not leave the previous run's higher-numbered slices behind: numbers are reused, so a
+  // leftover sits there claiming to be a page this plan no longer publishes.
+  const shrinkDir = n2TmpDir("shrink");
+  n2RunCli(n2TreeManifest("Education school", "Experience school"), N2_UNITS, N2_SLICES, shrinkDir);
+  const beforeShrink = fs.readdirSync(shrinkDir).filter((f) => f.startsWith(N2_Q)).length;
+  runCli(N2_UNITS, N2_SLICES, shrinkDir);   // the one-page fixture, same directory
+  const afterShrink = fs.readdirSync(shrinkDir).filter((f) => f.startsWith(N2_Q));
+  check("ENG-95472: a shorter plan PRUNES the slices the previous run wrote — no numbered leftover claiming to be a page this plan no longer publishes",
+    () => beforeShrink === 3 && afterShrink.length === publishedKeys.length
+      && afterShrink.every((f) => f === path.basename(n2SliceFile(shrinkDir, N2_Q, 1))),
+    () => ({ beforeShrink, afterShrink }));
+  fs.rmSync(shrinkDir, { recursive: true, force: true });
+
+  const noMode = runCli("--plan", N2_SLICES, dir);
+  check("ENG-95472: `--slices` outside `--units` / `--verify` EXITS 1 — accepting it silently would leave a caller believing slices had been written",
+    () => noMode.status === 1 && /applies to `--units` and `--verify`/.test(noMode.stderr || ""),
+    () => ({ status: noMode.status, stderr: (noMode.stderr || "").slice(0, 160) }));
+  const pageNoMode = runCli("--plan", N2_PAGE, "main");
+  check("ENG-95472: `--page` still refuses a mode that renders no page slice",
+    () => pageNoMode.status === 1 && /applies to `--spec`, `--checklist`, `--units` and `--verify`/.test(pageNoMode.stderr || ""),
+    () => ({ status: pageNoMode.status, stderr: (pageNoMode.stderr || "").slice(0, 160) }));
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(badDir, { recursive: true, force: true });
+}
+
+// --- fixture 2: three keys. Per-key ISOLATION of the built slice, with a POPULATED payload. ---
+// The payload must be POPULATED: an empty one makes every built slice empty, and a slicer handing back the whole
+// file then passes on file count and names alone.
+// The tree manifest is gate-BLOCKED (no seed, no placement), so these runs exit 2 — orthogonal to slicing, so the
+// assertions below reject only exit 1, the guard's own code.
+{
+  const MANIFEST = n2TreeManifest("Education school", "Experience school");
+  const whole = n2RunCli(MANIFEST, N2_UNITS);
+  const units = whole.stdout?.trim().startsWith("{") ? JSON.parse(whole.stdout) : { pages: [], evidenceRows: [] };
+  const keys = units.pages.map((p) => p.key);
+  check("ENG-95472: the three-key fixture really publishes a parent and two distinct children, or the isolation checks below prove nothing",
+    () => keys.length === 3 && keys.includes("main") && keys.filter((k) => k.startsWith("child:Education@")).length === 2,
+    () => ({ status: whole.status, keys }));
+  const idsFor = (key) => (units.evidenceRows || []).filter((r) => r.pageKey === key).map((r) => r.id);
+  const populated = keys.filter((k) => idsFor(k).length).slice(0, 2);
+  const guid = (n) => `${String(n).repeat(8)}-${String(n).repeat(4)}-${String(n).repeat(4)}-${String(n).repeat(4)}-${String(n).repeat(12)}`;
+  const built = { pages: {}, reachability: {}, evidence: {}, judge: {} };
+  populated.forEach((k, i) => {
+    built.pages[k] = { viewConfig: { marker: "body-of-" + k }, packageName: "UsrN2", schemaUId: guid(i + 1) };
+    for (const id of idsFor(k)) built.evidence[id] = { referencePage: "Ref-" + k, components: ["crt.Input"] };
+    built.judge[idsFor(k)[0]] = { convincing: false, why: "verdict-of-" + k };
+  });
+  check("ENG-95472: two of the three keys carry evidence ids, so the built payload below exercises real per-key content",
+    () => populated.length === 2 && Object.keys(built.pages).length === 2,
+    () => ({ populated, evidenceByKey: keys.map((k) => [k, idsFor(k).length]) }));
+
+  const dir = n2TmpDir("tree");
+  const builtFile = path.join(dir, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify(built));
+  const gate = n2RunCli(MANIFEST, "--verify", "--built", builtFile, N2_SLICES, dir);
+  const builtFiles = fs.readdirSync(dir).filter((f) => f.startsWith(N2_B));
+  check("ENG-95472: `--verify --slices <dir>` writes one built slice per published key EVEN ON EXIT 2 — a run with open rows is exactly the round a build agent needs its row",
+    () => gate.status === 2 && builtFiles.length === keys.length
+      && keys.every((k, i) => builtFiles.includes(path.basename(n2SliceFile(dir, N2_B, i + 1)))),
+    () => ({ status: gate.status, builtFiles, keys, stderr: (gate.stderr || "").slice(0, 200) }));
+  check("ENG-95472: a written built slice carries THAT key's `pages` row VERBATIM and no sibling's — handing back the whole payload fails here",
+    () => populated.every((k) => { const s = n2ReadSlice(dir, N2_B, keys, k);
+      return Object.keys(s.pages).join(",") === k && s.pages[k].viewConfig.marker === "body-of-" + k
+        && s.pages[k].schemaUId === built.pages[k].schemaUId && s.pages[k].packageName === "UsrN2"; }),
+    () => populated.map((k) => ({ k, pages: Object.keys(n2ReadSlice(dir, N2_B, keys, k).pages) })));
+  check("ENG-95472: a written built slice carries only THIS key's evidence and judge ids, and the records are that key's own",
+    () => populated.every((k) => { const s = n2ReadSlice(dir, N2_B, keys, k), mine = idsFor(k);
+      return Object.keys(s.evidence).length > 0
+        && Object.keys(s.evidence).every((id) => mine.includes(id))
+        && Object.keys(s.judge).every((id) => mine.includes(id))
+        && Object.values(s.evidence).every((r) => r.referencePage === "Ref-" + k); }),
+    () => populated.map((k) => ({ k, evidence: Object.keys(n2ReadSlice(dir, N2_B, keys, k).evidence), mine: idsFor(k) })));
+  const badPageDir = n2TmpDir("verify-badpage");
+  const builtBad = n2RunCli(MANIFEST, "--verify", "--built", builtFile, N2_PAGE, "child:NoSuchThing", N2_SLICES, badPageDir);
+  check("ENG-95472: a bad `--page` combined with `--slices` writes NOTHING in `--verify` either — argument validation completes before any file, the same order `--units` follows",
+    () => builtBad.status === 1 && fs.readdirSync(badPageDir).length === 0
+      && /matches no page in this plan/.test(builtBad.stderr || ""),
+    () => ({ status: builtBad.status, files: fs.readdirSync(badPageDir), stderr: (builtBad.stderr || "").slice(0, 160) }));
+  fs.rmSync(badPageDir, { recursive: true, force: true });
+  check("ENG-95472: a written built slice carries `planVersion` on disk, not just in the pure return value — a matching `pageKey` says the right page, the version says the right round",
+    () => populated.every((k) => { const one = n2ReadSlice(dir, N2_B, keys, k);
+      return typeof one.planVersion === "string" && one.planVersion.trim() !== ""
+        && one.planVersion === units.planVersion; }),
+    () => populated.map((k) => ({ k, onDisk: n2ReadSlice(dir, N2_B, keys, k).planVersion,
+      engine: units.planVersion })));
+  check("ENG-95472: a key the payload does not carry gets an EMPTY `pages` in its slice, never a `null` entry",
+    () => { const other = keys.find((k) => !populated.includes(k));
+      const s = n2ReadSlice(dir, N2_B, keys, other);
+      return Object.keys(s.pages).length === 0 && !Object.hasOwn(s.pages, other); },
+    () => n2ReadSlice(dir, N2_B, keys.find((k) => !populated.includes(k))));
+  // The queue half of the same directory, so both families are present for the isolation check below.
+  n2RunCli(MANIFEST, N2_UNITS, N2_SLICES, dir);
+  // The on-demand form of the same row: what a builder runs when its pre-cut slice is missing, so even that path
+  // never opens the whole payload.
+  const onePageBuilt = n2RunCli(MANIFEST, "--verify", "--built", builtFile, N2_PAGE, populated[0]);
+  check("ENG-95472: `--verify --built <f> --page <key>` prints THAT page's built row and nothing else — the fallback reads no whole payload",
+    () => { const one = JSON.parse(onePageBuilt.stdout);
+      return one.pageKey === populated[0] && Object.keys(one.pages).join(",") === populated[0]
+        && Object.keys(one.evidence).every((id) => idsFor(populated[0]).includes(id)); },
+    () => ({ status: onePageBuilt.status, stdout: (onePageBuilt.stdout || "").slice(0, 200) }));
+  const builtBadKey = n2RunCli(MANIFEST, "--verify", "--built", builtFile, N2_PAGE, "child:NoSuchThing");
+  check("ENG-95472: `--verify --page` on an unknown key EXITS 1 and names the published keys, like every other `--page` mode",
+    () => builtBadKey.status === 1 && /matches no page in this plan/.test(builtBadKey.stderr || ""),
+    () => ({ status: builtBadKey.status, stderr: (builtBadKey.stderr || "").slice(0, 160) }));
+  check("ENG-95472: the queue slices of the two children carry each child's OWN row — the disambiguated keys do not cross",
+    () => keys.filter((k) => k.startsWith("child:")).every((k) => {
+      const s = n2ReadSlice(dir, N2_Q, keys, k);
+      return s.pageKey === k && s.page.key === k && s.parent === "main"; }),
+    () => keys.filter((k) => k.startsWith("child:")).map((k) => n2ReadSlice(dir, N2_Q, keys, k).pageKey));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// --- THE NAMING. Page keys are unique; a key sanitised into a filename is not. ----------------
+// Two children of one entity are disambiguated by their detail CAPTION — customer-authored, localizable — so any
+// two non-Latin captions strip to the same characters. Numbering the files by position is what makes that a
+// non-event; these cases are the ones a key-derived name silently merged.
+{
+  const LATIN = ["Education (school)", "Education [school]"];
+  const CYRILLIC = ["Освіта", "Досвід"];
+  const keysOf = (r) => (r.stdout?.trim().startsWith("{") ? JSON.parse(r.stdout).pages.map((p) => p.key) : []);
+  check("ENG-95472: two children of one entity whose CAPTIONS differ only outside `[A-Za-z0-9_.-]` publish two distinct page keys — the case a key-derived filename merged",
+    () => { const k = keysOf(n2RunCli(n2TreeManifest(...LATIN), N2_UNITS));
+      return k.length === 3 && k.includes("child:Education@Education (school)") && k.includes("child:Education@Education [school]"); },
+    () => keysOf(n2RunCli(n2TreeManifest(...LATIN), N2_UNITS)));
+  for (const [label, pair] of [["latin", LATIN], ["non-latin", CYRILLIC]]) {
+    const d = n2TmpDir("naming");
+    // Gate-blocked (no seed, no placement), so exit 2 — orthogonal to slicing. What matters is that the run is
+    // NOT stopped and each page still gets a file of its own.
+    const r = n2RunCli(n2TreeManifest(pair[0], pair[1]), N2_UNITS, N2_SLICES, d);
+    const keys = keysOf(r);
+    check(`ENG-95472: captions that differ only outside the safe set (${label}) still get ONE FILE EACH, and the run is not stopped`,
+      () => r.status !== 1 && keys.length === 3
+        && fs.readdirSync(d).filter((f) => f.startsWith(N2_Q)).length === 3,
+      () => ({ status: r.status, keys, files: fs.readdirSync(d), stderr: (r.stderr || "").slice(0, 200) }));
+    check(`ENG-95472: and each of those files names its OWN page (${label}) — no two pages share a slice`,
+      () => { const seen = keys.map((k, i) => JSON.parse(fs.readFileSync(n2SliceFile(d, N2_Q, i + 1), "utf8")).pageKey);
+        return seen.join("|") === keys.join("|") && new Set(seen).size === 3; },
+      () => keys.map((k, i) => { try { return JSON.parse(fs.readFileSync(n2SliceFile(d, N2_Q, i + 1), "utf8")).pageKey; }
+        catch (e) { return "(" + e.code + ")"; } }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

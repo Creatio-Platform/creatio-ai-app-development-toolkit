@@ -25,7 +25,11 @@ jobs:
         # Quoted: the unquoted `:all: ` (colon-space) makes YAML parse this as a nested mapping → workflow startup_failure.
         run: "pip install --only-binary :all: pytest==8.3.4"
       - name: Run tests
-        run: pytest tests/
+        # Both suites: the repo-root tests/ and the out-of-tree cost-counter
+        # suite (its tests/__init__.py puts cost-counter/ on sys.path so the
+        # bare `import export` / `import metrics` resolve). Without the second
+        # path the cost-counter suite is never run in CI.
+        run: pytest tests/ skills/classic-to-freedom-migration/tools/cost-counter/tests/
 
   version-check:
     name: Manifest version sync
