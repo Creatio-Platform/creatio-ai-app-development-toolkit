@@ -1,9 +1,11 @@
 import glob
 import json
+import re
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -182,11 +184,29 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
             "the telemetry-routing hook must be wired into PostToolUse",
         )
         # Matching clio's MCP tools specifically: a broader matcher would emit a floor event
-        # in sessions that never touch Creatio.
-        self.assertTrue(
-            any("clio" in entry["matcher"] for entry in entries),
-            "the hook must be scoped to clio MCP tool calls",
-        )
+        # in sessions that never touch Creatio. Applied as a regex against real tool names rather
+        # than checked for the substring "clio": a matcher can contain that substring and still
+        # match nothing, which would silently disable the floor on the primary host.
+        matchers = [re.compile(entry["matcher"]) for entry in entries]
+        for tool in (
+            "mcp__plugin_creatio-ai-app-development-toolkit_clio__clio-run",
+            "mcp__plugin_creatio-ai-app-development-toolkit_clio__list-apps",
+            "mcp__clio__create-app",
+        ):
+            self.assertTrue(
+                any(matcher.match(tool) for matcher in matchers),
+                f"the matcher must select {tool}",
+            )
+        for unrelated in ("mcp__atlassian__getJiraIssue", "Bash", "Read"):
+            self.assertFalse(
+                any(matcher.match(unrelated) for matcher in matchers),
+                f"the matcher must not select {unrelated}",
+            )
+        # Referenced through the plugin root, so the command resolves wherever the plugin is
+        # installed rather than relative to whatever directory the host happened to start in.
+        for command in commands:
+            if "telemetry-routing.mjs" in command:
+                self.assertIn("${CLAUDE_PLUGIN_ROOT}", command)
 
         # Also on UserPromptSubmit, which is how one session's several runs each get routed: a
         # new request reopens the per-turn claim. It takes NO matcher — the event carries no
@@ -457,6 +477,37 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
             Path(_TMP, "caadt-telemetry-routing", f"{session}.usage").exists(),
             "a reading clio did not accept must be retried, not remembered as sent",
         )
+
+    def test_sweeps_stale_markers_but_not_on_every_call(self):
+        # Marker files are per session and nothing removes them when a session ends, so they need a
+        # sweep — but it was running from `stateDir()`, which `markerPath()` calls, so a full
+        # directory listing plus a stat per file ran several times per hook invocation and the cost
+        # grew with every marker any session on the machine had ever left behind.
+        state = Path(_TMP, "caadt-telemetry-routing")
+        state.mkdir(parents=True, exist_ok=True)
+        stale_age = time.time() - 8 * 24 * 60 * 60
+
+        def stale_marker(name: str) -> Path:
+            marker = state / name
+            marker.write_text("", encoding="utf-8")
+            os.utime(marker, (stale_age, stale_age))
+            return marker
+
+        # The sweep is rate-limited by a stamp file, so an earlier test in the same directory would
+        # otherwise decide this one's outcome: clear it to make a sweep due, which is also the
+        # only state the assertion below is about.
+        (state / ".swept").unlink(missing_ok=True)
+        first = stale_marker("caadt-sweep-first.claimed")
+        run_hook({"session_id": str(uuid.uuid4()), "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=telemetry_home("granted"))
+        self.assertFalse(first.exists(), "a marker older than the TTL must be cleaned up")
+
+        # A second invocation moments later must NOT sweep again: the stamp the first one wrote is
+        # what keeps housekeeping off the hot path.
+        second = stale_marker("caadt-sweep-second.claimed")
+        run_hook({"session_id": str(uuid.uuid4()), "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=telemetry_home("granted"))
+        self.assertTrue(second.exists(), "the sweep must be rate-limited, not run on every call")
 
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns

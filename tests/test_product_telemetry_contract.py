@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # (migration_plan_approved, branding_approved, ...) — encodes a dimension into
 # the enum: names multiply by flows, every new skill needs a clio release, and
 # comparing one funnel step across flows becomes a UNION over a hand-kept list.
+# Point-in-time snapshot of clio's allow-list, mirrored from clio#1081 (ENG-92551). The
+# vocabulary is OWNED by `get-guidance name=product-telemetry`, not by this file: a failure here
+# after a clio release means the snapshot is stale, not that the code regressed. Update it from
+# the article and clio's `TelemetryService.AllowedEventNames` together.
 STAGE_EVENTS = [
     "workflow_started",
     "clarification_requested",

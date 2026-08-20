@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,11 +147,41 @@ class McpClientTests(unittest.TestCase):
         # Windows' default install location contains a space, and CLIO_CMD is commonly a bare path.
         # Splitting the value first turned `C:\Program Files\...\clio.exe` into `C:\Program` plus a
         # stray argument, and clio was then reported as not installed on a machine where it was.
-        # `sys.executable` is a real file with a space in its path on this machine.
-        with patch.dict(os.environ, {"CLIO_CMD": sys.executable}):
-            self.assertEqual(mcp_client._resolve_clio_cmd(), [sys.executable])
-        with patch.dict(os.environ, {"CLIO_CMD": f'"{sys.executable}"'}):
-            self.assertEqual(mcp_client._resolve_clio_cmd(), [sys.executable])
+        #
+        # The path is BUILT with a space rather than borrowed from `sys.executable`: on the Linux and
+        # macOS runners that name has no space (`/usr/bin/python3`), so the assertion held whether or
+        # not the fix worked — the test passed everywhere it mattered least.
+        with tempfile.TemporaryDirectory() as tmp:
+            spaced = Path(tmp) / "Program Files" / "clio.exe"
+            spaced.parent.mkdir(parents=True)
+            spaced.write_text("", encoding="utf-8")
+            self.assertIn(" ", str(spaced))
+            with patch.dict(os.environ, {"CLIO_CMD": str(spaced)}):
+                self.assertEqual(mcp_client._resolve_clio_cmd(), [str(spaced)])
+            with patch.dict(os.environ, {"CLIO_CMD": f'"{spaced}"'}):
+                self.assertEqual(mcp_client._resolve_clio_cmd(), [str(spaced)])
+
+    def test_resolve_clio_cmd_keeps_windows_quoting_when_the_path_is_absent(self):
+        # The win32-only `posix=False` branch: on a POSIX runner the platform check skipped it, so
+        # nothing exercised the quote handling that branch exists for. A path that does not exist
+        # falls through to the split, which is where the two spellings have to agree.
+        with patch.object(mcp_client.sys, "platform", "win32"):
+            with patch.dict(os.environ, {"CLIO_CMD": r'"C:\Program Files\clio\clio.exe"'}):
+                self.assertEqual(
+                    mcp_client._resolve_clio_cmd(), [r"C:\Program Files\clio\clio.exe"]
+                )
+
+    def test_resolve_clio_cmd_ignores_a_directory_at_the_executable_path(self):
+        # `exists()` was true for a directory, so a stray folder at the install path was returned as
+        # the command and the spawn failed with "Is a directory" instead of "clio not installed".
+        #
+        # The directory needs a space in its name for the two behaviours to differ at all: without
+        # one, the fall-through split yields the same single token and the assertion proves nothing.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "Program Files" / "clio"
+            directory.mkdir(parents=True)
+            with patch.dict(os.environ, {"CLIO_CMD": str(directory)}):
+                self.assertNotEqual(mcp_client._resolve_clio_cmd(), [str(directory)])
 
     def test_resolve_clio_cmd_still_splits_the_documented_two_token_form(self):
         # `dotnet /path/to/clio.dll` must keep splitting: that string is not itself a file, so the

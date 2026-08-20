@@ -242,11 +242,42 @@ function consentGranted() {
 	}
 }
 
+let sweptThisProcess = false;
+
 function stateDir() {
 	const dir = path.join(os.tmpdir(), 'caadt-telemetry-routing');
 	fs.mkdirSync(dir, { recursive: true });
-	sweepStaleMarkers(dir);
+	// Every claim, read and release resolves a path through here, so an unconditional sweep ran a
+	// full directory listing plus a stat per file SEVERAL times per hook invocation, and the cost
+	// grew with every stale marker any session on the machine had ever left. Housekeeping does not
+	// need that cadence: once per process, and at most once a day across processes.
+	if (!sweptThisProcess) {
+		sweptThisProcess = true;
+		if (sweepIsDue(dir)) {
+			sweepStaleMarkers(dir);
+		}
+	}
 	return dir;
+}
+
+// A stamp file rather than an in-memory guard, because each hook invocation is its own process:
+// without it "once per process" still means once per tool call. A stamp that cannot be written or
+// read leaves the sweep due, so the failure mode is the old cost, never an unbounded directory.
+function sweepIsDue(dir) {
+	const stamp = path.join(dir, '.swept');
+	try {
+		if (Date.now() - fs.statSync(stamp).mtimeMs < SWEEP_INTERVAL_MS) {
+			return false;
+		}
+	} catch {
+		// Never swept, or the stamp is unreadable: due.
+	}
+	try {
+		fs.writeFileSync(stamp, '');
+	} catch {
+		// Cannot record the sweep; running it anyway is correct, it just will not be rate-limited.
+	}
+	return true;
 }
 
 // Marker files are per session and nothing removes them when a session ends, so without this they
@@ -255,11 +286,15 @@ function stateDir() {
 // `claimOnce` relies on exclusive-create, so removing a marker a running session still holds would
 // let it emit a second floor event.
 const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function sweepStaleMarkers(dir) {
 	try {
 		const cutoff = Date.now() - MARKER_TTL_MS;
 		for (const name of fs.readdirSync(dir)) {
+			if (name === '.swept') {
+				continue; // The sweep's own rate-limit stamp, not a session marker.
+			}
 			const file = path.join(dir, name);
 			try {
 				if (fs.statSync(file).mtimeMs < cutoff) {

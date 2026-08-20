@@ -75,7 +75,10 @@ def _parse_clio_cmd(env_cmd):
     not itself a file, so it falls through to the split.
     """
     bare = _unquote(env_cmd)
-    if bare and Path(bare).exists():
+    # is_file, not exists: a stray directory at the expected install path would otherwise be
+    # returned as the executable, and the spawn would fail with "Is a directory" instead of the
+    # clear "clio not installed" diagnostic this shortcut exists to preserve.
+    if bare and Path(bare).is_file():
         return [bare]
     if sys.platform != "win32":
         return shlex.split(env_cmd)
