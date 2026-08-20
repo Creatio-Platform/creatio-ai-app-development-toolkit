@@ -1511,17 +1511,24 @@ check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
 check("ENG-95472: NO per-unit file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name",
-  /const unitNoOf = \(key\) => unitNo\(state\?\.unitKeys, key\)/.test(wfSrc)
+  /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(state\.unitKeys, key\)/.test(wfSrc)
     && /queue-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc)
     && /spec-\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
     && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
     && !/sliceFileName/.test(dsSrc),
   () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
 check("ENG-95472: and there is ONE numbering rule, not one per file family — every file helper reads the same bound `unitNoOf`",
-  (wfSrc.match(/unitNo\(state\?\.unitKeys, key\)/g) || []).length === 1
+  (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length === 1
     && (wfSrc.match(/indexOf\(key\)/g) || []).length === 1,
-  () => ({ bound: (wfSrc.match(/unitNo\(state\?\.unitKeys, key\)/g) || []).length,
+  () => ({ bound: (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length,
     indexOf: (wfSrc.match(/indexOf\(key\)/g) || []).length }));
+// RC-4/RC-14: the two failures must read differently. A missing key list is not a schedule mismatch, and a
+// caller told the wrong one goes hunting an inconsistency that does not exist.
+check("ENG-95472: an ABSENT key list gets its own message, distinct from the key-not-in-list one — `unitNo`'s own error would misdiagnose it as a schedule mismatch",
+  () => { const m = /no published key list in run state yet/.test(wfSrc);
+    const guard = /if \(!state\?\.unitKeys\?\.length\)/.test(wfSrc);
+    return m && guard; },
+  () => wfSrc.slice(wfSrc.indexOf("const unitNoOf"), wfSrc.indexOf("const unitNoOf") + 420));
 
 // THE AGREEMENT, DRIVEN. The engine numbers slices by position in `pages[]`; the executor numbers by position in
 // the key list it was handed. The two are computed independently and must land on the same integer for the same

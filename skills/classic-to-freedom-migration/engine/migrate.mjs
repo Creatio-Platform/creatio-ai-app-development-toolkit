@@ -48,6 +48,8 @@
 // instead of the whole file. `<n>` is the page's 1-based POSITION in `pages[]`, not its key: a key is not a legal
 // filename and sanitising one is many-to-one. Each slice names its own page in `pageKey`. Additive, and written on
 // exit 2 as well: a run with open rows is exactly the round a builder needs its row.
+// `--page` and `--slices` COMBINE: the directory gets every published key's file AND stdout carries the one
+// page's slice. Neither suppresses the other.
 // `--verify --built <file>` = the VERIFIED done-gate: diff the ACTUALLY BUILT pages against expected deliverables.
 // `--built` is a JSON keyed BY PAGE — `{ pages: { "<key from --units>": { viewConfig, packageName,
 // parentSchemaName } | false }, reachability, evidence, judge }` — where `viewConfig` is clio `get-page`'s
@@ -2094,8 +2096,8 @@ function requirePublishedKey(units, pageKey, fail) {
     fail(`--page '${pageKey}' matches no page in this plan. Published keys: ${(units.pages || []).map((p) => p.key).join(", ") || "(none)"}. Use a key --units publishes.`);
   }
 }
-// `--units --page <key>` — the queue slice for ONE key.
-function unitsPageSlice(units, pageKey, fail) {
+// `--units --page <key>` — the queue slice for ONE key, or exit 1.
+function pageUnitsSliceOrFail(units, pageKey, fail) {
   requirePublishedKey(units, pageKey, fail);
   return pageUnitsSlice(units, pageKey);
 }
@@ -2113,7 +2115,10 @@ function writePageSlices(dir, prefix, units, sliceOf, fail) {
   // claiming to be a page this plan no longer publishes.
   const keep = new Set((units.pages || []).map((_, i) => `${prefix}-${i + 1}.json`));
   const isSlice = (f) => f.startsWith(`${prefix}-`) && f.endsWith(".json") && /^\d+$/.test(f.slice(prefix.length + 1, -5));
-  for (const f of fs.readdirSync(dir)) {
+  let present;
+  try { present = fs.readdirSync(dir); }
+  catch (e) { fail(`cannot read the --slices directory '${dir}': ${e.message}`); }
+  for (const f of present) {
     if (isSlice(f) && !keep.has(f)) fs.rmSync(path.join(dir, f), { force: true });
   }
   const written = [];
@@ -2245,7 +2250,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: readResolutions(resolutionsFile, fail) });
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
-    const requested = pageArg ? unitsPageSlice(units, pageArg, fail) : units;
+    const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
     if (slicesDir) writePageSlices(slicesDir, "queue", units, (k) => pageUnitsSlice(units, k), fail);
     output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
@@ -2262,11 +2267,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const issue = builtPayloadIssue(built);
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Run `--units` on this manifest for the exact page keys.");
     const builtUnits = pageUnits(result, checklistOpts(manifest));
+    // VALIDATE `--page` FIRST, before any file is written — the same order `--units` follows. Writing the slice
+    // directory and only then exiting 1 leaves a caller a populated directory to reconcile against a failure.
+    if (pageArg) requirePublishedKey(builtUnits, pageArg, fail);
     // The PER-PAGE slices, written BEFORE the verdict files below so a bad `--slices` exits 1 with nothing
     // written at all. They are written on exit 2 as well: a run with open rows is when a builder needs its row.
     if (slicesDir) writePageSlices(slicesDir, "built", builtUnits, (k) => builtSlice(builtUnits, built, k), fail);
     if (pageArg) {
-      requirePublishedKey(builtUnits, pageArg, fail);
       output = JSON.stringify(builtSlice(builtUnits, built, pageArg), null, 2) + "\n";
     }
     else {

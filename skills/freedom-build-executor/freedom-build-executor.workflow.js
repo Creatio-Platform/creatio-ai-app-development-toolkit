@@ -222,7 +222,15 @@ const REFS_INDEX = `${REFS_DIR}/index.md`
 // Bound to THIS run's published key list; the rule is the pure `unitNo` in the helpers block below. Every per-unit
 // FILE carries the number, because a name derived from the page key alone is many-to-one. The readable part stays
 // for the folder's sake; the number is what makes it unique.
-const unitNoOf = (key) => unitNo(state?.unitKeys, key)
+// TWO FAILURES, TWO MESSAGES. `unitNo`'s own error says the schedule and the key list disagree, which is the
+// wrong diagnosis when the list is simply not there yet — a caller reading it would go hunting a key mismatch
+// that does not exist.
+const unitNoOf = (key) => {
+  if (!state?.unitKeys?.length) {
+    throw new Error(`no published key list in run state yet, so no file can be named for unit '${key}'. Reconcile publishes \`unitKeys\`; this ran before it did, or it returned none.`)
+  }
+  return unitNo(state.unitKeys, key)
+}
 const readablePart = (key) => key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')
 const specFile = (key) => `${REFS_DIR}/spec-${readablePart(key)}-${unitNoOf(key)}.md`
 // One worklog FILE per unit, so a builder writes its own and reads nobody else's. The single append-only file was

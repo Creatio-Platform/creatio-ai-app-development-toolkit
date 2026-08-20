@@ -7598,6 +7598,19 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
         && Object.keys(s.judge).every((id) => mine.includes(id))
         && Object.values(s.evidence).every((r) => r.referencePage === "Ref-" + k); }),
     () => populated.map((k) => ({ k, evidence: Object.keys(n2ReadSlice(dir, N2_B, keys, k).evidence), mine: idsFor(k) })));
+  const badPageDir = n2TmpDir("verify-badpage");
+  const builtBad = n2RunCli(MANIFEST, "--verify", "--built", builtFile, N2_PAGE, "child:NoSuchThing", N2_SLICES, badPageDir);
+  check("ENG-95472: a bad `--page` combined with `--slices` writes NOTHING in `--verify` either — argument validation completes before any file, the same order `--units` follows",
+    () => builtBad.status === 1 && fs.readdirSync(badPageDir).length === 0
+      && /matches no page in this plan/.test(builtBad.stderr || ""),
+    () => ({ status: builtBad.status, files: fs.readdirSync(badPageDir), stderr: (builtBad.stderr || "").slice(0, 160) }));
+  fs.rmSync(badPageDir, { recursive: true, force: true });
+  check("ENG-95472: a written built slice carries `planVersion` on disk, not just in the pure return value — a matching `pageKey` says the right page, the version says the right round",
+    () => populated.every((k) => { const one = n2ReadSlice(dir, N2_B, keys, k);
+      return typeof one.planVersion === "string" && one.planVersion.trim() !== ""
+        && one.planVersion === units.planVersion; }),
+    () => populated.map((k) => ({ k, onDisk: n2ReadSlice(dir, N2_B, keys, k).planVersion,
+      engine: units.planVersion })));
   check("ENG-95472: a key the payload does not carry gets an EMPTY `pages` in its slice, never a `null` entry",
     () => { const other = keys.find((k) => !populated.includes(k));
       const s = n2ReadSlice(dir, N2_B, keys, other);
