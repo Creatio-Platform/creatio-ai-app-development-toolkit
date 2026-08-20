@@ -219,17 +219,16 @@ const VERIFY_DIGEST = `${input.outDir}/verify-digest.json`
 // not in here still calls the tool.
 const REFS_DIR = `${input.outDir}/refs`
 const REFS_INDEX = `${REFS_DIR}/index.md`
-// THE UNIT NUMBER — a page's 1-based place in `--units.pages[]`, as `unitKeys` republishes it. Every per-unit
-// FILE carries it, because a name derived from the page key alone is many-to-one: two keys differing only in
-// characters a filename cannot hold (any two non-Latin captions) collapse to one name, and the second write
-// wins. The readable part stays for the folder's sake; the number is what makes it unique.
-const unitNo = (key) => (state?.unitKeys || []).indexOf(key) + 1
+// Bound to THIS run's published key list; the rule is the pure `unitNo` in the helpers block below. Every per-unit
+// FILE carries the number, because a name derived from the page key alone is many-to-one. The readable part stays
+// for the folder's sake; the number is what makes it unique.
+const unitNoOf = (key) => unitNo(state?.unitKeys, key)
 const readablePart = (key) => key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')
-const specFile = (key) => `${REFS_DIR}/spec-${readablePart(key)}-${unitNo(key)}.md`
+const specFile = (key) => `${REFS_DIR}/spec-${readablePart(key)}-${unitNoOf(key)}.md`
 // One worklog FILE per unit, so a builder writes its own and reads nobody else's. The single append-only file was
 // read 37 times in one run for one reason: to append to it you first read it. `worklog.md` is still the human
 // artifact the documentation standard requires — the Close phase assembles it from these.
-const worklogFile = (key) => `${input.outDir}/worklog/${readablePart(key)}-${unitNo(key)}.md`
+const worklogFile = (key) => `${input.outDir}/worklog/${readablePart(key)}-${unitNoOf(key)}.md`
 // THE PER-UNIT SLICES of the build queue and the built file, one file per page key: a build agent reads its own row
 // and never the whole artifact.
 // NOT under `${REFS_DIR}` — that cache is keyed on the plan version, and a slice goes stale on an operator's answer
@@ -239,8 +238,8 @@ const SLICE_DIR = `${input.outDir}/slices`
 // need no readable half. `unitKeys` is the published order copied verbatim, but it reaches this script through an
 // agent, so the number can still be wrong; every slice carries its own `pageKey` and `planVersion`, and the builder
 // is told to check both before building.
-const queueSliceFile = (key) => `${SLICE_DIR}/queue-${unitNo(key)}.json`
-const builtSliceFile = (key) => `${SLICE_DIR}/built-${unitNo(key)}.json`
+const queueSliceFile = (key) => `${SLICE_DIR}/queue-${unitNoOf(key)}.json`
+const builtSliceFile = (key) => `${SLICE_DIR}/built-${unitNoOf(key)}.json`
 // SHELL-QUOTE every path that goes into a command line. These strings are handed to an agent to run in a shell, so
 // an unquoted `/tmp/My Migration/manifest.json` splits into two arguments and every engine phase then reads or
 // writes the wrong path — with no error, because the engine is simply given a path that is not the one intended.
@@ -765,6 +764,19 @@ Read the card for each imperative row this page owns before you write the handle
 // it, which is why nothing here may capture anything else and why the block must stay self-contained — a
 // helper moved out of the markers silently shrinks that suite. Extracted, too, so the round loop stays flat
 // (Sonar cognitive complexity).
+
+// THE UNIT NUMBER — a page's 1-based place in the published key list. Every per-unit FILE is named with it,
+// because a name built from the page key alone is many-to-one: two keys differing only in characters a filename
+// cannot hold collapse to one name.
+// A key the list does not carry is a STOP, never `0`. A `-0` suffix would collapse EVERY unresolved key onto one
+// file and reinstate that collision on the spec and worklog paths, which carry no `pageKey` field to catch it.
+function unitNo(unitKeys, key) {
+  const i = (unitKeys || []).indexOf(key);
+  if (i < 0) {
+    throw new Error(`unit '${key}' is not in the published key list [${(unitKeys || []).join(', ') || 'empty'}] — the schedule and unitKeys disagree, so no file can be named for it. Re-run Reconcile rather than building.`);
+  }
+  return i + 1;
+}
 const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:

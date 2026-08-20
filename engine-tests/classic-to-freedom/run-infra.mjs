@@ -140,7 +140,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
-  "resolutionsForUnit", "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt"];
+  "resolutionsForUnit", "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -1511,15 +1511,64 @@ check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
 check("ENG-95472: NO per-unit file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name",
-  /const unitNo = \(key\) => \(state\?\.unitKeys \|\| \[\]\)\.indexOf\(key\) \+ 1/.test(wfSrc)
-    && /queue-\$\{unitNo\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNo\(key\)\}\.json/.test(wfSrc)
-    && /spec-\$\{readablePart\(key\)\}-\$\{unitNo\(key\)\}\.md/.test(wfSrc)
-    && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNo\(key\)\}\.md/.test(wfSrc)
+  /const unitNoOf = \(key\) => unitNo\(state\?\.unitKeys, key\)/.test(wfSrc)
+    && /queue-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc)
+    && /spec-\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
+    && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
     && !/sliceFileName/.test(dsSrc),
-  () => wfSrc.split("\n").filter((l) => /^const (unitNo|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
-check("ENG-95472: and there is ONE numbering rule, not one per file family",
-  (wfSrc.match(/\(state\?\.unitKeys \|\| \[\]\)\.indexOf\(key\) \+ 1/g) || []).length === 1,
-  () => (wfSrc.match(/indexOf\(key\) \+ 1/g) || []).length);
+  () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
+check("ENG-95472: and there is ONE numbering rule, not one per file family — every file helper reads the same bound `unitNoOf`",
+  (wfSrc.match(/unitNo\(state\?\.unitKeys, key\)/g) || []).length === 1
+    && (wfSrc.match(/indexOf\(key\)/g) || []).length === 1,
+  () => ({ bound: (wfSrc.match(/unitNo\(state\?\.unitKeys, key\)/g) || []).length,
+    indexOf: (wfSrc.match(/indexOf\(key\)/g) || []).length }));
+
+// THE AGREEMENT, DRIVEN. The engine numbers slices by position in `pages[]`; the executor numbers by position in
+// the key list it was handed. The two are computed independently and must land on the same integer for the same
+// key, or a builder opens another unit's file. A source-shape regex cannot show that — this runs both sides.
+{
+  const ENGINE_MJS = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/classic-to-freedom-migration/engine/migrate.mjs");
+  const manifest = JSON.stringify({
+    entity: "Applicant",
+    schemas: [{ pkg: "HRApplicant", body: `define("N2Num", [], function() {
+  return {
+    entitySchemaName: "Applicant",
+    details: /**SCHEMA_DETAILS*/{
+      "A": { "schemaName": "EduA", "entitySchemaName": "Education", "filter": { "detailColumn": "Applicant", "masterColumn": "Id" } },
+      "B": { "schemaName": "EduB", "entitySchemaName": "Education", "filter": { "detailColumn": "Applicant", "masterColumn": "Id" } }
+    }/**SCHEMA_DETAILS*/,
+    diff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/
+  };
+});` }],
+    detailSchemas: { EduA: { title: "\u041e\u0441\u0432\u0456\u0442\u0430", entity: "Education" },
+      EduB: { title: "\u0414\u043e\u0441\u0432\u0456\u0434", entity: "Education" } },
+  });
+  let dir;
+  try {
+    dir = mkdtempSync(path.join(os.tmpdir(), "n2-agree-"));
+    const r = spawnSync(process.execPath, [ENGINE_MJS, "-", "--units", "--slices", dir],
+      { input: manifest, encoding: "utf8" });
+    const keys = r.stdout && r.stdout.trim().startsWith("{") ? JSON.parse(r.stdout).pages.map((pg) => pg.key) : [];
+    // What the ENGINE actually wrote: read each slice back and note which number holds which key.
+    const engineNo = {};
+    for (const f of readdirSync(dir).filter((f) => f.startsWith("queue-"))) {
+      engineNo[JSON.parse(readFileSync(path.join(dir, f), "utf8")).pageKey] = Number(f.slice(6, -5));
+    }
+    check("ENG-95472: the fixture publishes three keys, two of them same-entity children, or the agreement check below proves nothing",
+      () => keys.length === 3 && Object.keys(engineNo).length === 3,
+      () => ({ status: r.status, keys, engineNo }));
+    check("ENG-95472: the executor's `unitNo` lands on the SAME integer the ENGINE wrote each key under — the two indices are computed independently, and a builder handed a mismatched number opens another unit's file",
+      () => keys.length === 3 && keys.every((k) => wf.unitNo(keys, k) === engineNo[k]),
+      () => keys.map((k) => ({ key: k, executor: (() => { try { return wf.unitNo(keys, k); } catch (e) { return "threw"; } })(), engine: engineNo[k] })));
+    check("ENG-95472: a key the published list does not carry STOPS instead of becoming 0 — a `-0` suffix would collapse every unresolved key onto one spec/worklog file, the collision the numbering exists to remove",
+      () => { try { wf.unitNo(keys, "child:NotPublished"); return false; }
+        catch (e) { return /not in the published key list/.test(e.message) && /child:NotPublished/.test(e.message); } },
+      () => { try { return "returned " + wf.unitNo(keys, "child:NotPublished"); } catch (e) { return e.message.slice(0, 160); } });
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+}
 check("ENG-95472: the engine writes those files under the same positional rule, 1-based over `pages[]`",
   /\$\{prefix\}-\$\{i \+ 1\}\.json/.test(mgSrc) && /forEach\(\(pg, i\)/.test(mgSrc),
   () => mgSrc.split("\n").filter((l) => /prefix\}-/.test(l)).slice(0, 3));
