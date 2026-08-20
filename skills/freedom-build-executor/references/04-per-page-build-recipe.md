@@ -106,8 +106,8 @@ the verifier files that page's contents as this unit's evidence.
    **before** anything depends on it.
 9. **Run the `creatio-ui-guidelines` review** as a done-gate, tool-based: open a shipped reference
    page on the same template, run `get-component-info` on each component you added, diff the
-   concrete props. Record the reference page and the component list — that is exactly what the
-   `<pageKey>#quality-gates` evidence record requires (`./01-evidence-records.md`).
+   concrete props. Then return `guidelines` — **required, and this unit does not close without it**
+   (`./01-evidence-records.md` for the record it becomes).
 10. **Append to the worklog and update the roadmap** — as part of closing THIS unit, not as a step
     at the end of the run. An interrupted run must not lose the history of what was built.
 
@@ -171,21 +171,37 @@ Structured, and it is a CLAIM, not evidence:
   "template": "PageWithAreaFreedomTemplate",
   "claimedBuilt": ["crt.ApprovalList", "crt.DataGrid", "crt.Input …"],
   "reboundFrom": "UsrVisaRequestPage_default",
-  "guidelinesRun": true,
-  "referencePage": "AccountPage",
+  "guidelines": {
+    "evidenceId": "child:VisaRequest#quality-gates",
+    "ran": true,
+    "referencePage": "AccountPage",
+    "componentsDiffed": ["crt.ExpansionPanel", "crt.Input"] },
   "blocked": [],
   "proposals": [] }
 ```
 
 `claimedBuilt` is the field name the schema requires, and the name says what it is: a claim. For a
-**page** unit the required fields are `unit`, `claimedBuilt` **and `schemaName`** — the return schema
-enforces all three, because a page unit without a schema name can never be verified by anyone. For a
-**reachability** unit (`sectionRegistered`, `miniPageWired`, …) there is no page and no schema, so only
-`unit` and `claimedBuilt` are required.
+**page** unit the required fields are `unit`, `claimedBuilt`, `schemaName` **and `guidelines`** — the
+return schema enforces all four, because a page unit without a schema name can never be verified by
+anyone, and one without `guidelines` closes on silence. For a **reachability** unit
+(`sectionRegistered`, `miniPageWired`, …) there is no page and no schema, so only `unit` and
+`claimedBuilt` are required.
 
-`referencePage` is not decoration either: it is the shipped page you diffed against in step 9, it is
-handed to the verifier alongside your claim, and it is what the `<pageKey>#quality-gates` evidence record
-has to name. Leave it out and no one downstream can file that record for you.
+`guidelines` is step 9's answer, and the verifier files the `#quality-gates` record from it verbatim:
+
+- `evidenceId` — your page's id, **copied from `--units.evidenceRows`**. Never composed from your page
+  key: an id nothing published matches no row and reads as silence.
+- `ran: true` — then `referencePage` (the shipped page you diffed) and `componentsDiffed` (the ones you
+  prop-diffed) are both required. `componentsDiffed` is **not** `claimedBuilt`: built is not diffed.
+- `ran: false` — then `notRunWhy`. This is a valid ANSWER, not a pass: the record is filed as `false`,
+  which is a hard `❌ MISSING`, and your unit stays open. Report it honestly anyway — a `false` says
+  "checked, not done" and routes a different repair than silence does.
+
+An omitted or half-filled `guidelines` is neither. Nothing downstream can file the record for you, and
+a reference page you did not open is the one failure this field exists to prevent.
+
+**A page key that publishes no `#quality-gates` id owes no record** — an unfolded or reuse child page.
+The field is not required of it, and the obligation above is not in its prompt.
 
 The verifier reads the stand and files what it actually finds. Where the two disagree, the
 disagreement is logged — a builder that claims a component the page does not carry is a signal

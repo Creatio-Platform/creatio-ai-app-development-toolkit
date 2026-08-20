@@ -140,7 +140,11 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
-  "resolutionsForUnit", "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt"];
+  "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
+  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt"];
+// Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
+// rather than a copy of it in this file.
+const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -150,7 +154,7 @@ let tmpWf;
 try {
   tmpWf = mkdtempSync(path.join(os.tmpdir(), "wf-helpers-"));
   const modPath = path.join(tmpWf, "helpers.mjs");
-  writeFileSync(modPath, `const MAX_ROUNDS = 3;\n${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${HELPERS.join(", ")} };\n`);
+  writeFileSync(modPath, `const MAX_ROUNDS = 3;\n${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
   wf = await import(pathToFileURL(modPath).href);
 } catch (e) {
   check("workflow: the pure-helper block loads as a standalone module (it closes over nothing but MAX_ROUNDS)", false, e.message);
@@ -159,6 +163,9 @@ try {
 }
 check("workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
   HELPERS.every((h) => typeof wf[h] === "function"), () => HELPERS.filter((h) => typeof wf[h] !== "function").join(", "));
+check("workflow: every block CONSTANT this suite asserts against is inside the markers too",
+  BLOCK_CONSTS.every((c) => typeof wf[c] === "string" && wf[c].length > 0),
+  () => BLOCK_CONSTS.filter((c) => typeof wf[c] !== "string").join(", "));
 
 // --- isOpenPage: the tri-state. Only an explicit `complete: true` closes a unit. ---
 check("isOpenPage: `complete: true` is the ONLY thing that closes a unit",
@@ -293,6 +300,117 @@ check("isUnitOpenWithFindings: an operator finding re-opens a unit the machine v
 check("isUnitOpenWithFindings: with NO findings it is exactly `isUnitOpen` — the schedule does not change shape in `auto`",
   () => (wf.isUnitOpenWithFindings({ key: "main", kind: "page" }, { pages: { main: { complete: true } } }, {}, new Set()) === false
     && wf.isUnitOpenWithFindings({ key: "main", kind: "page" }, { pages: {} }, {}, undefined) === true));
+// --- ENG-95471 the UI-guidelines close row. The failure it pins: the review RAN, the optional field came back
+// empty, the record went unfiled, and a complete page was re-opened as falsely short.
+// `ran: false` returning null means the unit ANSWERED the contract. The filed `false` is still a hard MISSING and
+// the unit still stays open (designspec `resolveEvidenceVk`), which is why nothing here calls it a pass.
+const gUnit = { key: "main", kind: "page" };
+const gIds = ["main#quality-gates", "child:X#quality-gates"];
+const gOk = { evidenceId: "main#quality-gates", ran: true, referencePage: "AccountPage", componentsDiffed: ["crt.Input"] };
+const gNotRun = { evidenceId: "main#quality-gates", ran: false, notRunWhy: "no shipped page on this template" };
+const gMiss = (res, ids = gIds, earned = [], unit = gUnit) => wf.guidelinesCloseMiss(unit, res, ids, earned);
+const FENCE = (s) => `[[${s}]]`;
+
+check("owesGuidelines: only a page key whose quality-gates id was PUBLISHED owes the record",
+  () => (wf.owesGuidelines(gUnit, gIds) === true
+    && wf.owesGuidelines({ key: "child:U1", kind: "page" }, gIds) === false
+    && wf.owesGuidelines({ key: "sectionRegistered", kind: "reach" }, gIds) === false
+    && wf.owesGuidelines({ key: "app", kind: "app" }, gIds) === false
+    && wf.owesGuidelines(gUnit, []) === false && wf.owesGuidelines(gUnit, undefined) === false));
+check("guidelinesCloseMiss: a complete RUN record answers the row",
+  () => (gMiss({ guidelines: gOk }) === null));
+check("guidelinesCloseMiss: an ABSENT record does NOT answer — silence is the whole failure this row exists for",
+  () => (typeof gMiss({}) === "string" && typeof gMiss({ guidelines: null }) === "string"));
+check("guidelinesCloseMiss: `ran: false` WITH a reason is a valid ANSWER — the row is still MISSING, but honestly so",
+  () => (gMiss({ guidelines: gNotRun }) === null));
+check("guidelinesCloseMiss: `ran: false` with NO reason does not answer — that is silence with a flag set",
+  () => (typeof gMiss({ guidelines: { evidenceId: "main#quality-gates", ran: false } }) === "string"));
+check("ENG-95471 review fix: `ran: false` against an id that ALREADY carries an unrejected record is a MISS — a repair round must not overwrite an earned pass with `false`",
+  () => (typeof gMiss({ guidelines: gNotRun }, gIds, ["main#quality-gates"]) === "string"
+    && gMiss({ guidelines: gNotRun }, gIds, ["child:X#quality-gates"]) === null));
+check("ENG-95471 review fix: the overwrite guard FAILS CLOSED on an unknown earned set (`null`) and stays open on an EMPTY one — round 1 has nothing filed and must still be able to answer honestly",
+  () => (typeof wf.guidelinesCloseMiss(gUnit, { guidelines: gNotRun }, gIds, null) === "string"
+    && typeof wf.guidelinesCloseMiss(gUnit, { guidelines: gNotRun }, gIds, undefined) === "string"
+    && wf.guidelinesCloseMiss(gUnit, { guidelines: gNotRun }, gIds, []) === null
+    // a COMPLETE record is unaffected either way: only the destructive `false` path consults the set
+    && wf.guidelinesCloseMiss(gUnit, { guidelines: gOk }, gIds, null) === null));
+check("guidelinesCloseMiss: RUN short of what the record REQUIRES does not answer (no reference page, no components, blank/empty variants)",
+  () => ([{ ...gOk, referencePage: "" }, { ...gOk, referencePage: "   " }, { ...gOk, componentsDiffed: [] },
+    { ...gOk, componentsDiffed: ["  "] }, { ...gOk, componentsDiffed: "crt.Input" }]
+    .every((g) => typeof gMiss({ guidelines: g }) === "string")));
+check("guidelinesCloseMiss: an id `--units` did not publish, and ANOTHER page's published id, are both misses",
+  () => (typeof gMiss({ guidelines: { ...gOk, evidenceId: "main#qualitygates" } }) === "string"
+    && typeof gMiss({ guidelines: { ...gOk, evidenceId: "child:X#quality-gates" } }) === "string"));
+check("ENG-95471 review fix: a page key that publishes NO quality-gates id (an unfolded or reuse child) is never held by the row — the guard used to be unsatisfiable for it, on every round",
+  () => (gMiss({}, gIds, [], { key: "child:U1", kind: "page" }) === null
+    && gMiss({ guidelines: null }, gIds, [], { key: "child:U1", kind: "page" }) === null));
+check("ENG-95471 review fix: an EMPTY or ABSENT published id list holds nobody — an absent list is not evidence that this unit's id is wrong",
+  () => (wf.guidelinesCloseMiss(gUnit, {}, [], []) === null
+    && wf.guidelinesCloseMiss(gUnit, {}, undefined, []) === null
+    && wf.guidelinesCloseMiss(gUnit, { guidelines: gOk }, [], []) === null));
+check("guidelinesCloseMiss: the row never holds a reachability or app unit",
+  () => (gMiss({}, gIds, [], { key: "sectionRegistered", kind: "reach" }) === null
+    && gMiss({}, gIds, [], { key: "app", kind: "app" }) === null));
+
+// --- guidelinesLine: the text that actually reaches the verifier, so every branch is asserted on the RENDERED
+// string. It renders the close-row decision; re-deriving it is how the two surfaces came to disagree.
+check("guidelinesLine: a unit that owes no record renders NOTHING — no instruction about an id that does not exist",
+  () => (wf.guidelinesLine(null, null, false, FENCE) === "" && wf.guidelinesLine(gOk, null, false, FENCE) === ""));
+check("guidelinesLine: a complete record renders the filing payload with the id and both fields JSON-quoted",
+  () => { const t = wf.guidelinesLine(gOk, null, true, FENCE);
+    return t.includes('"main#quality-gates"') && t.includes('"referencePage": "AccountPage"')
+      && t.includes('"components": ["crt.Input"]') && !t.includes("file NOTHING"); });
+check("guidelinesLine: `ran: false` renders the `false` filing and FENCES the builder's free-text reason",
+  () => { const t = wf.guidelinesLine(gNotRun, null, true, FENCE);
+    return t.includes("= false") && t.includes(FENCE("no shipped page on this template")); });
+check("ENG-95471 review fix: ANY miss renders file-NOTHING with the reason — a returned id that failed validation is never handed on as a filing target",
+  () => { const t = wf.guidelinesLine({ ...gOk, evidenceId: "child:X#quality-gates" }, "not this unit's id", true, FENCE);
+    return t.includes("file NOTHING") && t.includes("not this unit's id")
+      && !t.includes("child:X#quality-gates") && !t.includes("AccountPage"); });
+check("ENG-95471 review fix: a whitespace-only `referencePage` cannot reach a filing instruction — the close row and the renderer agree on the same input",
+  () => { const g = { ...gOk, referencePage: "   " }; const m = gMiss({ guidelines: g });
+    return typeof m === "string" && wf.guidelinesLine(g, m, true, FENCE).includes("file NOTHING"); });
+check("ENG-95471 review fix: a quote inside a builder value cannot reshape the filing instruction — values are JSON-quoted, not interpolated raw",
+  () => { const t = wf.guidelinesLine({ ...gOk, referencePage: 'A" , "components": ["x' }, null, true, FENCE);
+    return t.includes('"components": ["crt.Input"]') && (t.match(/"components":/g) || []).length === 1; });
+
+check("ENG-95471: `guidelines` is REQUIRED on the page build schema — optional is what let a builder close on silence",
+  /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines'\]/.test(wfSrc));
+check("ENG-95471 review fix: the schema is selected by whether the unit OWES the record, not by kind alone",
+  /owesGuidelines\(unit, state\.evidenceIds\) \? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_PAGE_NO_GUIDELINES/.test(wfSrc)
+    && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName'\]/.test(wfSrc));
+check("ENG-95471: the close row runs at DISPATCH and its decision is CARRIED to the claim, not recomputed",
+  /guidelinesMiss: guidelinesCloseMiss\(unit, res, state\.evidenceIds, earnedEvidenceIds\(\)\)/.test(wfSrc)
+    && /owesGuidelines: owesGuidelines\(unit, state\.evidenceIds\)/.test(wfSrc)
+    && /guidelinesLine\(c\.guidelines, c\.guidelinesMiss, c\.owesGuidelines, dataFence\)/.test(wfSrc));
+check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list only ever grows and is re-billed into every report payload",
+  /!blockedItems\.some\(\(b\) => b\.unit === unit\.key && b\.what === GUIDELINES_BLOCKED_WHAT\)/.test(wfSrc));
+check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
+  !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
+check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
+  /guidelines: res\.guidelines \|\| null/.test(wfSrc)
+    && !/guidelinesRun: res\.guidelinesRun/.test(wfSrc) && !/guidelinesRun: \{ type/.test(wfSrc));
+check("ENG-95471 review fix: the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two",
+  /required: \['approval'[\s\S]{0,1400}'evidenceIds', 'evidenceFiled', 'evidenceRejected'\]/.test(wfSrc));
+check("ENG-95471 review fix: an ABSENT `evidenceFiled` yields the UNKNOWN set, not an empty one — the two must not collapse, or the overwrite guard silently stops firing",
+  /Array\.isArray\(state\.evidenceFiled\)[\s\S]{0,200}: null\)/.test(wfSrc));
+// The BUILDER-FACING wording, pinned on the shipped constant. `ran: false` is an honest answer whose row is a hard
+// MISSING; a prompt that calls it a "close" invites a builder to prefer it over doing the review.
+check("ENG-95471 re-review: no surface tells an agent that `ran: false` CLOSES anything — the prompt is the one that changes behaviour",
+  () => (!/valid close/.test(wf.GUIDELINES_RETURN) && !/valid close/.test(wfSrc)
+    && /valid ANSWER, not a pass/.test(wf.GUIDELINES_RETURN) && /your unit stays open/.test(wf.GUIDELINES_RETURN)));
+check("ENG-95471 review fix: the PROMPT obligation is gated on owing the record, exactly as the schema is — a regression to `unit.kind` alone reinstates the unsatisfiable guard for a child page",
+  /guidelinesReturn: owesGuidelines\(unit, state\.evidenceIds\) \? GUIDELINES_RETURN : ''/.test(wfSrc));
+check("ENG-95471 review fix: a builder that answered NOTHING still gets the UI-guidelines instruction when it owes the id — it HAS a line, so the standing no-line rule would not cover it",
+  /c\.noAnswer[\s\S]{0,600}c\.owesGuidelines \? `\\n  \$\{guidelinesLine\(null, 'the build agent returned nothing', true, dataFence\)\}`/.test(wfSrc));
+check("ENG-95471 review fix: neither non-page schema requires `guidelines` — BOTH are asserted, not just the reachability one",
+  /const BUILD_SCHEMA_REACH = \{[^}]*required: \['unit', 'claimedBuilt'\]/.test(wfSrc)
+    && /required: \['unit', 'packageName'\]/.test(wfSrc)
+    && !/required: \[[^\]]*'packageName'[^\]]*'guidelines'/.test(wfSrc));
+check("ENG-95471 review fix: the verifier keeps a STANDING anti-invention rule for a published id the claims block does not mention",
+  /A published \\`#quality-gates\\` id with NO line in that block/.test(wfSrc)
+    && /You never invent a \\`referencePage\\`/.test(wfSrc));
+
 check("PARK arithmetic ignores findings: a unit open ONLY because a human reported a defect is never parked by budget — its park reason would read `0 MISSING + 0 unconfirmed`, a question nobody can answer",
   () => (wf.parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: { main: { complete: true } } }, {}).length === 0));
 check("findingKeySet / findingsFor: findings are indexed by unit, and a malformed entry cannot poison the set",
@@ -650,7 +768,15 @@ const CBP_ANSWER = "Full name, Stage, Request, Responsible, Source, Modified on"
 const cbpBlock = wf.resolutionsBlockText(
   wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
 const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md",
-  kindBlock: "KIND-BLOCK", repair: "", resolutions: cbpBlock, findings: "", checkFirst: "" };
+  kindBlock: "KIND-BLOCK", repair: "", resolutions: cbpBlock, findings: "", checkFirst: "",
+  guidelinesReturn: "GUIDELINES-BLOCK" };
+// EVERY composed prompt, every args shape: the literal "undefined" must not appear. A bare-interpolated parameter
+// with no default put it into the shipped assembly while all three checks below stayed green.
+check("ENG-95471 review fix: no composed prompt carries the literal `undefined` — a parameter with no default is interpolated as text, and the checks below cannot see it",
+  () => [cbpArgs, { ...cbpArgs, guidelinesReturn: "" }, { ...cbpArgs, guidelinesReturn: undefined },
+    { rules: "R", behaviour: "B", worklogPath: "w", kindBlock: "K", repair: "", resolutions: "", findings: "", checkFirst: "" }]
+    .every((a) => !wf.composeBuildPrompt(a).includes("undefined")),
+  () => wf.composeBuildPrompt({ ...cbpArgs, guidelinesReturn: undefined }).slice(0, 400));
 check("ENG-95503: the operator's answer survives into the COMPOSED build prompt — the assembly is executed and the answer text read back out, not matched in the source",
   () => { const prompt = wf.composeBuildPrompt(cbpArgs);
     return typeof prompt === "string" && prompt.includes(CBP_ANSWER)
@@ -667,6 +793,16 @@ check("ENG-95503: the composed prompt keeps the resolutions block BEFORE the clo
     return prompt.indexOf(CBP_ANSWER) > 0 && prompt.indexOf(CBP_ANSWER) < prompt.indexOf("Return the schema."); },
   () => { const t = wf.composeBuildPrompt(cbpArgs);
     return { answerAt: t.indexOf(CBP_ANSWER), closingAt: t.indexOf("Return the schema.") }; });
+// EXECUTED, not matched: the source regex above proves the composer is CALLED with the obligation, never that the
+// text survives into the prompt the builder reads. This suite's own rule — see the comment above the ENG-95503
+// composer checks — and the obligation is the only thing that makes a builder return `guidelines` at all.
+check("ENG-95471 review fix: the return obligation SURVIVES into the composed prompt, before the closing instruction — and is absent when the unit owes no record",
+  () => { const withIt = wf.composeBuildPrompt({ ...cbpArgs, guidelinesReturn: wf.GUIDELINES_RETURN });
+    const without = wf.composeBuildPrompt({ ...cbpArgs, guidelinesReturn: "" });
+    return withIt.includes("does not close without it") && withIt.includes("COPIED from")
+      && withIt.indexOf("does not close without it") < withIt.indexOf("Return the schema.")
+      && !without.includes("does not close without it") && without.includes("Return the schema."); },
+  () => ({ len: wf.composeBuildPrompt({ ...cbpArgs, guidelinesReturn: wf.GUIDELINES_RETURN }).length }));
 // The wiring that connects the executed helpers above to the real prompt. Pinned on the shipped source because the
 // wrapper reads run state and this host's fencer, neither of which the harness can supply.
 const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf("// OPERATOR FINDINGS from an earlier checkpoint"));
@@ -1226,7 +1362,7 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
-  /'targetPackage', 'packageState'\]/.test(wfSrc));
+  /'targetPackage', 'packageState'/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
   /if \(packageState !== 'exists' && packageState !== 'absent'\)/.test(wfSrc));
 check("engine: a MEMBER key carries its scope — two child pages declaring the same member produced one key, so the coverage Set counted two rows as one and ONE card closed both",

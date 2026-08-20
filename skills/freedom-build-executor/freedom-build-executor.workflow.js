@@ -316,7 +316,11 @@ const RECONCILE_SCHEMA = {
     // Both package facts are REQUIRED. A schema-valid result that simply omitted `packageState` left it `undefined`,
     // which was neither 'unknown' (so nothing stopped) nor 'exists' (so an app unit was scheduled) — i.e. `create-app`
     // against what may be a live application, on a run that never established whether the package was there.
-    'targetPackage', 'packageState'],
+    // `evidenceIds` is REQUIRED for the same reason: the UI-guidelines close row keys off it, and a result that
+    // omitted it left the row inert — the gate silently off on the run that needs it. `evidenceFiled` and
+    // `evidenceRejected` are required because the close row's overwrite guard reads them: absent, it cannot tell
+    // an unfiled id from an earned one, and it then fails closed on every honest `ran: false`.
+    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
@@ -553,8 +557,21 @@ const BUILD_PROPERTIES = {
   // the script logs any disagreement rather than smoothing it over.
   claimedBuilt: { type: 'array', items: { type: 'string' } },
   reboundFrom: { type: 'string' },
-  guidelinesRun: { type: 'boolean' },
-  referencePage: { type: 'string' },
+  // The UI-guidelines pass, as the record the verifier files from. REQUIRED on a page unit: an absent answer
+  // is not a valid outcome, `ran: false` with `notRunWhy` is. `evidenceId` is COPIED from this unit's published
+  // ids, never composed — an invented id matches no row. `componentsDiffed` is the prop-diffed set, which is
+  // NOT `claimedBuilt`.
+  guidelines: {
+    type: 'object',
+    required: ['evidenceId', 'ran'],
+    properties: {
+      evidenceId: { type: 'string' },
+      ran: { type: 'boolean' },
+      referencePage: { type: 'string' },
+      componentsDiffed: { type: 'array', items: { type: 'string' } },
+      notRunWhy: { type: 'string' },
+    },
+  },
   blocked: {
     type: 'array',
     items: {
@@ -593,7 +610,10 @@ const BUILD_PROPERTIES = {
 // must come back with `schemaName` — that is the one fact only the builder holds, and the whole rest of the run
 // (verify, judge, resume in a later session) is unreachable without it. A REACHABILITY unit is a configuration
 // record with no page body, so demanding a schema name there would reject a correct answer.
-const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
+const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines'], properties: BUILD_PROPERTIES }
+// The same page obligations MINUS `guidelines`, for a published page key that carries no quality-gates row (an
+// unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable.
+const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
 const BUILD_SCHEMA_REACH = { type: 'object', required: ['unit', 'claimedBuilt'], properties: BUILD_PROPERTIES }
 // The APP unit must come back with the package it actually produced — the one fact the rest of the run schedules
 // on. `packageName` is REQUIRED and is compared against the plan's target by the script, not by the agent: clio
@@ -1097,7 +1117,12 @@ function answeredNoteFor(batch, note) {
 // THE BUILD PROMPT, ASSEMBLED. Pure and in this block so the assembly is EXECUTED by a test rather than matched in
 // the source: a regex can show a block is interpolated somewhere in the function, never that it reaches the string
 // the agent is handed. Every block arrives already rendered; this only orders them.
-function composeBuildPrompt({ rules, behaviour, worklogPath, kindBlock, repair, resolutions, findings, checkFirst }) {
+const GUIDELINES_RETURN = `
+  THEN RETURN \`guidelines\` — REQUIRED, and this unit does not close without it. \`evidenceId\`: your page's \`#quality-gates\` id, COPIED from \`--units.evidenceRows\`, never composed from your page key. \`ran: true\` takes \`referencePage\` (the shipped page you diffed) AND \`componentsDiffed\` (the ones you prop-diffed — NOT everything you built). Did not run it? \`ran: false\` plus \`notRunWhy\`; that is a valid ANSWER, not a pass — the record is filed as \`false\`, which is a hard \`❌ MISSING\`, and your unit stays open. Report it anyway: an omitted or half-filled answer is not valid at all, and a reference page you did not open is the one thing this field exists to stop.`
+
+// `guidelinesReturn` is EMPTY for the app and reachability kinds: they own no page, carry no `#quality-gates` id,
+// and their schemas do not require the field. Only a page unit is held by it.
+function composeBuildPrompt({ rules, behaviour, worklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '' }) {
   return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
 
 ${rules}
@@ -1107,7 +1132,7 @@ ${repair}
 ${behaviour}
 
 MANDATORY WHILE BUILDING:
-- Invoke the \`creatio-ui-guidelines\` skill BEFORE authoring the page body, and run its review AFTER saving — the review is tool-based: open a SHIPPED reference page on the same template and diff concrete props (\`color\`/\`padding\`/\`borderRadius\`/\`gap\`, panel \`toggleType\`, \`caption\` not raw \`title\`, \`labelPosition\`, column count) with \`get-component-info\` per component you added. A screenshot glance is not the gate.
+- Invoke the \`creatio-ui-guidelines\` skill BEFORE authoring the page body, and run its review AFTER saving — the review is tool-based: open a SHIPPED reference page on the same template and diff concrete props (\`color\`/\`padding\`/\`borderRadius\`/\`gap\`, panel \`toggleType\`, \`caption\` not raw \`title\`, \`labelPosition\`, column count) with \`get-component-info\` per component you added. A screenshot glance is not the gate.${guidelinesReturn}
 - Build the plan EXACTLY: every profile island is its own container, every tab and group exists, and BOTH halves of a two-part component (Approvals = the approval module above the island AND \`crt.ApprovalList\`; DCM = the progress bar in \`MainContainer\` AND the Next steps tab). If you think the plan is wrong, put it in \`proposals\` AND BUILD THE PLAN. Never simplify silently.
 - When you create a page on a non-default template, RE-BIND the object to it and drop the old binding. A page built but not re-bound is an orphan and is not migrated.
 - Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogPath}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. An interrupted run must not lose the history. Do NOT read or append to the shared \`worklog.md\`: the Close phase assembles it from these per-unit files, and reading a growing shared log just to append to it cost 37 reads on one run.
@@ -1135,6 +1160,58 @@ function findingsFor(findings, unitKey) {
 function isUnitOpenWithFindings(unit, verify, reachState, findingKeys, packageState) {
   if (findingKeys && findingKeys.has(unit.key)) return true
   return isUnitOpen(unit, verify, reachState, packageState)
+}
+
+const nonBlank = (s) => typeof s === 'string' && s.trim() !== ''
+// The ONE place this id is composed. Composing it here is a validation of what the builder COPIED, never a
+// substitute for copying it: `qualityGateRows` emits exactly this for every key that carries the row.
+const qualityGateId = (key) => `${key}#quality-gates`
+// WHICH UNITS OWE A UI-GUIDELINES RECORD: the ones whose id `--units` published, not every page unit. An unfolded
+// child (`#childpage`) and a reuse child carry no quality-gates row, so demanding one from them is unsatisfiable.
+// An EMPTY published list owes nothing either — an absent list is not evidence that this unit's id is wrong.
+function owesGuidelines(unit, evidenceIds) {
+  if (!unit || unit.kind !== 'page') return false
+  return (evidenceIds || []).includes(qualityGateId(unit.key))
+}
+// THE `ran: false` HALF, its own function so the close row below gains no nested branch (Sonar CC).
+// FAIL CLOSED on an UNKNOWN earned set (`null` — Reconcile published none): filing `false` is destructive, so "we
+// do not know what is on file" must refuse it. An EMPTY set is different — nothing is filed yet, which is every
+// first round — and it allows the answer.
+function notRunMiss(g, earnedIds) {
+  if (!earnedIds) return 'reported NOT run, and nothing published what is already on file — `false` could overwrite an earned record'
+  if (earnedIds.includes(g.evidenceId)) return 'reported NOT run against an id that already carries a record — filing `false` would overwrite it'
+  return nonBlank(g.notRunWhy) ? null : 'reported NOT run with no `notRunWhy`'
+}
+// THE UI-GUIDELINES CLOSE ROW. Returns a reason string when a page unit may not close, `null` when it may.
+// A dispatch row: one kind of incompleteness, one source (the unit's own return), no page fetch.
+// The bar is what the verifier needs to FILE the record — `ran: true` short of that is silence with a flag set.
+// `null` on `ran: false` means the unit ANSWERED the contract, not that the row passed: a filed `false` is a hard
+// MISSING and the unit stays open.
+// `earnedIds` are ids already carrying an unrejected record: `ran: false` against one of those would overwrite
+// work that is done, so it is a miss rather than an answer.
+function guidelinesCloseMiss(unit, res, evidenceIds, earnedIds) {
+  if (!owesGuidelines(unit, evidenceIds)) return null
+  const g = res && res.guidelines
+  if (!g || typeof g !== 'object') return 'no `guidelines` record returned'
+  if (!nonBlank(g.evidenceId)) return 'no `guidelines.evidenceId`'
+  if (g.evidenceId !== qualityGateId(unit.key)) return `${JSON.stringify(g.evidenceId)} is not this unit's published quality-gates id`
+  if (g.ran !== true) return notRunMiss(g, earnedIds)
+  if (!nonBlank(g.referencePage)) return 'reported run, named no `referencePage`'
+  if (!Array.isArray(g.componentsDiffed) || !g.componentsDiffed.filter(nonBlank).length) return 'reported run, named no `componentsDiffed`'
+  return null
+}
+// The UI-GUIDELINES answer as the verifier's instruction for that one id: file the record, file `false`, or file
+// NOTHING. It RENDERS the close-row decision and re-derives none of it, so the two surfaces cannot disagree and an
+// id that failed validation is never interpolated as a filing target. `''` for a unit that owes no record.
+// Builder-supplied values are fenced or JSON-quoted: they are data here, not part of the directive. `fence` is
+// injected for the same reason it is on `resolutionsBlockText` — this block closes over nothing but `MAX_ROUNDS`.
+function guidelinesLine(g, miss, owes, fence) {
+  if (!owes) return ''
+  if (miss) return `UI-guidelines: **NOT FILEABLE as returned** (${miss}) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
+  const wrap = typeof fence === 'function' ? fence : String
+  if (g.ran !== true) return `UI-guidelines: **reported NOT run** — file \`evidence[${JSON.stringify(g.evidenceId)}] = false\`. Reason given: ${wrap(String(g.notRunWhy ?? '').slice(0, 240))}`
+  const comps = g.componentsDiffed.filter(nonBlank)
+  return `UI-guidelines: RUN — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": ${JSON.stringify(comps)} }\`.`
 }
 // ---8<--- END PURE DECISION HELPERS ---8<---
 // ---------------------------------------------------------------------------
@@ -1503,6 +1580,17 @@ const localRounds = {}
 // otherwise make the state vanish from the return, and a state that can silently empty is not the
 // explicit state this exists to be. A key that later gets a schema drops out by construction.
 const unknownSchemaSeen = new Set()
+// One `what` string for the close row's blocked entry, so the duplicate guard at the append site matches on it
+// rather than on a re-typed literal.
+const GUIDELINES_BLOCKED_WHAT = 'the UI-guidelines evidence record'
+// Ids that already carry a record the judge has not rejected. Filing `false` over one of these destroys work that
+// is done, so the close row refuses it. Same pair the preflight fan-out uses to avoid re-deriving settled answers —
+// but the failure DIRECTION differs there (an empty list wastes a re-derivation; here it would permit a
+// destructive overwrite), so an ABSENT list returns `null` and the close row fails closed on it.
+const earnedEvidenceIds = () => (Array.isArray(state.evidenceFiled)
+  ? state.evidenceFiled.filter((id) => !(state.evidenceRejected || []).includes(id))
+  : null)
+
 const unknownSchemaNow = () => [...new Set([...unknownSchemaSeen, ...(state.unitKeys || [])])]
   .filter((k) => !pageSchemas[k])
   .sort((a, b) => a.localeCompare(b))
@@ -1850,6 +1938,7 @@ RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this
   return composeBuildPrompt({
     rules: RULES, behaviour: BEHAVIOUR_BLOCK, worklogPath: worklogFile(unit.key),
     kindBlock, repair,
+    guidelinesReturn: owesGuidelines(unit, state.evidenceIds) ? GUIDELINES_RETURN : '',
     resolutions: resolutionsPromptBlock(unit.key),
     findings: findingsPromptBlock(unit.key),
     checkFirst: checkFirstPromptBlock(unit.key),
@@ -1910,12 +1999,14 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
 async function buildRound(open) {
   phase('Build')
   log(`round ${round}: ${open.length} open unit(s) — ${open.map((u) => u.key).join(', ')}`)
+  // ONE run-level note, not one miss per unit: with no published ids nothing can be keyed off them, and reporting
+  // every page as owing an unpublished record would be the false negative this gate exists to remove.
+  if (!(state.evidenceIds || []).length) log('no evidence ids were published this round — the UI-guidelines close row is inert; check that Reconcile returned `evidenceIds`')
   const built = []
   const noSchema = []
-  // THE BUILDERS' CLAIMS, kept so the Verify phase can be handed them. The whole reason there is a separate
-  // verifier is comparing a CLAIM against an OBSERVATION: `claimedBuilt` and `referencePage` used to be
-  // collected by the schema and then dropped here, so the verifier was asked for `discrepancies` with no
-  // claim to compare against and the `#quality-gates` record could not name the page the builder diffed.
+  // THE BUILDERS' CLAIMS, kept so the Verify phase can be handed them: it compares a CLAIM against an
+  // OBSERVATION, and files the `#quality-gates` record from the `guidelines` answer. Dropped here, neither is
+  // reachable.
   const claims = []
   // THE CHECKPOINT STOP. Once a unit that is a checkpoint has been BUILT, the rest of this round's units are not
   // dispatched — they are DEFERRED and reported, never silently dropped. The round still runs Verify, Judge and
@@ -1934,13 +2025,18 @@ async function buildRound(open) {
       agentType: 'general-purpose', phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
       // Three obligations, three schemas. A PAGE unit must return `schemaName`; a reachability unit has no page and
       // must not be asked for one; the APP unit must return the package it actually produced.
-      schema: unit.kind === 'app' ? BUILD_SCHEMA_APP : (unit.kind === 'page' ? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_REACH),
+      // `guidelines` is required only of a page that OWES the record — an unfolded or reuse child publishes no
+      // quality-gates id, so requiring it there would force the builder to fabricate the one thing it must copy.
+      schema: unit.kind === 'app' ? BUILD_SCHEMA_APP
+        : (unit.kind === 'page'
+          ? (owesGuidelines(unit, state.evidenceIds) ? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_PAGE_NO_GUIDELINES)
+          : BUILD_SCHEMA_REACH),
     })
     if (!res) {
       log(`build agent returned nothing for ${unit.key} — it stays open`)
       // An ABSENT claim is recorded as absent. Dropping the unit here would let the verifier read "this unit
       // claimed nothing" off a silence that actually means "the builder never answered" — two different facts.
-      claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true })
+      claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true, owesGuidelines: owesGuidelines(unit, state.evidenceIds) })
       continue
     }
     built.push(unit.key)
@@ -1953,10 +2049,22 @@ async function buildRound(open) {
       packageName: res.packageName || null,
       template: res.template || null,
       claimedBuilt: res.claimedBuilt || [],
-      referencePage: res.referencePage || null,
-      guidelinesRun: res.guidelinesRun === true,
+      guidelines: res.guidelines || null,
+      // The close row's decision, computed ONCE and carried: the verifier instruction renders this and re-derives
+      // nothing, so a returned id that failed validation is never handed on as a filing target.
+      guidelinesMiss: guidelinesCloseMiss(unit, res, state.evidenceIds, earnedEvidenceIds()),
+      owesGuidelines: owesGuidelines(unit, state.evidenceIds),
       reboundFrom: res.reboundFrom || null,
     })
+    // The close row runs HERE, in the round that built the unit — not after the verifier, where an unfiled record
+    // reads as a page defect and costs a repair round to rediscover. It reports; the engine still owns the verdict.
+    const gateMiss = claims.at(-1).guidelinesMiss
+    if (gateMiss && !blockedItems.some((b) => b.unit === unit.key && b.what === GUIDELINES_BLOCKED_WHAT)) {
+      log(`close row FAILED for \`${unit.key}\`: ${gateMiss} — the record cannot be filed as returned; the quality-gates row stays unverified`)
+      blockedItems = [...blockedItems, { unit: unit.key, what: GUIDELINES_BLOCKED_WHAT, why: gateMiss }]
+    } else if (gateMiss) {
+      log(`close row FAILED again for \`${unit.key}\`: ${gateMiss}`)
+    }
     // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report. The equality is the whole
     // point: an app created under a different package name unblocks nothing, because every page unit's placement
     // row gates on the plan's package. A mismatch leaves `packageState` untouched — so the unit stays open, the
@@ -2045,27 +2153,28 @@ function verifierSchemaTable() {
   return `PAGE KEY → FREEDOM SCHEMA (the queue's record; a key is a ROLE, never a schema name, so this table is the only way to know what to fetch):\n${lines}${unknownLine}`
 }
 
-// WHAT THE BUILDERS CLAIMED, rendered for the verifier. This is the input the discrepancy comparison did not
-// have: the point of a separate verifier is comparing CLAIM against OBSERVATION, and without the claims the
-// verifier was being asked to find disagreements with nothing to disagree with. `referencePage` also travels
-// here — it is what a `#quality-gates` record must name, and only the builder knows which page it diffed.
+// WHAT THE BUILDERS CLAIMED, rendered for the verifier: the discrepancy comparison needs a CLAIM to hold against
+// the OBSERVATION, and the `#quality-gates` record is filed from the `guidelines` answer carried here.
 function claimsBlock(claims) {
   if (!claims.length) return 'NO BUILD AGENT REPORTED THIS ROUND — there is no claim to compare against; file only what the stand shows.'
   const line = (c) => {
-    if (c.noAnswer) return `- \`${c.unit}\` — **the build agent returned NOTHING**. This is not "it claimed nothing built": nobody answered for this unit. Fetch it like any other and file what you find; do not treat an absent claim as a claim of absence.`
-    const refPage = c.referencePage ? `\`${c.referencePage}\`` : '**none named**'
+    // A unit whose builder answered nothing still gets the UI-guidelines instruction if it owes the id: it HAS a
+    // line, so the standing "no line in this block" rule would not cover it, and the id would be left unruled.
+    if (c.noAnswer) return `- \`${c.unit}\` — **the build agent returned NOTHING**. This is not "it claimed nothing built": nobody answered for this unit. Fetch it like any other and file what you find; do not treat an absent claim as a claim of absence.${
+      c.owesGuidelines ? `\n  ${guidelinesLine(null, 'the build agent returned nothing', true, dataFence)}` : ''}`
     const bits = [
       c.schemaName ? `schema \`${c.schemaName}\`` : 'no schema named',
       c.packageName ? `package \`${c.packageName}\`` : null,
       c.template ? `template \`${c.template}\`` : null,
       c.reboundFrom ? `re-bound from \`${c.reboundFrom}\`` : null,
-      `guidelines review ${c.guidelinesRun ? 'RUN' : 'NOT reported as run'}`,
-      `reference page for the style diff: ${refPage}`,
     ].filter(Boolean)
     const claimed = c.claimedBuilt.length ? c.claimedBuilt.map((x) => `\`${x}\``).join(', ') : '(none listed)'
-    return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${claimed}`
+    // Only a page claim that OWES the record gets the line: the app and reachability kinds carry no such id, and an
+    // instruction to file nothing for an id that does not exist is noise in the surface the run judges shortness on.
+    const gl = guidelinesLine(c.guidelines, c.guidelinesMiss, c.owesGuidelines, dataFence)
+    return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${claimed}${gl ? `\n  ${gl}` : ''}`
   }
-  return `WHAT THE BUILD AGENTS CLAIMED THIS ROUND — a CLAIM, never evidence. Your job includes checking it against what \`get-page\` actually returns:\n${claims.map(line).join('\n')}\n\nA builder that named NO reference page has not evidenced a style diff: a \`#quality-gates\` record cannot invent one, so file what the builder named or leave the record unfiled and say so. A claimed component the page does not carry, and a component on the page nobody claimed, are BOTH \`discrepancies\`.`
+  return `WHAT THE BUILD AGENTS CLAIMED THIS ROUND — a CLAIM, never evidence. Your job includes checking it against what \`get-page\` actually returns:\n${claims.map(line).join('\n')}\n\nA claimed component the page does not carry, and a component on the page nobody claimed, are BOTH \`discrepancies\`.`
 }
 
 async function verifyRound(builtThisRound, claims) {
@@ -2090,7 +2199,7 @@ WRITE THREE THINGS into ${BUILT_FILE}, and nothing else — the \`judge\` object
 
 1. \`pages\` — for every published key WITH a schema in the table above, clio \`get-page\` that schema and store \`{ viewConfig: <bundle.viewConfig VERBATIM>, viewModelConfig: <bundle.viewModelConfig VERBATIM>, modelConfig: <bundle.modelConfig VERBATIM>, entitySchemaName, packageName, parentSchemaName, schemaUId }\`. **\`entitySchemaName\` is the object the page's PRIMARY data source is bound to** — read it off \`modelConfig\`: the data source named by \`primaryDataSourceName\`, its \`entitySchemaName\`. Record \`modelConfig\` verbatim as well, so that scalar can be audited against the structure it came from. THIS IS THE MIGRATION'S WHOLE POINT: the Freedom page must sit on the SAME object the Classic page did, so the customer's existing records show up in it. A page on a fresh object is not a migration. Nothing used to record this, and a real run got 13 units deep with pages bound to a stub entity \`create-app\` had minted. \`bundle.viewConfig\` is the MERGED page: NOT \`ownBodySummary\`, NOT the page's own body — a template-provided element (Feed, FileList, ApprovalList, ContactCommunication, the DCM bar) is touched with \`operation: "merge"\` and carries no \`type\`, so the own body makes a CORRECT page read ❌ MISSING. A page whose schema exists but which the stand does not have is \`false\`. A page you could not fetch is OMITTED — absent means nobody looked, and the engine reports the two differently. If you confirm a schema for a key the table did not have (the builder named it in this round's report and the stand agrees), return it in \`schemasConfirmed\` so the queue keeps it.
 2. \`reachability\` — for each applicable key, \`true\` ONLY after you confirmed the wiring on-stand, \`false\` when you confirmed it is absent, and OMIT the key when you did not check. Return what you wrote in \`reachabilityWritten\` as the strings 'true' / 'false' / 'unset'.
-3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, \`referencePage\` is the shipped page THAT UNIT'S BUILDER diffed against — it is named per unit in the claims block above, and if the builder named none you cannot invent one — and \`components\` are the ones checked with \`get-component-info\`. Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
+3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
 
 Then report \`discrepancies\`: where a builder CLAIMED a component and get-page does not show it, or the reverse. Record them — do not smooth them over.
 

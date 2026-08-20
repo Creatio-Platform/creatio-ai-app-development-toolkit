@@ -66,11 +66,16 @@ different repair.
 
 ## What to put in the two fields, per family
 
-- **`<pageKey>#quality-gates`** — `referencePage` is the SHIPPED Freedom page you diffed this page
-  against; `components` are the components you ran `get-component-info` on and compared props for
+- **`<pageKey>#quality-gates`** — `referencePage` is the SHIPPED Freedom page the page was diffed
+  against; `components` are the ones `get-component-info` was run on and props compared for
   (`color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` not raw `title`,
   `labelPosition`, column count). A record naming no reference page is not evidence of a style
   diff; it is evidence that a screenshot was looked at.
+  **Both fields come from the builder's required `guidelines` return, never from the verifier.** The
+  builder does not file — but a page that owes this id does not close without answering, so the record
+  is never absent because nobody was asked. `ran: false` files `false` (a hard MISSING, per the rule
+  above — an honest answer, not a pass); a half-filled answer files nothing and is reported. A page key
+  that publishes no `#quality-gates` id — an unfolded or reuse child — owes nothing here.
 - **`<pageKey>#confirm:<kind>:<item>`** — the answer to that decision, evidenced the same way:
   the page (or shipped reference) you resolved it against, and the components the answer produced
   or ruled out. A `kind` of `detail-add-mechanism` closes when the record names the lookup /
