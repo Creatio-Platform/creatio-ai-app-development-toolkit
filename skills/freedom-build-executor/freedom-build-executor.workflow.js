@@ -949,9 +949,17 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost) {
 // did not report is not a failure (absence is not evidence of absence, and a plan predating this field must
 // behave exactly as before). The `note` carries the stand's reason (closest matches / required package /
 // feature) so the stop names the fix, not just the miss.
-function componentTypeMismatches(componentResolution) {
+// `publishedTypes` is the plan's OWN deduped `componentTypes` union (deterministic from the manifest). Only a type
+// the plan itself published can gate: `componentResolution` is a free-text agent sweep, so an invented near-miss
+// name the plan never named must NOT manufacture a stop on a plan whose every published type resolves — the run
+// would die on a `next` no re-plan can act on. When the plan published no `componentTypes` (a plan predating the
+// field, or a transient Reconcile that dropped it), the intersection is SKIPPED and the resolution is trusted as
+// given — the same "absence is not evidence, behave exactly as before" rule the `resolved` filter already applies.
+function componentTypeMismatches(componentResolution, publishedTypes) {
+  const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
     .filter((c) => c && typeof c.type === 'string' && c.resolved === false)
+    .filter((c) => published.size === 0 || published.has(c.type))
     .map((c) => ({ type: c.type, note: (typeof c.note === 'string' && c.note.trim()) ? c.note : 'does not resolve on the target stand' }))
 }
 // The operator-facing renderings of the unresolved types, shared by every stop and log that reports them so the
@@ -1219,7 +1227,7 @@ if ((state.planGaps || []).length) {
 // facts, before any unit is built. Computed here so a placement stop can carry the component mismatches too: the
 // Applicant run stopped on placement in round 1 and only hit the fabricated component type rounds later, so a
 // re-plan that sees BOTH at once fixes them in one pass.
-const componentMismatches = componentTypeMismatches(state.componentResolution)
+const componentMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
 const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
@@ -2100,7 +2108,7 @@ function acceptReconciled(next, whereFrom) {
   // Reconcile predated this field and only now reports `componentResolution`, or a component package uninstalled
   // from the stand during a long run. Re-checking here stops before the NEXT build unit is dispatched instead of
   // paying repair rounds for a plan assertion untrue of the stand — the exact failure this gate exists to prevent.
-  const midRunMismatches = componentTypeMismatches(state.componentResolution)
+  const midRunMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
   if (midRunMismatches.length) {
     log(`STOP after ${whereFrom} — ${midRunMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(midRunMismatches)}`)
     return {

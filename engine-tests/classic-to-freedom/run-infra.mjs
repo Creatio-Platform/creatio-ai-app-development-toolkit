@@ -399,6 +399,19 @@ check("componentTypeMismatches: all-resolved → no mismatch; a missing/empty re
     && wf.componentTypeMismatches(undefined).length === 0));
 check("componentTypeMismatches: a compositeOnly type reported resolved:true is NOT a mismatch (crt.CommunicationOptions resolves as a component-type — the corrected Applicant target)",
   () => wf.componentTypeMismatches([{ type: "crt.CommunicationOptions", resolved: true }]).length === 0);
+// The plan-scope intersection (ENG-95468, PR #102 review): `componentResolution` is a free-text agent sweep, so a
+// resolved:false type the plan NEVER published must not manufacture a stop on a plan whose every published type
+// resolves — the run would die on a `next` no re-plan can act on. Only a type in the plan's own `componentTypes`
+// (deterministic from the manifest) can gate. A missing/empty `componentTypes` skips the intersection (a plan
+// predating the field behaves exactly as before), so the gate is narrowed, never disabled.
+check("componentTypeMismatches: an agent-invented resolved:false type the plan never published does NOT gate — only a type in the plan's own componentTypes can manufacture a stop",
+  () => wf.componentTypeMismatches([{ type: "crt.Invented", resolved: false, note: "no match" }], ["crt.ApprovalList", "crt.DataGrid"]).length === 0);
+check("componentTypeMismatches: a PUBLISHED type reported resolved:false STILL gates when componentTypes is passed (the intersection narrows extras, it does not disable the gate)",
+  () => { const m = wf.componentTypeMismatches([{ type: "crt.DataGrid", resolved: false, note: "package not installed" }], ["crt.ApprovalList", "crt.DataGrid"]);
+    return m.length === 1 && m[0].type === "crt.DataGrid"; });
+check("componentTypeMismatches: an absent/empty publishedTypes does NOT intersect — a plan predating componentTypes behaves exactly as before (resolved:false still gates, single-arg call unchanged)",
+  () => wf.componentTypeMismatches([{ type: "crt.Foo", resolved: false }], []).length === 1
+    && wf.componentTypeMismatches([{ type: "crt.Foo", resolved: false }]).length === 1);
 // ONLY a strict boolean `false` on a well-formed entry gates — every malformed or absent signal is NOT a failure, so
 // a garbled `componentResolution` can never manufacture a false stop, and (with `type`/`resolved` `required` in
 // RECONCILE_SCHEMA) a genuinely-unresolved type is never silently dropped either. This pins that whole contract at once.
@@ -428,8 +441,8 @@ check("workflow: the app unit creates the section on the EXISTING object via `cr
 check("workflow: the built payload records the page OBJECT — without it the gate cannot tell the real entity from a stub, which is how a whole run stayed green on the wrong one",
   /entitySchemaName/.test(wfSrc) && /modelConfig: <bundle\.modelConfig VERBATIM>/.test(wfSrc)
     && /primaryDataSourceName/.test(wfSrc));
-check("workflow: the component-type gate (ENG-95468) is WIRED at the baseline — it computes componentMismatches from the Reconcile resolution, carries them on the placement stop too (both blockers in one stop), and has its own `plan-invalid-against-stand` stop before any build unit",
-  /const componentMismatches = componentTypeMismatches\(state\.componentResolution\)/.test(wfSrc)
+check("workflow: the component-type gate (ENG-95468) is WIRED at the baseline — it computes componentMismatches from the Reconcile resolution INTERSECTED with the plan's own componentTypes, carries them on the placement stop too (both blockers in one stop), and has its own `plan-invalid-against-stand` stop before any build unit",
+  /const componentMismatches = componentTypeMismatches\(state\.componentResolution, state\.componentTypes\)/.test(wfSrc)
     && /\.\.\.stopOnPackage,\s*componentMismatches,/.test(wfSrc)
     && /stopped: 'plan-invalid-against-stand'/.test(wfSrc));
 check("workflow: the Reconcile prompt tells the agent to RESOLVE each component type read-only (get-component-info) and return componentResolution — the gate's input",
@@ -637,6 +650,16 @@ check("workflow EXECUTES Hard Stop 3.5: a baseline Reconcile with a resolved:fal
   !gateFires.threw && gateFires.stopped === "plan-invalid-against-stand"
     && Array.isArray(gateFires.componentMismatches) && gateFires.componentMismatches.some((c) => c.type === "crt.ContactCommunication"),
   () => (gateFires.threw ? `threw: ${gateFires.threw}` : `stopped=${gateFires.stopped} mismatches=${JSON.stringify(gateFires.componentMismatches)}`));
+// The OPERATOR-FACING payload of the pre-build stop, not just its `stopped` key: `planInvalidNext` must name the
+// unresolved type, carry the re-plan instruction, and end with the PRE-BUILD tail — and must NOT carry the mid-run
+// tail. Without this, swapping the two tails at the call sites or deleting the re-plan clause from `planInvalidNext`
+// passes every check while telling a pre-build operator (nothing written) that artifacts are on disk. (PR #102 review.)
+check("workflow Hard Stop 3.5 `next` is the operator's re-plan instruction with the PRE-BUILD tail: names the type, says re-run `--plan --out` + re-approve, ends 'Nothing was built.' and does NOT carry the mid-run tail",
+  /crt\.ContactCommunication/.test(gateFires.next || "")
+    && /re-run .--plan --out., re-approve/.test(gateFires.next || "")
+    && /Nothing was built\./.test(gateFires.next || "")
+    && !/already built this run is on disk/.test(gateFires.next || ""),
+  () => `next=${JSON.stringify(gateFires.next)}`);
 const gatePasses = await runToBaseline(baselineState([{ type: "crt.CommunicationOptions", resolved: true }])).catch((e) => ({ threw: e.message }));
 check("workflow EXECUTES past the component gate: an all-resolved baseline Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches a downstream stop, so an inverted gate condition would surface here",
   !gatePasses.threw && gatePasses.stopped !== "plan-invalid-against-stand" && gatePasses.stopped === "unknown-checkpoint-key",
@@ -711,6 +734,16 @@ check("workflow EXECUTES the mid-run gate in `acceptReconciled`: a post-prefligh
   !midRunStops.threw && midRunStops.stopped === "plan-invalid-against-stand"
     && Array.isArray(midRunStops.componentMismatches) && midRunStops.componentMismatches.some((c) => c.type === "crt.ContactCommunication"),
   () => (midRunStops.threw ? `threw: ${midRunStops.threw}` : `stopped=${midRunStops.stopped} mismatches=${JSON.stringify(midRunStops.componentMismatches)}`));
+// The MID-RUN stop shares `stopped` and the whole `planInvalidNext` body with the pre-build one and differs ONLY in
+// the trailing clause — so the tail is the one thing that tells an operator with units already on disk apart from a
+// pre-build operator with nothing written. Assert the re-plan instruction AND the mid-run tail, and that the
+// pre-build tail is absent — this pins the tail that the pre-build test above pins the other side of. (PR #102 review.)
+check("workflow mid-run gate `next` is the operator's re-plan instruction with the MID-RUN tail: names the type, says re-run `--plan --out` + re-approve, ends 'Anything already built this run is on disk.' and does NOT carry the pre-build tail",
+  /crt\.ContactCommunication/.test(midRunStops.next || "")
+    && /re-run .--plan --out., re-approve/.test(midRunStops.next || "")
+    && /Anything already built this run is on disk\./.test(midRunStops.next || "")
+    && !/Nothing was built/.test(midRunStops.next || ""),
+  () => `next=${JSON.stringify(midRunStops.next)}`);
 // Positive control: the SAME path with an all-resolved post-preflight Reconcile does NOT stop on the gate — it
 // proceeds past `acceptReconciled` to the dry-run boundary, so a mid-run gate that always fired would surface here.
 const midRunPasses = await runToPostPreflight(midRunBaseline, midRunBaseline, { dryRun: true })
@@ -910,8 +943,8 @@ check("workflow: EVERY refreshed state goes through one acceptance path that re-
 // resumed run whose baseline predated `componentResolution`, or a package uninstalled mid-run. Scoped to the
 // function body (not the whole file) because the baseline call would match wfSrc regardless of whether the mid-run
 // guard exists — the point under test is that `acceptReconciled` itself re-checks it and returns the same stop.
-check("workflow: `acceptReconciled` also re-applies the COMPONENT-TYPE gate — the mid-run guarantee added with ENG-95468, so a resumed/long run that first reports an unresolved type mid-run stops instead of building it",
-  /componentTypeMismatches\(state\.componentResolution\)/.test(topLevelFnBody("acceptReconciled"))
+check("workflow: `acceptReconciled` also re-applies the COMPONENT-TYPE gate — the mid-run guarantee added with ENG-95468, intersected with the plan's own componentTypes, so a resumed/long run that first reports an unresolved type mid-run stops instead of building it",
+  /componentTypeMismatches\(state\.componentResolution, state\.componentTypes\)/.test(topLevelFnBody("acceptReconciled"))
     && /stopped: 'plan-invalid-against-stand'/.test(topLevelFnBody("acceptReconciled")));
 // The negative is scoped to the OLD assignment the two call sites used. `acceptReconciled` itself contains
 // `state = next` by construction — that is the one place allowed to move it.
