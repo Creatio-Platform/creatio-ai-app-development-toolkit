@@ -178,6 +178,23 @@ const DATAVALUETYPE_CODE = Object.fromEntries(Object.entries(DATA_VALUE_TYPE)
 // can bind — NOT a binary Image, NOT a Text URL. Recognize it by normalized code or by name so an image field /
 // generator-image can be bound concretely (and a non-IMAGELOOKUP source flagged, never silently mis-bound).
 const isImageLookupType = (t) => { const s = String(t ?? "").toLowerCase(); return s === "imagelookup" || s === "image link" || s === "imagelink" || s === "16" || DATAVALUETYPE_CODE[s] === "imagelookup"; };
+// clio's OWN readback names for the money/decimal/phone subtypes, mapped onto the tokens this file already handles.
+// `EntitySchemaDesignerSupport.GetFriendlyTypeName` returns `Currency2` for DataValueType 6, `Decimal8` for 40 and
+// `PhoneNumber` for 42, and `get-entity-schema-properties` reports those names verbatim — verified on a stand:
+// Contact.Phone/MobilePhone/HomePhone read `PhoneNumber`, Product and Invoice read `Currency2`, Invoice reads
+// `Decimal8`. None was a key here, so ordinary money, decimal and phone fields fell through to the loud
+// `field-control` decision claiming their TYPE was not recognized — while the engine knew the type perfectly well
+// and only did not know clio's spelling of it. Keys are lower-case because both callers lower-case first.
+// `RichText` and `WebLink` are the two names in clio's map that already matched, so they are deliberately absent.
+// This can only turn a false "unknown type" into the control the engine already picks for the same underlying type.
+const CLIO_TYPE_ALIAS = {
+  phonenumber: "phone",
+  currency0: "money", currency1: "money", currency2: "money", currency3: "money",
+  decimal0: "float", decimal1: "float", decimal3: "float", decimal4: "float", decimal8: "float",
+};
+// ONE normalization for both the control choice and the reader-facing type label — they diverged before on the
+// numeric codes, and a label reading `Currency2` next to a control chosen for `money` is the same class of bug.
+const normalizeDvt = (t) => CLIO_TYPE_ALIAS[t] || DATAVALUETYPE_CODE[t] || t;
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
@@ -192,7 +209,7 @@ function scalarControl(t) {
   // L2523-2529). What this table actually encodes is "which types the engine can bind a Freedom control for",
   // which is a Freedom-side judgement; returning null raises the loud field-control decision so a human confirms
   // the control on-stand. Use BLOB as the exemplar of "Classic refuses to render it" — STAGE_INDICATOR is not one.
-  t = DATAVALUETYPE_CODE[t] || t;
+  t = normalizeDvt(t);
   if (t === "imagelookup") return { type: "crt.ImageInput", image: true }; // binds via `value`, not `control`
   if (t === "boolean") return { type: "crt.Checkbox" };
   if (t === "datetime") return { type: "crt.DateTimePicker", picker: "datetime" };
@@ -261,7 +278,7 @@ function control(dataType, contentType, ref) {
 function fieldTypeLabel(col, meta, ctl) {
   if (ctl.lookup) return "Lookup";
   let t = String(meta.type || "").toLowerCase();
-  t = DATAVALUETYPE_CODE[t] || t;   // same numeric-code normalization as scalarControl (Money "6", Phone "42", …)
+  t = normalizeDvt(t);   // same normalization as scalarControl: numeric codes AND clio's friendly names
   if (t === "phone") return "Phone";
   if (t === "email") return "Email";
   if (t === "weblink") return "Web link";

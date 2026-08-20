@@ -7393,6 +7393,28 @@ try {
     () => ({ needsDecision: secRun.changeSet.needsDecision.filter((d) => d.kind === "field-control"),
       emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I", "B"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
 
+  // ---- ENG-95412: clio's friendly type names, which the control table did not accept ----
+  // OBSERVED, not inferred: on a live stand Contact.Phone/MobilePhone/HomePhone report `type: PhoneNumber`,
+  // Product and Invoice report `Currency2`, Invoice reports `Decimal8`. The engine lower-cases the name and then
+  // looked it up in a table keyed on its own tokens, so three ordinary field types read as "TYPE was not
+  // recognized". `RichText` and `WebLink` are the control arm: they already matched, and must keep matching.
+  const clioCols = { P: { type: "PhoneNumber" }, C: { type: "Currency2" }, D: { type: "Decimal8" },
+    R: { type: "RichText" }, W: { type: "WebLink" }, M: { type: "Currency0" }, F: { type: "Decimal1" } };
+  const clioRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: clioCols,
+    schemas: [{ pkg: "P", body: gmBody("", Object.keys(clioCols).map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")) }] }, { baseDir: FIX });
+  const ctlOf = (n) => clioRun.changeSet.viewConfigDiff.find((o) => o.name === n)?.values?.type;
+  check("ENG-95412: clio's own readback names resolve to the control the engine already picks for the same underlying type — Currency* to a number input, Decimal* to a number input, PhoneNumber to a plain input",
+    ctlOf("C") === "crt.NumberInput" && ctlOf("M") === "crt.NumberInput"
+    && ctlOf("D") === "crt.NumberInput" && ctlOf("F") === "crt.NumberInput"
+    && ctlOf("P") === "crt.Input",
+    () => Object.keys(clioCols).map((n) => `${n}(${clioCols[n].type})=${ctlOf(n)}`));
+  check("ENG-95412: and NO `field-control` decision is raised for any of them — the engine knew these types all along, it only did not know clio's spelling",
+    !clioRun.changeSet.needsDecision.some((d) => d.kind === "field-control"),
+    () => clioRun.changeSet.needsDecision.filter((d) => d.kind === "field-control").map((d) => d.reason));
+  check("ENG-95412: the two names that ALREADY matched (`RichText`, `WebLink`) still do — the alias table must not shadow the tokens it sits in front of",
+    ctlOf("R") === "crt.Input" && ctlOf("W") === "crt.Input",
+    () => ({ R: ctlOf("R"), W: ctlOf("W") }));
+
   // ---- ENG-95412 / AC22: the owning member's OWN row says the value could not be read ----
   // The correction used to live ONLY in a separate `parse-gap` worklist line, so the attribute's Detail cell stayed
   // empty — which a reader takes as "no default". Both surfaces must carry it: the worklist line names the body and
