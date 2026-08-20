@@ -56,6 +56,31 @@ class SessionExport:
         return files
 
 
+def _make_workflow(wf_dir: str, name: str, session_dir: str,
+                   session_results: Optional[str]) -> Workflow:
+    """One Workflow from its run-id directory, resolving journal + meta paths."""
+    agents = sorted(glob.glob(os.path.join(wf_dir, "agent-*.jsonl")))
+    journal = os.path.join(wf_dir, "journal.jsonl")
+    journal = journal if os.path.isfile(journal) else None
+    meta = os.path.join(session_dir, "workflows", name + ".json")
+    meta = meta if os.path.isfile(meta) else None
+    return Workflow(name, wf_dir, agents, journal, meta, session_results)
+
+
+def _session_workflows(wf_parent: str) -> tuple[str, Optional[str], list]:
+    """Session dir, its tool-results/ (if any), and every workflow under one
+    ``subagents/workflows`` parent."""
+    session_dir = os.path.dirname(os.path.dirname(wf_parent))
+    candidate_results = os.path.join(session_dir, "tool-results")
+    session_results = candidate_results if os.path.isdir(candidate_results) else None
+    workflows = [
+        _make_workflow(os.path.join(wf_parent, name), name, session_dir, session_results)
+        for name in sorted(os.listdir(wf_parent))
+        if os.path.isdir(os.path.join(wf_parent, name))
+    ]
+    return session_dir, session_results, workflows
+
+
 def discover(root: str) -> SessionExport:
     root = os.path.abspath(root)
     main = os.path.join(root, "transcript.jsonl")
@@ -69,20 +94,9 @@ def discover(root: str) -> SessionExport:
         set(glob.glob(os.path.join(root, "**", "subagents", "workflows"), recursive=True))
     )
     for wf_parent in wf_parents:
-        session_dir = os.path.dirname(os.path.dirname(wf_parent))
-        candidate_results = os.path.join(session_dir, "tool-results")
-        session_results = candidate_results if os.path.isdir(candidate_results) else None
+        session_dir, session_results, wfs = _session_workflows(wf_parent)
         if session_results:
             tool_results_dir = session_results
-        for name in sorted(os.listdir(wf_parent)):
-            wf_dir = os.path.join(wf_parent, name)
-            if not os.path.isdir(wf_dir):
-                continue
-            agents = sorted(glob.glob(os.path.join(wf_dir, "agent-*.jsonl")))
-            journal = os.path.join(wf_dir, "journal.jsonl")
-            journal = journal if os.path.isfile(journal) else None
-            meta = os.path.join(session_dir, "workflows", name + ".json")
-            meta = meta if os.path.isfile(meta) else None
-            workflows.append(Workflow(name, wf_dir, agents, journal, meta, session_results))
+        workflows.extend(wfs)
 
     return SessionExport(root, main, session_dir, tool_results_dir, workflows)

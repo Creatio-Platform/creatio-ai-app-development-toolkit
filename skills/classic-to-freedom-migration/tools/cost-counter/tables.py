@@ -135,13 +135,8 @@ class Table:
             "total": {"label": "TOTAL", "cells": self._cells(totals, totals)},
         }
 
-    def to_markdown(self) -> str:
-        """GitHub-flavoured Markdown table for --format md (renders in Jira).
-
-        Same columns as render() -- each measure plus its own ``%`` column --
-        with a bold ``TOTAL`` row equal to the column sums. Label left-aligned,
-        numbers right-aligned."""
-        totals = self.total_values()
+    def _md_head_sep(self) -> tuple[list, list]:
+        """Header labels and alignment separators for the Markdown table."""
         heads = [self.label_header or " "]
         seps = [":--"]
         for col in self.columns:
@@ -150,26 +145,37 @@ class Table:
             if col.share:
                 heads.append("%")
                 seps.append("--:")
+        return heads, seps
 
-        def row(label: str, values: dict, bold: bool = False) -> str:
-            # Never bold an empty cell -- "****" would render as literal asterisks
-            # (e.g. the text column's blank TOTAL cell).
-            wrap = (lambda s: f"**{s}**" if bold and s else s)
-            cells = [wrap(label)]
-            for col in self.columns:
-                if col.is_text:
-                    cells.append(wrap(_fmt(values.get(col.key), col.kind)))
-                    continue
-                value = values.get(col.key, 0) or 0
-                cells.append(wrap(_fmt(value, col.kind)))
-                if col.share:
-                    col_total = totals[col.key]
-                    pct = (value / col_total * 100.0) if col_total else 0.0
-                    cells.append(wrap(f"{pct:.1f}%"))
-            return "| " + " | ".join(cells) + " |"
+    def _md_row(self, label: str, values: dict, totals: dict, bold: bool = False) -> str:
+        # Never bold an empty cell -- "****" would render as literal asterisks
+        # (e.g. the text column's blank TOTAL cell).
+        def wrap(s):
+            return f"**{s}**" if bold and s else s
 
+        cells = [wrap(label)]
+        for col in self.columns:
+            if col.is_text:
+                cells.append(wrap(_fmt(values.get(col.key), col.kind)))
+                continue
+            value = values.get(col.key, 0) or 0
+            cells.append(wrap(_fmt(value, col.kind)))
+            if col.share:
+                col_total = totals[col.key]
+                pct = (value / col_total * 100.0) if col_total else 0.0
+                cells.append(wrap(f"{pct:.1f}%"))
+        return "| " + " | ".join(cells) + " |"
+
+    def to_markdown(self) -> str:
+        """GitHub-flavoured Markdown table for --format md (renders in Jira).
+
+        Same columns as render() -- each measure plus its own ``%`` column --
+        with a bold ``TOTAL`` row equal to the column sums. Label left-aligned,
+        numbers right-aligned."""
+        totals = self.total_values()
+        heads, seps = self._md_head_sep()
         lines = ["| " + " | ".join(heads) + " |", "| " + " | ".join(seps) + " |"]
         for label, values in self.rows:
-            lines.append(row(label, values))
-        lines.append(row("TOTAL", totals, bold=True))
+            lines.append(self._md_row(label, values, totals))
+        lines.append(self._md_row("TOTAL", totals, totals, bold=True))
         return "\n".join(lines)

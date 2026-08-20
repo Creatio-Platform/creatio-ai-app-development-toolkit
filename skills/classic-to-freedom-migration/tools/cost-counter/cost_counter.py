@@ -24,6 +24,15 @@ import export as export_mod
 import metrics
 from report import Report
 
+_DEFAULTED_TO_1 = " (defaulted to 1)"
+
+
+def _pages_label(page_count: int, built_pages: list) -> str:
+    """'<n> (Name1, Name2)', or '<n> (defaulted to 1)' when nothing was built."""
+    if built_pages:
+        return f"{page_count} ({', '.join(built_pages)})"
+    return f"{page_count}{_DEFAULTED_TO_1}"
+
 
 def _reconfigure_stdout() -> None:
     # Transcripts carry non-ASCII (Cyrillic captions, box glyphs); force UTF-8
@@ -236,8 +245,7 @@ def _reconcile_markdown(report: Report) -> str:
 
 def _normalization_markdown(report: Report) -> str:
     norm = _normalization_payload(report)
-    pages = f"{norm['page_count']}"
-    pages += f" ({', '.join(norm['built_pages'])})" if norm["built_pages"] else " (defaulted to 1)"
+    pages = _pages_label(norm["page_count"], norm["built_pages"])
     return "\n".join([
         "### Normalization",
         "",
@@ -304,8 +312,7 @@ def _fmt_measure(value: float, kind: str) -> str:
 
 def _summary_markdown(report: Report) -> str:
     s = report.summary()
-    pages = f"{s['page_count']}"
-    pages += f" ({', '.join(s['built_pages'])})" if s["built_pages"] else " (defaulted to 1)"
+    pages = _pages_label(s["page_count"], s["built_pages"])
     return "\n".join([
         "### Summary",
         "",
@@ -324,8 +331,7 @@ def _summary_markdown(report: Report) -> str:
 
 def _print_summary(report: Report) -> None:
     s = report.summary()
-    pages = f"{s['page_count']}"
-    pages += f" ({', '.join(s['built_pages'])})" if s["built_pages"] else " (defaulted to 1)"
+    pages = _pages_label(s["page_count"], s["built_pages"])
     print("summary:")
     print(f"    section (built pages)        : {pages}")
     print(f"    weighted cost per built page : {s['weighted_per_page'] / 1e6:,.2f}M input-equiv tokens")
@@ -391,45 +397,53 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
             "baseline": base, "candidate": cand,
             "same_section": same_section, "deltas": rows, "verdict": verdict,
         }, indent=2, ensure_ascii=False))
-        return 0
+    elif fmt == "md":
+        print(_compare_markdown(base, cand, same_section, rows, verdict))
+    else:
+        print(_compare_text(base, cand, same_section, rows, verdict))
+    return 0
 
-    if fmt == "md":
-        lines = ["### Cost comparison (baseline vs candidate)", ""]
-        lines.append(f"- baseline section: {base['built_pages'] or '(none)'}")
-        lines.append(f"- candidate section: {cand['built_pages'] or '(none)'}"
-                     + ("  · ✓ same section" if same_section
-                        else "  · ✗ **sections differ — comparison void**"))
-        lines += ["", "| measure | baseline | candidate | Δ | Δ% |",
-                  "| :-- | --: | --: | --: | --: |"]
-        for r in rows:
-            pct = f"{r['pct']:+.1f}%" if r["pct"] is not None else "n/a"
-            lines.append(
-                f"| {r['label']} | {_fmt_measure(r['baseline'], r['kind'])} "
-                f"| {_fmt_measure(r['candidate'], r['kind'])} "
-                f"| {_fmt_measure(r['delta'], r['kind'])} | {pct} |"
-            )
-        lines += ["", f"**Verdict:** {verdict}"]
-        print("\n".join(lines))
-        return 0
 
-    # text
+def _compare_markdown(base: dict, cand: dict, same_section: bool,
+                      rows: list, verdict: str) -> str:
+    lines = ["### Cost comparison (baseline vs candidate)", ""]
+    lines.append(f"- baseline section: {base['built_pages'] or '(none)'}")
+    lines.append(f"- candidate section: {cand['built_pages'] or '(none)'}"
+                 + ("  · ✓ same section" if same_section
+                    else "  · ✗ **sections differ — comparison void**"))
+    lines += ["", "| measure | baseline | candidate | Δ | Δ% |",
+              "| :-- | --: | --: | --: | --: |"]
+    for r in rows:
+        pct = f"{r['pct']:+.1f}%" if r["pct"] is not None else "n/a"
+        lines.append(
+            f"| {r['label']} | {_fmt_measure(r['baseline'], r['kind'])} "
+            f"| {_fmt_measure(r['candidate'], r['kind'])} "
+            f"| {_fmt_measure(r['delta'], r['kind'])} | {pct} |"
+        )
+    lines += ["", f"**Verdict:** {verdict}"]
+    return "\n".join(lines)
+
+
+def _compare_text(base: dict, cand: dict, same_section: bool,
+                  rows: list, verdict: str) -> str:
     b_sec = ", ".join(base["built_pages"]) or "(none)"
     c_sec = ", ".join(cand["built_pages"]) or "(none)"
     mark = "same section" if same_section else "SECTIONS DIFFER -- comparison void"
-    print("cost comparison (baseline -> candidate):")
-    print(f"    baseline section : {b_sec}")
-    print(f"    candidate section: {c_sec}   [{mark}]")
-    print()
-    print(f"    {'measure':28} {'baseline':>12} {'candidate':>12} {'delta':>12} {'delta%':>9}")
-    print(f"    {'-' * 28} {'-' * 12} {'-' * 12} {'-' * 12} {'-' * 9}")
+    lines = [
+        "cost comparison (baseline -> candidate):",
+        f"    baseline section : {b_sec}",
+        f"    candidate section: {c_sec}   [{mark}]",
+        "",
+        f"    {'measure':28} {'baseline':>12} {'candidate':>12} {'delta':>12} {'delta%':>9}",
+        f"    {'-' * 28} {'-' * 12} {'-' * 12} {'-' * 12} {'-' * 9}",
+    ]
     for r in rows:
         pct = f"{r['pct']:+.1f}%" if r["pct"] is not None else "n/a"
-        print(f"    {r['label']:28} {_fmt_measure(r['baseline'], r['kind']):>12} "
-              f"{_fmt_measure(r['candidate'], r['kind']):>12} "
-              f"{_fmt_measure(r['delta'], r['kind']):>12} {pct:>9}")
-    print()
-    print(f"    VERDICT: {verdict}")
-    return 0
+        lines.append(f"    {r['label']:28} {_fmt_measure(r['baseline'], r['kind']):>12} "
+                     f"{_fmt_measure(r['candidate'], r['kind']):>12} "
+                     f"{_fmt_measure(r['delta'], r['kind']):>12} {pct:>9}")
+    lines += ["", f"    VERDICT: {verdict}"]
+    return "\n".join(lines)
 
 
 def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,

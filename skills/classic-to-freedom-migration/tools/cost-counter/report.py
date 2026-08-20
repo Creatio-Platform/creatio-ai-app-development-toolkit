@@ -64,6 +64,38 @@ def _result_bytes(content, offloaded_dir: Optional[str]) -> int:
     return len(text.encode("utf-8"))
 
 
+def _apply_usage(agg: TranscriptAgg, usage: dict) -> None:
+    """Fold one turn's token usage into the aggregate."""
+    agg.turns += 1
+    in_tok = usage.get("input_tokens", 0) or 0
+    cw = usage.get("cache_creation_input_tokens", 0) or 0
+    agg.input += in_tok
+    agg.cache_write += cw
+    agg.cache_read += usage.get("cache_read_input_tokens", 0) or 0
+    agg.output += usage.get("output_tokens", 0) or 0
+    m5, h1 = parsing.cache_creation_ttl(usage)
+    agg.ephemeral_5m += m5
+    agg.ephemeral_1h += h1
+    if agg.startup == 0 and agg.turns == 1:
+        agg.startup = cw + in_tok
+
+
+def _apply_tool_blocks(agg: TranscriptAgg, content: list, id_to_tool: dict,
+                       offloaded_dir: Optional[str]) -> None:
+    """Fold one message's tool_use / tool_result blocks into the aggregate."""
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "tool_use":
+            name = block.get("name") or "?"
+            id_to_tool[block.get("id")] = name
+            agg.tool_calls[name] += 1
+        elif btype == "tool_result":
+            tool_name = id_to_tool.get(block.get("tool_use_id"), "?")
+            agg.tool_bytes[tool_name] += _result_bytes(block.get("content"), offloaded_dir)
+
+
 def aggregate_transcript(path: str, offloaded_dir: Optional[str] = None) -> TranscriptAgg:
     """Single pass over one transcript: usage, tool calls and tool-result bytes.
 
@@ -76,34 +108,10 @@ def aggregate_transcript(path: str, offloaded_dir: Optional[str] = None) -> Tran
     for obj in parsing.iter_jsonl(path):
         usage = parsing.usage_of(obj)
         if usage:
-            agg.turns += 1
-            in_tok = usage.get("input_tokens", 0) or 0
-            cw = usage.get("cache_creation_input_tokens", 0) or 0
-            agg.input += in_tok
-            agg.cache_write += cw
-            agg.cache_read += usage.get("cache_read_input_tokens", 0) or 0
-            agg.output += usage.get("output_tokens", 0) or 0
-            m5, h1 = parsing.cache_creation_ttl(usage)
-            agg.ephemeral_5m += m5
-            agg.ephemeral_1h += h1
-            if agg.startup == 0 and agg.turns == 1:
-                agg.startup = cw + in_tok
-
-        message = obj.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type")
-            if btype == "tool_use":
-                name = block.get("name") or "?"
-                id_to_tool[block.get("id")] = name
-                agg.tool_calls[name] += 1
-            elif btype == "tool_result":
-                tool_name = id_to_tool.get(block.get("tool_use_id"), "?")
-                agg.tool_bytes[tool_name] += _result_bytes(block.get("content"), offloaded_dir)
+            _apply_usage(agg, usage)
+        content = (obj.get("message") or {}).get("content")
+        if isinstance(content, list):
+            _apply_tool_blocks(agg, content, id_to_tool, offloaded_dir)
     return agg
 
 
@@ -144,31 +152,8 @@ def _workflow_labels(session: export_mod.SessionExport) -> dict:
     build rounds), the repeats are numbered ``round 1/2/3`` in start-time order.
     Anything without a readable name falls back to its raw run id.
     """
-    info: dict = {}
-    for workflow in session.workflows:
-        name = start = None
-        if workflow.meta_json:
-            try:
-                with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
-                    data = json.load(handle)
-                name = data.get("workflowName")
-                start = data.get("startTime") or data.get("timestamp")
-            except Exception:
-                pass
-        info[workflow.name] = (name, start)
-
-    groups: dict = collections.defaultdict(list)
-    for run_id, (name, start) in info.items():
-        if name:
-            groups[name].append((start, run_id))
-    round_no: dict = {}
-    for runs in groups.values():
-        if len(runs) > 1:
-            # start-time order; None sorts first so numbering stays deterministic.
-            for index, (_, run_id) in enumerate(
-                sorted(runs, key=lambda r: (r[0] is None, r[0])), start=1
-            ):
-                round_no[run_id] = index
+    info = {wf.name: _workflow_name_start(wf) for wf in session.workflows}
+    round_no = _round_numbers(info)
 
     labels: dict = {}
     for run_id, (name, _) in info.items():
@@ -180,6 +165,37 @@ def _workflow_labels(session: export_mod.SessionExport) -> dict:
             friendly = f"{friendly} · round {round_no[run_id]}"
         labels[run_id] = friendly
     return labels
+
+
+def _workflow_name_start(workflow) -> tuple:
+    """(workflowName, startTime) from a workflow's meta json, (None, None) if absent."""
+    if not workflow.meta_json:
+        return (None, None)
+    try:
+        with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
+            data = json.load(handle)
+    except Exception:
+        return (None, None)
+    return (data.get("workflowName"), data.get("startTime") or data.get("timestamp"))
+
+
+def _round_numbers(info: dict) -> dict:
+    """Map run-id -> round number for workflow names that ran more than once,
+    numbered in start-time order. Names that ran once get no entry."""
+    groups: dict = collections.defaultdict(list)
+    for run_id, (name, start) in info.items():
+        if name:
+            groups[name].append((start, run_id))
+    round_no: dict = {}
+    for runs in groups.values():
+        if len(runs) <= 1:
+            continue
+        # start-time order; None sorts first so numbering stays deterministic.
+        for index, (_, run_id) in enumerate(
+            sorted(runs, key=lambda r: (r[0] is None, r[0])), start=1
+        ):
+            round_no[run_id] = index
+    return round_no
 
 
 def _workflow_sort_key(workflow) -> tuple:
@@ -200,24 +216,31 @@ def _workflow_sort_key(workflow) -> tuple:
     return (1, 0, workflow.name)
 
 
+def _pages_in_journal(journal: str) -> set:
+    """String page-schema names recorded in one workflow journal."""
+    pages: set = set()
+    for obj in parsing.iter_jsonl(journal):
+        result = obj.get("result")
+        if not isinstance(result, dict):
+            continue
+        schemas = result.get("pageSchemas")
+        if not isinstance(schemas, dict):
+            continue
+        for value in schemas.values():
+            # Only string schema names belong in the set. A non-string value
+            # (dict/list, if the journal format ever nests) would later crash
+            # sorted(self.built_pages) with a TypeError.
+            if isinstance(value, str) and value:
+                pages.add(value)
+    return pages
+
+
 def _built_pages(session: export_mod.SessionExport) -> set:
     """Distinct built page schema names, read from workflow journals."""
     pages: set = set()
     for workflow in session.workflows:
-        if not workflow.journal:
-            continue
-        for obj in parsing.iter_jsonl(workflow.journal):
-            result = obj.get("result")
-            if not isinstance(result, dict):
-                continue
-            schemas = result.get("pageSchemas")
-            if isinstance(schemas, dict):
-                for value in schemas.values():
-                    # Only string schema names belong in the set. A non-string
-                    # value (dict/list, if the journal format ever nests) would
-                    # later crash sorted(self.built_pages) with a TypeError.
-                    if isinstance(value, str) and value:
-                        pages.add(value)
+        if workflow.journal:
+            pages |= _pages_in_journal(workflow.journal)
     return pages
 
 
