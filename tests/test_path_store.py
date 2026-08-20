@@ -43,9 +43,10 @@ class PathStoreTest(unittest.TestCase):
         # string as a path component would return it happily. This one cannot:
         # with the listing reporting nothing, there is no entry to descend into
         # and no component to join. That asymmetry is the whole guarantee.
+        requested = os.path.join(self.base, "exports")
         with patch("runtime.path_store.os.listdir", return_value=[]):
             with self.assertRaises(PathNotInStore):
-                self.store.resolve(os.path.join(self.base, "exports"))
+                self.store.resolve(requested)
 
     def test_the_joined_component_is_the_listed_entry(self):
         seen = []
@@ -86,8 +87,9 @@ class PathStoreTest(unittest.TestCase):
         self.assertEqual(_key(self.store.resolve(self.base)), _key(self.base))
 
     def test_parent_traversal_is_refused(self):
+        requested = os.path.join(self.base, "exports", "..", "..", "elsewhere")
         with self.assertRaises(PathOutsideStore):
-            self.store.resolve(os.path.join(self.base, "exports", "..", "..", "elsewhere"))
+            self.store.resolve(requested)
 
     def test_a_path_outside_the_base_is_refused(self):
         outside = tempfile.mkdtemp(prefix="path-store-outside-")
@@ -98,14 +100,16 @@ class PathStoreTest(unittest.TestCase):
         self.assertIn(self.base, str(caught.exception))
 
     def test_a_missing_entry_is_refused_as_not_in_the_store(self):
+        requested = os.path.join(self.base, "exports", "no-such-run")
         with self.assertRaises(PathNotInStore):
-            self.store.resolve(os.path.join(self.base, "exports", "no-such-run"))
+            self.store.resolve(requested)
 
     def test_a_file_in_the_middle_of_the_chain_is_refused(self):
         with open(os.path.join(self.base, "a-file"), "w", encoding="utf-8") as handle:
             handle.write("x")
+        requested = os.path.join(self.base, "a-file", "deeper")
         with self.assertRaises(PathNotInStore):
-            self.store.resolve(os.path.join(self.base, "a-file", "deeper"))
+            self.store.resolve(requested)
 
     def test_a_symlink_out_of_the_base_is_not_followed(self):
         outside = tempfile.mkdtemp(prefix="path-store-linked-")
