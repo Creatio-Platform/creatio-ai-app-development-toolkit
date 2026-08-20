@@ -2417,6 +2417,63 @@ export function pageUnits(result, opts = {}) {
   };
 }
 
+// Only the keys the source actually carries, so absent / `false` / record stay three distinguishable states: the
+// gate reads them differently, and a slice must not write `null` for a key nobody has answered.
+function pickKeys(src, keys) {
+  const out = {};
+  if (!src || typeof src !== "object") return out;
+  for (const k of keys) if (Object.hasOwn(src, k)) out[k] = src[k];
+  return out;
+}
+// The evidence ids that read on ONE page. The built file is keyed by id and says nothing about which page an id
+// belongs to; `--units.evidenceRows` is the only place that mapping exists.
+const pageEvidenceIds = (units, pageKey) =>
+  (units.evidenceRows || []).filter((r) => r.pageKey === pageKey).map((r) => r.id);
+// The reachability keys that read on ONE page. Same rule: a key applies to a page only when `--units` names it.
+const pageReachKeys = (units, pageKey) =>
+  (units.reachability || []).filter((r) => (r.pages || []).includes(pageKey)).map((r) => r.key);
+
+// ONE page's slice of `--units`: the run-level fields stay (a single unit still needs the plan version, section
+// host and application code), and every list narrows to the rows that name this key.
+// An unknown key returns `null`: a caller that asked for one page must never be handed the whole queue.
+// `parent` is copied only when `parents` carries the key, because an absent edge and a `null` edge are different
+// answers: `null` is a root page, absent is a page whose place in the tree is unknown.
+export function pageUnitsSlice(units, pageKey) {
+  const page = (units.pages || []).find((p) => p.key === pageKey);
+  if (!page) return null;
+  return {
+    pageKey,
+    entity: units.entity ?? null,
+    planVersion: units.planVersion ?? null,
+    sectionSchema: units.sectionSchema ?? null,
+    sectionHost: units.sectionHost ?? null,
+    applicationCode: units.applicationCode ?? null,
+    page,
+    ...(units.parents && Object.hasOwn(units.parents, pageKey) ? { parent: units.parents[pageKey] } : {}),
+    reachability: (units.reachability || []).filter((r) => (r.pages || []).includes(pageKey)),
+    preflight: (units.preflight || []).filter((p) => p.pageKey === pageKey),
+    evidenceRows: (units.evidenceRows || []).filter((r) => r.pageKey === pageKey),
+  };
+}
+
+// ONE page's slice of a `--built` payload: its own `pages` row, plus only the reachability keys and evidence ids
+// that read on this page. Every value is copied VERBATIM — a narrowing, never a projection.
+// STAMPED with `planVersion`, like the queue slice: slice files are numbered, numbers are reused, and a `pageKey`
+// that matches says the file is the right PAGE, not that it is the right ROUND. The pair a consumer holds must
+// agree on the version, or one of the two is left over.
+export function builtSlice(units, built, pageKey) {
+  const src = built && typeof built === "object" ? built : {};
+  const ids = pageEvidenceIds(units, pageKey);
+  return {
+    pageKey,
+    planVersion: units.planVersion ?? null,
+    pages: pickKeys(src.pages, [pageKey]),
+    reachability: pickKeys(src.reachability, pageReachKeys(units, pageKey)),
+    evidence: pickKeys(src.evidence, ids),
+    judge: pickKeys(src.judge, ids),
+  };
+}
+
 // `--checklist` — the grouped Plan-vs-Done skeleton (all rows `☐ pending`), presented AFTER implementing. Not part
 // of `--plan`. The verified version is `--verify` below (SAME structure, Status auto-filled from the built page).
 export function renderChecklist(result, opts = {}) {

@@ -21,14 +21,23 @@ Freedom one lives in exactly one place — read it there:
 
 | Input | Where it comes from |
 |---|---|
-| the design spec for THIS page | the page's block under `### Child page mappings` / `### Typed page mappings` / `### Add mini-page mapping` in the approved plan. (`--spec` renders the WHOLE run from the one manifest — there is no per-page manifest and no per-page `--spec`.) |
-| the acceptance criteria | the page's own checklist rows — run `--checklist`. A SUB-page's group titles are prefixed with its page key (`child:Education · Form — Coverage`); **`main`'s groups carry no prefix at all**, so for `main` the rows are exactly the unprefixed groups |
-| the expected element NAMES | `--units.pages[].expect.fieldNames` — the fields row matches by element NAME, so build each element under the name this array gives |
-| the expected template schema | `--units.pages[].expectedTemplate` (omitted ⇒ no template row is gated for this page) |
-| the target package | `--units.pages[].targetPackage` (`null` ⇒ no placement row for this page) |
-| the counts to satisfy | `--units.pages[].expect` — `fields`, `tabs`, `details`, `images` |
+| the design spec for THIS page | `refs/spec-<name>-<n>.md`, pre-cut for this key by the run (`--spec --page <key>`) and carrying the plan's `Adjustments` list in full. A page the engine did not fold has no slice — work from its row under `### Child page mappings` / `### Typed page mappings` / `### Add mini-page mapping` in the approved plan. |
+| the acceptance criteria | `--checklist --page <key>` — THIS page's rows only. A SUB-page's group titles are prefixed with its page key (`child:Education · Form — Coverage`); **`main`'s groups carry no prefix at all**, so for `main` the rows are exactly the unprefixed groups |
+| the expected element NAMES | `slices/queue-<n>.json` → `page.expect.fieldNames` — the fields row matches by element NAME, so build each element under the name this array gives |
+| the expected template schema | `slices/queue-<n>.json` → `page.expectedTemplate` (omitted ⇒ no template row is gated for this page) |
+| the target package | `slices/queue-<n>.json` → `page.targetPackage` (`null` ⇒ no placement row for this page) |
+| the counts to satisfy | `slices/queue-<n>.json` → `page.expect` — `fields`, `tabs`, `details`, `images` |
+| what the verifier last saw, and how the judge ruled | `slices/built-<n>.json` → this page's `pages` entry, plus the `evidence` records and `judge` verdicts for THIS page's ids and no other's |
 
-`expect.fieldNames` is the single most load-bearing input. Each name is the **bound column name**
+**Every row above names the file this unit is HANDED** — `<n>` is this page's position in the queue, and the run
+gives you the exact path. Before you build from a slice, check TWO fields in it: `pageKey` must be your own key,
+and `planVersion` must be the same string in both slices. The first says the file is the right page, the second
+that it is the right round. Either one wrong is a `blocked` report. Read that file. Do not open the whole build queue or
+the whole built file, and do not cut a row out of one with `grep` / `jq` / `sed` / python: the slice is the same
+bytes, and a hand-cut row is how a build agent reads another page's. A slice that is missing is reported in
+`blocked`, not worked around.
+
+`page.expect.fieldNames` is the single most load-bearing input. Each name is the **bound column name**
 — but when several Classic items bind the SAME column the engine emits `col`, `col_2`, `col_3`,
 because the element name, not the column, is the distinct identity it matches on. Copy the array;
 do not re-derive names from the columns, or the suffixed duplicates match nothing and the row
@@ -47,9 +56,9 @@ Half the time the page is already there — the plan's target was created in an 
 stand shipped with it. A key is a ROLE (`main`, `child:Education`), never a schema name, so the mapping
 has to be looked up. **`list-pages` is the tool.** It takes a package or an app code and returns, per
 page, `schema-name` + `packageName` + `parentSchemaName`. Run it once, keep the list, and match against
-what `--units` already told you about this key:
+what this unit's queue slice already told you about this key:
 
-1. **Run `list-pages` for the target package first** (`--units.pages[].targetPackage`), then for the
+1. **Run `list-pages` for the target package first** (`slices/queue-<n>.json` → `page.targetPackage`), then for the
    application code if that returns nothing useful. This is a read; it changes nothing.
 2. **Filter by `parentSchemaName` against `expectedTemplate`.** The template a key expects is published,
    and a page on a different template is a different deliverable — that is exactly what the `template`

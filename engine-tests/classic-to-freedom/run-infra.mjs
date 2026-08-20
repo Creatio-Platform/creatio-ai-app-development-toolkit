@@ -669,7 +669,9 @@ check("ENG-95503: the composed prompt keeps the resolutions block BEFORE the clo
     return { answerAt: t.indexOf(CBP_ANSWER), closingAt: t.indexOf("Return the schema.") }; });
 // The wiring that connects the executed helpers above to the real prompt. Pinned on the shipped source because the
 // wrapper reads run state and this host's fencer, neither of which the harness can supply.
-const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf("// OPERATOR FINDINGS from an earlier checkpoint"));
+// The end marker is ORDINARY source text, so it lives in one constant that both slice sites read.
+const BP_END_MARKER = "// OPERATOR FINDINGS from an earlier checkpoint";
+const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER));
 check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
   buildPromptSrc.length > 200
     && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
@@ -707,7 +709,7 @@ check("ENG-95503 wiring: the answer's authority is BOUNDED — it may name what 
       && /change the target package/.test(b) && /belongs in \\`proposals\\` unbuilt/.test(b); },
   () => wfSrc.slice(wfSrc.indexOf("**The \\`ANSWER:\\` text"), wfSrc.indexOf("**The \\`ANSWER:\\` text") + 700));
 check("ENG-95503 wiring: `--units` is invoked WITH `--resolutions`, or the queue the executor reads carries no answers at all",
-  /const CLI_UNITS = cli\(`--units --resolutions \$\{q\(RESOLUTIONS_FILE\)\}`\)/.test(wfSrc)
+  /const CLI_UNITS = cli\(`--units [^`]*--resolutions \$\{q\(RESOLUTIONS_FILE\)\}/.test(wfSrc)
     && /RESOLUTIONS_FILE = input\.resolutionsFile \|\| `\$\{input\.outDir\}\/resolutions\.json`/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const RESOLUTIONS_FILE"), wfSrc.indexOf("const RESOLUTIONS_FILE") + 260));
 check("ENG-95503 wiring: Preflight is told to build the record FROM an operator's answer and NOT to report it unresolved — otherwise an answered question is re-asked every run",
@@ -1492,6 +1494,154 @@ const cbaVerdictAt = cbaSrc.indexOf("const complete = mergeOk && isComplete(");
 check("cba workflow: the verdict is computed AFTER the repair round — hoisting it above would read the stale round-1 counts and pass every pin above",
   cbaRepairAt > 0 && cbaVerdictAt > cbaRepairAt,
   () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
+
+
+// ---------------------------------------------------------------------------
+// ENG-95472 — the executor hands each unit its OWN row, as a path.
+// ---------------------------------------------------------------------------
+const dsSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+  "skills/classic-to-freedom-migration/engine/designspec.mjs"), "utf8");
+
+check("ENG-95472: BOTH engine runs Reconcile already makes carry `--slices`, so the per-unit slices cost no extra invocation",
+  /const CLI_UNITS = cli\(`--units [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc)
+    && /const CLI_VERIFY = cli\(`--verify [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("const CLI_UNITS"), wfSrc.indexOf("const cliSpec")));
+check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the plan version, which an operator's answer and a stand-writing round both leave unchanged, so a cached slice would be silently stale",
+  /const SLICE_DIR = `\$\{input\.outDir\}\/slices`/.test(wfSrc)
+    && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
+check("ENG-95472: NO per-unit file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name",
+  /const unitNo = \(key\) => \(state\?\.unitKeys \|\| \[\]\)\.indexOf\(key\) \+ 1/.test(wfSrc)
+    && /queue-\$\{unitNo\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNo\(key\)\}\.json/.test(wfSrc)
+    && /spec-\$\{readablePart\(key\)\}-\$\{unitNo\(key\)\}\.md/.test(wfSrc)
+    && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNo\(key\)\}\.md/.test(wfSrc)
+    && !/sliceFileName/.test(dsSrc),
+  () => wfSrc.split("\n").filter((l) => /^const (unitNo|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
+check("ENG-95472: and there is ONE numbering rule, not one per file family",
+  (wfSrc.match(/\(state\?\.unitKeys \|\| \[\]\)\.indexOf\(key\) \+ 1/g) || []).length === 1,
+  () => (wfSrc.match(/indexOf\(key\) \+ 1/g) || []).length);
+check("ENG-95472: the engine writes those files under the same positional rule, 1-based over `pages[]`",
+  /\$\{prefix\}-\$\{i \+ 1\}\.json/.test(mgSrc) && /forEach\(\(pg, i\)/.test(mgSrc),
+  () => mgSrc.split("\n").filter((l) => /prefix\}-/.test(l)).slice(0, 3));
+check("ENG-95472: the builder verifies BOTH slices on two fields — `pageKey` for the right page, `planVersion` for the right round, since numbers are reused and a stale file can still carry a matching key",
+  /CHECK BOTH FILES ARE YOURS FIRST/.test(buildPromptSrc) && /MUST read exactly/.test(buildPromptSrc)
+    && /\\`planVersion\\` MUST be the SAME string in both/.test(buildPromptSrc)
+    && /build nothing from that file/.test(buildPromptSrc),
+  () => buildPromptSrc.slice(buildPromptSrc.indexOf("CHECK BOTH FILES ARE YOURS"), buildPromptSrc.indexOf("CHECK BOTH FILES ARE YOURS") + 420));
+check("ENG-95472: a build agent is handed its two slice PATHS, not a command that re-derives them",
+  /\$\{queueSliceFile\(unit\.key\)\}/.test(buildPromptSrc) && /\$\{builtSliceFile\(unit\.key\)\}/.test(buildPromptSrc),
+  () => buildPromptSrc.slice(buildPromptSrc.indexOf("Get your inputs from the engine"), buildPromptSrc.indexOf("Get your inputs from the engine") + 400));
+check("ENG-95472: the build prompt no longer hands a builder the WHOLE queue or the WHOLE checklist — those were the two whole-file reads every unit repeated",
+  !/\$\{CLI_UNITS\}/.test(buildPromptSrc) && !/CLI_CHECKLIST/.test(wfSrc)
+    && /\$\{cliChecklistPage\(unit\.key\)\}/.test(buildPromptSrc),
+  () => ({ wholeUnits: /\$\{CLI_UNITS\}/.test(buildPromptSrc), checklistConst: /CLI_CHECKLIST/.test(wfSrc) }));
+check("ENG-95472: cutting a row out with a shell one-liner is PROHIBITED by name — that habit is what the slice replaces, and it is also what produced a false negative on the gate",
+  /grep\/jq\/sed\/python a row out of one/.test(buildPromptSrc),
+  () => buildPromptSrc.slice(buildPromptSrc.indexOf("YOUR TWO ROWS ARE ALREADY CUT"), buildPromptSrc.indexOf("YOUR TWO ROWS ARE ALREADY CUT") + 320));
+check("ENG-95472: a MISSING slice is reported, not silently worked around — a build agent that quietly falls back leaves every later unit hitting the same thing",
+  /Either slice file MISSING is a report, not a workaround/.test(buildPromptSrc)
+    && /\$\{cliUnitsPage\(unit\.key\)\}/.test(buildPromptSrc) && /\$\{cliBuiltPage\(unit\.key\)\}/.test(buildPromptSrc)
+    && !/\$\{BUILT_FILE\}/.test(buildPromptSrc),
+  () => buildPromptSrc.slice(buildPromptSrc.indexOf("Either slice file MISSING"), buildPromptSrc.indexOf("Either slice file MISSING") + 300));
+check("ENG-95472: the queue-slice fields the prompt names are the ones the slice actually publishes — a builder told to read `expect.fieldNames` at the root would find nothing there",
+  /\\`page\.expectedTemplate\\`/.test(buildPromptSrc) && /\\`page\.expect\.fieldNames\\` is load-bearing/.test(buildPromptSrc)
+    && /pageKey,\r?\n\s+entity: units\.entity/.test(dsSrc),   // `\r?` — a checkout can hand this file back as CRLF
+  () => buildPromptSrc.slice(buildPromptSrc.indexOf("YOUR ROW of the build queue"), buildPromptSrc.indexOf("YOUR ROW of the build queue") + 300));
+check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped `--slices` costs every build agent that round its row, silently",
+  /Run it VERBATIM — its \\`--slices\\` flag writes each unit its own row of the queue/.test(wfSrc)
+    && /\\`--slices\\` each unit its own row of the built file/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("Run it VERBATIM"), wfSrc.indexOf("Run it VERBATIM") + 220));
+
+
+// `REF_BLOCK` hands the recipe to every page unit, so it must name the same inputs the build prompt does. Two
+// documents disagreeing about where a unit's inputs live is a whole-file read waiting to happen.
+{
+  const recipe = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/freedom-build-executor/references/04-per-page-build-recipe.md"), "utf8");
+  const lines = (re) => recipe.split("\n").filter((l) => re.test(l)).slice(0, 4);
+  check("ENG-95472: the per-page recipe routes NO input to `--units.pages[]` — that path does not exist in the slice the agent is handed",
+    !/--units\.pages\[/.test(recipe), () => lines(/--units\.pages\[/));
+  check("ENG-95472: the per-page recipe asks for the PER-PAGE checklist, never the whole-run one",
+    !/run `--checklist`/.test(recipe) && /--checklist --page <key>/.test(recipe), () => lines(/--checklist/));
+  check("ENG-95472: the recipe's inputs table names both slice files, so the agent reads the same two paths the prompt gives it",
+    /slices\/queue-<n>\.json/.test(recipe) && /slices\/built-<n>\.json/.test(recipe), () => lines(/slices\//));
+  check("ENG-95472: the recipe carries BOTH halves of the slice self-check, not just the page one — the prompt makes both mandatory",
+    /`pageKey` must be your own key/.test(recipe) && /`planVersion` must be the same string in both/.test(recipe),
+    () => lines(/pageKey|planVersion/));
+  check("ENG-95472: the recipe states the no-whole-file rule itself, rather than leaving it only in the prompt",
+    /Do not open the whole build queue/.test(recipe) && /grep/.test(recipe), () => lines(/whole build queue|grep/));
+}
+
+// `buildPrompt` RENDERED, every free variable stubbed, for each unit shape it branches on. Nothing else here
+// executes it, so an unresolved interpolation would otherwise surface only when a unit is dispatched.
+{
+  const BP_HEAD = "function buildPrompt(unit, st, roundNo)";
+  const bpStart = wfSrc.indexOf(BP_HEAD);
+  const bpEnd = wfSrc.indexOf("\n" + BP_END_MARKER);
+  // The markers are ordinary source text, so a rename moves them. Own check, and the render is SKIPPED when it
+  // fails: a truncated body throws before any tally is printed.
+  const markersOk = bpStart >= 0 && bpEnd > bpStart;
+  check("ENG-95472: the `buildPrompt` source markers still resolve — the render harness below is skipped, not crashed, when they move",
+    markersOk, () => ({ bpStart, bpEnd, head: BP_HEAD, end: BP_END_MARKER }));
+  if (markersOk) {
+    const fnSrc = wfSrc.slice(bpStart, bpEnd).trimEnd();
+    const free = {
+      MAX_ROUNDS: 3, REFS_DIR: "/m/refs", REFS_INDEX: "/m/refs/index.md", BUILT_FILE: "/m/built.json",
+      REF_BLOCK: "<refs>", RULES: "<rules>", BEHAVIOUR_BLOCK: "<behaviour>",
+      input: { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" },
+      state: { applicationCode: "UsrApp" }, pageSchemas: { main: "UsrMainPage" },
+      sliceKeys: new Set(["main"]),
+      specFile: (k) => "/m/refs/spec-" + k + ".md",
+      worklogFile: (k) => "/m/worklog/" + k + ".md",
+      queueSliceFile: (k) => "/m/slices/queue-" + k + ".json",
+      builtSliceFile: (k) => "/m/slices/built-" + k + ".json",
+      cliChecklistPage: (k) => "node e.mjs m.json --checklist --page " + k,
+      cliUnitsPage: (k) => "node e.mjs m.json --units --page " + k,
+      cliBuiltPage: (k) => "node e.mjs m.json --verify --built b.json --page " + k,
+      openRowPrompt: (r) => r.deliverable,
+      composeBuildPrompt: (parts) => Object.values(parts).join("\n\n"),
+      resolutionsPromptBlock: () => "", findingsPromptBlock: () => "", checkFirstPromptBlock: () => "",
+    };
+    // A free variable with no stub FAILS here; auto-stubbing would swallow the typo this check exists to catch.
+    // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
+    // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
+    // option, because the prompt prose carries literal braces. The render below covers the rest.
+    const params = new Set(["unit", "st", "roundNo"]);
+    const locals = new Set([...fnSrc.matchAll(/(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]));
+    const roots = [...new Set([...fnSrc.matchAll(/\$\{([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]))];
+    const unstubbed = roots.filter((r) => !params.has(r) && !locals.has(r) && !Object.hasOwn(free, r));
+    check("ENG-95472: every interpolation that OPENS with an identifier resolves to a param, a local or a stub here — a new free variable is added to the list, never auto-stubbed, or this check stops catching typos",
+      unstubbed.length === 0, () => ({ unstubbed, roots }));
+
+    const names = Object.keys(free);
+    const rendered = {};
+    let renderThrew = null;
+    try {
+      const buildPrompt = new Function(...names, fnSrc + "\nreturn buildPrompt;")(...names.map((n) => free[n]));
+      rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
+      rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
+      rendered.list = buildPrompt({ key: "list", kind: "page" }, null, 1);
+      rendered.app = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", entity: "Applicant" }, null, 1);
+      // BOTH arms of the app branch: `pages-only-no-menu` ships pages with no menu entry and takes a different
+      // path entirely, so the default-arm stub above never compiles it.
+      rendered.appNoMenu = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", sectionHost: "pages-only-no-menu" }, null, 1);
+      rendered.reach = buildPrompt({ key: "sectionRegistered", kind: "reach", pages: ["main"] }, null, 1);
+    } catch (e) { renderThrew = e.message; }
+    check("ENG-95472: `buildPrompt` RENDERS for every unit shape it branches on — page, repair round, list, both app arms and reachability",
+      () => !renderThrew && Object.keys(rendered).length === 6 && Object.values(rendered).every((t) => t.length > 200),
+      () => renderThrew || Object.fromEntries(Object.entries(rendered).map(([k, v]) => [k, v.length])));
+    check("ENG-95472: the two app arms really are different prompts — the no-menu arm forbids the section the default arm creates",
+      () => /DO NOT CREATE A SECTION/.test(rendered.appNoMenu || "") && !/DO NOT CREATE A SECTION/.test(rendered.app || ""),
+      () => ({ noMenu: /DO NOT CREATE A SECTION/.test(rendered.appNoMenu || ""), dflt: /DO NOT CREATE A SECTION/.test(rendered.app || "") }));
+    check("ENG-95472: a rendered PAGE prompt carries BOTH slice paths for its own key and no other unit's",
+      () => /\/m\/slices\/queue-main\.json/.test(rendered.main) && /\/m\/slices\/built-main\.json/.test(rendered.main)
+        && !/slices\/queue-list\.json/.test(rendered.main) && !/slices\/queue-child/.test(rendered.main),
+      () => [...(rendered.main || "").matchAll(/\/m\/slices\/\S+\.json/g)].map((m) => m[0]));
+    check("ENG-95472: a NON-page unit is handed no slice path — `--units` publishes slices for page keys, and `app` / reachability units are not among them",
+      () => !/\/m\/slices\//.test(rendered.app) && !/\/m\/slices\//.test(rendered.appNoMenu) && !/\/m\/slices\//.test(rendered.reach),
+      () => ({ app: /\/m\/slices\//.test(rendered.app || ""), reach: /\/m\/slices\//.test(rendered.reach || "") }));
+  }
+}
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
