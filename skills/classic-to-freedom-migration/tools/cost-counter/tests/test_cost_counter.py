@@ -16,6 +16,21 @@ import cost_counter as counter
 import metrics
 
 
+@contextlib.contextmanager
+def _in_dir(path):
+    """Run the body with the process CWD set to ``path`` (restored after).
+
+    main() confines the export dir to the working directory (SonarCloud S8707),
+    so a main([...]) test must stand inside the export it points at.
+    """
+    prev = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
+
+
 def _line(obj):
     return json.dumps(obj) + "\n"
 
@@ -95,7 +110,8 @@ class CliSmokeTest(unittest.TestCase):
             shutil.rmtree(empty, ignore_errors=True)
 
     def test_main_parses_argv_and_returns_zero(self):
-        self.assertEqual(counter.main([self.root, "stage"]), 0)
+        with _in_dir(self.root):
+            self.assertEqual(counter.main([self.root, "stage"]), 0)
 
     def test_json_format_parses_and_mirrors_the_report(self):
         buf = io.StringIO()
@@ -120,8 +136,19 @@ class CliSmokeTest(unittest.TestCase):
         self.assertIn("| **TOTAL**", out)  # bold total row, GFM table
 
     def test_main_accepts_format_flag(self):
-        self.assertEqual(counter.main([self.root, "role", "--format", "md"]), 0)
-        self.assertEqual(counter.main([self.root, "--format", "json"]), 0)
+        with _in_dir(self.root):
+            self.assertEqual(counter.main([self.root, "role", "--format", "md"]), 0)
+            self.assertEqual(counter.main([self.root, "--format", "json"]), 0)
+
+    def test_main_rejects_export_outside_cwd(self):
+        # An export path outside the working directory is refused, not read
+        # (SonarCloud S8707 path-injection guard). self.root lives under the
+        # system temp dir, not under the test runner's CWD.
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = counter.main([self.root, "stage"])
+        self.assertEqual(rc, 2)
+        self.assertIn("inside the current working directory", buf.getvalue())
 
     def test_pages_zero_is_rejected(self):
         # --pages 0 must not reach page_count() (it would divide by zero in

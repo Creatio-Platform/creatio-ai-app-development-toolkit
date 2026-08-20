@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import export as export_mod
@@ -91,6 +92,30 @@ def _print_normalization(report: Report) -> None:
           + (f"  {sorted(report.built_pages)}" if report.built_pages else "  (defaulted to 1)"))
     print(f"    weighted cost (total)       : {weighted / 1e6:,.2f}M input-equiv tokens")
     print(f"    weighted cost per built page: {weighted / pages / 1e6:,.2f}M input-equiv tokens")
+
+
+def _confined_export_dir(path: str) -> str:
+    """Resolve an export directory and confine it to the current working dir.
+
+    The working directory is a fixed base that does NOT come from the command
+    line, so requiring the (argument-derived) export path to resolve inside it
+    is a genuine path-injection guard (SonarCloud S8707): the tool will not read
+    a session export that lives outside the directory it was launched from.
+    Run the counter from a parent of your export (e.g. ``cd`` into the folder
+    that holds it) and pass a path beneath that. Returns the resolved path;
+    raises ValueError (with a user-facing message) if the path escapes the base.
+    """
+    base = os.path.realpath(os.getcwd())
+    resolved = os.path.realpath(path)
+    if not export_mod.within_root(base, resolved):
+        raise ValueError(
+            f"export directory must be inside the current working directory\n"
+            f"    export : {resolved}\n"
+            f"    cwd    : {base}\n"
+            f"Run the counter from a parent of the export (cd into it) and pass "
+            f"a path beneath the current directory."
+        )
+    return resolved
 
 
 def _positive_pages(value: str) -> int:
@@ -525,9 +550,15 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
     cfg = metrics.CostConfig()
-    if args.compare:
-        return compare(args.export_dir, args.compare, cfg, args.format)
-    return run(args.export_dir, args.section, args.pages, cfg, args.format)
+    try:
+        export_dir = _confined_export_dir(args.export_dir)
+        compare_dir = _confined_export_dir(args.compare) if args.compare else None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if compare_dir is not None:
+        return compare(export_dir, compare_dir, cfg, args.format)
+    return run(export_dir, args.section, args.pages, cfg, args.format)
 
 
 if __name__ == "__main__":
