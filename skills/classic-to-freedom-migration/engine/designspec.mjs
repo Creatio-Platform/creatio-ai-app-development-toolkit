@@ -2242,12 +2242,134 @@ function rowsByPageKey(groups) {
 function listUnitNode(key, opts) {
   return key === LIST_PAGE_KEY ? { schema: opts.planMeta?.sectionSchema || null } : null;
 }
+// ===== ⚠ Confirm RESOLUTIONS — an operator's ANSWER, matched to its own question =============================
+// KEY ON `kind` + `item`; the published id is an ALTERNATIVE key, never the only one. The id's `pageKey` half moves
+// — a list decision rides on `list` when that key is published, on `main` when it is withheld — so id-only matching
+// breaks when a section empties.
+// An answer is an INPUT. Nothing here writes `--built.evidence`, and an answer closes no `--verify` row.
+const resolutionKey = (kind, item) => `${String(kind)}\u0000${String(item)}`;   // NUL joiner: `item` carries colons. Keep it ESCAPED — a literal NUL byte makes git read the file as binary.
+const blankStr = (v) => typeof v !== "string" || !v.trim();
+// `{ resolutions: [ … ] }` or a bare array; anything else is unusable.
+function resolutionList(input) {
+  if (Array.isArray(input)) return input;
+  if (Array.isArray(input?.resolutions)) return input.resolutions;
+  return null;
+}
+const hasPairKey = (r) => !blankStr(r.kind) && !blankStr(r.item);
+// An entry needs an `answer` plus EITHER `id` OR both `kind` and `item`. Returns the problem, or null when usable.
+function resolutionProblem(r, at) {
+  if (!r || typeof r !== "object") return `${at} is not an object`;
+  if (blankStr(r.answer)) return `${at} has no non-blank \`answer\``;
+  if (blankStr(r.id) && !hasPairKey(r)) return `${at} names neither an \`id\` nor both \`kind\` and \`item\``;
+  return null;
+}
+// One entry under BOTH key forms it supplies. A second answer to the same question overwrites the first — a later
+// edit to the file is the likelier intent — but the discard is NOTED, never silent. Own fn so the loop below keeps
+// its own branch count low.
+function indexResolution(r, entry, ix) {
+  if (!blankStr(r.id)) {
+    const k = r.id.trim();
+    if (ix.byId.has(k)) ix.duplicates.push(k);
+    ix.byId.set(k, entry);
+  }
+  if (hasPairKey(r)) {
+    const pair = `${r.kind.trim()}:${r.item.trim()}`;
+    const k = resolutionKey(r.kind.trim(), r.item.trim());
+    if (ix.byKindItem.has(k)) ix.duplicates.push(pair);
+    ix.byKindItem.set(k, entry);
+  }
+}
+// COLLECT an unusable entry, never skip it: `bad` becomes exit 1 at the CLI.
+export function buildResolutionIndex(input) {
+  const ix = { byId: new Map(), byKindItem: new Map(), bad: [], duplicates: [], count: 0 };
+  const list = input == null ? [] : resolutionList(input);
+  if (!list) {
+    ix.bad.push("the file is neither an array nor an object with a `resolutions` array");
+    return ix;
+  }
+  list.forEach((r, i) => {
+    const problem = resolutionProblem(r, `resolutions[${i}]`);
+    if (problem) { ix.bad.push(problem); return; }
+    indexResolution(r, { ...r, answer: r.answer.trim() }, ix);   // entry kept WHOLE: `decidedBy`/`date` travel with it
+    ix.count++;
+  });
+  return ix;
+}
+// `kind`+`item` FIRST, id second — the pair is the stable identity. `null` for an unanswered question, never an
+// empty answer.
+export function matchResolution(index, { id, kind, item }) {
+  if (!index) return null;
+  // TRIMMED ON BOTH SIDES. The index trims what the operator wrote; trimming the published side too keeps the two
+  // symmetric — otherwise a published `item` carrying surrounding whitespace misses an answer that is on file.
+  const pair = kind != null && item != null
+    ? index.byKindItem.get(resolutionKey(String(kind).trim(), String(item).trim())) : undefined;
+  const hit = pair || (id != null ? index.byId.get(String(id).trim()) : undefined);
+  if (!hit) return null;
+  const out = { answer: hit.answer };
+  if (!blankStr(hit.decidedBy)) out.decidedBy = hit.decidedBy.trim();
+  if (!blankStr(hit.date)) out.date = hit.date.trim();
+  return out;
+}
+// Every key the published questions consumed, under both key forms.
+function askedKeys(published) {
+  const seen = new Set();
+  for (const p of published) {
+    if (p.kind != null && p.item != null) seen.add(resolutionKey(p.kind, p.item));
+    if (p.id != null) seen.add(p.id);
+  }
+  return seen;
+}
+// Answers matching no published question — REPORT them, never drop them: the operator believes they are answered.
+// KEEP THE TWO GUARDS SYMMETRIC. One entry may carry both key forms and match through either, so each loop must ask
+// whether the OTHER form matched before calling it a miss — otherwise an applied answer is reported as a miss.
+function unmatchedResolutions(index, published) {
+  if (!index) return [];
+  const seen = askedKeys(published);
+  const pairMatched = (v) => hasPairKey(v) && seen.has(resolutionKey(v.kind.trim(), v.item.trim()));
+  const idMatched = (v) => !blankStr(v.id) && seen.has(v.id.trim());
+  const out = [];
+  for (const [k, v] of index.byKindItem) if (!seen.has(k) && !idMatched(v)) out.push({ kind: v.kind, item: v.item, answer: v.answer });
+  for (const [k, v] of index.byId) if (!seen.has(k) && !pairMatched(v)) out.push({ id: k, answer: v.answer });
+  return out;
+}
+// TWO DIFFERENT ENTRIES answering ONE published question through the two different key forms. `indexResolution`
+// cannot see this — the forms are separate keys, so neither map collides — and `matchResolution` resolves it by
+// preferring the pair, which discards the id-keyed answer. Detected HERE because only the published question joins
+// the two forms, and reported for the same reason a same-form duplicate is: an operator's discarded answer must
+// never be silent. Precedence is not a judgement call worth guessing, so the report names both.
+function resolutionConflicts(index, published) {
+  if (!index) return [];
+  const out = [], seen = new Set();   // one report per question: a plan can publish the same id twice
+  for (const p of published) {
+    if (p.kind == null || p.item == null || p.id == null || seen.has(p.id)) continue;
+    const pair = index.byKindItem.get(resolutionKey(String(p.kind).trim(), String(p.item).trim()));
+    const byId = index.byId.get(String(p.id).trim());
+    if (!pair || !byId || pair === byId) continue;
+    seen.add(p.id);
+    out.push({ id: p.id, kind: p.kind, item: p.item, used: pair.answer, discarded: byId.answer });
+  }
+  return out;
+}
+// An already-built index passes through; a parsed file is indexed here.
+const asResolutionIndex = (r) => (r?.byKindItem instanceof Map ? r : buildResolutionIndex(r ?? null));
+// `resolution: null` for an open question — an omitted field cannot be told apart from an engine that publishes none.
+function preflightUnits(confirmRows, resIndex) {
+  return confirmRows.map((r) => ({
+    id: r.vk.id, pageKey: r.pageKey, kind: r.confirm.kind, item: r.confirm.item, requires: [...r.vk.requires],
+    resolution: matchResolution(resIndex, { id: r.vk.id, kind: r.confirm.kind, item: r.confirm.item }),
+  }));
+}
 export function pageUnits(result, opts = {}) {
   assignPageKeys(result);   // claim the global keys BEFORE anything reads one — `--units` is a root-level artifact
   const byKey = rowsByPageKey(checklistGroups(result, opts));
   const nodes = new Map(subPageNodes(result).map((nd) => [nd.pageKey, nd]));
   const rows = [...byKey.values()].flat();
   const evidence = rows.filter((r) => r.vk?.type === "evidence");
+  // Resolutions are consumed at THIS level only: every confirm row in the tree — `main`, the list page, every
+  // spliced sub-page — is already in `rows`, so nothing needs threading through `subPageOpts`. ONE index, shared
+  // with the unmatched report below, so the two cannot disagree about what matched.
+  const resIndex = asResolutionIndex(opts.resolutions);
+  const preflight = preflightUnits(evidence.filter((r) => r.confirm), resIndex);
   return {
     entity: result.entity || null,
     // The version the `--plan` artifact printed, republished here so the executor never has to parse it back out
@@ -2269,9 +2391,14 @@ export function pageUnits(result, opts = {}) {
     reachability: reachabilityUnits(rows),
     // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so
     // it is closed through `--built.evidence`/`.judge` exactly like any other evidence row — republished here with
-    // its raw kind/item so the queue names the decision, not just an id.
-    preflight: evidence.filter((r) => r.confirm)
-      .map((r) => ({ id: r.vk.id, pageKey: r.pageKey, kind: r.confirm.kind, item: r.confirm.item, requires: [...r.vk.requires] })),
+    // its raw kind/item so the queue names the decision, not just an id, and with the operator's ANSWER when one
+    // was recorded (see the resolutions block above).
+    preflight,
+    // One question answered twice through the two key forms — the pair wins and the id-keyed answer is dropped, so
+    // the discard is named rather than left silent.
+    resolutionsConflicts: resolutionConflicts(resIndex, preflight),
+    // Answers matching no question this plan asks — published so the CLI reports them rather than dropping them.
+    resolutionsUnmatched: unmatchedResolutions(resIndex, preflight),
     evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
     // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
     // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
