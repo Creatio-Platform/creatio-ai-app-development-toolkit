@@ -1588,7 +1588,13 @@ function buildCoverageRows(cs, pm, result) {
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
-  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };
+  // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
+  // published in `componentTypesOf` (→ `--units.pages[].componentTypes`), so it must be a type the built page really
+  // carries and the stand really resolves. "Communication options" is the native `crt.CommunicationOptions`
+  // (a compositeOnly widget the "Communication options" composite assembles) — NOT `crt.ContactCommunication`, which
+  // was a fabricated name (the `ContactCommunication` ENTITY with a `crt.` prefix) that resolves to nothing on-stand;
+  // verified on-stand (ENG-95468). The other three resolve as-is.
+  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.CommunicationOptions", Attachments: "crt.FileList", Feed: "crt.Feed" };
   for (const s of cs.standardFeatures || []) {
     const f = s.feature || s.caption || ""; const t = FEATURE_TYPE[f];
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"

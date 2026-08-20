@@ -887,8 +887,8 @@ check("ContactCommunication: detail over the ContactCommunication entity → Com
   commcs.standardFeatures.some(s => s.feature === "Communication options" && s.uiShape === "component" && s.inferredFromEntity)
   && !commcs.details.some(d => d.entity === "ContactCommunication"),
   () => ({ features: commcs.standardFeatures.map(s => s.feature), details: commcs.details.map(d => d.entity) }));
-check("ContactCommunication: the note says use the native crt.ContactCommunication component + do NOT downgrade to a plain grid (package gap = a decision, not a silent fallback)",
-  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
+check("ContactCommunication: the note says use the native crt.CommunicationOptions component (NOT the fabricated crt.ContactCommunication) + do NOT downgrade to a plain grid (package/feature gap = a decision, not a silent fallback)",
+  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.CommunicationOptions/.test(n.reason) && /NOT `?crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
   () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication/.test(n.reason))?.reason);
 
 /* ---- virtual-field: a bound field whose column is NOT on the entity (auto-filled companion from a lookup)
@@ -5101,7 +5101,7 @@ check("verify: a built page missing the DCM progress bar / Next steps / Communic
 const vOk = renderVerify(vResult, {}, {
   ops: [{ name: "Contact", type: "crt.ComboBox" }, { name: "Owner", type: "crt.ComboBox" }, { name: "DG", type: "crt.DataGrid" },
     { name: "Bar", type: "crt.EntityStageProgressBar" }, { name: "NS", type: "crt.NextSteps" },
-    { name: "CC", type: "crt.ContactCommunication" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
@@ -6260,19 +6260,19 @@ check("ENG-94975 F4/D3: a one-key JSON object closes the unresolved child's STRU
 /* ---- D6/v2 change 1: `--built` carries `get-page`'s MERGED `bundle.viewConfig`, a JSON TREE the engine walks
    itself. A component the TEMPLATE provides is touched in the page's own body with `operation: "merge"` and
    carries NO type, so the previously documented source (`ownBodySummary.viewConfigDiffOps`) structurally could
-   not confirm Feed / FileList / ApprovalList / ContactCommunication / the DCM bar — they read ❌ on a correctly
+   not confirm Feed / FileList / ApprovalList / CommunicationOptions / the DCM bar — they read ❌ on a correctly
    built page. The merged bundle carries the real type, nested arbitrarily deep. ---- */
 const tplProvidedRes = { changeSet: { viewConfigDiff: [{ name: "Contact", values: { control: "$Contact" } }],
   standardFeatures: [{ feature: "Communication options" }, { feature: "Approvals" }, { feature: "Feed" }], details: [], cardActions: [] }, signals: {} };
 const tplProvidedDeep = renderVerify(tplProvidedRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate", viewConfig: { items: [
   { name: "Root", type: "crt.Grid", items: [{ name: "Tabs", type: "crt.TabContainer", items: [{ name: "T1", type: "crt.Tab", items: [
     { name: "Contact", type: "crt.ComboBox" }, { name: "Feed", type: "crt.Feed" },
-    { name: "CC", type: "crt.ContactCommunication" }, { name: "AL", type: "crt.ApprovalList" },
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AL", type: "crt.ApprovalList" },
   ] }] }] },
 ] } } }, ...QG_EVIDENCE });
 const tplProvidedShallow = renderVerify(tplProvidedRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate",
   viewConfig: { items: [{ name: "Contact", type: "crt.ComboBox" }] } } }, ...QG_EVIDENCE });
-check("ENG-94975 D6: template-provided components nested 4 levels deep in the merged `bundle.viewConfig` ARE found (Feed / ContactCommunication / ApprovalList all ✅, verdict complete) — the regression that motivated contract v2",
+check("ENG-94975 D6: template-provided components nested 4 levels deep in the merged `bundle.viewConfig` ARE found (Feed / CommunicationOptions / ApprovalList all ✅, verdict complete) — the regression that motivated contract v2",
   tplProvidedDeep.missing === 0 && tplProvidedDeep.unverified === 0 && tplProvidedDeep.complete === true
   && /Feed \(`crt\.Feed`\) \| ✅ Done/.test(tplProvidedDeep.markdown)
   && tplProvidedShallow.missing === 3, // positive control: the SAME expectations, without those nodes, are MISSING

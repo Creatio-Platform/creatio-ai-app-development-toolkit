@@ -36,7 +36,7 @@ there is no "resume" command: there is one command, and it does the next undone 
     "child:VisaRequest": { "rounds": 2, "parked": false, "schemaName": "UsrVisaRequestPage",
                            "lastNote": "ApprovalList added; style diff pending" },
     "child:Education":   { "rounds": 3, "parked": true,  "schemaName": "UsrEducationPage",
-                           "parkedWhy": "still short after 3 round(s) — the engine's open rows: Communication options (`crt.ContactCommunication`) — ❌ MISSING — component type absent from the built page" },
+                           "parkedWhy": "still short after 3 round(s) — the engine's open rows: Communication options (`crt.CommunicationOptions`) — ❌ MISSING — component type absent from the built page" },
     "mini:ApplicantMiniPage": { "rounds": 1, "parked": false, "schemaName": "UsrApplicantMiniPage" },
     "main":              { "rounds": 0, "parked": false, "schemaName": "UsrApplicantFormPage" }
   },
@@ -50,7 +50,7 @@ there is no "resume" command: there is one command, and it does the next undone 
   ],
   "blocked": [
     { "unit": "child:Education", "what": "the Communication options block",
-      "why": "crt.ContactCommunication is not registered on this stand" }
+      "why": "crt.CommunicationOptions is not registered on this stand" }
   ],
   "discrepancies": [
     { "round": 2, "unit": "main", "claim": "crt.ApprovalList added",
