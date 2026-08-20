@@ -112,7 +112,8 @@ without redoing settled work.
 {
   "pages": {
     "main": { "viewConfig": { "...": "clio get-page bundle.viewConfig, VERBATIM" },
-              "packageName": "CustomHrApp", "viewModelConfig", "parentSchemaName": "PageWithTabsFreedomTemplate" },
+              "packageName": "CustomHrApp", "viewModelConfig", "parentSchemaName": "PageWithTabsFreedomTemplate",
+              "businessRules": { "count": 2, "rules": [ { "name": "BR_Contact", "caption": "...", "condition": {}, "actions": [] } ] } },
     "child:Education": false
   },
   "reachability": { "sectionRegistered": true, "miniPageWired": false },
@@ -131,6 +132,19 @@ by `--units`), and the `Mini page` row is closed by that entry — present with 
 `false` ⇒ MISSING, omitted ⇒ not checked. There is no boolean to write instead: a payload with a
 `pages` map is never read for `miniPageBuilt`, so the only way to close that row is to `get-page`
 the mini page and file what came back.
+
+**`businessRules` gates the `Business rules × N` row — a page's rules are NOT in its `viewConfig`.**
+Declarative business rules persist as separate `BusinessRule_*` schemas, invisible to a `viewConfig`
+walk, so the `Business rules` row reads a dedicated per-page slot: the `read-page-business-rules`
+result (`{ count, rules }`, copied verbatim), populated by the same read-only verifier that fetches
+`get-page`. `--verify` matches each expected rule identity (a page rule's `element` / an entity rule's
+`targetAttribute`, published in `--units.pages[].expect.ruleNames`) against the built rules by target
+attribute. The slot keeps the tri-state every page field has: present with the rules ⇒ matched; `[]`
+⇒ checked-and-empty (the page genuinely has none — a confirmed answer); **omitted ⇒ NOT-CHECKABLE**
+(nobody read the rules — ⚠ unverified, distinct from a hard MISSING, so a rule the payload cannot see
+is never a false ❌). Write `businessRules: []` only after confirming the page has none; never leave it
+absent as a shortcut, or the row stays open forever. It is REQUIRED for any page whose
+`--units.pages[].expect.rules` is non-zero.
 
 The CLI rejects a malformed payload at **exit 1**, naming what is wrong:
 
@@ -169,6 +183,13 @@ rounds are left, what a repair round is handed. The table has no per-page counts
 than restating it. `planGaps` is the plan-versus-build split (`03-failure-and-park-policy.md`),
 already classified, and it is independent of `complete`: a run with nothing left to build still
 stops when that array is non-empty.
+
+The `Business rules × N` row appears in `openRows` like any other gated row — e.g.
+`{ "deliverable": "Business rules × 11", "status": "⚠ verify", "evidence": "business rules NOT checkable — this page entry carries no businessRules slot; run read-page-business-rules …", "outcome": "unverified" }`
+when the slot is absent, or `"status": "✅ Done"` (off the tally, not in `openRows`) once every
+expected target attribute is governed by a built rule. A genuine shortfall reads `⚠ verify`
+(`b/N business rule(s) matched by target attribute — missing: …`), never ❌ — a rule matched by
+target attribute must not cry MISSING on a page whose rules were read.
 
 ## The per-unit slices — `slices/queue-<n>.json` and `slices/built-<n>.json`
 
