@@ -1048,7 +1048,7 @@ function markOwnerRowWithGap(changeSet, owner, gapPath) {
   const path = String(gapPath || "");
   const scope = GAP_OWNER_SCOPE.find(([rx]) => rx.test(path))?.[1];
   if (!scope) return;
-  const seg = path.split(".").filter(Boolean).pop() || "value";
+  const seg = path.split(".").findLast(Boolean) || "value";
   const marker = `⚠ ${GAP_PROP_LABEL[seg] || seg} unreadable`;
   for (const n of (changeSet.needsDecision || [])) {
     if (n.item !== owner || !IMPERATIVE_KINDS.has(n.kind) || !scope(n.kind)) continue;

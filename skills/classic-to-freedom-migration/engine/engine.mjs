@@ -1345,8 +1345,11 @@ function replaySet(op, cur, items, { seed, pkg }, warnings) {
     parent: cur.parent, propertyName: cur.propertyName, order: cur.order,
     templateOwned: cur.templateOwned, provenance: [...cur.provenance, pkg],
     schemaTouched: seed ? cur.schemaTouched : true });
+  // The child clause is named rather than nested inside the hint: one template per string, so the sentence stays
+  // readable and the optional half is not a second template inside the first.
+  const droppedNote = dropped ? `, and ${dropped} direct child(ren) were dropped with it` : "";
   warnings.push({ op: "set", name: op.name, schema: pkg,
-    hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${dropped ? `, and ${dropped} direct child(ren) were dropped with it` : ""}. If the classic page still shows content here, it must be restated in this op.` });
+    hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${droppedNote}. If the classic page still shows content here, it must be restated in this op.` });
 }
 
 // businessRules + legacy rules (merge by attribute::ruleKey)

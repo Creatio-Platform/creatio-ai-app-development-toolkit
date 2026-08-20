@@ -7650,7 +7650,7 @@ try {
   const twinRow = twin.changeSet.needsDecision.find((d) => d.kind === "attribute-virtual" && d.item === "Twin");
   check("ENG-95412 AC22: a gap on a DIFF ITEM does not leak onto a same-named ATTRIBUTE row — the path's member kind gates the marker, not the bare name",
     !!twinRow && !/unreadable/.test(String(twinRow.detail || ""))
-    && twin.parseDiagnostics.some((d) => d.kind === "unknown-enum-member" && /^diff\./.test(d.path)),
+    && twin.parseDiagnostics.some((d) => d.kind === "unknown-enum-member" && d.path.startsWith("diff.")),
     () => ({ detail: twinRow?.detail, diags: twin.parseDiagnostics.map((d) => d.kind + "@" + d.path) }));
 
   // ---- ENG-95412: PROGRESS_BAR, the one kind Classic itself has no branch for ----
