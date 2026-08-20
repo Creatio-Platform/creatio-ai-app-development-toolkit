@@ -3,8 +3,8 @@
 A single committed, parameterised tool that reads a Claude Code session-export
 directory and reports the cost of a Classic->Freedom migration run:
 
-    python counter.py <export-dir> [section] [--pages N] [--format text|md|json]
-    python counter.py <baseline-export> --compare <candidate-export> [--format ...]
+    python cost_counter.py <export-dir> [section] [--pages N] [--format text|md|json]
+    python cost_counter.py <baseline-export> --compare <candidate-export> [--format ...]
 
 Sections: all (default) | summary | stage | tool | role | agent | ttl | check.
   'summary' is the concise single-run headline (weighted cost / page + the main

@@ -21,7 +21,7 @@ Python 3.10+ (standard library only — no third-party packages).
 
 ```bash
 # from this directory
-python counter.py <export-dir> [section] [--pages N] [--format text|md|json]
+python cost_counter.py <export-dir> [section] [--pages N] [--format text|md|json]
 ```
 
 - `<export-dir>` — the folder that holds `transcript.jsonl` and the
@@ -37,8 +37,8 @@ python counter.py <export-dir> [section] [--pages N] [--format text|md|json]
   numbers and honour `section`.
 
 ```bash
-python counter.py /path/to/session-export --format md      # Markdown for Jira
-python counter.py /path/to/session-export --format json    # machine-readable
+python cost_counter.py /path/to/session-export --format md      # Markdown for Jira
+python cost_counter.py /path/to/session-export --format json    # machine-readable
 ```
 
 ### A quick single-run headline
@@ -47,7 +47,7 @@ python counter.py /path/to/session-export --format json    # machine-readable
 the main token streams — without the full per-stage/role/agent tables:
 
 ```bash
-python counter.py /path/to/session-export summary
+python cost_counter.py /path/to/session-export summary
 ```
 
 ### Did a fix make the migration cheaper? (`--compare`)
@@ -59,8 +59,8 @@ headline** — it is normalised by built pages, so runs that build a different
 number of pages stay comparable.
 
 ```bash
-python counter.py <baseline-export> --compare <candidate-export>
-python counter.py <baseline-export> --compare <candidate-export> --format md   # for Jira
+python cost_counter.py <baseline-export> --compare <candidate-export>
+python cost_counter.py <baseline-export> --compare <candidate-export> --format md   # for Jira
 ```
 
 Two guards from the ticket's comparison protocol:
@@ -76,9 +76,9 @@ Two guards from the ticket's comparison protocol:
 Examples:
 
 ```bash
-python counter.py /path/to/session-export            # everything
-python counter.py /path/to/session-export role        # just the by-role table
-python counter.py /path/to/session-export ttl         # cache-write TTL split + weight
+python cost_counter.py /path/to/session-export            # everything
+python cost_counter.py /path/to/session-export role        # just the by-role table
+python cost_counter.py /path/to/session-export ttl         # cache-write TTL split + weight
 ```
 
 The output is UTF-8 (transcripts carry Cyrillic captions and box glyphs); the

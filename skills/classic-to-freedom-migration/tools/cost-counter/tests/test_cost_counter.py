@@ -2,7 +2,7 @@
 
 Pins the CLI plumbing -- section dispatch, the empty-export exit code, the
 --pages override, and the ttl/check/normalization printers -- so a refactor of
-counter.py cannot silently break the reporting surface.
+cost_counter.py cannot silently break the reporting surface.
 """
 import contextlib
 import io
@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import unittest
 
-import counter
+import cost_counter as counter
 import metrics
 
 
