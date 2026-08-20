@@ -142,7 +142,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
-  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo"];
+  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -265,6 +265,34 @@ check("workflow: `applyParks` parks through `parkableKeys` (budget spent AND sti
   && !/parkedKeys\([^)]*schedule\.map/.test(applyParksSrc),
   () => applyParksSrc.split("\n").filter((l) => /park(able|ed)Keys/.test(l)).join("\n"));
 
+// --- ENG-95469 in-context completeness gate: the ONE-BOUNDED-FIX → PARK reason, distinct from the round-budget one.
+check("inContextParkWhy: composes the reason from the HANDED-IN short rows (Deliverable — Status — Evidence), names the ONE bounded attempt, and is never blank",
+  () => { const w = wf.inContextParkWhy([{ deliverable: "Related lists — 4 expected", status: "❌ MISSING", evidence: "no crt.DataGrid built" }]);
+    return /ONE in-context fix attempt/.test(w) && /Related lists — 4 expected — ❌ MISSING — no crt\.DataGrid built/.test(w); },
+  () => wf.inContextParkWhy([{ deliverable: "Related lists — 4 expected", status: "❌ MISSING", evidence: "no crt.DataGrid built" }]));
+check("inContextParkWhy: DISTINCT from the round-budget `parkWhy` — it names a bounded fix attempt, not a round count",
+  () => { const w = wf.inContextParkWhy([{ deliverable: "X", status: "⚠ verify", evidence: "y" }]);
+    return /ONE in-context fix attempt/.test(w) && !/still short after \d+ round/.test(w); });
+check("inContextParkWhy: no rows still yields a non-blank reason (a park with no reason is a question nobody can answer)",
+  () => { const w = wf.inContextParkWhy([]); return typeof w === "string" && w.trim().length > 0 && /re-verify/.test(w); });
+check("inContextParkWhy: junk/blank rows are dropped, not rendered as ` —  — `",
+  () => { const w = wf.inContextParkWhy([null, { status: "x" }, { deliverable: "Real", status: "❌", evidence: "gone" }]);
+    return /Real — ❌ — gone/.test(w) && !/ —  — /.test(w); });
+
+// The in-context gate WIRING, pinned at the source level (the round loop drives live agents, so it is verified by
+// the Applicant replay, not a golden — these seams keep a revert from silently removing the one-bounded-fix→park).
+check("ENG-95469: the build phase relaxes 'a builder does not run --verify' ONLY for the scoped in-context gate — the shared built file and the evidence record stay off-limits",
+  wfSrc.includes("you do not write the run's shared")
+  && wfSrc.includes("you may run is the SCOPED in-context completeness gate")
+  && wfSrc.includes("IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE"));
+check("ENG-95469: a still-short-after-one-fix selfCheck is collected in buildRound and parked via applyInContextParks BEFORE the round-budget applyParks",
+  /sc\.ran === true && sc\.complete === false && sc\.fixAttempted === true/.test(wfSrc)
+  && /const inContextParked = applyInContextParks\(selfCheckShort\)/.test(wfSrc)
+  && wfSrc.indexOf("applyInContextParks(selfCheckShort)") < wfSrc.indexOf("const newlyParked = applyParks()"));
+check("ENG-95469: applyInContextParks confirms the unit is still OPEN on the post-hoc verdict before parking (the self-check is engine arithmetic, not an agent's word taken on trust)",
+  /function applyInContextParks\(selfCheckShort\)[\s\S]{0,400}isUnitOpen\(unitOf\(s\.key\), state\.verify/.test(wfSrc)
+  && /parkRecord\(s\.key, inContextParkWhy\(s\.shortRows\)/.test(wfSrc));
+
 // --- ENG-94975 modes: auto / checkpoints / guided. A checkpoint stops the run at a PAGE BOUNDARY so a human can
 // open the built page and exercise it — the only check the `Form — Logic` handler rows get, since they carry no
 // verification key. Every failure mode below is silent-in-the-wrong-direction if it regresses: the operator asked
@@ -375,8 +403,8 @@ check("ENG-95471 review fix: a quote inside a builder value cannot reshape the f
   () => { const t = wf.guidelinesLine({ ...gOk, referencePage: 'A" , "components": ["x' }, null, true, FENCE);
     return t.includes('"components": ["crt.Input"]') && (t.match(/"components":/g) || []).length === 1; });
 
-check("ENG-95471: `guidelines` is REQUIRED on the page build schema — optional is what let a builder close on silence",
-  /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines'\]/.test(wfSrc));
+check("ENG-95471 / ENG-95469: `guidelines` AND `selfCheck` are REQUIRED on the page build schema — optional `guidelines` let a builder close on silence, and A3's in-context gate (`selfCheck`) must run before a page reports complete",
+  /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'\]/.test(wfSrc));
 // EXECUTED, not matched: the schema decision is a pure helper now, so the four outcomes are run rather than
 // regexed, and the dispatch site is pinned separately as a seam.
 check("ENG-95471 review fix: the schema is selected by whether the unit OWES the record, not by kind alone",
@@ -1877,6 +1905,7 @@ const resolutionsPromptBlock = () => ""
 const findingsPromptBlock = () => ""
 const checkFirstPromptBlock = () => ""
 const guidelinesReturnFor = () => ""
+const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "")
 `;
     // ONE source of truth for what is stubbed: the names are read back out of the declarations above, so the
     // guard below cannot drift from them.
@@ -1923,6 +1952,16 @@ const guidelinesReturnFor = () => ""
     check("ENG-95472: a NON-page unit is handed no slice path — `--units` publishes slices for page keys, and `app` / reachability units are not among them",
       () => !/\/m\/slices\//.test(rendered.app) && !/\/m\/slices\//.test(rendered.appNoMenu) && !/\/m\/slices\//.test(rendered.reach),
       () => ({ app: /\/m\/slices\//.test(rendered.app || ""), reach: /\/m\/slices\//.test(rendered.reach || "") }));
+    // ENG-95469: `buildPrompt` threads the in-context gate into the composer FOR PAGE UNITS — a page (and the list
+    // page) gets it, an app / reachability unit does not. The block's own text is asserted at the source level above;
+    // this pins the WIRING (buildPrompt hands `gate: inContextGateBlock(unit)` to the composer, page-only).
+    check("ENG-95469: the in-context gate is composed into a PAGE unit's build prompt (and the list page's), never an app / reachability unit's",
+      () => /<IN-CONTEXT GATE>/.test(rendered.main) && /<IN-CONTEXT GATE>/.test(rendered.list)
+        && !/<IN-CONTEXT GATE>/.test(rendered.app) && !/<IN-CONTEXT GATE>/.test(rendered.reach),
+      () => ({ main: /<IN-CONTEXT GATE>/.test(rendered.main || ""), list: /<IN-CONTEXT GATE>/.test(rendered.list || ""),
+        app: /<IN-CONTEXT GATE>/.test(rendered.app || ""), reach: /<IN-CONTEXT GATE>/.test(rendered.reach || "") }));
+    check("ENG-95469: buildPrompt hands `gate: inContextGateBlock(unit)` to the composer",
+      /gate: inContextGateBlock\(unit\)/.test(wfSrc));
   }
 }
 

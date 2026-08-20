@@ -117,7 +117,22 @@ the verifier files that page's contents as this unit's evidence.
    page on the same template, run `get-component-info` on each component you added, diff the
    concrete props. Then return `guidelines` — **required, and this unit does not close without it**
    (`./01-evidence-records.md` for the record it becomes).
-10. **Append to the worklog and update the roadmap** — as part of closing THIS unit, not as a step
+10. **Run the in-context completeness gate — BEFORE you report this unit complete** (ENG-95469). It
+    catches a deliverable your slice *declared* but the build left short — a datasource-less grid, a
+    component not on the page, a rule the slot does not carry — here, in your own context, instead of
+    a whole round later. `get-page` YOUR page and write its `bundle.viewConfig` verbatim into a
+    self-check built file `{ "pages": { "<yourKey>": { "viewConfig": …, "parentSchemaName": …,
+    "schemaUId": … } } }` (add `businessRules` from `read-page-business-rules` if this page owns
+    rules — an absent slot reads ⚠ not-checkable, never a false ❌). Then run the SCOPED gate:
+    `migrate.mjs <manifest> --verify --built <self-built.json> --page <yourKey> --verify-json
+    <self-verdict.json>`. It reconciles what your slice declared against what you built, for THIS
+    page only, and exits 2 when short. If NOT `complete`, you get **exactly one bounded fix attempt**
+    in this same context: read the verdict's `openRows` (each Evidence cell IS the repair), fix only
+    those, `get-page` again, and re-run the gate **once**. Do not loop. Return `selfCheck`
+    (`ran` / `complete` / `missing` / `unverified` / `fixAttempted` / `stillShortRows`), copying the
+    verdict verbatim. Still short after the one attempt is a valid outcome — the unit **parks**
+    (`./03-failure-and-park-policy.md`, the one-bounded-fix→park), it does not loop.
+11. **Append to the worklog and update the roadmap** — as part of closing THIS unit, not as a step
     at the end of the run. An interrupted run must not lose the history of what was built.
 
 ## Tool safety — always the narrowest operation that does the job
@@ -162,8 +177,13 @@ re-bind, and the re-bind is what gets skipped.
 - **Not write the evidence record.** The builder declares what it built in its structured return;
   a separate read-only verifier fetches the page and files `pages` / `reachability` / `evidence`.
   A builder filing its own evidence is grading its own work.
-- **Not run `--verify`.** Its report is the machine table, produced from a payload it did not
-  write.
+- **Not run `--verify`, with ONE scoped exception.** The full `--verify` sweep is the machine table,
+  produced from a payload the read-only verifier writes, not the builder — leave that alone. The one
+  `--verify` you DO run is the in-context completeness gate over YOUR OWN page (step 10,
+  `--verify --page <yourKey> --verify-json`): it is arithmetic over the engine's own numbers, not a
+  self-graded claim, and the read-only verifier still re-reads your page afterwards as the
+  authoritative evidence — so builder purity for *evidence* is untouched. Run no other `--verify`,
+  and never over another unit's page.
 - **Not touch another unit's page.** The stand is a shared mutable resource; units run one at a
   time for that reason, and a builder that "fixes something small" on a neighbouring page makes
   the neighbour's next verify unattributable.
@@ -185,14 +205,23 @@ Structured, and it is a CLAIM, not evidence:
     "ran": true,
     "referencePage": "AccountPage",
     "componentsDiffed": ["crt.ExpansionPanel", "crt.Input"] },
+  "selfCheck": {
+    "ran": true,
+    "complete": true,
+    "missing": 0,
+    "unverified": 0,
+    "fixAttempted": false,
+    "stillShortRows": [] },
   "blocked": [],
   "proposals": [] }
 ```
 
 `claimedBuilt` is the field name the schema requires, and the name says what it is: a claim. For a
-**page** unit the required fields are `unit`, `claimedBuilt`, `schemaName` **and `guidelines`** — the
-return schema enforces all four, because a page unit without a schema name can never be verified by
-anyone, and one without `guidelines` closes on silence. For a **reachability** unit
+**page** unit the required fields are `unit`, `claimedBuilt`, `schemaName`, `guidelines` **and
+`selfCheck`** — the return schema enforces all five, because a page unit without a schema name can
+never be verified by anyone, one without `guidelines` closes on silence, and `selfCheck` is the
+in-context completeness gate (step 10): its numbers are copied verbatim from the engine's single-unit
+verdict, and a unit still short after its one bounded fix parks. For a **reachability** unit
 (`sectionRegistered`, `miniPageWired`, …) there is no page and no schema, so only `unit` and
 `claimedBuilt` are required.
 

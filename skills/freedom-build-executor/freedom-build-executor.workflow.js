@@ -248,6 +248,12 @@ const SLICE_DIR = `${input.outDir}/slices`
 // is told to check both before building.
 const queueSliceFile = (key) => `${SLICE_DIR}/queue-${unitNoOf(key)}.json`
 const builtSliceFile = (key) => `${SLICE_DIR}/built-${unitNoOf(key)}.json`
+// THE IN-CONTEXT COMPLETENESS GATE'S own files (ENG-95469). `self-built` is the builder's get-page of ITS OWN page,
+// assembled in its own context; `self-verdict` is the single-unit `--verify --page` verdict written over it. They
+// are the builder's SELF-CHECK — distinct from the read-only verifier's `built-*` slices, which remain the
+// authoritative evidence — so a short unit is caught before it reports complete, not a round later.
+const selfBuiltFile = (key) => `${SLICE_DIR}/self-built-${unitNoOf(key)}.json`
+const selfVerdictFile = (key) => `${SLICE_DIR}/self-verdict-${unitNoOf(key)}.json`
 // SHELL-QUOTE every path that goes into a command line. These strings are handed to an agent to run in a shell, so
 // an unquoted `/tmp/My Migration/manifest.json` splits into two arguments and every engine phase then reads or
 // writes the wrong path — with no error, because the engine is simply given a path that is not the one intended.
@@ -267,6 +273,10 @@ const cliChecklistPage = (key) => cli(`--checklist --page ${q(key)}`)
 // The fallbacks when a pre-cut slice is missing: the same row, cut on demand. Never the whole artifact.
 const cliUnitsPage = (key) => cli(`--units --page ${q(key)} --resolutions ${q(RESOLUTIONS_FILE)}`)
 const cliBuiltPage = (key) => cli(`--verify --built ${q(BUILT_FILE)} --page ${q(key)}`)
+// The IN-CONTEXT single-unit gate (ENG-95469): the builder's own scoped `--verify` over ITS page, writing a
+// single-unit verdict file. `--verify --page <key> --verify-json` reconciles what the slice DECLARED against what
+// was built, for this page only, and exits 2 when the build is short — the ONE `--verify` a builder runs.
+const cliSelfCheck = (key) => cli(`--verify --built ${q(selfBuiltFile(key))} --page ${q(key)} --verify-json ${q(selfVerdictFile(key))}`)
 
 // ---------------------------------------------------------------------------
 // Schemas. Structured output everywhere a later phase or this script COMPUTES on
@@ -598,6 +608,32 @@ const BUILD_PROPERTIES = {
       notRunWhy: { type: 'string' },
     },
   },
+  // THE IN-CONTEXT COMPLETENESS GATE'S RESULT (ENG-95469). The builder runs the scoped single-unit `--verify` over
+  // its OWN page before reporting the unit complete, gets one bounded fix if short, re-checks, and files the outcome
+  // here. `ran: false` with `notRunWhy` is a valid outcome (a page the builder genuinely could not get-page);
+  // `stillShortRows` is the scoped verdict's `openRows` AFTER the one fix — what the run composes the park reason
+  // from when a unit is still short. `complete`/`missing`/`unverified` are copied VERBATIM from the engine's
+  // single-unit verdict file, never a self-graded claim: the number is the engine's arithmetic, transcribed.
+  selfCheck: {
+    type: 'object',
+    required: ['ran'],
+    properties: {
+      ran: { type: 'boolean' },
+      complete: { type: 'boolean' },
+      missing: { type: 'integer' },
+      unverified: { type: 'integer' },
+      fixAttempted: { type: 'boolean' },
+      stillShortRows: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['deliverable', 'status', 'evidence'],
+          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' } },
+        },
+      },
+      notRunWhy: { type: 'string' },
+    },
+  },
   blocked: {
     type: 'array',
     items: {
@@ -636,7 +672,7 @@ const BUILD_PROPERTIES = {
 // must come back with `schemaName` — that is the one fact only the builder holds, and the whole rest of the run
 // (verify, judge, resume in a later session) is unreachable without it. A REACHABILITY unit is a configuration
 // record with no page body, so demanding a schema name there would reject a correct answer.
-const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines'], properties: BUILD_PROPERTIES }
+const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'], properties: BUILD_PROPERTIES }
 // The same page obligations MINUS `guidelines`, for a published page key that carries no quality-gates row (an
 // unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable.
 const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
@@ -901,6 +937,20 @@ const isUnitOpen = (unit, verify, reachState, packageState) => {
 const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState) =>
   parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key))
 
+// WHY a unit parked from the IN-CONTEXT gate (ENG-95469) — distinct from `parkWhy`'s "still short after N round(s)".
+// The in-context completeness gate gives a unit EXACTLY ONE bounded fix in its own build context; still short after
+// that, the unit parks HERE, after one round, without spending the ${MAX_ROUNDS}-round post-hoc budget. Pure: the
+// still-short rows are HANDED in (the builder's own scoped `--verify --page` verdict, copied verbatim), never read
+// off run state — so this composes the same Deliverable — Status — Evidence line the post-hoc park uses, with the
+// ONE bounded attempt named in place of a round count. Never blank: a park with no reason is a question nobody can
+// answer.
+function inContextParkWhy(shortRows) {
+  const rows = (shortRows || []).filter((r) => r && r.deliverable).map((r) => `${r.deliverable} — ${r.status} — ${r.evidence}`)
+  const head = 'still short after ONE in-context fix attempt (the unit\'s own completeness gate, run before it could report complete)'
+  if (rows.length) return `${head} — the gate's open rows: ${rows.join(' · ')}`
+  return `${head} — the gate reported the unit incomplete but named no open row; re-verify this unit`
+}
+
 // Which units a park BLOCKS. With the parent edge published, a parked page blocks its ancestors
 // and nothing else; without it, the honest fallback is that it blocks `main` only — and the
 // return says `independence: 'approximated'` rather than claiming branches were kept independent.
@@ -1163,7 +1213,7 @@ const GUIDELINES_RETURN = `
 
 // `guidelinesReturn` is EMPTY for the app and reachability kinds: they own no page, carry no `#quality-gates` id,
 // and their schemas do not require the field. Only a page unit is held by it.
-function composeBuildPrompt({ rules, behaviour, worklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '' }) {
+function composeBuildPrompt({ rules, behaviour, worklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '', gate = '' }) {
   return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
 
 ${rules}
@@ -1178,8 +1228,8 @@ MANDATORY WHILE BUILDING:
 - When you create a page on a non-default template, RE-BIND the object to it and drop the old binding. A page built but not re-bound is an orphan and is not migrated.
 - Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogPath}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. An interrupted run must not lose the history. Do NOT read or append to the shared \`worklog.md\`: the Close phase assembles it from these per-unit files, and reading a growing shared log just to append to it cost 37 reads on one run.
 - Touch NO other unit's page. The stand is shared and units run one at a time for that reason.
-
-WHAT YOU DO NOT DO: you do not file the evidence record, you do not write \`--built\`, and you do not run \`--verify\`. A separate read-only agent fetches the stand and files what it finds; a third agent judges. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
+${gate}
+WHAT YOU DO NOT DO: you do not file the evidence record, and you do not write the run's shared \`--built\` file. A separate read-only agent fetches the stand and files what it finds; a third agent judges — that separation is what keeps the EVIDENCE honest, and it is untouched. The ONE \`--verify\` you may run is the SCOPED in-context completeness gate over your OWN page described above (ENG-95469): it is arithmetic over the engine's own numbers, not a self-graded claim, and the read-only verifier still re-reads your page afterwards as the authoritative record. Run NO other \`--verify\`, and never over another unit's page. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
 ${resolutions}${findings}${checkFirst}
 Return the schema. Anything you could not do goes in \`blocked\` with why — a stated blocker is worth more than a quiet omission.`
 }
@@ -1735,6 +1785,27 @@ function applyParks() {
   return fresh
 }
 
+// IN-CONTEXT PARKS (ENG-95469). A builder's own completeness gate gave a unit its ONE bounded fix and it is STILL
+// short — so the unit parks NOW, after one round, instead of burning the full ${MAX_ROUNDS}-round post-hoc budget.
+// Trust the agent's WORD for nothing: the park fires only when the post-hoc verifier (`state.verify`, refreshed this
+// round by the read-only agent) ALSO reports the unit open. The self-check is the engine's own scoped arithmetic and
+// this is its independent confirmation — a builder that mis-reported "still short" on a page the verifier finds
+// green does NOT park it. The reason is `inContextParkWhy` (distinct from the round-budget park), and the record
+// flows through the SAME `parked`/`parkedSet`/`blockedByParked` machinery so ancestors block identically.
+function applyInContextParks(selfCheckShort) {
+  const fresh = []
+  for (const s of selfCheckShort || []) {
+    if (!s?.key || parkedSet.has(s.key)) continue
+    if (!isUnitOpen(unitOf(s.key), state.verify, state.reachabilityState, packageState)) continue
+    fresh.push(parkRecord(s.key, inContextParkWhy(s.shortRows), roundsRun(state.roundOf, localRounds, s.key)))
+  }
+  if (!fresh.length) return []
+  parked = [...parked, ...fresh]
+  for (const p of fresh) { parkedSet.add(p.key) }
+  ;({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability, schedule.map((u) => u.key)))
+  return fresh
+}
+
 // Parks the queue file ALREADY holds need no write; anything this process decides does.
 const parksPersisted = new Set((state.parkedUnits || []).map((p) => p?.key).filter(Boolean))
 const markParksPersisted = () => { for (const p of parked) parksPersisted.add(p.key) }
@@ -1961,6 +2032,25 @@ function logUnmatchedResolutions(where) {
 // ---------------------------------------------------------------------------
 // The round loop: Build (sequential) → Verify → Judge → Reconcile.
 // ---------------------------------------------------------------------------
+// THE IN-CONTEXT COMPLETENESS GATE INSTRUCTION (ENG-95469). Only a PAGE unit gets it — a reach/app unit has no page
+// body to reconcile against a slice. This is the ONE sanctioned relaxation of "a builder does not run `--verify`":
+// the builder gates its OWN page, in its OWN context, BEFORE reporting the unit complete, so a deliverable the slice
+// DECLARED but the build left short (a datasource-less grid, a component not wired, a rule the slot does not carry)
+// is caught here — one bounded fix and re-check — instead of a whole round later by the post-hoc sweep. The gate is
+// ARITHMETIC over the engine's own numbers (the scoped `--verify --page` verdict it copies), never a self-assertion;
+// the read-only verifier and judge still run afterwards as the authoritative evidence, so builder purity for EVIDENCE
+// is untouched. Still short after the ONE attempt is a valid outcome — the unit PARKS (one-bounded-fix→park), it does
+// not loop; and NEVER weaken the build to reach green.
+function inContextGateBlock(unit) {
+  if (unit.kind !== 'page') return ''
+  return `
+IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (ENG-95469). This is the ONE place you run \`--verify\`, and only for YOUR OWN page:
+1. After you have built and render-checked the page, get-page YOUR page's Freedom schema and write its \`bundle.viewConfig\` VERBATIM into \`${selfBuiltFile(unit.key)}\` as \`{ "pages": { "${unit.key}": { "viewConfig": <bundle.viewConfig>, "parentSchemaName": <template>, "schemaUId": <page.schemaUId> } } }\`. If this page owns business rules, run \`read-page-business-rules\` and add its \`{ count, rules }\` result under \`"businessRules"\` on that entry — a rule deliverable cannot be checked without it, and an ABSENT slot reads ⚠ not-checkable, not a false ❌.
+2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, missing, unverified, openRows }\`. A non-zero exit (2) means your build is short.
+3. If the verdict is NOT \`complete\`, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` — each row's Evidence cell IS the repair (a field absent by name, a grid with no bound datasource, a component not on the page, a rule the slot does not carry) — fix ONLY those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check.
+4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If it is STILL short after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
+}
+
 function buildPrompt(unit, st, roundNo) {
   const shortRows = (st?.openRows || []).map((r) => `  - ${openRowPrompt(r)}`).join('\n')
   const repair = roundNo > 1
@@ -2032,6 +2122,7 @@ RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this
     rules: RULES, behaviour: BEHAVIOUR_BLOCK, worklogPath: worklogFile(unit.key),
     kindBlock, repair,
     guidelinesReturn: guidelinesReturnFor(unit, state.evidenceIds),
+    gate: inContextGateBlock(unit),
     resolutions: resolutionsPromptBlock(unit.key),
     findings: findingsPromptBlock(unit.key),
     checkFirst: checkFirstPromptBlock(unit.key),
@@ -2120,6 +2211,9 @@ async function buildRound(open) {
   // OBSERVATION, and files the `#quality-gates` record from the `guidelines` answer. Dropped here, neither is
   // reachable.
   const claims = []
+  // IN-CONTEXT gate parks (ENG-95469): units whose builder ran the scoped self-check, made its ONE bounded fix, and
+  // is STILL short. Collected here and applied after the verifier confirms them open — one-bounded-fix→park.
+  const selfCheckShort = []
   // THE CHECKPOINT STOP. Once a unit that is a checkpoint has been BUILT, the rest of this round's units are not
   // dispatched — they are DEFERRED and reported, never silently dropped. The round still runs Verify, Judge and
   // Reconcile afterwards: stopping before those would hand the operator the PREVIOUS round's numbers for a stand
@@ -2224,6 +2318,15 @@ async function buildRound(open) {
     if (unit.kind === 'page') {
       if (res.schemaName) pageSchemas[unit.key] = res.schemaName
       else if (!pageSchemas[unit.key]) noSchema.push(unit.key)
+      // THE IN-CONTEXT GATE'S PARK SIGNAL (ENG-95469). The builder ran its scoped self-check, made its one bounded
+      // fix (`fixAttempted`), and the engine's single-unit verdict is still NOT `complete` — so this unit has spent
+      // its one in-context attempt and parks (confirmed against the post-hoc verifier below). A `ran: false` or a
+      // gate that came back complete records nothing here — only a genuine still-short-after-one-fix does.
+      const sc = res.selfCheck
+      if (sc && sc.ran === true && sc.complete === false && sc.fixAttempted === true) {
+        selfCheckShort.push({ key: unit.key, shortRows: sc.stillShortRows || [] })
+        log(`in-context gate: \`${unit.key}\` is still short after its one bounded fix (${sc.missing ?? '?'} MISSING + ${sc.unverified ?? '?'} unconfirmed) — it will park once the verifier confirms it open`)
+      }
     }
     proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
     blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
@@ -2238,7 +2341,7 @@ async function buildRound(open) {
   if (pausedAfter) {
     log(`CHECKPOINT after \`${pausedAfter}\` (mode: ${MODE}) — ${deferred.length} unit(s) deferred to the next run: ${deferred.join(', ') || '(none)'}`)
   }
-  return { built, claims, pausedAfter, deferred, checkFirst }
+  return { built, claims, pausedAfter, deferred, checkFirst, selfCheckShort }
 }
 
 // The read-only VERIFIER. A DIFFERENT agent from the ones that built these pages, and that
@@ -2529,7 +2632,7 @@ while (true) {
   if (!open.length) break
   round += 1
 
-  const { built: builtThisRound, claims, pausedAfter, deferred, checkFirst } = await buildRound(open)
+  const { built: builtThisRound, claims, pausedAfter, deferred, checkFirst, selfCheckShort } = await buildRound(open)
 
   // PERSIST THE BUILDERS' ANSWER IMMEDIATELY, before the verifier runs. It used to wait until after Verify, and a
   // stop in that window took the whole round's blockers, proposals and discrepancies with it — measured on a real
@@ -2628,6 +2731,14 @@ while (true) {
     })
   }
 
+  // IN-CONTEXT PARKS FIRST (ENG-95469): a unit whose builder spent its one bounded fix and stayed short parks after
+  // ONE round, with its own gate's open rows as the reason — before the round-budget park runs, so the same unit is
+  // never double-parked and its reason names the bounded fix rather than a round count. Confirmed against the fresh
+  // post-hoc verdict inside `applyInContextParks`.
+  const inContextParked = applyInContextParks(selfCheckShort)
+  if (inContextParked.length) {
+    log(`IN-CONTEXT PARK after round ${round}: ${inContextParked.map((p) => p.key).join(', ')} — each had its one bounded fix in its own build context and stayed short; ${blockedSet.size} unit(s) blocked behind them, the rest continue`)
+  }
   // PARK, then keep going. The run exits ONCE with every stuck unit — a caller asked five separate
   // times about five stuck pages loses track; asked once, with five named units, it can answer.
   const newlyParked = applyParks()
