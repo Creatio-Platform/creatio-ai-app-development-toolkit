@@ -21,6 +21,16 @@ CLIO = os.environ.get("CAADT_TEST_CLIO")
 _TMP = tempfile.mkdtemp(prefix="caadt-hook-tests-")
 
 
+NEWLINE = chr(10)
+STUB_CAPTURE_SOURCE = NEWLINE.join([
+    "const fs = require('fs');",
+    "fs.appendFileSync(process.env.CAADT_STUB_CAPTURE, fs.readFileSync(0, 'utf8'));",
+]) + NEWLINE
+# `emitEvent` looks for the substring "recorded" in RAW stdout, so the status has to appear
+# unescaped. Nesting it inside a JSON-encoded text block yields (backslash-quote)recorded and
+# would make the stub look like a rejection - which it silently did until this was checked.
+RECORDED_REPLY = "process.stdout.write(JSON.stringify({result:{structuredContent:{success:true,status:'recorded'}}}));"
+
 def _base_env() -> dict:
     return {
         k: v
@@ -47,6 +57,8 @@ def run_hook(
     telemetry_home: str,
     clio: str = "caadt-no-such-clio",
     host: str | None = None,
+    capture: "Path | None" = None,
+    capture_dir: str | None = None,
 ):
     """Invoke the hook exactly as Claude Code does: JSON on stdin, JSON on stdout.
 
@@ -63,6 +75,9 @@ def run_hook(
         timeout=60,
         # A fresh TMPDIR per suite isolates the once-per-session marker files, so tests
         # cannot leak state into each other or into a developer's machine.
+        # The stub resolves `mcp-server` relative to the process working directory, so the hook
+        # runs from the stub's own directory when one is in use.
+        cwd=capture_dir,
         env={
             **_base_env(),
             "TMPDIR": _TMP,
@@ -71,8 +86,52 @@ def run_hook(
             "CLIO_TELEMETRY_HOME": telemetry_home,
             "CAADT_TELEMETRY_CLIO": clio,
             **({"CAADT_TELEMETRY_HOOK_HOST": host} if host else {}),
+            **({"CAADT_STUB_CAPTURE": str(capture)} if capture else {}),
         },
     )
+
+
+def stub_clio(*, succeeds: bool = True) -> "tuple[str, Path]":
+    """A stand-in for the clio binary that captures what the hook actually sends.
+
+    The suite could assert only that the hook survives a MISSING clio: the default
+    `caadt-no-such-clio` exercises the emit path solely as a failure, so the payload — the thing
+    that decides whether an event is accepted at all — was asserted nowhere, and three defects
+    reached a live stand through a green suite (`plugin_version=unknown`, one host's name reported
+    for every host, and a `<synthetic>` model that made clio reject the whole floor event).
+
+    The hook spawns `<clio> mcp-server`, so a file literally named `mcp-server` beside a `node`
+    executable is a stub on every platform, with no shell and no real binary: `CAADT_TELEMETRY_CLIO`
+    becomes `node`, and node runs an extension-less file as CommonJS.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="caadt-stub-clio-", dir=_TMP))
+    capture = directory / "captured.jsonl"
+    # `emitEvent` counts a send as delivered when stdout contains `"recorded"`, which is what clio
+    # answers; a stub that prints nothing reproduces a rejection without restating clio's error shape.
+    reply = (
+        RECORDED_REPLY if succeeds else 'process.stdout.write("");'
+    )
+    (directory / "mcp-server").write_text(
+        STUB_CAPTURE_SOURCE + reply + NEWLINE, encoding="utf-8"
+    )
+    return str(directory), capture
+
+
+def sent_payloads(capture: "Path") -> "list[dict]":
+    """Every `send-telemetry` argument object the hook handed to clio, in order."""
+    if not capture.exists():
+        return []
+    payloads = []
+    for line in capture.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("{"):
+            continue
+        message = json.loads(line)
+        if message.get("method") != "tools/call":
+            continue
+        arguments = message["params"]["arguments"]["args"]
+        if arguments.get("command") == "send-telemetry":
+            payloads.append(arguments["args"])
+    return payloads
 
 
 def write_transcript() -> str:
@@ -261,6 +320,144 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertIn('coding_agent="Codex"', context)
         self.assertNotIn("Claude Code", context)
 
+    def test_the_floor_payload_carries_no_placeholder_identity(self):
+        # What actually reached a live stand: coding_agent=claude-code, plugin_version=unknown. The
+        # routing text forbids exactly that placeholder, and clio slugs one host's name over four.
+        # Asserted on the wire, because the routing text agreeing with itself proved nothing.
+        manifest = json.loads(
+            (Path(HOOK).parent.parent / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        session = str(uuid.uuid4())
+        stub, capture = stub_clio()
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"),
+            clio=NODE,
+            capture=capture,
+            capture_dir=stub,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        floor = sent_payloads(capture)
+        self.assertEqual(len(floor), 1)
+        self.assertEqual(floor[0]["event_name"], "workflow_started")
+        self.assertEqual(floor[0]["workflow"], "unattributed")
+        self.assertEqual(floor[0]["plugin_version"], manifest["version"])
+        self.assertNotEqual(floor[0]["plugin_version"], "unknown")
+        self.assertEqual(floor[0]["coding_agent"], "Claude Code")
+
+    def test_the_floor_payload_names_the_host_that_ran_the_hook(self):
+        session = str(uuid.uuid4())
+        stub, capture = stub_clio()
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"),
+            clio=NODE,
+            capture=capture,
+            capture_dir=stub,
+            host="cursor",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(sent_payloads(capture)[0]["coding_agent"], "Cursor")
+
+    def test_omits_a_model_the_validator_would_refuse(self):
+        # Claude Code writes synthetic assistant messages carrying model "<synthetic>". clio rejects
+        # a malformed token by rejecting the WHOLE event, so one such message after the last real
+        # turn cost the floor — the tier this design calls guaranteed — for the entire session.
+        session = str(uuid.uuid4())
+        transcript = Path(tempfile.mkdtemp(prefix="caadt-synthetic-", dir=_TMP), "session.jsonl")
+        transcript.write_text(
+            json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": 10, "output_tokens": 3}}})
+            + chr(10)
+            + json.dumps({"message": {"model": "<synthetic>", "usage": {
+                "input_tokens": 1, "output_tokens": 1}}}),
+            encoding="utf-8",
+        )
+        stub, capture = stub_clio()
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__list-apps",
+                "transcript_path": str(transcript),
+                "cwd": _TMP,
+            },
+            telemetry_home=telemetry_home("granted"),
+            clio=NODE,
+            capture=capture,
+            capture_dir=stub,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        floor = sent_payloads(capture)[0]
+        # The last REAL model survives instead of being overwritten by the unusable one, and nothing
+        # outside clio's token shape is ever sent.
+        self.assertEqual(floor["model"], "claude-opus-5")
+        self.assertNotIn("<", floor["model"])
+
+    def test_a_failed_floor_emit_is_retried_on_the_next_clio_call(self):
+        # The claim is taken before the emit, so a rejected send used to spend the one marker that
+        # allows the floor and lose it permanently — the same failure mode the consent check above
+        # already guards against.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        failing, _ = stub_clio(succeeds=False)
+        recording, capture = stub_clio()
+
+        rejected = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=home, clio=NODE, capture_dir=failing,
+        )
+        retried = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=home, clio=NODE, capture=capture, capture_dir=recording,
+        )
+
+        for result in (rejected, retried):
+            self.assertEqual(result.returncode, 0)
+        floor = [p for p in sent_payloads(capture) if p["event_name"] == "workflow_started"]
+        self.assertEqual(len(floor), 1, "the floor must be re-attempted after a send that stored nothing")
+
+    def test_a_clio_that_never_records_stops_being_retried(self):
+        # Retrying without end would buy a process spawn on every tool call of the session.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        failing, capture = stub_clio(succeeds=False)
+
+        for _ in range(5):
+            result = run_hook(
+                {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                telemetry_home=home, clio=NODE, capture=capture, capture_dir=failing,
+            )
+            self.assertEqual(result.returncode, 0)
+
+        attempts = [p for p in sent_payloads(capture) if p["event_name"] == "workflow_started"]
+        self.assertEqual(len(attempts), 3, "bounded by FLOOR_ATTEMPT_LIMIT")
+
+    def test_a_rejected_reading_is_not_recorded_as_reported(self):
+        # Marking a rejected send as delivered hides the failure behind a series that merely looks
+        # sparse, and a persistently rejected field would end the series in silence.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        failing, _ = stub_clio(succeeds=False)
+        transcript = write_transcript()
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, clio=NODE, capture_dir=failing)
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
+            telemetry_home=home, clio=NODE, capture_dir=failing,
+        )
+
+        self.assertFalse(
+            Path(_TMP, "caadt-telemetry-routing", f"{session}.usage").exists(),
+            "a reading clio did not accept must be retried, not remembered as sent",
+        )
+
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns
         # to skip, and the floor is one event per session because it is the denominator.
@@ -371,19 +568,26 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # Stop fires per RESPONSE, not per session, so it is reached many times. A turn that spent
         # nothing, or a Stop the host repeated, must not re-send an identical row into a series whose
         # only meaning is that it grows. `stop_hook_active` marks the host re-entering its own Stop.
+        #
+        # Run against a recording stub rather than the absent default: the dedup marker is written
+        # only for a reading clio accepted, so asserting it after a failed send would have proved the
+        # opposite of what this test is about.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
         transcript = write_transcript()
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
         # Stop is scoped to sessions that used clio, so the session has to have done so.
-        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
 
         first = run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
-            telemetry_home=home,
+            telemetry_home=home, **stubbed,
         )
         again = run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
-            telemetry_home=home,
+            telemetry_home=home, **stubbed,
         )
         reentered = run_hook(
             {
@@ -392,7 +596,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
                 "stop_hook_active": True,
                 "transcript_path": write_transcript(),
             },
-            telemetry_home=home,
+            telemetry_home=home, **stubbed,
         )
 
         for result in (first, again, reentered):
@@ -401,6 +605,9 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # unchanged total is skipped rather than re-sent. The fixture totals 7 output tokens.
         marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
         self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 7)
+        # And the series itself carries exactly one reading, which is the claim the marker stands for.
+        readings = [p for p in sent_payloads(capture) if p["event_name"] == "session_usage"]
+        self.assertEqual(len(readings), 1)
 
     def test_reports_again_once_the_session_has_spent_more(self):
         # The point of the series: a live session was measured freezing its total at the end of the
@@ -408,11 +615,14 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # nothing recorded. A grown total must produce a new reading.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
-        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
 
         run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": write_transcript()},
-            telemetry_home=home,
+            telemetry_home=home, **stubbed,
         )
         # A later turn: the transcript has grown by one more assistant reply.
         grown = Path(tempfile.mkdtemp(prefix="caadt-hook-grown-", dir=_TMP), "session.jsonl")
@@ -426,7 +636,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
         later = run_hook(
             {"session_id": session, "hook_event_name": "Stop", "transcript_path": str(grown)},
-            telemetry_home=home,
+            telemetry_home=home, **stubbed,
         )
 
         self.assertEqual(later.returncode, 0)

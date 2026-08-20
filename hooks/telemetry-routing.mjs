@@ -92,6 +92,12 @@ function identityRoutingLines() {
 	];
 }
 const CALL_TIMEOUT_MS = 15_000;
+// clio's own validator for `model`, `workflow` and `variant`: 1-64 chars of lowercase letters,
+// digits, '.', '_' or '-'. Restated here because sending a value it refuses costs the event.
+const MODEL_TOKEN = /^[a-z0-9._-]{1,64}$/;
+// A failed floor emit releases its claim so the next clio call retries, but not without end: an
+// installation whose clio refuses every send would otherwise spawn one for every tool call.
+const FLOOR_ATTEMPT_LIMIT = 3;
 
 // clio's telemetry surface: reminding a session that is already sending telemetry is circular, and
 // emitting a floor event in reaction to a floor event would recurse.
@@ -184,7 +190,12 @@ function readSessionUsage(payload) {
 		if (!message) {
 			continue;
 		}
-		if (typeof message.model === 'string' && message.model) {
+		// Validated against the shape clio enforces, not merely lowercased. Claude Code writes
+		// synthetic assistant messages carrying `model: "<synthetic>"`, and clio rejects the WHOLE
+		// event on a malformed token — so one such message after the last real turn used to cost the
+		// floor, the tier this design calls guaranteed, for the entire session. An unusable value is
+		// skipped rather than assigned, which keeps the last real model instead of overwriting it.
+		if (typeof message.model === 'string' && MODEL_TOKEN.test(message.model.toLowerCase())) {
 			usage.model = message.model.toLowerCase();
 		}
 		const consumed = message.usage;
@@ -338,6 +349,28 @@ function releaseClaim(sessionId, suffix) {
 		fs.rmSync(markerPath(sessionId, suffix), { force: true });
 	} catch {
 		// A marker we cannot clear only costs one skipped reminder.
+	}
+}
+
+// Give the floor claim back after a failed emit, up to a limit. The attempt counter is deliberately
+// separate from the claim itself: the claim keeps its exclusive-create semantics, so two racing hook
+// processes still cannot both emit, while the counter only bounds how many times a retry is allowed.
+function releaseFloorClaimForRetry(sessionId) {
+	const file = markerPath(sessionId, 'attempts');
+	let attempts = 0;
+	try {
+		attempts = Number.parseInt(fs.readFileSync(file, 'utf8'), 10) || 0;
+	} catch {
+		// No counter yet: this was the first attempt.
+	}
+	attempts += 1;
+	try {
+		fs.writeFileSync(file, String(attempts));
+	} catch {
+		return; // Cannot bound the retries, so do not open them.
+	}
+	if (attempts < FLOOR_ATTEMPT_LIMIT) {
+		releaseClaim(sessionId, 'claimed');
 	}
 }
 
@@ -511,8 +544,12 @@ function reportSessionUsage(payload, sessionId) {
 	if (!usage.hasData || usage.output_tokens <= previous.output) {
 		return;
 	}
-	emitEvent(sessionId, usage, 'session_usage');
-	rememberReported(sessionId, usage.output_tokens, size);
+	// Recorded as reported only when it was actually delivered. Marking a rejected send as delivered
+	// hides the failure behind a series that merely looks sparse, and a persistently rejected field
+	// would end the series silently; gating the marker makes the very next turn retry.
+	if (emitEvent(sessionId, usage, 'session_usage')) {
+		rememberReported(sessionId, usage.output_tokens, size);
+	}
 }
 
 // A clio MCP call: the floor event, and the routing the agent needs to build a funnel on top of it.
@@ -550,7 +587,15 @@ function routeClioCall(payload, sessionId) {
 	if (floorClaimed) {
 		// Emitted whether or not the routing reaches the agent: if clio rejected the call (an older clio,
 		// a broken install), the agent's own stages are then the only telemetry there is.
-		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started');
+		//
+		// A failure gives the claim back, for the same reason consent is checked before claiming: a
+		// one-shot marker spent on an attempt that stored nothing loses the floor permanently, and the
+		// causes are transient often enough to be worth one more try (a rejected field, a clio being
+		// replaced mid-session). Bounded by FLOOR_ATTEMPT_LIMIT so a permanently refusing clio does not
+		// buy a process spawn on every tool call for the rest of the session.
+		if (!emitEvent(sessionId, readSessionUsage(payload), 'workflow_started')) {
+			releaseFloorClaimForRetry(sessionId);
+		}
 	}
 	const routing = remind ? routingOutput(sessionId) : null;
 	if (routing) {
