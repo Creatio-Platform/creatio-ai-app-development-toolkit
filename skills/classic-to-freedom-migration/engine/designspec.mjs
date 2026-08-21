@@ -1109,11 +1109,19 @@ const LEDGER_PREAMBLE = [
   "> Every member of every merged schema layer, and what happened to it. **mapped** = the ChangeSet carries a",
   "> Freedom artifact · **decision** = it is on a ⚠ worklist above · **resolved** = you recorded a disposition in",
   "> `manifest.memberDispositions` · **context** = inherited base-template content, excluded by design ·",
+  "> **decoration** = pure UI furniture (a menu separator — and only that) — identified by its classic kind, and",
+  "> carrying no migration answer to give. A tooltip, a control's own label and the grid-settings editor were",
+  "> provisionally counted here and are NOT decoration: each carries author-written text or its own child items,",
+  "> so each gets a normal ⚠ row instead of being auto-accounted ·",
   "> **unaccounted** = a gap, and the coverage gate blocks on it.", "",
-  "| Member kind | Mapped | Decision | Resolved | Context | Unaccounted |",
-  "| --- | --- | --- | --- | --- | --- |",
+  "| Member kind | Mapped | Decision | Resolved | Context | Decoration | Unaccounted |",
+  "| --- | --- | --- | --- | --- | --- | --- |",
 ];
-const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "unaccounted"];
+// Column order = the header above, and nothing else — this list is a RENDERING order, not a rank. It deliberately
+// does NOT mirror `disposition()` (migrate.mjs), which returns `chrome` ahead of `context`: the table reads better
+// with the two auto-accounted columns in template-then-decoration order, and the header is the only contract a
+// reader can check. Claiming the two orders coincide would be a claim a reader can falsify in thirty seconds.
+const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "chrome", "unaccounted"];
 // explicit locale-aware comparator (Array#sort's default coerces to string and orders by code unit) — the same
 // determinism discipline engine.mjs applies to its own diagnostic lists, and a golden test asserts byte-identical
 // output across two runs of the same manifest.

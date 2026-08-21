@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { parseSchema, mergeHierarchy, CONTENT_TYPE } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { makeSchema } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -182,6 +182,259 @@ const c2 = mergeHierarchy([
 check("C2: merge introduces contentType (5=lookup) on an existing item — carried, not dropped",
   c2.items.find(i => i.name === "F")?.contentType === 5);
 
+/* ---- ENG-95412: `set` and `remove`-with-`properties`, the two operations the engine did not implement ----
+   Driven through a REAL schema body and `parseSchema`, not the testkit's pre-normalized ops, because half of what
+   is being pinned is that the PARSER carries `op.properties` and the `set` operation name at all — a `makeOp`-based
+   golden would pass even if `normalizeDiffOp` dropped them (which is how the `valuesKeys` gap slipped through).
+   HONEST LIMIT: no occurrence of either operation was found in 130 schema bodies across 5 real Classic pages, so
+   these are synthetic cases validated against core `json-applier.js`, not against observed data. Group ordering is
+   still not mirrored, so nothing here asserts anything about the order operations run in. ---- */
+const realBody = (diff) => `define("T",[],function(){return{entitySchemaName:"X",diff:[${diff}]};});`;
+const realRun = (...ops) => mergeHierarchy([parseSchema(realBody(ops.join(",")), "T")]);
+// Two LAYERS, which is the realistic shape and the only one that can express "a later schema changes this".
+// Within ONE layer the runtime runs all merges BEFORE any insert, so a single-layer insert+merge pair tests
+// array-order semantics that the runtime does not have — see the group-ordering pins below.
+const realRun2 = (opsA, opsB) => mergeHierarchy([parseSchema(realBody(opsA), "A"), parseSchema(realBody(opsB), "B")]);
+
+/* ---- PR #105 review, Major: `set` must not hide CLIENT-authored children ----
+   `cascadeRemove` deliberately skips non-templateOwned items (its `!it.templateOwned` guard) so client-authored
+   removals surface individually, and `removed[]` filters out anything carrying `cascadeRemoved`. `replaySet` set that
+   flag on EVERY direct child, so a client element inside a replaced container vanished from the decision rows with no
+   per-element diagnostic — the op's warning counts dropped children but a count is not an element. Mixed ownership is
+   the only shape that discriminates, which is exactly the test the reviewer asked for. */
+const setMixedSeed = parseSchema(realBody([
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7}}`,
+  `{operation:"insert",name:"TplKid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`].join(",")), "Tpl");
+const setMixedClient = parseSchema(realBody([
+  `{operation:"insert",name:"CliKid",parentName:"Box",propertyName:"items",values:{bindTo:"Other"}}`,
+  `{operation:"set",name:"Box",values:{itemType:7}}`].join(",")), "Client");
+const setMixed = mergeHierarchy([setMixedClient], { seedTemplate: [setMixedSeed] });
+const setMixedRemoved = setMixed.removed.map((r) => r.name).sort((a, b) => a.localeCompare(b));
+check("PR#105 Major: a `set` that drops a mixed-ownership child set keeps the CLIENT-authored child in removed[] as its own decision row, while the template-owned one is swept as structural cleanup",
+  setMixedRemoved.join(",") === "CliKid" && !setMixed.items.some((i) => ["TplKid", "CliKid"].includes(i.name)),
+  () => ({ removed: setMixedRemoved, items: setMixed.items.map((i) => i.name) }));
+
+/* ---- ENG-95412: aliases ----
+   `saveAlias` (json-applier.js L554-566) keys the table by the ALIAS name and stores the REAL item name on it, which
+   is what lets a later op target the element by the alias. It also carries `excludeOperations` (a whole op on that
+   name becomes a no-op, L601-608) and `excludeProperties` (individual merge keys never apply, L583-591). The table
+   survives every layer — `applyDiff` resets it only on an empty source object, i.e. once.
+   HONEST LIMIT: no `alias` appears anywhere in the harvested corpus, so all of this is synthetic. */
+const aliasResolved = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Orig"},alias:{name:"OldFld"}}`,
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.ViaAlias"}}`);
+check("ENG-95412: a later op targeting the ALIAS name reaches the real element — the table is keyed by the alias and carries the real name, so `OldFld` resolves to `RealFld`",
+  aliasResolved.items.find((i) => i.name === "RealFld")?.caption === "Resources.Strings.ViaAlias"
+  && !aliasResolved.items.some((i) => i.name === "OldFld"),
+  () => aliasResolved.items.map((i) => `${i.name}:${i.caption}`));
+// Control: WITHOUT the alias the same merge finds nothing and produces the engine-only stub instead. Without this,
+// "resolution works" could be satisfied by resolving every unknown name to something.
+const aliasAbsent = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Orig"}}`,
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.ViaAlias"}}`);
+check("ENG-95412: with NO alias registered the same merge does NOT reach the element — it falls through to the engine-only stub, so resolution is driven by the table and not by name guessing",
+  aliasAbsent.items.find((i) => i.name === "RealFld")?.caption === "Resources.Strings.Orig"
+  && aliasAbsent.items.find((i) => i.name === "OldFld")?.engineOnlyStub === true,
+  () => aliasAbsent.items.map((i) => `${i.name}:${i.caption}:stub=${i.engineOnlyStub}`));
+const aliasExclOp = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"},alias:{name:"OldFld",excludeOperations:["remove"]}}`,
+  `{operation:"remove",name:"OldFld"}`);
+check("ENG-95412: an alias `excludeOperations` entry makes that operation a no-op — the remove never runs and the element is not tombstoned",
+  aliasExclOp.items.some((i) => i.name === "RealFld") && !aliasExclOp.removed.some((r) => r.name === "RealFld"),
+  () => ({ items: aliasExclOp.items.map((i) => i.name), removed: aliasExclOp.removed.map((r) => r.name) }));
+// The runtime's carve-out: a `remove` carrying `properties` is a DIFFERENT operation and is never excluded.
+const aliasExclCarveOut = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"},alias:{name:"OldFld",excludeOperations:["remove"]}}`,
+  `{operation:"remove",name:"OldFld",properties:["caption"]}`);
+check("ENG-95412: `excludeOperations:['remove']` does NOT block a `remove` carrying `properties` — the runtime carves that out explicitly, because the two forms are different operations",
+  aliasExclCarveOut.items.find((i) => i.name === "RealFld")?.caption === null,
+  () => aliasExclCarveOut.items.find((i) => i.name === "RealFld"));
+const aliasExclProp = realRun2(
+  `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Keep"},alias:{name:"OldFld",excludeProperties:["caption"]}}`,
+  `{operation:"merge",name:"OldFld",values:{caption:"Resources.Strings.Blocked",tip:{content:{bindTo:"Resources.Strings.T"}}}}`);
+const aep = aliasExclProp.items.find((i) => i.name === "RealFld");
+check("ENG-95412: an alias `excludeProperties` entry drops just that key from the merge — the caption is held back while a non-excluded property on the same op still applies (both arms, or 'excluded' could mean 'merge does nothing')",
+  aep?.caption === "Resources.Strings.Keep" && aep?.tip === "Resources.Strings.T",
+  () => aep);
+
+/* ---- ENG-95412: a layer's diff runs in the runtime's BUCKET order, not in array order ----
+   `applyOperations` (json-applier.js L299-306): all `merge`, then the position group, then remove-properties, then
+   `set`. Pinned in both directions, because "the merge did nothing" is also what a broken merge looks like.
+   HONEST LIMIT: no layer in the harvested corpus (130 schema bodies, 5 real pages) contains an `insert X` + `merge X`
+   pair, so this behaviour is synthetic — validated against json-applier.js, not observed on a page. */
+const sameLayerMerge = realRun(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Ins"}}`,
+  `{operation:"merge",name:"Fld",values:{caption:"Resources.Strings.Merged"}}`);
+check("ENG-95412: within ONE layer a `merge` runs BEFORE the `insert` that defines its target, so the merge is a NO-OP — replaying in array order applied it and reported a caption the page does not have",
+  sameLayerMerge.items.find((i) => i.name === "Fld")?.caption === "Resources.Strings.Ins",
+  () => sameLayerMerge.items.find((i) => i.name === "Fld"));
+const crossLayerMerge = realRun2(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Ins"}}`,
+  `{operation:"merge",name:"Fld",values:{caption:"Resources.Strings.Merged"}}`);
+check("ENG-95412: the SAME pair across two layers DOES apply — bucket ordering is per layer, so this proves merges still work rather than having been switched off",
+  crossLayerMerge.items.find((i) => i.name === "Fld")?.caption === "Resources.Strings.Merged",
+  () => crossLayerMerge.items.find((i) => i.name === "Fld"));
+// `set` is the LAST bucket, so its array position is irrelevant: written first, it still lands after the merge.
+const setLastRun = realRun2(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  [`{operation:"set",name:"Box",values:{itemType:7}}`,
+   `{operation:"merge",name:"Box",values:{caption:"Resources.Strings.Merged"}}`].join(","));
+check("ENG-95412: `set` is the LAST bucket — written BEFORE the merge in the array it still runs after it, so the merge's caption is wiped by the wholesale replace",
+  setLastRun.items.find((i) => i.name === "Box")?.caption === null,
+  () => setLastRun.items.find((i) => i.name === "Box"));
+
+/* ---- ENG-95412: the content properties follow the same key-presence rule as the identity ones ----
+   The runtime writes whatever `values` carries, `""` and `false` included (json-applier.js L702-705). A truthiness
+   guard here dropped a layer that deliberately BLANKS a caption or UNBINDS a control, so the plan kept reporting a
+   caption the page no longer shows. Both arms are pinned: the blanking case must apply, the untouched case must not. */
+const blanked = realRun2(
+  `{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"}}`,
+  `{operation:"merge",name:"F",values:{caption:""}}`);
+const blankedItem = blanked.items.find((i) => i.name === "F");
+check("ENG-95412: a merge that RESTATES `caption` as empty blanks it — presence decides for the content properties too, and the base caption is not kept",
+  blankedItem?.caption === null && blankedItem?.bindTo === "Name",
+  () => blankedItem);
+const untouchedCap = realRun2(
+  `{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"}}`,
+  `{operation:"merge",name:"F",values:{visible:false}}`);
+check("ENG-95412: a merge that does NOT carry `caption` leaves it intact — otherwise 'presence decides' would just mean 'always overwrite'",
+  untouchedCap.items.find((i) => i.name === "F")?.caption === "Resources.Strings.Cap",
+  () => untouchedCap.items.find((i) => i.name === "F"));
+
+/* ---- ENG-95412: a merge onto an item nothing defined is an ENGINE-ONLY stub, and now says so ----
+   The runtime finds no item, returns false (json-applier.js L688) and `applyOperations` throws that away (L301) —
+   a silent no-op. The engine records a stub instead, deliberately, because a merge onto nothing means a missing base
+   seed or schemas out of order. Unmarked, though, every consumer reads that stub as an element on the rendered page. */
+const stubRun = realRun(`{operation:"merge",name:"Ghost",values:{bindTo:"Name"}}`);
+const ghost = stubRun.items.find((i) => i.name === "Ghost");
+check("ENG-95412: a merge-onto-missing stub is flagged `engineOnlyStub` and its warning states the runtime does nothing there — the stub is a diagnostic, not a claim about the page",
+  ghost?.engineOnlyStub === true
+  && (stubRun.warnings || []).some((w) => w.name === "Ghost" && /runtime silently does nothing/.test(w.hint || "")),
+  () => ({ ghost, warnings: (stubRun.warnings || []).map((w) => w.hint) }));
+check("ENG-95412: an ordinary insert is NOT flagged as an engine-only stub — the marker has to distinguish, not decorate everything",
+  realRun(`{operation:"insert",name:"Real",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`)
+    .items.find((i) => i.name === "Real")?.engineOnlyStub === false,
+  () => realRun(`{operation:"insert",name:"Real",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`).items);
+
+
+// `remove` + `properties` deletes the NAMED keys and KEEPS the element (json-applier.js L726-730). The engine used
+// to tombstone it, so an element the runtime still renders went missing from the plan entirely — the one
+// divergence in this family that HIDES real UI rather than over-reporting.
+const rmProps = realRun(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.C1",itemType:6}}`,
+  `{operation:"remove",name:"Fld",properties:["caption"]}`);
+const rmPropsItem = rmProps.items.find((i) => i.name === "Fld");
+check("ENG-95412: `remove` with a `properties` array clears ONLY those keys and KEEPS the element — caption gone, bindTo and itemType intact, and it is not in removed[]",
+  !!rmPropsItem && rmPropsItem.caption === null && rmPropsItem.bindTo === "Name" && rmPropsItem.itemType === 6
+  && !rmProps.removed.some((r) => r.name === "Fld"),
+  () => ({ item: rmPropsItem, removed: rmProps.removed.map((r) => r.name) }));
+// The control arm: a plain `remove` must still tombstone. Without it, "keeps the element" could be implemented by
+// making every remove a no-op.
+const rmPlain = realRun2(
+  `{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
+  `{operation:"remove",name:"Fld"}`);
+check("ENG-95412: a plain `remove` (no `properties`) still tombstones the element — the two forms stay distinct operations",
+  !rmPlain.items.some((i) => i.name === "Fld") && rmPlain.removed.some((r) => r.name === "Fld"),
+  () => ({ items: rmPlain.items.map((i) => i.name), removed: rmPlain.removed.map((r) => r.name) }));
+
+// `set` is a wholesale replace: position is recovered from the replaced item, every unrestated property is gone,
+// and so are the children (json-applier.js L660-677).
+const setRun = realRun(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`,
+  `{operation:"set",name:"Box",values:{itemType:7}}`);
+const setBox = setRun.items.find((i) => i.name === "Box");
+check("ENG-95412: `set` replaces the element wholesale — the unrestated caption is gone, the position is recovered from the replaced item, and the child is dropped with it",
+  !!setBox && setBox.caption === null && setBox.parent === "Header" && setBox.itemType === 7
+  && !setRun.items.some((i) => i.name === "Kid"),
+  () => ({ box: setBox, items: setRun.items.map((i) => i.name) }));
+// REWRITTEN — this pinned the defect, not the invariant. Its `Kid` is CLIENT-authored (a single client layer), so
+// "does not appear in removed[]" asserted exactly the hiding the PR #105 review caught. That is also why the
+// mutation check passed on it: the pin agreed with the bug. The real invariant is ownership-dependent, and it is
+// pinned on the mixed-ownership fixture above; here the client-authored child must be VISIBLE.
+check("ENG-95412: a CLIENT-authored child dropped by `set` appears in removed[] — it is a decision the reader must see, not structural cleanup",
+  setRun.removed.some((r) => r.name === "Kid"),
+  () => setRun.removed.map((r) => r.name));
+// The control arm that gives `set` its meaning: the SAME values via `merge` must keep both the caption and the child.
+// Two layers on purpose: in ONE layer the merge bucket runs before the inserts, so the merge would be a no-op and
+// this control would pass without contrasting anything with `set` — the exact tautology it exists to rule out.
+const mergeControl = realRun2(
+  [`{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+   `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`].join(","),
+  `{operation:"merge",name:"Box",values:{itemType:7}}`);
+// Compared against a run with NO third op rather than against a literal: whatever normalization the engine applies
+// to a caption resource key is a separate concern, and hard-coding the normalized form here would make this test
+// fail for a reason that has nothing to do with set-vs-merge.
+const noThirdOp = realRun(
+  `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7,caption:"Resources.Strings.BoxCap"}}`,
+  `{operation:"insert",name:"Kid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`);
+const baselineCaption = noThirdOp.items.find((i) => i.name === "Box")?.caption;
+check("ENG-95412: the same `values` via `merge` keeps BOTH the caption and the child — this is the whole difference between the two operations, so pinning one without the other pins nothing",
+  baselineCaption != null
+  && mergeControl.items.find((i) => i.name === "Box")?.caption === baselineCaption
+  && mergeControl.items.some((i) => i.name === "Kid"),
+  () => ({ baselineCaption, merged: mergeControl.items.find((i) => i.name === "Box"), items: mergeControl.items.map((i) => i.name) }));
+
+/* ---- ENG-95412: a `move` carries its own `values`, and the runtime applies them ----
+   Grounded in real data: ContactPageV2's `SiteEventDetail` is inserted by package `SiteEvent` with
+   `values: { itemType: Terrasoft.ViewItemType.DETAIL }` and then MOVED by package `EventTracking` restating the
+   same `itemType`. That real occurrence is REDUNDANT — the value repeats what the insert already set — so it can
+   never witness the bug. The pin therefore uses the identical code path with a DIFFERING value, which is the only
+   way to observe it, and the redundant real shape is pinned separately as the no-regression arm. ---- */
+const moveApplies = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 7 }]),
+  synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab", itemType: 2 }]),
+]);
+const movedItem = moveApplies.items.find((i) => i.name === "SiteEventDetail");
+check("ENG-95412: a `move` that restates `itemType` APPLIES it (7 -> 2) — the runtime Ext.applies the move op onto the reinserted item, so ignoring its values reported a stale kind",
+  movedItem?.itemType === 2 && movedItem?.parent === "HistoryTab",
+  () => ({ itemType: movedItem?.itemType, parent: movedItem?.parent }));
+// The real ContactPageV2 shape: the move repeats the insert's kind. Must stay a no-op, or the fix would be
+// "apply something" rather than "apply what the op states".
+const moveRedundant = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 2 }]),
+  synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab", itemType: 2 }]),
+]);
+check("ENG-95412: the REAL shape (a move restating the kind the insert already set) stays a no-op on the kind — this is what ContactPageV2 actually does",
+  moveRedundant.items.find((i) => i.name === "SiteEventDetail")?.itemType === 2,
+  () => moveRedundant.items.find((i) => i.name === "SiteEventDetail"));
+// A move that states NO itemType must leave the kind alone — key presence, same as merge.
+const moveSilent = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 2 }]),
+  synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab" }]),
+]);
+check("ENG-95412: a `move` that carries no `itemType` key leaves the kind intact — presence decides here too",
+  moveSilent.items.find((i) => i.name === "SiteEventDetail")?.itemType === 2,
+  () => moveSilent.items.find((i) => i.name === "SiteEventDetail"));
+
+/* ---- ENG-95412: the merge rule is key PRESENCE, not value — verified against core `json-applier.js` ----
+   `JsonApplier.merge` takes `Object.keys(config.values)` (L583-585) and assigns unconditionally (L702-705), so a
+   later layer that carries an `itemType` key AT ALL overwrites the base — including with a value this engine cannot
+   resolve. The engine used to guard on `op.itemType != null`, which silently kept the base kind and reported a
+   RADIO_GROUP the runtime had already turned into a plain bound field (`generateStandardItem` default →
+   `generateModelItem`). Both directions are pinned, because a one-sided pin passes with the guard put back. ---- */
+const mergeCleared = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", itemType: 16 }]),
+  synth("top", [{ operation: "merge", name: "F", itemType: null, itemTypeUnresolved: true }]),
+]);
+const clearedItem = mergeCleared.items.find((i) => i.name === "F");
+check("ENG-95412: a merge that RESTATES `itemType` with a value the engine cannot resolve CLEARS the base kind (16) — keeping it asserts a kind the runtime already overwrote",
+  clearedItem?.itemType === null && clearedItem?.itemTypeUnresolved === true,
+  () => ({ itemType: clearedItem?.itemType, unresolved: clearedItem?.itemTypeUnresolved }));
+check("ENG-95412: clearing a resolved kind is WARNED, not silent — the element changed behaviour and the operator has to see it",
+  (mergeCleared.warnings || []).some((w) => w.name === "F" && /CLEARED/.test(w.hint || "")),
+  () => (mergeCleared.warnings || []).map((w) => w.hint));
+// The other direction: a merge that does NOT carry the key must leave the base kind alone. This is the arm that
+// fails if key-presence is implemented as "always overwrite".
+const mergeKept = mergeHierarchy([
+  synth("base", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", itemType: 16 }]),
+  synth("top", [{ operation: "merge", name: "F", caption: "Renamed" }]),
+]);
+const keptItem = mergeKept.items.find((i) => i.name === "F");
+check("ENG-95412: a merge whose `values` does NOT carry `itemType` leaves the base kind intact (16) — presence decides, so absence must be a no-op",
+  keptItem?.itemType === 16 && keptItem?.itemTypeUnresolved === false,
+  () => ({ itemType: keptItem?.itemType, unresolved: keptItem?.itemTypeUnresolved }));
+
 /* ---- F9/C6 origin: a base field the client only MOVES stays templateOwned (insert origin = seed),
    so it is NOT re-emitted as client payload — the client only repositioned template content. ---- */
 const mvSeed = makeSchema("Tpl", { diff: [{ operation: "insert", name: "BF", parentName: "Header", propertyName: "items", bindTo: "BCol" }] });
@@ -292,7 +545,15 @@ check("bare terrasoft-param Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 
 check("this.Terrasoft.ViewItemType.GRID_LAYOUT resolves to 0", byName.gGrid.itemType === 0);
 check("this.Terrasoft.ContentType.LOOKUP resolves to 5 (lookup control hint)", byName.fLookThis.contentType === 5);
 check("bare terrasoft-param Terrasoft.ContentType.LOOKUP resolves to 5", byName.fLookParam.contentType === 5);
-check("ContentType.ENUM stays null (hint-only; not pinned to a guessed number that could mis-equal LOOKUP=5)", byName.fEnum.contentType === null);
+// ContentType is pinned COMPLETE (ENG-95412): a member the schema names is IDENTIFIED, never collapsed to null —
+// "we could not read it" and "the page did not set one" are different statements and the gate reacts to them
+// differently. The old contract left every non-LOOKUP member null to guarantee none could mis-equal LOOKUP=5;
+// that guarantee is now a property of the transcribed values themselves, which is what the second check pins.
+check("ContentType.ENUM resolves to 3 (pinned complete — an identified member, not a silent null)", byName.fEnum.contentType === 3,
+  () => `got ${byName.fEnum.contentType}`);
+check("no pinned ContentType member other than LOOKUP equals 5 (a resolved hint cannot mis-flag a scalar as a lookup)",
+  Object.entries(CONTENT_TYPE).filter(([, v]) => v === 5).map(([k]) => k).join(",") === "LOOKUP",
+  () => `members equal to 5: ${Object.entries(CONTENT_TYPE).filter(([, v]) => v === 5).map(([k]) => k).join(",")}`);
 
 /* ---- T1: every AST-evaluator branch has a golden — this is the security-critical component that replaced the
    vm, and none of Unary/Binary/Conditional/Template/Spread/computed-key/New was pinned. A refactor could silently

@@ -195,16 +195,77 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
 // and statically evaluates the returned object literal — no code runs, so a hostile body cannot reach
 // process/fs/env. Anything it cannot resolve statically is left null AND recorded in `astDiagnostics`
 // (fail-loud) rather than silently guessed.
-const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
+// `Terrasoft.ViewItemType`, complete, transcribed from core `Terrasoft.Nui/Resources/Terrasoft/core/enums/
+// sysenums.js`. Classic identifies every element with one `switch (itemType)` over all of these
+// (`ViewGeneratorV2.generateStandardItem`), so the table stays complete and the values stay exact — a schema may
+// write `itemType` as a raw number instead of the enum member.
+const AST_VIEW_ITEM_TYPE = {
+  GRID_LAYOUT: 0, TAB_PANEL: 1, DETAIL: 2, MODEL_ITEM: 3, MODULE: 4, BUTTON: 5, LABEL: 6, CONTAINER: 7,
+  MENU: 8, MENU_ITEM: 9, MENU_SEPARATOR: 10, SECTION_VIEWS: 11, SECTION_VIEW: 12, GRID: 13, SCHEDULE_EDIT: 14,
+  CONTROL_GROUP: 15, RADIO_GROUP: 16, DESIGN_VIEW: 17, COLOR_BUTTON: 18, IMAGE_TAB_PANEL: 19, HYPERLINK: 20,
+  INFORMATION_BUTTON: 21, TIP: 22, COMPONENT: 23, TIP_LABEL: 24,
+  PROGRESS_BAR: 30, GRID_LAYOUT_EDIT: 31, IFRAMECONTROL: 32, EXTERNAL_WIDGET: 33,
+};
 // The classic Terrasoft.core.enums vocabulary the mapper also switches on — one named source of truth so the
 // two files never drift on a raw itemType/contentType literal (an off-by-value waiting to happen).
-export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE; // ViewItemType: GridLayout 0 · Detail 2 · ControlGroup 15
-export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a column rendered via a picker)
+export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE;
+// `Terrasoft.ContentType`, complete. LOOKUP (5) is the only member that drives a mapping decision (the mapper
+// renders it via a picker); the rest are pinned so a member the schema names is identified rather than collapsing
+// to null — "could not read it" and "the page set none" must stay distinguishable.
+export const CONTENT_TYPE = {
+  LONG_TEXT: 0, SHORT_TEXT: 1, DATE_TIME: 2, ENUM: 3, RICH_TEXT: 4, LOOKUP: 5, SEARCHABLE_TEXT: 6,
+};
+// `Terrasoft.DataValueType`, complete. A diff item may declare its own `dataValueType`; for a VIRTUAL field (no
+// entity column behind it) that declaration is the only type evidence there is.
+// GROUNDWORK, deliberately unread: the item's own `dataValueType` is projected onto `items[]`/`fields[]` but has NO
+// consumer yet — `control()` is still called with the ENTITY column's type only, so a virtual field keeps raising
+// the loud `field-control` decision rather than being typed from its own declaration. Wiring that fallback is the
+// mapping task's business (ENG-95543); the projection lands here so the evidence is already carried when it does.
+export const DATA_VALUE_TYPE = {
+  GUID: 0, TEXT: 1, INTEGER: 4, FLOAT: 5, MONEY: 6, DATE_TIME: 7, DATE: 8, TIME: 9, LOOKUP: 10, ENUM: 11,
+  BOOLEAN: 12, BLOB: 13, IMAGE: 14, CUSTOM_OBJECT: 15, IMAGELOOKUP: 16, COLLECTION: 17, COLOR: 18,
+  LOCALIZABLE_STRING: 19, ENTITY: 20, ENTITY_COLLECTION: 21, ENTITY_COLUMN_MAPPING_COLLECTION: 22,
+  HASH_TEXT: 23, SECURE_TEXT: 24, FILE: 25, MAPPING: 26, SHORT_TEXT: 27, MEDIUM_TEXT: 28, MAXSIZE_TEXT: 29,
+  LONG_TEXT: 30, FLOAT1: 31, FLOAT2: 32, FLOAT3: 33, FLOAT4: 34, LOCALIZABLE_PARAMETER_VALUES_LIST: 35,
+  METADATA_TEXT: 36, STAGE_INDICATOR: 37, OBJECT_LIST: 38, COMPOSITE_OBJECT_LIST: 39, FLOAT8: 40,
+  FILE_LOCATOR: 41, PHONE_TEXT: 42, RICH_TEXT: 43, WEB_TEXT: 44, EMAIL_TEXT: 45, COMPOSITE_OBJECT: 46,
+  FLOAT0: 47, MONEY0: 48, MONEY1: 49, MONEY3: 50,
+};
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
 // stored as `Foo` was looked up as `Foo#bar` and the raw key leaked into the plan.
 export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "");
+// ---- ENUM DRIFT GUARD ------------------------------------------------------------------------------------
+// The tables above are a snapshot of core, so they can drift from the target platform. `manifest.enumVocabulary`
+// is the stand's own echo of these enums (`{ ViewItemType: {…}, ContentType: {…}, DataValueType: {…} }`).
+// Severities are deliberately unequal:
+//  • MISMATCH on a member both sides carry ⇒ blocking. The engine's number is wrong for this stand, so every
+//    element of that kind is mis-read and there is no safe partial reading.
+//  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
+//    stop every migration on the day a release adds a member.
+//  • A member only the ENGINE carries ⇒ not a finding: an older stand legitimately predates it.
+const DRIFT_TABLES = { ViewItemType: AST_VIEW_ITEM_TYPE, ContentType: CONTENT_TYPE, DataValueType: DATA_VALUE_TYPE };
+export function enumDriftIssues(vocabulary) {
+  const live = plainObj(vocabulary);
+  const mismatches = [], newMembers = [];
+  for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
+    const standTable = plainObj(live[enumName]);
+    if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
+    for (const [member, standValue] of Object.entries(standTable)) {
+      if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
+      // `Object.hasOwn`, never `in`: the echo is UNTRUSTED input, and `in` walks the prototype chain — an echoed
+      // `toString`/`constructor`/`valueOf` key would count as pinned and be compared against a native function,
+      // producing a BLOCKING mismatch whose text names `function toString() { [native code] }`.
+      if (!Object.hasOwn(pinned, member)) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
+      if (pinned[member] !== standValue) mismatches.push(`${enumName}.${member}: engine ${pinned[member]}, stand ${standValue}`);
+    }
+  }
+  mismatches.sort(byLocale);
+  newMembers.sort(byLocale);
+  return { mismatches, newMembers };
+}
+
 // Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
 // not blow the call stack (DoS). `path.length` is the current nesting depth — bail to null + a diagnostic
 // well before any real stack limit. Real page schemas nest only a handful of levels; 500 is unreachable by
@@ -228,11 +289,12 @@ const TAG_TRANSITIONS = {
   this: { BusinessRuleModule: "brm", Terrasoft: "terrasoft" },
   brm: { enums: "brm.enums" },
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
-  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", controls: "terrasoft.controls", core: "terrasoft.core",
+  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
+    controls: "terrasoft.controls", core: "terrasoft.core",
     MessageMode: "t:sym", MessageDirectionType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
-  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct",
+  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
     MessageMode: "t:sym", MessageDirectionType: "t:sym" },
 };
 // "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
@@ -241,11 +303,13 @@ const TAG_TRANSITIONS = {
 // plan reads better naming it, so there is no reason to pin numeric constants the engine would have to assert.
 // An unknown key under this state still yields its name (any member of these two namespaces is a symbol we want).
 const TAG_SYMBOLIC = "t:sym";
-// "t:ct" indexes ContentType. Only LOOKUP (5) drives behavior (the mapper renders it via a picker); every other
-// ContentType key is a display hint the mapper does not switch on, so it intentionally stays null (unknown-key →
-// null, exactly as before) rather than being pinned to a guessed numeric — resolving LOOKUP is the fix, and no
-// other value can silently equal 5 and mis-flag a scalar as a lookup.
-const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY, "t:ct": CONTENT_TYPE };
+// The terminal enum tables, each complete against core `sysenums.js`. A member that does NOT resolve against one
+// is a vocabulary gap in this engine and is reported BY NAME (`unknown-enum-member`), never as a silent null.
+const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY,
+  "t:ct": CONTENT_TYPE, "t:dvt": DATA_VALUE_TYPE };
+// The enum a terminal state indexes, by NAME — the miss-report cites `ViewItemType.RADIO_GROUP`, not the tag.
+const TAG_ENUM_NAME = { "t:vit": "ViewItemType", "t:rule": "RuleType", "t:prop": "Property",
+  "t:ct": "ContentType", "t:dvt": "DataValueType" };
 
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
@@ -290,27 +354,37 @@ function spliceAliasChain(path, base, scope) {
   return cur;
 }
 
-// Walk the transition table from `tag` along `path` to the value it lands on.
+// Walk the transition table from `tag` along `path` to the value it lands on. Returns `{ value }`, plus
+// `unknown: "<Enum>.<MEMBER>"` when the walk REACHED a terminal enum table and the member was not in it: the enum
+// and the member are then both identified and only the number is missing, so it is reported by name. A miss on a
+// non-terminal state stays a plain null — an opaque proxy has nothing to name.
 function walkTagAutomaton(tag, path) {
   for (const k of path) {
-    if (tag === TAG_SYMBOLIC) return k;                          // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
+    if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
-    if (enumTable) return k in enumTable ? enumTable[k] : null;  // terminal: the next key indexes the enum table
+    if (enumTable) {                                             // terminal: the next key indexes the enum table
+      // `Object.hasOwn`, never `in`: the body is UNTRUSTED, and `in` walks the prototype chain — a body naming
+      // `Terrasoft.ViewItemType.constructor` would resolve to a native function instead of raising the
+      // `unknown-enum-member` advisory, so the member would go unreported rather than fail loud.
+      if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
+      return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
+    }
     const next = TAG_TRANSITIONS[tag];
-    if (!next) return null;                                      // proxy (or already a value) — further access is null
+    if (!next) return { value: null };                           // proxy (or already a value) — further access is null
     tag = next[k] || "proxy";                                    // unknown key at this state collapses to proxy
   }
-  return null; // ended on a resolver, not a concrete value
+  return { value: null }; // ended on a resolver, not a concrete value
 }
 
+// Same `{ value, unknown? }` shape as walkTagAutomaton: the caller needs the reason a null is null.
 function resolveMemberValue(node, scope) {
   const chain = memberChain(node);
-  if (!chain) return null;
+  if (!chain) return { value: null };
   const { path } = chain;
   const cur = spliceAliasChain(path, chain.base, scope);
-  if (cur === null) return null;
+  if (cur === null) return { value: null };
   const tag = baseTag(cur, scope);
-  if (tag == null) return null;
+  if (tag == null) return { value: null };
   return walkTagAutomaton(tag, path);
 }
 
@@ -320,7 +394,10 @@ function memberBase(node) { let cur = node; while (cur?.type === "MemberExpressi
 
 function makeAstEvaluator(scope, diagnostics, src) {
   const snippet = (n) => { try { return src.slice(n.start, Math.min(n.end, n.start + 60)).replace(/\s+/g, " "); } catch { return "?"; } };
-  const flag = (kind, node, path) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node) });
+  // `detail` (optional) — a machine-readable rider a consumer reads instead of re-parsing `snippet` (today: the
+  // enum member name). Omitted when absent, so a diagnostic without one keeps its exact shape.
+  const flag = (kind, node, path, detail) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node),
+    ...(detail ? { detail } : {}) });
   function evalNode(node, path) {
     if (!node) return null;
     if (path.length > MAX_AST_DEPTH) { flag("max-nesting-depth", node, path); return null; }
@@ -370,12 +447,16 @@ function makeAstEvaluator(scope, diagnostics, src) {
     });
   }
   function evalMember(node, path) {
-    const v = resolveMemberValue(node, scope);
+    const { value, unknown } = resolveMemberValue(node, scope);
+    // A member of a known framework enum the pinned table does not carry: a vocabulary gap in THIS engine, so it
+    // is reported by name in `detail`. ADVISORY — the kind is identified, only its number is not, which is why the
+    // gate treats it differently from a value it genuinely could not read (see migrate.mjs).
+    if (unknown) flag("unknown-enum-member", node, path, unknown);
     // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
     // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
     // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
-    if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
-    return v;
+    if (value == null && !unknown) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
+    return value;
   }
   function evalIdentifier(node, path) {
     if (node.name === "undefined") return undefined;
@@ -956,8 +1037,16 @@ function normalizeDiffOp(op, i) {
     propertyName: strOrNull(op.propertyName),
     index: opIndex,
     bindTo: strOrNull(v.bindTo),
-    itemType: numOrNull(v.itemType),      // 0 grid,2 detail,15 group
+    itemType: numOrNull(v.itemType),      // the element KIND — the whole ViewItemType vocabulary (see AST_VIEW_ITEM_TYPE)
     contentType: numOrNull(v.contentType),
+    // The item's OWN declared data type. PRECEDENCE, verified against the runtime and the reverse of what this
+    // comment said before: `ViewGeneratorV2.getItemDataValueType` (CrtNUI 7.8.0 L1796-1810) returns
+    // `config.dataValueType` FIRST and only consults the view-model column when the item declares none — so the
+    // item's own value OVERRIDES the column, it is not a fallback to it. The guard there is `Ext.isEmpty`, and
+    // `Ext.isEmpty(0)` is false, so `dataValueType: 0` (GUID) is a legal declared value: test with `!= null` /
+    // `Object.hasOwn`, never with truthiness. Reading it is still the mapping task's business (ENG-95543); what
+    // changes here is only that the recorded precedence is now the right way round.
+    dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
     hasCaption: !!(v.caption),
     // caption resource key (tab/group/detail label) — carried so the real caption is shown for
@@ -981,6 +1070,26 @@ function normalizeDiffOp(op, i) {
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
     handlers: handlerBindings(v),
     astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
+    // Which keys this op's `values` actually CARRIES. Required because `numOrNull` collapses "key absent" and
+    // "key present but not statically a number" into the same `null`, and the runtime treats those two as
+    // opposites (see `replayMerge`). Without this the merge rule cannot be implemented at all.
+    valuesKeys: new Set(safeKeys(v)),
+    // `remove` with a `properties` array is a DIFFERENT operation from a plain remove: it deletes the named keys
+    // and KEEPS the element (core `json-applier.js` L726-730). Carried here because dropping it made the engine
+    // tombstone an element the runtime still renders — the one divergence in this family that HIDES real UI.
+    properties: Array.isArray(op.properties) ? op.properties.filter(isStr) : null,
+    // An `insert` may register an ALIAS (a top-level op property, not inside `values`): core `json-applier.js` calls
+    // `saveAlias` from `insert` (L629). A later op may then target the element by the alias name, and the alias can
+    // also EXCLUDE whole operations or individual merge properties from ever applying (L583-591, L601-608).
+    alias: op.alias && isStr(op.alias.name) ? {
+      name: op.alias.name,
+      excludeProperties: Array.isArray(op.alias.excludeProperties) ? op.alias.excludeProperties.filter(isStr) : [],
+      excludeOperations: Array.isArray(op.alias.excludeOperations) ? op.alias.excludeOperations.filter(isStr) : [],
+    } : null,
+    // The body STATED a kind and this engine could not resolve it to a number (a member `AST_VIEW_ITEM_TYPE`
+    // lacks, or a non-static expression). Distinct from "stated no kind": the remedy is to extend the engine's
+    // pinned table, not to go read the page.
+    itemTypeUnresolved: Object.hasOwn(v, "itemType") && numOrNull(v.itemType) === null,
   };
 }
 
@@ -1096,21 +1205,82 @@ function sanitizeConditions(conds) {
 function makeItem(op, seed, pkg) {
   return {
     name: op.name, parent: op.parentName, propertyName: op.propertyName,
-    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
+    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
     handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
+    itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
 }
 
 // diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
-function replayDiffOp(op, items, { seed, pkg }, warnings) {
-  const cur = items.get(op.name);
-  if (op.operation === "insert") { items.set(op.name, makeItem(op, seed, pkg)); return; }
+// ALIASES. `saveAlias` (core `json-applier.js` L554-566) keys the table by the ALIAS's declared name and stores the
+// REAL item name on it — an inversion worth stating, because it is what lets a later op refer to the element by the
+// alias. Two further effects: `excludeOperations` makes a whole operation on that name a no-op (L601-608, with the
+// carve-out that a `remove` carrying `properties` is never excluded), and `excludeProperties` drops individual keys
+// from a merge (L583-591). The table is singleton state that survives every layer — `applyDiff` resets it only when
+// the source object is empty (L793-795), i.e. once — so an alias registered in layer 1 keeps acting in layer 9.
+// No `alias` appears in the harvested corpus (130 schema bodies, 5 real pages), so this path is synthetic.
+function saveAlias(aliases, op) {
+  if (op.alias) aliases.set(op.alias.name, { ...op.alias, realName: op.name });
+}
+function aliasFor(aliases, name) { return aliases.get(name) || null; }
+// The item an op targets, resolving the alias when the literal name is not in the map.
+function resolveTarget(items, aliases, name) {
+  if (items.has(name)) return name;
+  const a = aliasFor(aliases, name);
+  return a && items.has(a.realName) ? a.realName : name;
+}
+function isExcludedByAlias(aliases, op) {
+  if (op.operation === "remove" && op.properties?.length) return false; // never excluded — runtime carve-out
+  const a = aliasFor(aliases, op.name);
+  return !!a && a.excludeOperations.includes(op.operation);
+}
+
+function replayDiffOp(op, items, { seed, pkg, aliases }, warnings) {
+  const target = aliases ? resolveTarget(items, aliases, op.name) : op.name;
+  const cur = items.get(target);
+  if (op.operation === "insert") {
+    if (aliases) saveAlias(aliases, op);
+    items.set(op.name, makeItem(op, seed, pkg));
+    return;
+  }
+  // An aliased op works on the REAL item, so every branch below must see the resolved name, not the written one.
+  // The excluded-property set is captured HERE, while the written name is still available: the table is keyed by the
+  // ALIAS name, so looking it up after the rewrite would find nothing.
+  const aliasExcluded = aliases ? (aliasFor(aliases, op.name)?.excludeProperties || []) : [];
+  if (target !== op.name || aliasExcluded.length) op = { ...op, name: target, aliasExcluded };
+  if (op.operation === "set") return replaySet(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
-  if (op.operation === "remove") return replayRemove(op, cur, items, { seed, pkg }, warnings);
+  if (op.operation === "remove") {
+    // the `properties` form is a different operation wearing the same name — and only when the item exists
+    if (cur && op.properties?.length) return replayRemoveProperties(op, cur, { seed, pkg }, warnings);
+    return replayRemove(op, cur, items, { seed, pkg }, warnings);
+  }
+}
+
+// The three IDENTITY properties, merged by the RUNTIME's rule — which is key PRESENCE, never the value.
+// `JsonApplier.merge` takes `Object.keys(config.values)` (core `utils/common/json-applier.js` L583-585) and assigns
+// unconditionally (L702-705). So a later layer carrying an `itemType` key AT ALL overwrites the base — including with
+// `null`/`undefined`/a member this engine cannot resolve. Keeping the lower layer's kind is the one provably wrong
+// answer: it reports a RADIO_GROUP the runtime has ALREADY turned into a plain bound field, because
+// `ViewGeneratorV2.generateStandardItem` routes every unrecognised itemType to `default -> generateModelItem`
+// (CrtNUI 7.8.0 L626-628) with no throw and no log. The engine's old value-based guard hid that behaviour change.
+// Its own function so `replayMerge` keeps its guard chain at nesting level 0 (S3776 ceiling), same reason as
+// `isStructuralDiag` / `methodLedgerDetail`.
+function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
+  for (const k of ["contentType", "itemType", "dataValueType"]) {
+    if (!op.valuesKeys?.has(k)) continue;
+    if (op.aliasExcluded?.includes(k)) continue;   // the alias forbids this key (json-applier.js L583-591)
+    if (k === "itemType" && cur.itemType != null && op.itemType == null) {
+      warnings.push({ op: opName, name: op.name, schema: pkg,
+        hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
+    }
+    cur[k] = op[k];
+  }
+  if (op.valuesKeys?.has("itemType")) cur.itemTypeUnresolved = !!op.itemTypeUnresolved;
 }
 
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
@@ -1120,12 +1290,25 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
     // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
     // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
-    items.set(op.name, makeItem(op, seed, pkg));
-    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
+    // ENGINE-ONLY, and now marked as such. The runtime does NOT do this: `JsonApplier.merge` finds no item, returns
+    // `false` (core `json-applier.js` L688) and `applyOperations` discards that return value (L301) — a silent no-op.
+    // The stub is a deliberate diagnostic (a merge onto nothing means a missing base seed or schemas out of order),
+    // but without the flag a consumer reads it as an element that is actually on the rendered page.
+    const stub = makeItem(op, seed, pkg);
+    stub.engineOnlyStub = true;
+    items.set(op.name, stub);
+    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
     return;
   }
-  for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
-  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
+  mergeIdentityProps(op, cur, pkg, warnings);
+  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
+  // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
+  // caption or UNBINDS a control — the engine then reported a caption the page no longer shows. Same rule as
+  // `mergeIdentityProps`, so content and identity properties stop behaving differently for no reason.
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
+    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
+  }
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
   if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
@@ -1145,6 +1328,14 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
   // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
   // (previously only the parent was updated, so a pure reorder silently kept the old position).
   if (op.order != null) { cur.order = op.order; }
+  // A `move` also carries its OWN `values`, and the runtime applies them: `convertMoveOperationToRemove` turns the
+  // move into a remove + an insert and then does `Ext.apply(insertOperationItem, operationItem)` (core
+  // `json-applier.js` L283-289), so every key the move op states lands on the reinserted item. Applying only
+  // parent/order dropped an `itemType` restated by a move — a real occurrence: ContactPageV2's `SiteEventDetail` is
+  // moved by `EventTracking` with `values: { itemType: Terrasoft.ViewItemType.DETAIL }`. There the value merely
+  // repeats what `SiteEvent`'s insert already set, so nothing was visibly wrong; a move that states a DIFFERENT
+  // kind was silently ignored. Same key-presence rule as `merge`, same helper, so the two cannot drift apart.
+  mergeIdentityProps(op, cur, pkg, warnings, "move");
   if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
@@ -1156,6 +1347,71 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
   items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
   warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+}
+
+// `remove` carrying a `properties` array: delete ONLY those keys, keep the element (core `json-applier.js`
+// L719-732, and it runs in a LATER group than plain removes at L304). The engine models a subset of a view item's
+// keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
+// alternative is telling the reader a property was cleared when nothing happened.
+const REMOVABLE_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
+  "layout", "tip", "hint", "generator", "visible", "caption"]);
+function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
+  const unmodelled = [];
+  for (const k of op.properties) {
+    if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
+    // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
+    // "absent vs unreadable" ambiguity this ticket removed elsewhere.
+    cur[k] = null;
+    if (k === "itemType") cur.itemTypeUnresolved = false;
+  }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true;
+  if (unmodelled.length) {
+    warnings.push({ op: "remove", name: op.name, schema: pkg,
+      hint: `this remove deletes propert(ies) the engine does not model on an item: ${unmodelled.join(", ")}. The element is KEPT (correct), but the effect of clearing those keys is not represented — read the classic body if the plan depends on them.` });
+  }
+}
+
+// `set` = remove-then-reinsert-from-`values` (core `json-applier.js` L660-677): the element keeps its POSITION but
+// loses every property the op does not restate AND every child, because the runtime rebuilds it from `values` alone
+// and recovers only `index`/`parentName`/`propertyName` from the item it removed (L670-673).
+// Bucket ordering IS mirrored now (`splitDiffOps`): the whole `set` group runs after every other group, exactly as
+// `applyOperations` does (L299-306) — the earlier note here saying the engine replayed in diff-array order is no
+// longer true. What is still NOT reproduced is insert ordering WITHIN a bucket (parent-chain depth, then `index`).
+// No real occurrence of `set` was found in a corpus of 130 schema bodies across 5 real Classic pages, so this path
+// is exercised only by goldens.
+function replaySet(op, cur, items, { seed, pkg }, warnings) {
+  if (!cur) {
+    items.set(op.name, makeItem(op, seed, pkg));
+    warnings.push({ op: "set", name: op.name, schema: pkg, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
+    return;
+  }
+  // Direct children are tombstoned here; `cascadeRemove` sweeps the deeper levels on its fixpoint pass, and marks
+  // them `cascadeRemoved` so they read as structural cleanup rather than as a client decision to drop them.
+  let dropped = 0;
+  for (const it of items.values()) {
+    if (it.parent === op.name && !it.removed) {
+      it.removed = true; it.removedBy = pkg; it.removedBySeed = seed;
+      // `cascadeRemoved` ONLY for template-owned children (PR #105 review, Major). `cascadeRemove` deliberately
+      // skips non-templateOwned items (see its `!it.templateOwned` guard), and `removed[]` filters out anything
+      // carrying the flag — so setting it unconditionally hid CLIENT-authored children of a replaced container from
+      // the decision rows entirely. The op's own warning counts them but does not name them, which is not the same
+      // thing: this engine's rule is that an element is never hidden, and a count is not an element.
+      if (it.templateOwned) it.cascadeRemoved = true;
+      dropped++;
+    }
+  }
+  const fresh = makeItem(op, seed, pkg);
+  items.set(op.name, { ...fresh,
+    // position is recovered from the item being replaced, not from the op
+    parent: cur.parent, propertyName: cur.propertyName, order: cur.order,
+    templateOwned: cur.templateOwned, provenance: [...cur.provenance, pkg],
+    schemaTouched: seed ? cur.schemaTouched : true });
+  // The child clause is named rather than nested inside the hint: one template per string, so the sentence stays
+  // readable and the optional half is not a second template inside the first.
+  const droppedNote = dropped ? `, and ${dropped} direct child(ren) were dropped with it` : "";
+  warnings.push({ op: "set", name: op.name, schema: pkg,
+    hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${droppedNote}. If the classic page still shows content here, it must be restated in this op.` });
 }
 
 // businessRules + legacy rules (merge by attribute::ruleKey)
@@ -1273,12 +1529,46 @@ function mergeModules(L, seed, components) {
 
 // Replay each tagged schema (seed-template first, then the page's own schemas) into the merge stores: diff ops
 // into `items`, and the keyed rule/detail/method/module blocks into their maps. Extracted for Sonar CC 15.
+// A layer's `diff` is NOT applied in array order by the runtime. `applyOperations` (core `json-applier.js`
+// L299-306) splits it into buckets and runs them in a fixed sequence: all `merge`, then the position group
+// (removes — move sources included — then the inserts, `applyChangePositionOperationGroup` L329-364), then
+// `remove`-with-`properties`, then `set`. The headline consequence: a layer that does `insert X` then `merge X`
+// has its merge applied to NOTHING at runtime, because the merge bucket runs before X exists. Replaying in array
+// order applied it, so the engine reported properties the page does not have.
+//
+// TWO runtime behaviours deliberately NOT copied here, both recorded in engine-internals.md:
+//   * `filterMoveOperation` (L313-320) drops a `move` whose name also appears in the SAME layer's removes, leaving
+//     the element removed. This engine keeps the classic reposition idiom instead (a move onto a tombstone
+//     RESURRECTS it) because a real page motivated it — Product's IsArchive/"Inactive" checkbox — and dropping the
+//     move there made a displayed field vanish. Neither reading can be settled without a fixture for that page, so
+//     the safer of the two is kept. No layer in the harvested corpus contains such a pair, so nothing observed
+//     depends on the choice.
+//   * insert ordering WITHIN the bucket (by parent-chain depth, then `index`, L359/L513-545) is not reproduced;
+//     sibling order is carried by the item's own `order`, and the projections do not promise array position.
+// An unrecognized operation name lands in no bucket and is dropped — which is what the runtime's empty `default:`
+// (L244) does too, so that arm needed no special case.
+const DIFF_OP_BUCKETS = ["merge", "remove", "insert", "move", "removeProperties", "set"];
+function splitDiffOps(diff, aliases) {
+  const b = { merge: [], remove: [], insert: [], move: [], removeProperties: [], set: [] };
+  for (const op of diff || []) {
+    if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
+    // Checked at SPLIT time, as the runtime does (`getSplittedOperations` L220-222), so the table an op is tested
+    // against holds only aliases registered by EARLIER layers — an alias cannot exclude an op in its own layer.
+    if (aliases && isExcludedByAlias(aliases, op)) continue;
+    if (op.operation === "remove") { (op.properties?.length ? b.removeProperties : b.remove).push(op); continue; }
+    if (b[op.operation]) b[op.operation].push(op);
+  }
+  return b;
+}
+
 function replayTagged(tagged, stores, warnings) {
   const { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps } = stores;
+  // Singleton across the whole fold, matching the runtime's one-reset lifetime.
+  const aliases = new Map();
   for (const { L, seed } of tagged) {
-    for (const op of L.diff) {
-      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
+    const buckets = splitDiffOps(L.diff, aliases);
+    for (const bucket of DIFF_OP_BUCKETS) {
+      for (const op of buckets[bucket]) replayDiffOp(op, items, { seed, pkg: L.pkg, aliases }, warnings);
     }
     mergeRuleBlocks(L, seed, rules);
     mergeDetails(L, seed, details);
@@ -1431,10 +1721,16 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     // (defining insert came from a seed schema): payload = client-authored items, structural identity =
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema schema contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
-      itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
+      // `?? null` because an item built from an op whose `itemType` key was absent used to project as `undefined`,
+      // which no consumer could tell from "the key was there and we could not read it".
+      itemType: i.itemType ?? null, itemTypeUnresolved: !!i.itemTypeUnresolved,
+      // `engineOnlyStub` marks an item the RUNTIME does not have (see `replayMerge`). It must reach consumers, or
+      // the flag exists only inside the fold and every reader still treats the stub as a rendered element.
+      engineOnlyStub: !!i.engineOnlyStub,
+      contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
       visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).

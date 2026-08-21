@@ -66,12 +66,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { parseSchema, mergeHierarchy } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet } from "./mapper.mjs";
+import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
-  pageUnitsSlice, builtSlice } from "./designspec.mjs";
+  pageUnitsSlice, builtSlice, IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -151,9 +151,16 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
 // Does an AST diagnostic sit on a STRUCTURAL position (the whole diff/details/… built via an unresolved var/call
 // → an empty effective page) rather than a resolved-leaf (a dynamic caption/tip/visible)? Structural ⇒ the gate
 // blocks. Extracted so computeGate stays under Sonar CC 15.
-function isStructuralDiag(p) {
+function isStructuralDiag(d) {
+  const p = typeof d === "string" ? d : d?.path;
+  const kind = typeof d === "string" ? null : d?.kind;
   const STRUCTURAL_ROOTS = new Set(["diff", "details", "businessRules", "rules", "modules", "entitySchemaName"]);
   const IDENTITY_FIELDS = new Set(["operation", "name", "parentName", "propertyName", "bindTo", "itemType", "contentType", "isTab"]);
+  // An `unknown-enum-member` miss is ADVISORY wherever it lands, including on an identity field: the body is
+  // correct and the ENGINE's pinned table is short a member, so the gate's remedy ("fix the body/seed so it
+  // resolves") would be an instruction nobody can act on. The element's kind is known by name and the typed ⚠
+  // reports it, so the member is on the plan either way. The hard gate is for structure that is truly unreadable.
+  if (kind === "unknown-enum-member") return false;
   if (p === "") return true;                         // a ROOT-level unresolved return / no-return → empty page → block
   const seg = String(p).split(".");
   if (!STRUCTURAL_ROOTS.has(seg[0])) return false;   // dynamic under a non-structural top key → advisory
@@ -174,7 +181,7 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   if (eff.seedQuality?.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
   if (eff.seedQuality && !eff.seedQuality.seeded && !manifest.noParentTemplate)
     reasons.push("no parent-template seed — a Classic page extends a base template (BaseModulePageV2/BasePageV2/…); building without its fetched body drops inherited base actions + container layout (F2). Fetch the parent-template schemas and pass them as `seed`, or set `noParentTemplate: true` ONLY if you have VERIFIED on-stand that this page has no parent template.");
-  const structDiag = parseDiagnostics.filter((d) => d.role !== "section" && isStructuralDiag(d.path));
+  const structDiag = parseDiagnostics.filter((d) => d.role !== "section" && isStructuralDiag(d));
   if (structDiag.length) {
     const structFields = [...new Set(structDiag.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
     reasons.push(`parse could not statically resolve structural field(s): ${structFields} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
@@ -190,6 +197,11 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
     reasons.push(`typed page(s) failed their own gate: ${blockedTypedList} — fix each typed form before the parent plan is approvable`);
   }
   if (miniPage?.blocked) reasons.push(`add mini page '${miniPage.schema}' failed its own gate: ${(miniPage.reasons || []).join("; ").slice(0, 90)} — fix it before the parent plan is approvable`);
+  // ENUM DRIFT (see engine.mjs `enumDriftIssues`): only a VALUE MISMATCH blocks — it mis-identifies every element
+  // of that kind, with no partially-correct reading to fall back to. A member only the stand carries is advisory.
+  const drift = enumDriftIssues(manifest.enumVocabulary);
+  if (drift.mismatches.length)
+    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning.`);
   return { blocked: reasons.length > 0, reasons };
 }
 
@@ -960,11 +972,15 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
   }
 }
 
+// The mapping-affecting property names, in ONE place. `reportedElsewhere` suppresses a diagnostic on the grounds
+// that `reportDynamicMappingProps` already reported it, so the two readers must be the same set: a property dropped
+// from one copy and not the other would be reported by NEITHER and vanish from plan.md entirely. Same reason
+// `ITEM_KIND_NAME`/`DATAVALUETYPE_CODE` are derived rather than hand-listed — a second literal is drift waiting.
+const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
 // A dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is not structural
 // (it doesn't block the gate) but silently collapsed to a DEFAULT in the ChangeSet — surface each as a
 // `dynamic-property` decision so the agent wires the real behaviour. Extracted to keep runMigration under CC 15.
 function reportDynamicMappingProps(schemas, changeSet) {
-  const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
   for (const s of schemas) {
     for (const d of (s.astDiagnostics || [])) {
       const m = /^diff\.(\d+)\.values\.(\w+)$/.exec(d.path || "");
@@ -975,6 +991,101 @@ function reportDynamicMappingProps(schemas, changeSet) {
       changeSet.needsDecision.push({ kind: "dynamic-property", item,
         reason: `'${item}' has a dynamic '${m[2]}' (${d.kind}) the parser could not resolve statically — the ChangeSet shows the DEFAULT (e.g. visible:true). Wire the real Freedom behavior (business rule / binding) instead of shipping the static default.` });
     }
+  }
+}
+
+// EVERY OTHER recorded diagnostic, routed to the member that OWNS it, by path prefix: `attributes.<name>.…` → that
+// attribute, `details.<key>.…` → that detail, and so on. A diagnostic with no resolvable owner surfaces as its own
+// item — an unrouted gap is still a gap. Without this the reporter above is an allowlist of 9 property names
+// deciding what the reader may see, and anything outside it is visible only on the console.
+const DIAG_OWNER_ROOTS = { attributes: "attribute", details: "detail", modules: "module", messages: "message",
+  businessRules: "business rule", rules: "business rule", mixins: "mixin" };
+// Which member a diagnostic path belongs to, as `{ item, ownerNote }`. `schema` may be undefined — a pooled
+// diagnostic from a layer whose body is not on hand still routes, it just names `diff[<n>]` instead of the element.
+function diagnosticOwner(p, schema) {
+  const seg = String(p).split(".");
+  if (seg[0] === "diff" && seg[1] !== undefined) {
+    const el = (schema?.diff || []).find((o) => o.astIndex === +seg[1]);
+    const item = el?.name || el?.bindTo || `diff[${seg[1]}]`;
+    return { item, ownerNote: `element '${item}'` };
+  }
+  if (DIAG_OWNER_ROOTS[seg[0]] && seg[1]) return { item: seg[1], ownerNote: `${DIAG_OWNER_ROOTS[seg[0]]} '${seg[1]}'` };
+  return { item: p || "(root)", ownerNote: `\`${p || "(root)"}\`` };
+}
+// Already reported in full by another surface: the mapping-property reporter above, or a named gate reason.
+// The structural arm MIRRORS the gate's own filter (`computeGate`: `d.role !== "section" && isStructuralDiag(d)`).
+// Without the role test this function suppresses every SECTION diagnostic as "the gate reports it" while the gate
+// has already excluded sections by design — so a structural section gap would be reported by nobody.
+function reportedElsewhere(d, p) {
+  const mapped = /^diff\.(\d+)\.values\.(\w+)$/.exec(p);
+  return (mapped && MAPPING_PROPS.has(mapped[2])) || (d.role !== "section" && isStructuralDiag(d));
+}
+// The enum-member case names the member it identified (the actionable part); every other kind names the construct.
+function diagnosticGapText(d, p) {
+  if (d.detail) return `names \`${d.detail}\`, a member this engine's pinned enum table does not carry — the KIND is known and only its numeric value is missing, so the element is identified but unmapped`;
+  const at = p ? " at `" + p + "`" : "";
+  return `carries a construct the parser could not read statically (${d.kind}${at})`;
+}
+// The pool tag for a schema, matching how `parseDiagnostics` tags its entries. Sections are namespaced because a
+// section schema and a main schema can legitimately carry the same `pkg`, and they are different bodies to open.
+const diagTag = (pkg, role) => (role === "section" ? `section::${pkg}` : String(pkg ?? ""));
+// Routes the pkg-tagged diagnostic POOL (not just the main-page chain): main + seed, `detail:<name>`,
+// `profile:<name>` and section layers all reach the plan. Previously this took `schemas` alone, so four of the five
+// layer kinds stayed console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
+// `diff.<n>` path back to its element name; a layer that is not in the map still routes by `diff[<n>]`.
+// AC22: the owning member's OWN row must say the value could not be read. The `⚠ Imperative members` table prints
+// `needsDecision[].detail` (designspec `imperativeMemberRows` filters `needsDecision`, so the ledger's `SOURCES`
+// detail closures are NOT what feeds that cell — worth stating, because it is the obvious wrong place to look).
+// Without this the reader saw an EMPTY Detail cell, which reads as "no default", while the correction sat in a
+// different section of the plan as a separate `parse-gap` line. Both surfaces now carry it: the worklist line stays
+// (it names the body and position to open), and the member's row stops asserting something false about itself.
+// Derived from the ownership `reportRemainingDiagnostics` has already computed — ownership is not re-derived here.
+const IMPERATIVE_KINDS = new Set(IMPERATIVE_MEMBER_KINDS);
+const GAP_PROP_LABEL = { value: "default" };
+// The member KIND a diagnostic path belongs to. Matching on the bare owner NAME is not enough and the trap is real,
+// not theoretical: a classic diff item is usually named for the column or attribute it binds, so on
+// ContentSmartHtmlEditPage a gap at `diff.19.values.itemType` (a diff ITEM) landed on the same-named virtual
+// ATTRIBUTE and rendered "⚠ itemType unreadable" on a member that has no itemType at all. A path with no entry
+// here (`diff.…`, `properties.…`) marks NOTHING: diff items carry no imperative-member row, and inventing one
+// would be worse than the empty cell this is fixing.
+const GAP_OWNER_SCOPE = [
+  [/^attributes\./, (k) => k.startsWith("attribute")],
+  [/^messages\./, (k) => k === "message"],
+  [/^mixins\./, (k) => k === "mixin"],
+];
+function markOwnerRowWithGap(changeSet, owner, gapPath) {
+  const path = String(gapPath || "");
+  const scope = GAP_OWNER_SCOPE.find(([rx]) => rx.test(path))?.[1];
+  if (!scope) return;
+  const seg = path.split(".").findLast(Boolean) || "value";
+  const marker = `⚠ ${GAP_PROP_LABEL[seg] || seg} unreadable`;
+  for (const n of (changeSet.needsDecision || [])) {
+    if (n.item !== owner || !IMPERATIVE_KINDS.has(n.kind) || !scope(n.kind)) continue;
+    const cur = n.detail ? String(n.detail) : "";
+    if (cur.includes(marker)) continue;           // two gaps on one property must not double the same marker
+    n.detail = cur ? `${cur} · ${marker}` : marker;
+  }
+}
+
+function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
+  const seen = new Set();                                        // one row per owner+kind+path+LAYER
+  for (const d of parseDiagnostics) {
+    const p = String(d.path || "");
+    if (reportedElsewhere(d, p)) continue;
+    const tag = diagTag(d.pkg, d.role);
+    const { item, ownerNote } = diagnosticOwner(p, schemaByTag.get(tag));
+    // The layer is part of the key, not just the text: two genuinely different occurrences at the same path in
+    // different packages are two gaps, and collapsing them hides the base-layer one behind the client layer.
+    const key = `${item}|${d.kind}|${p}|${tag}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Named rather than nested inside `where`: the section note is a second, independent condition, and reading two
+    // ternaries in one template made the package arm look like it depended on the role.
+    const sectionNote = d.role === "section" ? " (section schema)" : "";
+    const where = d.pkg ? ` in \`${d.pkg}\`${sectionNote}` : "";
+    changeSet.needsDecision.push({ kind: "parse-gap", item,
+      reason: `${ownerNote}${where} ${diagnosticGapText(d, p)}. Read the classic body at that position and record the real value/behaviour — this is NOT a resolved default, and nothing downstream can see it unless it is answered here.` });
+    markOwnerRowWithGap(changeSet, item, p);
   }
 }
 
@@ -1331,9 +1442,14 @@ const methodLedgerDetail = (m) =>
   m.facts ? { lines: m.facts.lines, kinds: m.facts.kinds, trivial: m.facts.callParentOnly || m.facts.isEmpty } : null;
 
 // A member's disposition, decided by what the pipeline actually produced for it.
-function disposition(name, { fromTemplate, mapped, decided }) {
+function disposition(name, { fromTemplate, mapped, decided, chrome }) {
   if (mapped) return "mapped";
   if (decided) return "decision";
+  // Pure decoration carries no migration answer, so `unaccounted` (which blocks the plan) would be wrong and
+  // `mapped` (which claims a Freedom artifact) would be false. Ranked BELOW mapped/decision: a real artifact or a
+  // recorded answer is the stronger statement and wins. Recorded, never suppressed — the member keeps its ledger
+  // row and its place in the totals, so what the engine treated as decoration stays auditable.
+  if (chrome) return "chrome";
   if (fromTemplate) return "context";
   return "unaccounted";
 }
@@ -1453,7 +1569,9 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
   // "did anyone account for this?" logic stays in ONE readable place.
   const SOURCES = [
     { kind: "diff-op", list: eff.items, name: (i) => i.name, prov: (i) => i.provenance,
-      tpl: (i) => i.templateOwned, mapped: (i) => mapped.has(i.name) || (!!i.bindTo && mapped.has(i.bindTo)) },
+      tpl: (i) => i.templateOwned, mapped: (i) => mapped.has(i.name) || (!!i.bindTo && mapped.has(i.bindTo)),
+      // the only kind that can be decoration: it is a property of a view element, not of a method or a message
+      chrome: isDecorationItem },
     // a STANDARD framework/scaffolding method (init / onSaved / validator config) is deliberately kept off the
     // worklist by the mapper, so it would otherwise land `unaccounted` and block every page. It is a recorded
     // `context` member — excluded by design and COUNTED — exactly like an inert module dep below.
@@ -1484,6 +1602,9 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
         fromTemplate: src.tpl(entry),
         mapped: src.mapped(entry),
         decided: decided.has(name) || (src.extraDecided ? src.extraDecided(entry) : false),
+        // `?.()` rather than a ternary: only one source row supplies `chrome`, and a conditional here sits two
+        // loops deep, where it costs more complexity than the fact it carries.
+        chrome: !!src.chrome?.(entry),
         provenance: src.prov(entry),
         detail: src.detail ? src.detail(entry) : null,
       });
@@ -1723,6 +1844,26 @@ export function runMigration(manifest, opts = {}) {
   // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
   reportDynamicMappingProps(schemas, changeSet);
+  // …and every OTHER recorded diagnostic in the POOL, routed to its owning member. Keyed the same way
+  // `parseDiagnostics` tags its entries, so a `diff.<n>` path resolves against the body it actually came from.
+  const diagSchemaByTag = new Map([
+    ...[...schemas, ...seedTemplate].map((l) => [diagTag(l.pkg), l]),
+    ...Object.entries(detailSchemas).map(([name, d]) => [diagTag(`detail:${name}`), d]),
+    ...Object.entries(profileSchemas).map(([name, p]) => [diagTag(`profile:${name}`), p]),
+    ...sectionSchemas.map((l) => [diagTag(l.pkg, "section"), l]),
+  ]);
+  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet);
+  // ENUM DRIFT, advisory arm. `computeGate` consumes `mismatches` (the arm that BLOCKS); this is the other severity
+  // the drift guard is specified to have: a member only the STAND carries. It must NOT block — blocking would stop
+  // every migration the day a platform release adds a member — but it must reach the plan, because it is the only
+  // PROACTIVE staleness signal there is. The per-element `unknown-enum-member` ⚠ fires only once some page body
+  // happens to name the member; this fires on the vocabulary itself, so an operator on a newer platform is told the
+  // engine's table is short before a page depends on it. Computed here rather than in `computeGate` precisely so it
+  // cannot be mistaken for a gate reason.
+  const driftAdvisory = enumDriftIssues(manifest.enumVocabulary);
+  if (driftAdvisory.newMembers.length)
+    changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
+      reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
   // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,
