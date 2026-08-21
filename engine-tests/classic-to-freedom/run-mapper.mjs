@@ -7,7 +7,7 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -2778,22 +2778,65 @@ const rvDup = renderVerify(rvDupResult, {}, { ops: [
 check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control (PR#58 Major)",
   rvDup.missing === 0 && rvDup.unverified === 0 && /Fields — 3 expected[\s\S]*?✅ Done/.test(rvDup.markdown),
   () => ({ missing: rvDup.missing, unverified: rvDup.unverified, row: rvDup.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
-// review (PR#58 Minor 3, 2026-08-01) — DRIFT guard: buildCoverageRows emits a machine-verifiable component row only
-// when `FEATURE_TYPE[f]` resolves, where `f` is the feature's DISPLAY name. Those keys must stay byte-identical to the
-// `feature:` strings in mapper's FEATURE_CATALOG. Read the catalog (source of truth) and assert every non-list feature
-// still yields a resolved verify row — so a label drift fails HERE rather than silently under-verifying a real deliverable.
-const nonListCatalogFeatures = [...new Set(Object.values(FEATURE_CATALOG)
-  .filter((c) => (c.uiShape || "list") !== "list").map((c) => c.feature))];
-const featDriftResult = { changeSet: { viewConfigDiff: [], images: [], details: [], cardActions: [],
-  standardFeatures: nonListCatalogFeatures.map((feature) => ({ feature, uiShape: "component" })) }, signals: {} };
-const featDrift = renderVerify(featDriftResult, {}, { ops: [] });
-// a resolved feature row is the ONLY line carrying both the display name and a `crt.` component type (this result has
-// no fields/images/tabs/details) — an unresolved FEATURE_TYPE lookup is `continue`-skipped, so no such line exists.
-const featDriftMissing = nonListCatalogFeatures.filter((f) =>
-  !featDrift.markdown.split("\n").some((l) => l.includes(f) && /`crt\./.test(l)));
-check("#verify feature drift: every NON-LIST FEATURE_CATALOG feature has a FEATURE_TYPE entry → a machine-verify component row (a catalog label drift would break this, not silently drop the gate) (PR#58 Minor 3)",
-  nonListCatalogFeatures.length > 0 && featDriftMissing.length === 0,
-  () => ({ nonListCatalogFeatures, featDriftMissing, rows: featDrift.markdown.split("\n").filter((l) => /crt\./.test(l)).join(" | ") }));
+// ENG-95543 — REPLACES the old "#verify feature drift" pin, and it had to be replaced rather than kept: that check
+// compared mapper's `FEATURE_CATALOG` against designspec's `FEATURE_TYPE`, two copies of one mapping. Now that both
+// are the SAME rows, comparing them would be a table against itself — green forever, checking nothing. (That is the
+// shape of the golden which pinned the `set` bug on ENG-95412: a test that agrees with itself.)
+//
+// The successor asserts the two things that can actually be wrong now: a non-list feature must CARRY a gate type
+// (else its deliverable silently leaves `--verify`), and that type must exist in the component registry (else the
+// gate judges a built page against a component no stand resolves — the `crt.ContactCommunication` defect).
+const featureRows = MAPPING_ROWS.filter((r) => r.meta?.feature);
+const nonListFeatureRows = featureRows.filter((r) => (r.meta.uiShape || "list") !== "list");
+const featuresWithoutGate = nonListFeatureRows.filter((r) => !r.verify?.componentType).map((r) => r.meta.feature);
+check("ENG-95543: every NON-LIST standard feature carries a `verify.componentType` — a feature with no gate type would leave --verify silently",
+  nonListFeatureRows.length >= 4 && featuresWithoutGate.length === 0,
+  () => ({ count: nonListFeatureRows.length, featuresWithoutGate }));
+const featureGateFindings = nonListFeatureRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f));
+check("ENG-95543: every feature gate type RESOLVES in the component registry at the oldest indexed version — a fabricated gate type fails here",
+  featureGateFindings.length === 0, () => featureGateFindings);
+// A list-shaped feature must NOT carry one: it is gated as a related list, and giving it a component type would
+// double-gate the same deliverable (once as a list, once as a component).
+check("ENG-95543: a LIST-shaped feature carries NO gate type — it is gated as a related list, not as a component",
+  featureRows.filter((r) => (r.meta.uiShape || "list") === "list").every((r) => !r.verify?.componentType),
+  () => featureRows.filter((r) => (r.meta.uiShape || "list") === "list" && r.verify?.componentType).map((r) => r.meta.feature));
+// The RESOLUTION ORDER, which moved out of `matchFeature`'s two lines into the table and therefore needs its own
+// pin: exact name, then the LONGEST suffix, then the entity fallbacks. Without the ordering a short suffix row
+// could shadow a row written for the full name, and which one won would depend on declaration order.
+check("ENG-95543: feature resolution is exact-name first, then longest suffix, then the ENTITY fallback (which marks itself inferred)",
+  resolveFeatureRow("VisaDetailV2")?.meta.feature === "Approvals"
+  && resolveFeatureRow("ApplicantEmailDetailV2")?.meta.feature === "Emails"
+  && resolveFeatureRow("ApplicantVisaDetail") === null
+  && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
+  && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
+  && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
+  () => ({ exact: resolveFeatureRow("VisaDetailV2")?.meta, suffix: resolveFeatureRow("ApplicantEmailDetailV2")?.meta,
+    none: resolveFeatureRow("ApplicantVisaDetail"), entity: resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta }));
+// The LONGEST-suffix rule, pinned against a fixture table with two OVERLAPPING suffixes. Today's rows do not
+// overlap, so this cannot be checked against the live table — and an unchecked ordering rule is how a generic
+// `DetailV2` row would come to shadow a row written for `VisaDetailV2`, with the winner decided by declaration
+// order.
+const sfx = (suffix, name) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix }, meta: { feature: name } });
+const overlapping = [sfx("DetailV2", "generic"), sfx("VisaDetailV2", "Approvals")];
+check("ENG-95543: among overlapping suffix rows the LONGEST wins, in either declaration order",
+  resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: overlapping })?.meta.feature === "Approvals"
+  && resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: [...overlapping].reverse() })?.meta.feature === "Approvals"
+  && resolveFeatureRow("ApplicantOtherDetailV2", null, { rows: overlapping })?.meta.feature === "generic",
+  () => ({ a: resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: overlapping })?.meta,
+    b: resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: [...overlapping].reverse() })?.meta }));
+
+// A schema name wins over the entity even when BOTH match, because a name is direct evidence and an entity is an
+// inference — and the plan's "inferred — confirm this is X" wording is only true if the two are ordered this way.
+check("ENG-95543: a matching schema NAME beats a matching entity — the resolved row is not marked inferred",
+  resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta.byEntity !== true,
+  () => resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta);
+// The derived `FEATURE_CATALOG` view must still answer for the callers and goldens that read it — the data moved,
+// the shape did not.
+check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/note/templateProvided)",
+  FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && FEATURE_CATALOG.FileDetailV2?.templateProvided === true
+  && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list" && /Approvals renders as TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.note || ""),
+  () => FEATURE_CATALOG);
+
 // review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
 // image binds the sole column; the rest get a FILL + an image-column decision (no silent key overwrite of the shared
 // column / two widgets on one column).

@@ -16,6 +16,7 @@
 //     verify:  { componentType } | null  — what a BUILT page must carry for this row to read ✅ in `--verify`
 //     uiShape: "component" | "list" | null — how it RENDERS, for the design-spec Layout table
 //     notes:   string | null
+//     meta:    row-kind-specific extras (a standard feature's own name, the package a profile card needs, …)
 //   }
 //
 // `target.events` names the component OUTPUTS the emission wires (a button's `clicked`), kept apart from
@@ -92,8 +93,9 @@ export const SOURCE = {
 
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
-function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null }) {
-  return Object.freeze({ match: Object.freeze(match), role, tier, ownedBy, target: target && Object.freeze(target), verify, uiShape, notes });
+function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null }) {
+  return Object.freeze({ match: Object.freeze(match), role, tier, ownedBy, target: target && Object.freeze(target),
+    verify: verify && Object.freeze(verify), uiShape, notes, meta: meta && Object.freeze(meta) });
 }
 const byItemType = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType }, ...rest });
 
@@ -204,7 +206,89 @@ const ITEM_TYPE_ROWS = [
   byItemType(VIEW_ITEM_TYPE.EXTERNAL_WIDGET, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
 ];
 
-export const MAPPING_ROWS = Object.freeze([...ITEM_TYPE_ROWS]);
+
+// ---- STANDARD-FEATURE rows (absorbed from `FEATURE_CATALOG` in mapper.mjs, and from `FEATURE_TYPE` in
+// designspec.mjs, which was a SECOND home for the same feature -> `crt.*` mapping: the mapper asserted the
+// component in prose while the `--verify` gate keyed on its own copy of the type) ----------------------------
+//
+// STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as a generic detail. Each row
+// is keyed by SCHEMA_SUFFIX, which covers the exact name AND the entity-prefixed variants a real site uses
+// (`ApplicantEmailDetailV2` -> Emails); prefixed variants were previously missed and fell through as generic
+// details, then dropped.
+//
+// `verify.componentType` is the type the BUILT page is gated on, so it must be a type the stand really resolves —
+// it is now checked against the component registry like every other row (`mapping-registry.mjs`), which is what
+// replaced the hand confirmation "read get-component-info for its contract".
+//
+// `meta.uiShape` distinguishes how the feature RENDERS: `list` = it looks like a regular related list
+// (Activities/Emails — the same UI as any child list); `component` = a distinct native Freedom component with its
+// own UI (Approvals, Attachments). This drives whether the spec marks it "Related list" or the component name —
+// the two are NOT visually interchangeable. `meta.templateProvided` = most Freedom FORM templates already ship
+// the component, so account for it / merge onto the existing one instead of creating a second.
+const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null }) =>
+  row({
+    match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix, ...(qualifiers ? { qualifiers } : {}) },
+    role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape,
+    verify: componentType ? { componentType } : null,
+    notes,
+    meta: { feature: name, freedom, templateProvided, uiShape },
+  });
+// The Communication-options note is shared by the SCHEMA row and the ENTITY fallback row: the entity fallback is
+// how a real site's detail is usually recognised (its schema is an auto-named `SchemaNDetail`), so pointing the
+// reader at a shorter note there would drop the package/feature prerequisites exactly where they are most needed.
+const COMMS_NOTE = "means of communication = the NATIVE Communication-options component (crt.CommunicationOptions, the compositeOnly widget the \"Communication options\" composite assembles — NOT `crt.ContactCommunication`, which is not a real component type; `ContactCommunication` is the ENTITY the data lives in) — read get-component-info for its contract/wiring; it requires the CrtCustomer360App package AND the CommonCommunicationsBehavior feature. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package/feature is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid.";
+const FEATURE_ROWS = [
+  // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
+  // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
+  // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.
+  // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
+  feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
+    componentType: "crt.ApprovalList", uiShape: "component",
+    notes: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Approvals renders as TWO components — read get-component-info for the approval set and add BOTH: (1) the approval MODULE/widget as a SEPARATE container placed ABOVE the profile island, and (2) the approval LIST. Adding only the list is INCOMPLETE. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." }),
+  feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
+    uiShape: "component", templateProvided: true }),
+  // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
+  // filtered to the master record, the SAME UI as any other child list. They are NOT the Freedom Timeline
+  // (an aggregate chronological feed; a separate classic component mapped by the MODULE_KEY row for Timeline) and
+  // Emails is NOT the email-client component. A real agent rebuilt these as a Timeline — do not conflate the
+  // list feature with the Timeline widget (#6). A list-shaped feature is gated as a related list, so it carries
+  // NO `verify.componentType` of its own.
+  feature("ActivityDetailV2", { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list",
+    notes: "Activities = a plain FILTERED RELATED LIST of Activity/Task records (a DataGrid filtered by the master FK) — NOT a Timeline and NOT an aggregate activity feed. Build it as a related list, exactly like any other child list." }),
+  feature("EmailDetailV2", { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list",
+    notes: "Emails = a plain FILTERED RELATED LIST of Email records (a DataGrid filtered by the master) — NOT a Timeline and NOT the email-client component. Build it as a related list." }),
+  // Means-of-communication ("Средства связи контакта" / ContactCommunication) is the NATIVE Communication-options
+  // component, NOT a generic list. A real agent downgraded it to a plain Expanded-list because the composite
+  // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
+  feature("ContactCommunicationDetail", { feature: "Communication options",
+    freedom: "Freedom Communication-options component (crt.CommunicationOptions)", componentType: "crt.CommunicationOptions", uiShape: "component",
+    notes: COMMS_NOTE }),
+  // Feed. Its classic origin is the ESN feed CONTAINER, not a detail schema, so it is keyed by container name —
+  // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry used to hold.
+  // Without it the Feed row silently left the `--verify` gate when that map was absorbed.
+  row({ match: { by: MATCH.CONTAINER_NAME, containerName: "ESNFeedContainer" },
+    role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET, uiShape: "component",
+    verify: { componentType: "crt.Feed" },
+    meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component", widget: "Feed (ESN)" } }),
+];
+
+// The ENTITY fallbacks (`mapper.mjs` L1185-1186 before this): a detail whose SCHEMA name matches nothing but whose
+// bound ENTITY says what it is. They are rows, not `if`s, so they resolve through the same table and are visible
+// to the same registry check. `*File` is a PREDICATE, not an equality test — hardcoding it as one is how an
+// `ApplicantFile` detail stopped being Attachments.
+const FEATURE_ENTITY_ROWS = [
+  row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } },
+    role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
+    verify: { componentType: "crt.FileList" },
+    meta: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
+  row({ match: { by: MATCH.ENTITY, entity: "ContactCommunication" },
+    role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
+    verify: { componentType: "crt.CommunicationOptions" },
+    notes: COMMS_NOTE,
+    meta: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.CommunicationOptions)", templateProvided: false, uiShape: "component", byEntity: true } }),
+];
+
+export const MAPPING_ROWS = Object.freeze([...ITEM_TYPE_ROWS, ...FEATURE_ROWS, ...FEATURE_ENTITY_ROWS]);
 
 // ---- resolution ---------------------------------------------------------------------------------------------
 // `qualifiers` is a plain object of predicates over the CANDIDATE (`{ entity: "ApplicantVisa" }`, or a function).
@@ -244,6 +328,42 @@ export function resolveRow(rows, { by, key, candidate = null }) {
 export function rowForItem(item) {
   if (item?.itemType == null) return null;
   return resolveRow(MAPPING_ROWS, { by: MATCH.ITEM_TYPE, key: item.itemType, candidate: item });
+}
+
+// A standard feature by classic DETAIL SCHEMA name, then by the detail's ENTITY. This is `matchFeature` plus the
+// two entity fallbacks, in ONE resolution with an explicit order:
+//   1. an EXACT schema-name match wins over any suffix match — otherwise a short suffix row could shadow a row
+//      written for the full name, and which one won would depend on declaration order;
+//   2. among suffix matches the LONGEST key wins, for the same reason;
+//   3. only then the ENTITY rows, because a schema name is direct evidence and an entity is an inference (the
+//      resolved row says so via `meta.byEntity`, which is what makes the plan's "inferred — confirm" wording true).
+// `rows` is a parameter for the same reason it is on `resolveRow`: the longest-suffix rule can only be pinned
+// against a table that HAS two overlapping suffixes, and today's rows do not overlap — so a check written against
+// the live table would pass whichever way the sort ran.
+export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS } = {}) {
+  const suffixRows = rows.filter((r) => r.match.by === MATCH.SCHEMA_SUFFIX);
+  if (schemaName) {
+    const exact = suffixRows.find((r) => r.match.schemaNameSuffix === schemaName);
+    if (exact) return exact;
+    const hits = suffixRows.filter((r) => schemaName.endsWith(r.match.schemaNameSuffix))
+      .sort((a, b) => b.match.schemaNameSuffix.length - a.match.schemaNameSuffix.length);
+    if (hits.length) return hits[0];
+  }
+  if (entity) {
+    const byEntity = rows.filter((r) => r.match.by === MATCH.ENTITY);
+    const exact = byEntity.find((r) => r.match.entity === entity && !r.match.qualifiers);
+    if (exact) return exact;
+    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity }));
+    if (pred) return pred;
+  }
+  return null;
+}
+
+// The Freedom component a standard FEATURE is gated on, by feature name — the single source both the mapper's
+// prose and the `--verify` gate read. `null` for a list-shaped feature: it is gated as a related list.
+export function featureVerifyType(featureName) {
+  const r = MAPPING_ROWS.find((x) => x.meta?.feature === featureName && x.verify?.componentType);
+  return r?.verify.componentType || null;
 }
 
 // The row for a bare itemType VALUE, with NO fallback of any kind — `undefined` means the table has no entry for

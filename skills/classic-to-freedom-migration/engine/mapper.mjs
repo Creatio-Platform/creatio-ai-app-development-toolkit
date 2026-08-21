@@ -2,7 +2,7 @@
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
-import { ROLE as ITEM_ROLE_VALUES, OWNER, SOURCE, rowForItem, rowForItemType } from "./mapping-table.mjs";
+import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -270,46 +270,18 @@ const PROP_ACTION = {
   Visible: ["show-element", "hide-element"],
 };
 
-// Standard-feature knowledge: STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as
-// a generic detail/widget. Matched by classic detail/module/container name. The Freedom analog is named
-// descriptively (the exact crt.* component is confirmed on-stand — never fabricated here; E1 lesson).
-// `templateProvided` = most Freedom FORM templates already ship this component → account for it / merge
-// onto the existing one, do NOT create a new one (#7).
-// `uiShape` distinguishes how the feature RENDERS (for the design-spec Layout table): `list` = it looks
-// like a regular related list (Activities/Emails — same UI as any child list); `component` = a distinct
-// native Freedom component with its own UI (Approvals, Attachments). This drives whether the spec marks it
-// "Related list" vs the component name — the two are NOT visually interchangeable.
-export const FEATURE_CATALOG = {
-  // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
-  // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
-  // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.
-  // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
-  VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)", uiShape: "component",
-    note: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Approvals renders as TWO components — read get-component-info for the approval set and add BOTH: (1) the approval MODULE/widget as a SEPARATE container placed ABOVE the profile island, and (2) the approval LIST. Adding only the list is INCOMPLETE. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." },
-  FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component" },
-  // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
-  // filtered to the master record, the SAME UI as any other child list. They are NOT the Freedom Timeline
-  // (an aggregate chronological feed; a separate classic component mapped via WIDGET_BY_MODULE.Timeline) and
-  // Emails is NOT the email-client component. A real agent rebuilt these as a Timeline — do not conflate the
-  // list feature with the Timeline widget (#6).
-  ActivityDetailV2: { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list",
-    note: "Activities = a plain FILTERED RELATED LIST of Activity/Task records (a DataGrid filtered by the master FK) — NOT a Timeline and NOT an aggregate activity feed. Build it as a related list, exactly like any other child list." },
-  EmailDetailV2: { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list",
-    note: "Emails = a plain FILTERED RELATED LIST of Email records (a DataGrid filtered by the master) — NOT a Timeline and NOT the email-client component. Build it as a related list." },
-  // Means-of-communication ("Средства связи контакта" / ContactCommunication) is the NATIVE Communication-options
-  // component, NOT a generic list. A real agent downgraded it to a plain Expanded-list because the composite
-  // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
-  ContactCommunicationDetail: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.CommunicationOptions)", uiShape: "component",
-    note: "means of communication = the NATIVE Communication-options component (crt.CommunicationOptions, the compositeOnly widget the \"Communication options\" composite assembles — NOT `crt.ContactCommunication`, which is not a real component type; `ContactCommunication` is the ENTITY the data lives in) — read get-component-info for its contract/wiring; it requires the CrtCustomer360App package AND the CommonCommunicationsBehavior feature. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package/feature is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid." },
-};
-// Match a classic detail schema to a standard feature by exact name OR entity-prefixed suffix — e.g.
-// `ApplicantEmailDetailV2` → `EmailDetailV2`, `ApplicantVisaDetail` → (no)…: prefixed variants of the
-// standard details were previously missed and fell through as generic details (then dropped). (#6/#11)
-function matchFeature(schemaName) {
-  if (!schemaName) return null;
-  if (FEATURE_CATALOG[schemaName]) return FEATURE_CATALOG[schemaName];
-  const key = Object.keys(FEATURE_CATALOG).find(k => schemaName.endsWith(k));
-  return key ? FEATURE_CATALOG[key] : null;
+// Standard-feature knowledge now lives in the SHARED MAPPING TABLE (`mapping-table.mjs`, the FEATURE rows): the
+// same rows serve this mapper, the `--verify` gate's component types and the registry check. `FEATURE_CATALOG` is
+// kept as a DERIVED view, keyed by the row's schema suffix, because it is the shape this engine's callers and
+// goldens already read — the data has one home, not two.
+export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
+  .filter((r) => r.match.by === MATCH.SCHEMA_SUFFIX && r.meta?.feature)
+  .map((r) => [r.match.schemaNameSuffix, featureView(r)]));
+// A feature ROW rendered in the shape the detail mapper consumes. `note` (singular) is the row's `notes`: the
+// wording reaches the plan verbatim, so it is deliberately not reworded on the way through.
+function featureView(r) {
+  return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
+    templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null };
 }
 // Freedom grid model (the confirmed target convention): the left profile island is a SINGLE-column grid;
 // tab/group containers are TWO columns. Classic pages use a 24-column grid, so classic field coordinates are
@@ -1181,10 +1153,10 @@ function mapDetails(ctx, containers, profileRegion) {
   // A standard Creatio feature is recognised by the detail SCHEMA name, OR (when auto-named SchemaNDetail hides
   // it) by its file-storage ENTITY (*File → Attachments) / ContactCommunication. Own fn for Sonar CC 15.
   const matchDetailFeature = (d, dentity) => {
-    let feat = matchFeature(d.schemaName), featByEntity = false;
-    if (!feat && (dentity || "").endsWith("File")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
-    if (!feat && dentity === "ContactCommunication") { feat = FEATURE_CATALOG.ContactCommunicationDetail; featByEntity = true; }
-    return { feat, featByEntity };
+    // ONE resolution, in the table's own documented order: exact schema name, then longest suffix, then the
+    // ENTITY fallbacks. `meta.byEntity` is what tells the plan the match was inferred rather than named.
+    const r = resolveFeatureRow(d.schemaName, dentity);
+    return { feat: r ? featureView(r) : null, featByEntity: !!r?.meta?.byEntity };
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
   const emitStandardFeature = (d, dentity, tab, feat, featByEntity) => {

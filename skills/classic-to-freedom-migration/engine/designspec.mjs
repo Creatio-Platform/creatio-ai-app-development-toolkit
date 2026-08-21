@@ -17,6 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
+import { featureVerifyType } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -1627,13 +1628,12 @@ function buildCoverageRows(cs, pm, result) {
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
   // published in `componentTypesOf` (→ `--units.pages[].componentTypes`), so it must be a type the built page really
-  // carries and the stand really resolves. "Communication options" is the native `crt.CommunicationOptions`
-  // (a compositeOnly widget the "Communication options" composite assembles) — NOT `crt.ContactCommunication`, which
-  // was a fabricated name (the `ContactCommunication` ENTITY with a `crt.` prefix) that resolves to nothing on-stand;
-  // verified on-stand (ENG-95468). The other three resolve as-is.
-  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.CommunicationOptions", Attachments: "crt.FileList", Feed: "crt.Feed" };
+  // carries and the stand really resolves. It comes from the SHARED MAPPING TABLE (ENG-95543): this used to be a
+  // local `FEATURE_TYPE` map — a SECOND home for the same knowledge the mapper asserted in prose, so the gate and
+  // the plan could disagree about which component a feature means. The table's types are checked against the
+  // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
   for (const s of cs.standardFeatures || []) {
-    const f = s.feature || s.caption || ""; const t = FEATURE_TYPE[f];
+    const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
     cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
   }

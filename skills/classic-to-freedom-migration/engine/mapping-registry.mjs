@@ -43,7 +43,12 @@ function versionBit(version, index) {
   return i < 0 ? null : 1 << i;
 }
 
-const isEmitter = (row) => !!row?.target && (!!row.target.componentType || !!row.target.foldInto);
+// A row is worth validating when it names a `crt.*` type at all — as the thing the engine EMITS (`target`) or as
+// the thing the `--verify` gate looks for on the built page (`verify`). The second half matters as much as the
+// first: a standard-feature row emits nothing itself, but a wrong gate type there is how a page gets judged
+// against a component that does not exist (`crt.ContactCommunication` — the defect ENG-95555 catalogues by hand).
+const namedType = (row) => row?.target?.componentType || row?.verify?.componentType || null;
+const isEmitter = (row) => !!namedType(row) || !!row?.target?.foldInto;
 
 // Validate ONE row against the index. `version` is optional: with it, existence is judged on that version;
 // without it, on the union of every version the index carries — and the caller is told which, because a union
@@ -56,34 +61,35 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
   const add = (kind, detail) => findings.push({ kind, row: where, ...detail });
   // A FOLDED row (a menu item) contributes props to the element that owns it; it has no componentType of its own,
   // so there is nothing here to resolve. Its keys are validated on the owner's component by that owner's row.
-  if (!row.target.componentType) return findings;
-  const c = index.components?.[row.target.componentType];
-  if (!c) { add("unknown-component", { componentType: row.target.componentType }); return findings; }
-  if (version && bit === null) add("unknown-version", { componentType: row.target.componentType, version });
+  const ctype = namedType(row);
+  if (!ctype) return findings;
+  const c = index.components?.[ctype];
+  if (!c) { add("unknown-component", { componentType: ctype }); return findings; }
+  if (version && bit === null) add("unknown-version", { componentType: ctype, version });
   else if (bit !== null && (c.v & bit) === 0)
-    add("component-absent-in-version", { componentType: row.target.componentType, version, presentIn: versionsOf(c.v, index) });
+    add("component-absent-in-version", { componentType: ctype, version, presentIn: versionsOf(c.v, index) });
   const inputKnown = (k) => !!c.inputs?.[k] || !!index.baseInputs?.[k];
-  for (const [prop, spec] of Object.entries(row.target.propMap || {})) {
-    if (!inputKnown(prop)) { add("unknown-input", { componentType: row.target.componentType, prop }); continue; }
+  for (const [prop, spec] of Object.entries(row.target?.propMap || {})) {
+    if (!inputKnown(prop)) { add("unknown-input", { componentType: ctype, prop }); continue; }
     const meta = c.inputs?.[prop];
     if (meta && bit !== null && (meta.v & bit) === 0)
-      add("input-absent-in-version", { componentType: row.target.componentType, prop, version, presentIn: versionsOf(meta.v, index) });
+      add("input-absent-in-version", { componentType: ctype, prop, version, presentIn: versionsOf(meta.v, index) });
     // Per-INPUT deprecation is the only deprecation signal the registry carries. Advisory, not an error: a
     // deprecated input still works, and the row's author has to decide with the reason in front of them.
-    if (meta?.deprecated) add("deprecated-input", { componentType: row.target.componentType, prop, reason: meta.deprecationReason || null });
+    if (meta?.deprecated) add("deprecated-input", { componentType: ctype, prop, reason: meta.deprecationReason || null });
     if (spec?.from === "literal" && meta?.values && !meta.values.includes(spec.value))
-      add("literal-not-in-values", { componentType: row.target.componentType, prop, value: spec.value, allowed: meta.values });
+      add("literal-not-in-values", { componentType: ctype, prop, value: spec.value, allowed: meta.values });
   }
-  for (const ev of Object.keys(row.target.events || {})) {
+  for (const ev of Object.keys(row.target?.events || {})) {
     const meta = c.outputs?.[ev];
-    if (!meta) { add("unknown-output", { componentType: row.target.componentType, event: ev }); continue; }
+    if (!meta) { add("unknown-output", { componentType: ctype, event: ev }); continue; }
     if (bit !== null && (meta.v & bit) === 0)
-      add("output-absent-in-version", { componentType: row.target.componentType, event: ev, version, presentIn: versionsOf(meta.v, index) });
+      add("output-absent-in-version", { componentType: ctype, event: ev, version, presentIn: versionsOf(meta.v, index) });
   }
   // `compositeOnly` is NOT a finding. It means the component has no Designer TOOLBAR entry; inserting it into a
   // page schema directly — which is what this engine emits — is valid. Reported as INFO so a row's note can say so
   // without a reader mistaking the flag for an error.
-  if (c.compositeOnly) add("composite-only", { componentType: row.target.componentType });
+  if (c.compositeOnly) add("composite-only", { componentType: ctype });
   return findings;
 }
 
