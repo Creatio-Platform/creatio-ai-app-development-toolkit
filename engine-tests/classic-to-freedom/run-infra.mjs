@@ -144,7 +144,8 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
-  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo"];
+  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo",
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -398,7 +399,7 @@ check("ENG-95471: the close row runs at DISPATCH and its decision is CARRIED to 
     && /guidelinesLine\(c\.guidelines, c\.guidelinesMiss, c\.owesGuidelines, wrap\)/.test(wfSrc));
 check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list only ever grows and is re-billed into every report payload",
   /function reportGuidelinesMiss\(unitKey, gateMiss\)[\s\S]{0,500}blockedItems\.some\(\(b\) => b\.unit === unitKey && b\.what === GUIDELINES_BLOCKED_WHAT\)/.test(wfSrc)
-    && /reportGuidelinesMiss\(unit\.key, claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
+    && /reportGuidelinesMiss\(unit\.key, r\.claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
 check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
   !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
 check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
@@ -499,9 +500,15 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 // the bottom, so a window that reaches only one of them passes on half the mechanism.
 const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("async function buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("async function buildRound(open)") && /if \(pausedAfter \|\| continuationAfter\) \{ deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+  wfSrc.includes("async function buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
     && /!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
+// ONLY a checkpoint terminates the round. A continuation in that guard truncated the round and deferred every other
+// open unit, buying a full extra Verify + Judge + Reconcile cycle for units that do not depend on the continued one.
+check("ENG-95474 review: a CONTINUATION does not terminate the round — the deferral guard names `pausedAfter` alone, so the remaining independent units still get their build",
+  !/if \(r?\.?pausedAfter \|\| continuation/.test(buildRoundSrc) && !/continuationAfter/.test(wfSrc)
+    && /continued: \[\]/.test(buildRoundSrc) && /r\.continued\.push\(unit\.key\)/.test(buildRoundSrc),
+  () => buildRoundSrc.split("\n").filter((l) => /continu/.test(l)).slice(0, 8).join("\n"));
 check("workflow: the checkpoint return is `stopped: 'paused-at-checkpoint'` — a pause is NEVER reported as complete",
   /stopped: 'paused-at-checkpoint'/.test(wfSrc) && !/complete: true[\s\S]{0,80}paused-at-checkpoint/.test(wfSrc));
 check("workflow: the schedule reads openness THROUGH the findings-aware predicate, so a re-opened unit is actually dispatched",
@@ -741,8 +748,21 @@ check("workflow: the parent edge is COPIED from `--units`, and reconstructing it
 check("ENG-95474 C4: each sequential Build unit writes its own audit file AND appends the same entry to worklog.md, so no Close worklog agent is needed",
   /worklogFile\(unit\.key\)/.test(wfSrc)
     && /sharedWorklogPath: `\$\{input\.outDir\}\/worklog\.md`/.test(wfSrc)
-    && /Build units run sequentially, so this append has no writer race and removes the old Close agent/.test(wfSrc)
+    && /Build units run sequentially, so an append has no writer race/.test(wfSrc)
     && !/close:worklog/.test(wfSrc));
+// The append must be APPEND-ONLY. "preserving existing content" made the builder read a file that grows by one entry
+// per unit — O(n²) across a run, the cost the per-unit files exist to avoid, and the reason the old prompt forbade it.
+check("ENG-95474 review: the shared-worklog instruction is append-only and forbids the READ — a growing shared log read once per unit is the O(n²) this design removed",
+  /Do NOT read that file first, and do not rewrite it/.test(wfSrc)
+    && /append-only write \(shell \\`>>\\`\)/.test(wfSrc)
+    && !/preserving existing content/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /sharedWorklogPath\\`|APPEND the SAME/.test(l)).join("\n").slice(0, 400));
+// `sharedWorklogPath` must have NO relative default: a sub-agent starts in an unknown CWD, so `'worklog.md'` would be
+// a silent write to the wrong file. The no-`undefined` assertion over every composed prompt is what catches an omission.
+check("ENG-95474 review: `composeBuildPrompt` gives `sharedWorklogPath` no relative default — every agent-facing path in this file is absolute",
+  /function composeBuildPrompt\(\{[^}]*sharedWorklogPath,/.test(wfSrc)
+    && !/sharedWorklogPath = 'worklog\.md'/.test(wfSrc),
+  () => wfSrc.split("\n").find((l) => /function composeBuildPrompt/.test(l)) || "?");
 check("workflow: the app unit's package answer is checked as an EQUALITY against the plan's target — a near-match is a blocker, not an acceptance, because every placement row gates on the plan's package",
   /got === unit\.package/.test(wfSrc) && /package MISMATCH/.test(wfSrc) && /packageState = 'exists'/.test(wfSrc));
 check("workflow: the starter page `create-app` minted is recorded as `main`'s schema, so `main` EDITS it instead of trying to create the page again",
@@ -867,7 +887,9 @@ const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPat
 // with no default put it into the shipped assembly while all three checks below stayed green.
 check("ENG-95471 review fix: no composed prompt carries the literal `undefined` — a parameter with no default is interpolated as text, and the checks below cannot see it",
   () => [cbpArgs, { ...cbpArgs, guidelinesReturn: "" }, { ...cbpArgs, guidelinesReturn: undefined },
-    { rules: "R", behaviour: "B", worklogPath: "w", kindBlock: "K", repair: "", resolutions: "", findings: "", checkFirst: "" }]
+    // `sharedWorklogPath` is in the MINIMAL shape too: it has no default by design (a relative one would be a silent
+    // write to a sub-agent's unknown CWD), so omitting it is exactly the `undefined` this check exists to catch.
+    { rules: "R", behaviour: "B", worklogPath: "w", sharedWorklogPath: "/m/worklog.md", kindBlock: "K", repair: "", resolutions: "", findings: "", checkFirst: "" }]
     .every((a) => !wf.composeBuildPrompt(a).includes("undefined")),
   () => wf.composeBuildPrompt({ ...cbpArgs, guidelinesReturn: undefined }).slice(0, 400));
 check("ENG-95503: the operator's answer survives into the COMPOSED build prompt — the assembly is executed and the answer text read back out, not matched in the source",
@@ -1168,6 +1190,185 @@ check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight R
   !midRunPasses.threw && midRunPasses.stopped !== "plan-invalid-against-stand" && midRunPasses.dryRun === true,
   () => (midRunPasses.threw ? `threw: ${midRunPasses.threw}` : `stopped=${midRunPasses.stopped} dryRun=${midRunPasses.dryRun}`));
 
+// --- THE BUILD CONTINUATION as an EXECUTION path (ENG-95474 review). Everything about the round-vs-continuation
+// split was asserted only by regexes over the source, which stay green if the accounting is inverted, if the ceiling
+// never fires, or if a continuation silently parks its unit. These drive the real round loop with a builder stub that
+// asks for a continuation, and read the accounting back off the run's own return.
+//
+// `runToRound` clears every baseline hard stop, schedules one page unit with no verdict on file (so it is open), and
+// keys the agent stub by label. `verify:stand` returns a verdict that leaves the unit open, so the loop keeps going
+// until the unit parks — which is the terminating condition these tests are about.
+const roundBaseline = {
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app", mainEntity: "UsrThing",
+  unitKeys: ["main"], buildOrder: ["main"], reachability: [], preflightItems: [],
+  componentResolution: [{ type: "crt.CommunicationOptions", resolved: true }],
+  evidenceIds: [],
+};
+// A builder answer shaped for a page unit. `continuationRequested` is the variable under test.
+const buildAnswer = (continuationRequested) => ({
+  schemaName: "UsrThingFormPage", claimedBuilt: ["Fields"], continuationRequested,
+  continuationReason: "handlers left to port", safeContinuationPoint: "page body saved",
+  guidelines: { ran: false, notRunWhy: "n/a" }, proposals: [], blocked: [],
+});
+// Drives the round loop. `builderContinues(n)` decides, per build call, whether that builder asks to continue.
+// The ACCOUNTING is read off the run's OWN return — `builds` counts real dispatches and the park record carries the
+// rounds actually charged — so the assertions do not depend on a stubbed Reconcile transcribing counters back.
+const runToRound = (builderContinues, extra = {}) => {
+  let builds = 0;
+  const continuationBlocks = [];
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return { ...roundBaseline };
+    if (label.startsWith("build:")) {
+      builds += 1;
+      return buildAnswer(builderContinues(builds));
+    }
+    // VERIFY is the phase that receives the carry — it is the queue writer. The BUILD CONTINUATIONS block must reach
+    // IT, not Reconcile. Matched on the carry block's own opening: the bare phrase also appears in Verify's static
+    // instructions, so a looser probe would pass on a round that carried nothing.
+    if (label.startsWith("verify:")) {
+      const at = prompt.indexOf("BUILD CONTINUATIONS — set each unit's");
+      if (at >= 0) continuationBlocks.push(prompt.slice(at, at + 260));
+      return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    }
+    // The unit stays OPEN, so the loop keeps going until the round budget parks it.
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    return null;
+  };
+  return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, builds, continuationBlocks }))
+    .catch((e) => ({ threw: e.message }));
+};
+// A builder that NEVER stops asking. Without a ceiling the unit is never charged a round, so `roundsRun` never
+// advances, `parkedKeys` never reaches MAX_ROUNDS, and the loop cannot end — the run would spin instead of returning.
+const alwaysContinues = await runToRound(() => true);
+const parkOf = (r) => (r.res?.parked || []).find((p) => p.key === "main");
+check("ENG-95474 review EXECUTES the continuation ceiling: a builder that asks to continue on EVERY round still TERMINATES — past `MAX_CONTINUATIONS` the ask is refused, the attempt is charged, and the unit parks",
+  !alwaysContinues.threw && !!parkOf(alwaysContinues),
+  () => (alwaysContinues.threw ? `threw: ${alwaysContinues.threw}`
+    : { builds: alwaysContinues.builds, parked: (alwaysContinues.res?.parked || []).map((p) => p.key), rounds: alwaysContinues.res?.rounds }));
+// The SPLIT, as arithmetic over the run's own numbers: 5 builds for a 3-round budget means exactly 2 of them were
+// continuations that spent no repair round. A ceiling folded into `rounds` would give 3 builds; no ceiling at all
+// would never park.
+check("ENG-95474 review: honoured continuations do NOT spend a repair round — a never-satisfied builder gets MAX_CONTINUATIONS (2) extra builds on top of MAX_ROUNDS (3), and the park record still reads 3 rounds",
+  !alwaysContinues.threw && alwaysContinues.builds === 5 && parkOf(alwaysContinues)?.rounds === 3,
+  () => ({ builds: alwaysContinues.builds, parkRounds: parkOf(alwaysContinues)?.rounds }));
+check("ENG-95474 review: the carry advertises BUILD CONTINUATIONS to the phase that WRITES the queue (Verify), as a counter separate from `rounds`",
+  !alwaysContinues.threw && alwaysContinues.continuationBlocks.length > 0
+    && /separate from `rounds`/.test(alwaysContinues.continuationBlocks[0] || "")
+    && /must not increment `rounds`/.test(alwaysContinues.continuationBlocks[0] || ""),
+  () => alwaysContinues.continuationBlocks[0] || "(no BUILD CONTINUATIONS carry block reached Verify)");
+// Reconcile is NOT a writer of these counters, so it must not be handed the carry — an unused parameter there reads
+// as if it were one, and its prompt then instructs on blocks that can never appear in it.
+check("ENG-95474 review: `reconcilePrompt` takes no carry — Verify is the queue writer, and Reconcile is told to PRESERVE both counters rather than increment either",
+  /function reconcilePrompt\(round\) \{/.test(wfSrc)
+    && !/reconcilePrompt\(round, carryNow\(\)\)/.test(wfSrc)
+    && /PRESERVE the \\`rounds\\` and \\`continuations\\` counters each unit already has/.test(wfSrc)
+    && /\*\*Do NOT increment either one here\.\*\*/.test(wfSrc)
+    && !/unless the ROUND COUNTERS block below is present/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /reconcilePrompt\(/.test(l)).join("\n"));
+// One continuation, then plain repairs: the unit gets exactly ONE build more than its round budget.
+const oneContinuation = await runToRound((n) => n === 1);
+check("ENG-95474 review EXECUTES the round-vs-continuation split: a single continuation buys the unit ONE extra build without spending a repair round — 4 builds for a 3-round budget",
+  !oneContinuation.threw && oneContinuation.builds === 4 && parkOf(oneContinuation)?.rounds === 3,
+  () => (oneContinuation.threw ? `threw: ${oneContinuation.threw}`
+    : { builds: oneContinuation.builds, parkRounds: parkOf(oneContinuation)?.rounds }));
+// `maxContinuations: 0` refuses every ask — the pre-continuation behaviour, and the control that shows the CEILING
+// governs rather than the builder. The unit gets exactly its round budget and no extra build.
+const noContinuations = await runToRound(() => true, { maxContinuations: 0 });
+check("ENG-95474 review: `maxContinuations: 0` refuses every continuation — the unit spends only its repair rounds, so the ceiling and not the builder decides how many builds it gets",
+  !noContinuations.threw && noContinuations.builds === 3 && parkOf(noContinuations)?.rounds === 3
+    && noContinuations.continuationBlocks.length === 0,
+  () => (noContinuations.threw ? `threw: ${noContinuations.threw}`
+    : { builds: noContinuations.builds, parkRounds: parkOf(noContinuations)?.rounds, blocks: noContinuations.continuationBlocks.length }));
+// THE PURE CEILING, executed directly: the predicate the loop above depends on.
+check("ENG-95474 review: `continuationAllowed` refuses at and past the cap, and treats a 0 or non-finite cap as 'no continuations'",
+  () => wf.continuationAllowed(0, 2) === true && wf.continuationAllowed(1, 2) === true
+    && wf.continuationAllowed(2, 2) === false && wf.continuationAllowed(3, 2) === false
+    && wf.continuationAllowed(0, 0) === false && wf.continuationAllowed(0, Infinity) === false
+    && wf.continuationAllowed(undefined, 2) === true,
+  () => ({ atCap: wf.continuationAllowed(2, 2), underCap: wf.continuationAllowed(1, 2),
+    zeroCap: wf.continuationAllowed(0, 0), infCap: wf.continuationAllowed(0, Infinity) }));
+// The builder's half of the contract: EMPTY at budget 0, so an agent never told to stop cannot ask to.
+check("ENG-95474 review: `continuationBudgetBlock` renders the budget only for a finite positive value — 0, Infinity and NaN yield the empty string, which is what disables the mechanism",
+  () => wf.continuationBudgetBlock(80).includes("about 80 assistant turns")
+    && wf.continuationBudgetBlock(80).includes("continuationRequested")
+    && wf.continuationBudgetBlock(0) === "" && wf.continuationBudgetBlock(Infinity) === ""
+    && wf.continuationBudgetBlock(Number("x")) === "",
+  () => ({ at80: wf.continuationBudgetBlock(80).slice(0, 80), at0: JSON.stringify(wf.continuationBudgetBlock(0)),
+    atInf: JSON.stringify(wf.continuationBudgetBlock(Infinity)) }));
+check("ENG-95474 review: `repairBlock` is empty on round 1 and names the open rows from round 2 — a round with no row named still says so rather than rendering an empty list",
+  () => wf.repairBlock(1, "  - Fields", 3, "/v.md") === ""
+    && wf.repairBlock(2, "  - Fields", 3, "/v.md").includes("REPAIR ROUND 2 of 3")
+    && wf.repairBlock(2, "  - Fields", 3, "/v.md").includes("  - Fields")
+    && wf.repairBlock(2, "", 3, "/v.md").includes("the verdict named no open row for this unit; re-read /v.md"),
+  () => ({ r1: JSON.stringify(wf.repairBlock(1, "x", 3, "/v.md")), noRows: wf.repairBlock(2, "", 3, "/v.md").slice(0, 160) }));
+
+// --- THE `queueWritten` BRANCH as an EXECUTION path (ENG-95474 review). Verify self-reports whether it merged the
+// carry; `true` skips the fallback persistence agent and `false` runs it. Both branches were asserted only by the
+// presence of their strings, which stays green if the condition is inverted or the fallback never fires.
+// The `why` note in each `persist:carry` prompt is what tells the round-close write apart from the fallback.
+const runVerifyBranch = (queueWritten, extra = {}) => {
+  const persistWhys = [];
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return { ...roundBaseline };
+    if (label.startsWith("build:")) return buildAnswer(false);
+    if (label.startsWith("verify:")) return { queueWritten, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    if (label === "persist:carry") {
+      const m = /persistence step of a Freedom build run \(([^)]*)\)/.exec(prompt);
+      persistWhys.push(m ? m[1] : "(no why)");
+      return { written: true, parkKeys: [] };
+    }
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    return null;
+  };
+  return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, persistWhys }))
+    .catch((e) => ({ threw: e.message }));
+};
+const afterVerify = (w) => (w || []).filter((s) => /after verify/.test(s));
+const queueConfirmed = await runVerifyBranch(true);
+check("ENG-95474 review EXECUTES the `queueWritten: true` branch: Verify confirming the carry write means the fallback persistence agent is NOT spawned for it",
+  !queueConfirmed.threw && afterVerify(queueConfirmed.persistWhys).length === 0,
+  () => (queueConfirmed.threw ? `threw: ${queueConfirmed.threw}` : { whys: queueConfirmed.persistWhys }));
+const queueUnconfirmed = await runVerifyBranch(false);
+check("ENG-95474 review EXECUTES the `queueWritten: false` branch: the fallback persistence agent runs ONCE per round, so a Verify that could not write the queue does not lose the carry",
+  !queueUnconfirmed.threw && afterVerify(queueUnconfirmed.persistWhys).length === 3,
+  () => (queueUnconfirmed.threw ? `threw: ${queueUnconfirmed.threw}` : { whys: queueUnconfirmed.persistWhys }));
+
+// --- PREFLIGHT EVIDENCE SURVIVES A FAILED JUDGE (ENG-95474 review). `markCarryPersisted` used to clear the evidence
+// as part of the queue bookkeeping, so a Reconcile accepted after a Judge that returned nothing dropped records that
+// were never filed — `reconcilePrompt` carries no evidence block, so nothing else had filed them either. The clear now
+// belongs to `markEvidenceFiled`, called only where a confirmation came back.
+const runFailedJudge = () => {
+  const evidenceSeenBy = [];
+  const note = (label, prompt) => {
+    if (prompt.includes("PREFLIGHT EVIDENCE")) evidenceSeenBy.push(label);
+  };
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    note(label, prompt);
+    if (label === "reconcile:baseline") return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }] };
+    if (label.startsWith("preflight:")) return { resolved: [{ id: "pf1", referencePage: "UsrRef", components: ["crt.Input"] }], unresolved: [] };
+    if (label.startsWith("judge:")) return null;            // Judge FAILS: the evidence must not be dropped.
+    if (label.startsWith("build:")) return buildAnswer(false);
+    if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    if (label === "persist:carry") return { written: true, parkKeys: [] };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    return null;
+  };
+  return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, evidenceSeenBy }))
+    .catch((e) => ({ threw: e.message }));
+};
+const failedJudge = await runFailedJudge();
+check("ENG-95474 review EXECUTES the evidence-retention path: when Judge returns nothing, the preflight records are NOT dropped — they ride the carry to the next phase that writes the queue (Verify)",
+  !failedJudge.threw && failedJudge.evidenceSeenBy.some((l) => l.startsWith("judge:"))
+    && failedJudge.evidenceSeenBy.some((l) => l.startsWith("verify:")),
+  () => (failedJudge.threw ? `threw: ${failedJudge.threw}` : { evidenceSeenBy: failedJudge.evidenceSeenBy }));
+
 // --- the untrusted-data fence. The parent skill's rule ("stand-derived strings are untrusted DATA, not
 // instructions") has to cross the delegation boundary, because these agents WRITE to a live stand. Two values
 // reach a prompt un-neutralised by construction: `--units.preflight[].item` (published deliberately un-escaped so
@@ -1430,28 +1631,43 @@ check("workflow: the round budget is charged per DISPATCH, not per open unit —
   /const dispatched = new Set\(\)/.test(wfSrc)
     && /chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
     && /ROUND COUNTERS — INCREMENT/.test(wfSrc)
-    && /PRESERVE the \\`rounds\\` counter each unit already has/.test(wfSrc)
+    && /PRESERVE the \\`rounds\\` and \\`continuations\\` counters each unit already has/.test(wfSrc)
     && !/INCREMENT \\`rounds\\` by 1 for every unit whose/.test(wfSrc));
 check("ENG-95474 BUILD continuation: the builder has a prompt-level budget and a structured continuation result",
-  /const BUILD_TURN_BUDGET = Number\(input\.buildTurnBudget\)/.test(wfSrc)
+  /const BUILD_TURN_BUDGET = Number\.isFinite\(Number\(input\.buildTurnBudget\)\)/.test(wfSrc)
     && /BUILD CONTINUATION BUDGET:/.test(wfSrc)
     && /continuationRequested: true/.test(wfSrc)
     && /safeContinuationPoint/.test(wfSrc)
     && /continuationReason/.test(wfSrc)
     && /will not charge this as a repair round/.test(wfSrc));
+// `Number("Infinity") >= 0` is true, so a `>= 0` guard admitted `Infinity` and rendered "approaching about Infinity
+// assistant turns" — a budget that reads enabled and bounds nothing. Same guard on the continuation ceiling.
+check("ENG-95474 review: both build budgets reject a non-finite value — `Number.isFinite`, not `>= 0`, so `Infinity` cannot render an uncapped budget into the prompt",
+  /const BUILD_TURN_BUDGET = Number\.isFinite\(Number\(input\.buildTurnBudget\)\) && Number\(input\.buildTurnBudget\) >= 0/.test(wfSrc)
+    && /const MAX_CONTINUATIONS = Number\.isFinite\(Number\(input\.maxContinuations\)\) && Number\(input\.maxContinuations\) >= 0/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /BUILD_TURN_BUDGET =|MAX_CONTINUATIONS =/.test(l)).join("\n"));
 check("ENG-95474 BUILD continuation: continuation handoff is verified but does NOT spend the repair-round counter",
   /const chargeBuildAttempt = \(key\) => \{[\s\S]{0,180}?localRounds\[key\][\s\S]{0,180}?dispatched\.add\(key\)/.test(wfSrc)
-    && /const continuation = res\.continuationRequested === true/.test(wfSrc)
+    && /const continuation = resolveContinuation\(unit, res, r\)/.test(wfSrc)
     && /if \(!continuation\) chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
-    && /build continuation \$\{continuations\[unit\.key\]\} requested[\s\S]*does not consume a repair round/.test(wfSrc)
-    && /CONTINUATION after/.test(wfSrc));
+    && /build continuation \$\{continuations\[unit\.key\]\} of \$\{MAX_CONTINUATIONS\}[\s\S]*does not consume a repair round/.test(wfSrc)
+    && /CONTINUATION: \$\{r\.continued\.length\}/.test(wfSrc));
 check("ENG-95474 BUILD continuation: continuation counts are tracked and persisted separately from repair rounds",
   /continuationOf: \{ type: 'object', additionalProperties: \{ type: 'integer' \} \}/.test(wfSrc)
     && /const continuations = \{\}/.test(wfSrc)
-    && /continuations\[unit\.key\] = \(continuations\[unit\.key\] \?\? 0\) \+ 1/.test(wfSrc)
+    && /continuations\[unit\.key\] = spent \+ 1/.test(wfSrc)
     && /BUILD CONTINUATIONS — set each unit's \\`continuations\\` counter/.test(wfSrc)
-    && /never fold it into \\`rounds\\`/.test(wfSrc)
+    && /must not increment \\`rounds\\`/.test(wfSrc)
     && /continuationOf\\` = the continuations counter now on file/.test(wfSrc));
+// THE TERMINATION GUARD. A continuation does not spend a repair round, so `roundsRun` never advances and
+// `parkedKeys` never reaches `MAX_ROUNDS` — without a ceiling a builder that asks every round loops forever.
+check("ENG-95474 review: an over-budget continuation ask is REFUSED and charged as a repair round, so the unit parks instead of looping",
+  /function resolveContinuation\(unit, res, r\) \{[\s\S]{0,400}?continuationAllowed\(spent, MAX_CONTINUATIONS\)/.test(buildRoundSrc)
+    && /build continuation REFUSED/.test(wfSrc)
+    && /charged as a repair round instead/.test(wfSrc)
+    // The refusal must RETURN FALSE, which is what makes the caller charge the attempt.
+    && /if \(!continuationAllowed\(spent, MAX_CONTINUATIONS\)\) \{[\s\S]{0,320}?return false/.test(buildRoundSrc),
+  () => buildRoundSrc.split("\n").filter((l) => /REFUSED|spent/.test(l)).join("\n"));
 check("ENG-95474 BUILD continuation: an unfinished continuation result cannot also trigger a human checkpoint pause",
   /if \(!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)\)/.test(wfSrc));
 check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistPending` runs more than once per round, and re-sending the same set charged one build attempt two or three times, parking a unit before it spent its real repair rounds",
@@ -1906,6 +2122,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     const STUBS = String.raw`
 const MAX_ROUNDS = 3
 const BUILD_TURN_BUDGET = 80
+const VERIFY_TABLE = "/m/verify.md"
 const REFS_DIR = "/m/refs"
 const REFS_INDEX = "/m/refs/index.md"
 const BUILT_FILE = "/m/built.json"
@@ -1950,7 +2167,13 @@ const guidelinesReturnFor = () => ""
     try {
       tmpBp = mkdtempSync(path.join(os.tmpdir(), "bp-render-"));
       const modPath = path.join(tmpBp, "buildPrompt.mjs");
-      writeFileSync(modPath, `${STUBS}\n${fnSrc}\nexport { buildPrompt };\n`);
+      // The two pure blocks `buildPrompt` composes are sliced in FOR REAL rather than stubbed: they carry the prompt
+      // text the assertions below match on, so a stub would make the render pass while shipping nothing.
+      const pureFn = (name) => {
+        const at = wfSrc.indexOf(`function ${name}(`);
+        return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
+      };
+      writeFileSync(modPath, `${STUBS}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${fnSrc}\nexport { buildPrompt };\n`);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);

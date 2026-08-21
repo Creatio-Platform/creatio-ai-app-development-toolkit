@@ -152,8 +152,8 @@ the reconcile step's own `--units` and `--verify` runs:
 sanitising one merges two pages into one file. Each slice names its own page in `pageKey` so a builder can
 confirm the file is its own.
 
-They are NOT in `refs`: that cache is keyed on the plan version, and a slice goes stale on an operator's answer or on
-any round that writes the stand. A build agent reads its two and cuts no row out of a whole file. See
+They are NOT in `refs`: the plan-slice tier of that cache is keyed on the plan version, and a slice goes stale on an
+operator's answer or on any round that writes the stand. A build agent reads its two and cuts no row out of a whole file. See
 `./references/02-queue-and-built-files.md`.
 
 Three rules make this safe rather than merely cheaper:
@@ -182,9 +182,10 @@ unchanged, for audit and for the human table.
 the `### Child page mappings` prose the same engine printed is how a partial parse made grandchildren read as roots
 and a park block more than it should.
 
-**One worklog file per unit.** A `<key>.md` in the run's `worklog` folder, written by that unit's builder, read by nobody else — the single
-shared log was read 37 times for one reason: to append to it you first read it. The `Close` phase appends the
-assembled section to `worklog.md`, which the documentation standard still requires as the append-only record.
+**One worklog file per unit.** A `<key>.md` in the run's `worklog` folder, written by that unit's builder, read by
+nobody else. Builders run sequentially, so each also appends its own entry to `worklog.md` — the append-only record the
+documentation standard requires — with an append-only write and no read of that file: a shared log read once per unit
+to append to costs O(n²) across a run. The per-unit files are the audit trail.
 
 ## The unit model
 
@@ -332,9 +333,9 @@ Every page key gets an entry, the mini page included: its `Mini page` row is clo
 `pages["mini:<Schema>"]`, never by a boolean — so a mini page you built is one you must fetch.
 
 The preflight fan-out is a fourth writer of `evidence`, and it is the one place the sequencing has
-to be enforced rather than assumed: its agents run in PARALLEL, so each writes only its own
-`preflight-<n>.json` and a single merge step folds them into the built file afterwards. Read-only
-describes what they do to the STAND — it never made a shared file write safe.
+to be enforced rather than assumed: its agents run in PARALLEL, so none of them opens the built file at all — each
+returns its records in its structured result, and the next sequential writer (Judge, or the Reconcile after it) files
+them. Read-only describes what they do to the STAND — it never made a shared file write safe.
 
 `viewConfig` in the built file is `get-page`'s `bundle.viewConfig` copied **verbatim** — the
 MERGED page. Not `ownBodySummary`, not the page's own body: a template-provided element carries
