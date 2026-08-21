@@ -7,6 +7,9 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -2689,6 +2692,59 @@ check("#verify image: 2 expected / 1 built → ⚠ verify (unverified), NOT Done
   imgVerifyPartial.unverified >= 1 && imgVerifyPartial.complete === false
   && /1\/2 crt\.ImageInput built/.test(imgVerifyPartial.markdown) && /⚠ verify/.test(imgVerifyPartial.markdown),
   () => imgVerifyPartial.markdown.split("\n").filter((l) => /Image field/.test(l)).join(" | "));
+// ---- ENG-95543: a table-emitted element is REPORTED, GATED and PUBLISHED ---------------------------------------
+// The three surfaces that make an emitted element real to a reader and to the executor: the Layout table (it exists
+// and where it sits), the `--verify` gate (it was actually built), and `--units.pages[].componentTypes` (its
+// documentation is fetched once per run). Before this the elements landed only in the ChangeSet — built, ungated and
+// mentioned nowhere.
+const tblElRes = { entity: "X", changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+  tableElements: [
+    { classic: "SendBtn", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.SendBtnClicked", folded: ["SendNow"] },
+    { classic: "NoteLbl", componentType: "crt.Label", classicKind: "LABEL", parent: "Header", tier: "A", request: null, folded: null },
+  ] }, signals: {} };
+const tblElSpec = renderDesignSpec(tblElRes, {});
+check("ENG-95543: a table-emitted element gets a LAYOUT row naming its component and its classic kind — a tier-B row also names the request its click still needs",
+  /crt\.Button/.test(tblElSpec) && /classic BUTTON/.test(tblElSpec) && /usr\.SendBtnClicked/.test(tblElSpec)
+  && /crt\.Label/.test(tblElSpec) && /classic LABEL/.test(tblElSpec),
+  () => tblElSpec.split("\n").filter((l) => /SendBtn|NoteLbl/.test(l)).join(" | "));
+const tblElMissing = renderVerify(tblElRes, {}, { ops: [{ name: "F", type: "crt.Input" }] });
+check("ENG-95543 verify: an expected crt.Button/crt.Label that was NOT built is ❌ MISSING and blocks completion — the gate is not a soft ⚠",
+  tblElMissing.complete === false && tblElMissing.missing >= 2
+  && /no crt\.Button built \(1 expected\)/.test(tblElMissing.markdown) && /no crt\.Label built \(1 expected\)/.test(tblElMissing.markdown),
+  () => tblElMissing.markdown.split("\n").filter((l) => /crt\.(Button|Label)/.test(l)).join(" | "));
+const tblElOk = renderVerify(tblElRes, {}, { ops: [{ name: "SendBtn", type: "crt.Button" }, { name: "NoteLbl", type: "crt.Label" }] });
+check("ENG-95543 verify: both built → both rows ✅ Done",
+  /crt\.Button built/.test(tblElOk.markdown) && /crt\.Label built/.test(tblElOk.markdown)
+  && !/no crt\.(Button|Label) built/.test(tblElOk.markdown),
+  () => tblElOk.markdown.split("\n").filter((l) => /crt\.(Button|Label)/.test(l)).join(" | "));
+// The PARTIAL branch, and the reason it must exist: two buttons expected and one built is not a build to accept and
+// not a build to accuse — it is a build to look at again.
+const tblElPartialRes = { ...tblElRes, changeSet: { ...tblElRes.changeSet, tableElements: [
+  { classic: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.AClicked" },
+  { classic: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.BClicked" },
+] } };
+const tblElPartial = renderVerify(tblElPartialRes, {}, { ops: [{ name: "A", type: "crt.Button" }] });
+check("ENG-95543 verify: 2 crt.Button expected / 1 built → ⚠ verify (unverified), neither Done nor MISSING",
+  tblElPartial.unverified >= 1 && tblElPartial.complete === false && /1\/2 crt\.Button built/.test(tblElPartial.markdown),
+  () => tblElPartial.markdown.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | "));
+// One coverage row per TYPE, not per element: three buttons are one row that expects three, so the plan does not
+// grow a row per control while the count still gates.
+const tblElGroupRes = { ...tblElRes, changeSet: { ...tblElRes.changeSet, tableElements: [
+  { classic: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  { classic: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  { classic: "C", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+] } };
+const tblElGroup = renderVerify(tblElGroupRes, {}, { ops: [] });
+check("ENG-95543: the coverage rows group BY componentType — 3 buttons are ONE row expecting 3, not three rows",
+  (tblElGroup.markdown.match(/no crt\.Button built \(3 expected\)/g) || []).length === 1,
+  () => tblElGroup.markdown.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | "));
+// And the type reaches the published queue, which is what a build agent reads to fetch component documentation.
+const tblElUnits = pageUnits(tblElRes, {});
+check("ENG-95543: every table-emitted componentType is published in `--units.pages[].componentTypes` (the executor's fetch-once list)",
+  (tblElUnits.pages?.[0]?.componentTypes || []).includes("crt.Button")
+  && (tblElUnits.pages?.[0]?.componentTypes || []).includes("crt.Label"),
+  () => tblElUnits.pages?.[0]?.componentTypes);
+
 // review (PR#58 Minor) — renderVerify must NOT undercount a control-bound field whose built component type is OUTSIDE
 // FIELD_RE (rich-text / lookup or color variant / future type). Expected is control-based (type-agnostic); the built
 // count now matches by field NAME too, so an odd-typed field counts and does not spuriously set verifyIncomplete.
@@ -2723,22 +2779,127 @@ const rvDup = renderVerify(rvDupResult, {}, { ops: [
 check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control (PR#58 Major)",
   rvDup.missing === 0 && rvDup.unverified === 0 && /Fields — 3 expected[\s\S]*?✅ Done/.test(rvDup.markdown),
   () => ({ missing: rvDup.missing, unverified: rvDup.unverified, row: rvDup.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
-// review (PR#58 Minor 3, 2026-08-01) — DRIFT guard: buildCoverageRows emits a machine-verifiable component row only
-// when `FEATURE_TYPE[f]` resolves, where `f` is the feature's DISPLAY name. Those keys must stay byte-identical to the
-// `feature:` strings in mapper's FEATURE_CATALOG. Read the catalog (source of truth) and assert every non-list feature
-// still yields a resolved verify row — so a label drift fails HERE rather than silently under-verifying a real deliverable.
-const nonListCatalogFeatures = [...new Set(Object.values(FEATURE_CATALOG)
-  .filter((c) => (c.uiShape || "list") !== "list").map((c) => c.feature))];
-const featDriftResult = { changeSet: { viewConfigDiff: [], images: [], details: [], cardActions: [],
-  standardFeatures: nonListCatalogFeatures.map((feature) => ({ feature, uiShape: "component" })) }, signals: {} };
-const featDrift = renderVerify(featDriftResult, {}, { ops: [] });
-// a resolved feature row is the ONLY line carrying both the display name and a `crt.` component type (this result has
-// no fields/images/tabs/details) — an unresolved FEATURE_TYPE lookup is `continue`-skipped, so no such line exists.
-const featDriftMissing = nonListCatalogFeatures.filter((f) =>
-  !featDrift.markdown.split("\n").some((l) => l.includes(f) && /`crt\./.test(l)));
-check("#verify feature drift: every NON-LIST FEATURE_CATALOG feature has a FEATURE_TYPE entry → a machine-verify component row (a catalog label drift would break this, not silently drop the gate) (PR#58 Minor 3)",
-  nonListCatalogFeatures.length > 0 && featDriftMissing.length === 0,
-  () => ({ nonListCatalogFeatures, featDriftMissing, rows: featDrift.markdown.split("\n").filter((l) => /crt\./.test(l)).join(" | ") }));
+// ENG-95543 — REPLACES the old "#verify feature drift" pin, and it had to be replaced rather than kept: that check
+// compared mapper's `FEATURE_CATALOG` against designspec's `FEATURE_TYPE`, two copies of one mapping. Now that both
+// are the SAME rows, comparing them would be a table against itself — green forever, checking nothing. (That is the
+// shape of the golden which pinned the `set` bug on ENG-95412: a test that agrees with itself.)
+//
+// The successor asserts the two things that can actually be wrong now: a non-list feature must CARRY a gate type
+// (else its deliverable silently leaves `--verify`), and that type must exist in the component registry (else the
+// gate judges a built page against a component no stand resolves — the `crt.ContactCommunication` defect).
+const featureRows = MAPPING_ROWS.filter((r) => r.meta?.feature);
+const nonListFeatureRows = featureRows.filter((r) => (r.meta.uiShape || "list") !== "list");
+const featuresWithoutGate = nonListFeatureRows.filter((r) => !r.verify?.componentType).map((r) => r.meta.feature);
+check("ENG-95543: every NON-LIST standard feature carries a `verify.componentType` — a feature with no gate type would leave --verify silently",
+  nonListFeatureRows.length >= 4 && featuresWithoutGate.length === 0,
+  () => ({ count: nonListFeatureRows.length, featuresWithoutGate }));
+const featureGateFindings = nonListFeatureRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f));
+check("ENG-95543: every feature gate type RESOLVES in the component registry at the oldest indexed version — a fabricated gate type fails here",
+  featureGateFindings.length === 0, () => featureGateFindings);
+// A list-shaped feature must NOT carry one: it is gated as a related list, and giving it a component type would
+// double-gate the same deliverable (once as a list, once as a component).
+check("ENG-95543: a LIST-shaped feature carries NO gate type — it is gated as a related list, not as a component",
+  featureRows.filter((r) => (r.meta.uiShape || "list") === "list").every((r) => !r.verify?.componentType),
+  () => featureRows.filter((r) => (r.meta.uiShape || "list") === "list" && r.verify?.componentType).map((r) => r.meta.feature));
+// The RESOLUTION ORDER, which moved out of `matchFeature`'s two lines into the table and therefore needs its own
+// pin: exact name, then the LONGEST suffix, then the entity fallbacks. Without the ordering a short suffix row
+// could shadow a row written for the full name, and which one won would depend on declaration order.
+check("ENG-95543: feature resolution is exact-name first, then longest suffix, then the ENTITY fallback (which marks itself inferred)",
+  resolveFeatureRow("VisaDetailV2")?.meta.feature === "Approvals"
+  && resolveFeatureRow("ApplicantEmailDetailV2")?.meta.feature === "Emails"
+  && resolveFeatureRow("ApplicantVisaDetail") === null
+  && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
+  && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
+  && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
+  () => ({ exact: resolveFeatureRow("VisaDetailV2")?.meta, suffix: resolveFeatureRow("ApplicantEmailDetailV2")?.meta,
+    none: resolveFeatureRow("ApplicantVisaDetail"), entity: resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta }));
+// ---- ENG-95543: the widget / profile-card / card-action catalogs, moved into the same table -------------------
+// The DERIVED VIEWS are what the mapper's builders read, so a row that lost a `meta` key would leave a builder
+// with an empty catalog and no test would otherwise notice. This pin exists because it HAPPENED mid-move: merging
+// Feed's two catalog entries into one row dropped `meta.widgets`, so the ESN feed container silently stopped
+// resolving to a widget while every suite stayed green.
+const wByModule = widgetsByMatch(MATCH.MODULE_KEY), wByContainer = widgetsByMatch(MATCH.CONTAINER_NAME);
+check("ENG-95543: the widget views carry every classic module and container the catalogs had — including ESNFeedContainer, whose row also serves the Feed feature gate",
+  ["DcmActionsDashboardModule", "ActionsDashboardModule", "Timeline"].every((k) => wByModule[k]?.length)
+  && ["DcmActionsDashboardContainer", "ActionDashboardContainer", "RecommendationModuleContainer", "DuplicatesWidgetContainer", "ESNFeedContainer"].every((k) => wByContainer[k]?.length)
+  && featureVerifyType("Feed") === "crt.Feed",
+  () => ({ modules: Object.keys(wByModule), containers: Object.keys(wByContainer), feedGate: featureVerifyType("Feed") }));
+// The DCM pair still resolves to BOTH components from one classic module — the "Action Dashboard is TWO Freedom
+// components" rule the catalog comment carries.
+check("ENG-95543: one classic module still maps to MORE THAN ONE Freedom component (the DCM dashboard emits both the progress bar and Next steps)",
+  () => wByModule.DcmActionsDashboardModule.length === 2
+  && wByModule.DcmActionsDashboardModule.every((w) => w.signal === "dcm")
+  && wByContainer.RecommendationModuleContainer[0].chrome === true,
+  () => wByModule.DcmActionsDashboardModule);
+// PROFILE_ENTITY is a match kind of its own. Keyed as `ENTITY` these rows would be returned by `resolveFeatureRow`,
+// so a Contact-bound detail would resolve as a "standard feature" whose meta describes a profile card.
+check("ENG-95543: a profile-card row is NOT reachable as a standard-feature entity fallback — the match kind is the discriminator",
+  resolveFeatureRow("SomeDetail", "Contact") === null && !!profileCardsByEntity().Contact,
+  () => ({ asFeature: resolveFeatureRow("SomeDetail", "Contact"), asProfileCard: profileCardsByEntity().Contact }));
+// `pkg` is HAND-CURATED and must stay: the registry has no package field, so this is knowledge the registry check
+// cannot supply — and the emitted decision's `list-packages` step depends on it.
+const pcards = profileCardsByEntity();
+// A THUNK, not a value: read as an expression, a row whose key moved makes `pcards.Contact` undefined and the
+// `.pkg` access aborts the whole runner instead of failing this one check (the runner's own reason for accepting
+// thunks). Proven by a mutation that did exactly that.
+check("ENG-95543: the profile-card rows keep their hand-curated `pkg` (the registry has NO package field — this is not something the check can replace)",
+  () => pcards.Contact.pkg === "CrtCustomer360App" && pcards.Account.pkg === "CrtCustomer360App"
+  && pcards.SysAdminUnit.pkg === null && pcards.VwSysAdminUnit.pkg === null
+  && Object.values(pcards).every((c) => c.type.startsWith("crt.")),
+  () => pcards);
+check("ENG-95543: the card-action view is exactly the five standard ACTIONS-menu items",
+  [...knownCardActions()].sort((a, b) => a.localeCompare(b)).join(",") === "PrintButton,ProcessButton,ReloadDataButton,TagButton,ViewOptionsButton",
+  () => [...knownCardActions()]);
+// And every type these rows name is registry-real. Two rows deliberately name NO type (Recommendations,
+// Duplicates): the registry carries no component under either name, so naming one would be the fabricated-type
+// defect this check exists to catch.
+const movedRows = MAPPING_ROWS.filter((r) => r.meta?.widgets || r.meta?.profileCard || r.meta?.cardAction);
+check("ENG-95543: every componentType the moved rows name resolves in the registry at the oldest indexed version, and the two rows with no real component name none",
+  movedRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f)).length === 0
+  && MAPPING_ROWS.filter((r) => /Recommendation|Duplicates/.test(String(r.match.containerName || ""))).every((r) => !r.verify),
+  () => movedRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f)));
+
+// ENG-95543 x ENG-95470: the role/analog pairs are the SHARED TABLE's now — the repoint N1's own comment asked for
+// ("sourced by hand … until ENG-95543's registry lands, then repointed there"). `componentAnalogsOf` (asserted
+// separately in the N1 block) still answers the same, so this pins the SOURCE rather than the behaviour.
+check("ENG-95543: the analog pair lives in the shared table — a planned `crt.ContactCommunication` resolves to `crt.CommunicationOptions`, an unrelated type to nothing",
+  analogsOf("crt.ContactCommunication").includes("crt.CommunicationOptions") && analogsOf("crt.Label").length === 0,
+  () => ({ comms: analogsOf("crt.ContactCommunication"), label: analogsOf("crt.Label") }));
+// A legacy name a row claims to satisfy must be a name the registry does NOT carry. If it did, the row would alias
+// one REAL component onto another: the gate would accept component B for a plan that named component A while both
+// exist — a different defect from the false MISSING the analog exists to remove.
+{
+  const legacy = satisfiedLegacyTypes();
+  check("ENG-95543: every legacy type a row claims to satisfy is ABSENT from the registry — an analog must not alias one real component onto another",
+    legacy.length >= 1 && legacy.every((t) => !vendoredIndex().components[t]),
+    () => ({ legacy, alsoReal: legacy.filter((t) => vendoredIndex().components[t]) }));
+}
+
+// The LONGEST-suffix rule, pinned against a fixture table with two OVERLAPPING suffixes. Today's rows do not
+// overlap, so this cannot be checked against the live table — and an unchecked ordering rule is how a generic
+// `DetailV2` row would come to shadow a row written for `VisaDetailV2`, with the winner decided by declaration
+// order.
+const sfx = (suffix, name) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix }, meta: { feature: name } });
+const overlapping = [sfx("DetailV2", "generic"), sfx("VisaDetailV2", "Approvals")];
+check("ENG-95543: among overlapping suffix rows the LONGEST wins, in either declaration order",
+  resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: overlapping })?.meta.feature === "Approvals"
+  && resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: [...overlapping].reverse() })?.meta.feature === "Approvals"
+  && resolveFeatureRow("ApplicantOtherDetailV2", null, { rows: overlapping })?.meta.feature === "generic",
+  () => ({ a: resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: overlapping })?.meta,
+    b: resolveFeatureRow("ApplicantVisaDetailV2", null, { rows: [...overlapping].reverse() })?.meta }));
+
+// A schema name wins over the entity even when BOTH match, because a name is direct evidence and an entity is an
+// inference — and the plan's "inferred — confirm this is X" wording is only true if the two are ordered this way.
+check("ENG-95543: a matching schema NAME beats a matching entity — the resolved row is not marked inferred",
+  resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta.byEntity !== true,
+  () => resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta);
+// The derived `FEATURE_CATALOG` view must still answer for the callers and goldens that read it — the data moved,
+// the shape did not.
+check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/note/templateProvided)",
+  FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && FEATURE_CATALOG.FileDetailV2?.templateProvided === true
+  && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list" && /Approvals renders as TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.note || ""),
+  () => FEATURE_CATALOG);
+
 // review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
 // image binds the sole column; the rest get a FILL + an image-column decision (no silent key overwrite of the shared
 // column / two widgets on one column).
@@ -7447,9 +7608,12 @@ try {
   // against `ViewGeneratorV2` and each carries content the reader would lose — TIP_LABEL an author caption
   // (Classic logs an ERROR when it is empty), TIP a recursively generated `tools`/`items` subtree,
   // GRID_LAYOUT_EDIT a raw `items` array on a live control. MENU_SEPARATOR is the only information-free kind.
-  check("ENG-95412: the role distribution over the pinned table is exactly 5 structural / 1 decoration / 1 field / 3 container / 19 unmapped",
+  // The `unmapped` count DROPPED from 19 to 13 in ENG-95543: six kinds (BUTTON, LABEL, MENU, MENU_ITEM,
+  // RADIO_GROUP, HYPERLINK) gained a Freedom target, so they carry `mapped`. Keeping them `unmapped` would have
+  // kept claiming "no Freedom element for this kind" about elements the engine now builds.
+  check("ENG-95412/ENG-95543: the role distribution is exactly 5 structural / 1 decoration / 1 field / 3 container / 13 unmapped / 6 mapped",
     roleTally[ITEM_ROLES.STRUCT] === 5 && roleTally[ITEM_ROLES.DECOR] === 1 && roleTally[ITEM_ROLES.FIELD] === 1
-    && roleTally[ITEM_ROLES.CONTAINER] === 3 && roleTally[ITEM_ROLES.UNMAPPED] === 19
+    && roleTally[ITEM_ROLES.CONTAINER] === 3 && roleTally[ITEM_ROLES.UNMAPPED] === 13 && roleTally[ITEM_ROLES.MAPPED] === 6
     && Object.values(roleTally).reduce((a, b) => a + b, 0) === 29,
     () => roleTally);
   // MENU_SEPARATOR is named explicitly, so a future reclassification cannot quietly restore a second decoration
@@ -7466,14 +7630,94 @@ try {
     && Object.values(VIEW_ITEM_TYPE).every((v) => itemKindName({ itemType: v }) !== `itemType ${v}`),
     () => Object.values(VIEW_ITEM_TYPE).filter((v) => itemRoleOf(v) === undefined));
 
-  // A RADIO_GROUP: recognised, and reported BY KIND. The old text ("classic component 'X' produced no Freedom
-  // element — non-standard UI") told the reader nothing they could act on although the schema stated the kind.
+  // ---- ENG-95543: the SHARED MAPPING TABLE's own invariants ------------------------------------------------
+  // The role checks above pin WHAT the table says about each kind; these pin that every row is STRUCTURALLY
+  // complete. A row builder that forgot `tier` yields `tier: undefined`, which passes every truthiness test in
+  // the mapper and would ship a kind with no stated outcome at all.
+  const itRows = MAPPING_ROWS.filter((r) => r.match.by === MATCH.ITEM_TYPE);
+  const TIERS = new Set(Object.values(TIER)), OWNERS = new Set(Object.values(OWNER));
+  const malformed = itRows.filter((r) => !TIERS.has(r.tier) || !OWNERS.has(r.ownedBy) || typeof r.role !== "string");
+  check("ENG-95543: every itemType row carries a role, a tier from TIER and an owner from OWNER — an incomplete row fails here, not at runtime",
+    itRows.length === 29 && malformed.length === 0,
+    () => ({ rows: itRows.length, malformed: malformed.map((r) => r.match.itemType) }));
+  // One row per member. Two rows for the same itemType with no qualifier would make the resolver's answer depend
+  // on declaration order, and the LAST one would be dead code nobody notices.
+  const itKeys = itRows.filter((r) => !r.match.qualifiers).map((r) => r.match.itemType);
+  check("ENG-95543: no itemType has two unqualified rows — a duplicate would make resolution order-dependent and leave one row dead",
+    new Set(itKeys).size === itKeys.length,
+    () => itKeys.filter((k, i, all) => all.indexOf(k) !== i));
+  // The tier CONTRACT, both directions. A tier-C row that names a target is the exact failure ENG-95555 is about:
+  // a fabricated `crt.*` presented as the answer instead of the decision it really is.
+  const tierCWithTarget = itRows.filter((r) => r.tier === TIER.DECISION && r.target !== null);
+  const emitterWithoutType = itRows.filter((r) => r.ownedBy === OWNER.TABLE && !r.target?.componentType);
+  check("ENG-95543: a tier-C row names NO target, and a row the table itself emits always names a componentType",
+    tierCWithTarget.length === 0 && emitterWithoutType.length === 0,
+    () => ({ tierCWithTarget: tierCWithTarget.map((r) => r.match.itemType), emitterWithoutType: emitterWithoutType.map((r) => r.match.itemType) }));
+  // The tier DISTRIBUTION, pinned like the role distribution above and for the same reason: a kind quietly moved
+  // from C to A is a kind the engine started building without anyone deciding what it should build.
+  const tierTally = itRows.reduce((a, r) => ({ ...a, [r.tier]: (a[r.tier] || 0) + 1 }), {});
+  check("ENG-95543: the itemType tier distribution is exactly 13 tier-A / 3 tier-B (view built, behaviour stubbed) / 13 tier-C (typed decision)",
+    tierTally[TIER.AUTO] === 13 && tierTally[TIER.VIEW_ONLY] === 3 && tierTally[TIER.DECISION] === 13,
+    () => tierTally);
+  // Absence of an itemType is NOT a kind: Classic reads a missing itemType as the field path, so the table must
+  // return nothing rather than a row that would answer for an element the schema never classified.
+  check("ENG-95543: rowForItem returns null for an item whose schema stated no itemType — absence is the field path, not a kind",
+    rowForItem({ itemType: null }) === null,
+    () => rowForItem({ itemType: null }));
+  check("ENG-95543: rowForItemType has no fallback — an unlisted member resolves to undefined, which is what lets the coverage check above bite",
+    rowForItemType(9999) === undefined && rowForItemType(VIEW_ITEM_TYPE.RADIO_GROUP)?.match.itemType === VIEW_ITEM_TYPE.RADIO_GROUP,
+    () => rowForItemType(9999));
+
+  // PRECEDENCE, checked against a FIXTURE table rather than the module's own rows: the rule must hold before the
+  // first qualified row exists, and a check written against the live table could only be added after one does.
+  // `ViewGeneratorV2.generateItem` applies the same rule (a `generator` override beats the itemType switch), and
+  // `FEATURE_CATALOG` needs it: VisaDetailV2 is Approvals, not merely a DETAIL.
+  const fx = (qualifiers, id) => ({ match: { by: MATCH.ITEM_TYPE, itemType: 7, qualifiers }, id });
+  const generic = fx(null, "generic"), qualified = fx({ entity: "ApplicantVisa" }, "qualified");
+  const pick = (rows, candidate) => resolveRow(rows, { by: MATCH.ITEM_TYPE, key: 7, candidate })?.id;
+  check("ENG-95543: a qualified row wins over the generic row for the same key — in EITHER declaration order (order-independence is the whole point)",
+    pick([generic, qualified], { entity: "ApplicantVisa" }) === "qualified"
+    && pick([qualified, generic], { entity: "ApplicantVisa" }) === "qualified"
+    && pick([generic, qualified], { entity: "SomethingElse" }) === "generic",
+    () => ({ a: pick([generic, qualified], { entity: "ApplicantVisa" }), b: pick([qualified, generic], { entity: "ApplicantVisa" }), c: pick([generic, qualified], { entity: "SomethingElse" }) }));
+  // A qualifier may be a PREDICATE, which is what the two entity fallbacks in mapDetails need (`endsWith("File")`
+  // is not an equality test and hardcoding it as one is how `ApplicantFile` stopped being Attachments).
+  const predRow = { match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } }, id: "file" };
+  check("ENG-95543: a qualifier can be a predicate, not only a literal — the `*File` detail fallback is not an equality test",
+    resolveRow([predRow], { by: MATCH.ENTITY, key: "*", candidate: { entity: "ApplicantFile" } })?.id === "file"
+    && resolveRow([predRow], { by: MATCH.ENTITY, key: "*", candidate: { entity: "ApplicantVisa" } }) === null,
+    () => resolveRow([predRow], { by: MATCH.ENTITY, key: "*", candidate: { entity: "ApplicantVisa" } }));
+  // SUFFIX matching is a distinct match kind, not a string compare: this is `matchFeature`'s live behaviour, and
+  // the reason `ApplicantEmailDetailV2` is recognised as Emails at all.
+  const sufRow = { match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "EmailDetailV2" }, id: "emails" };
+  check("ENG-95543: SCHEMA_SUFFIX matches an entity-prefixed variant and nothing else — ApplicantEmailDetailV2 resolves, EmailDetail does not",
+    resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "ApplicantEmailDetailV2" })?.id === "emails"
+    && resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "EmailDetailV2" })?.id === "emails"
+    && resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "EmailDetail" }) === null,
+    () => resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "EmailDetail" }));
+  // Every row is FROZEN: the mapper hands rows to builders that also carry per-page state, and a builder that
+  // mutated a row would change the mapping for every later page in the same run (a whole-run corruption that
+  // reproduces only in multi-page folds).
+  check("ENG-95543: rows and their match keys are frozen — a builder cannot mutate the shared table mid-run",
+    Object.isFrozen(MAPPING_ROWS) && itRows.every((r) => Object.isFrozen(r) && Object.isFrozen(r.match)),
+    () => itRows.filter((r) => !Object.isFrozen(r)).length);
+
+  // A RADIO_GROUP with a binding but NO option children. REWRITTEN for ENG-95543, which is the point of the
+  // rewrite: the KIND now has a mapping, so "map this kind to its Freedom counterpart" would send the reader to
+  // add a row that already exists. What this ELEMENT lacks is the option sub-items its target needs, and that is
+  // what the ⚠ must say. It still reports BY KIND, which was the original invariant.
   const rg = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"}}}`);
   const rgRow = rg.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "IsPrimary");
-  check("ENG-95412: a RADIO_GROUP is reported BY KIND — `itemKind` carries it and the reason calls it a missing MAPPING, not 'non-standard UI'",
+  check("ENG-95543: a RADIO_GROUP whose options are missing is reported BY KIND, naming the target and the MISSING PART — not as a missing mapping",
     rgRow?.itemKind === "RADIO_GROUP" && /classic RADIO_GROUP 'IsPrimary'/.test(rgRow.reason)
-    && /missing MAPPING rather than unknown UI/.test(rgRow.reason) && !/non-standard UI/.test(rgRow.reason),
+    && /crt\.IconRadioButton/.test(rgRow.reason) && /optionChildren/.test(rgRow.reason)
+    && /rather than adding a mapping/.test(rgRow.reason) && !/non-standard UI/.test(rgRow.reason),
     () => rgRow);
+  // ...and it is NOT emitted half-configured. An empty `crt.IconRadioButton` on the page would be the silent-drop
+  // failure wearing the new mapping as a costume.
+  check("ENG-95543: the half-configured radio group emits NO element — a control with no options is not a migration",
+    !rg.changeSet.viewConfigDiff.some((o) => o.values?.type === "crt.IconRadioButton"),
+    () => rg.changeSet.viewConfigDiff.filter((o) => o.values?.type === "crt.IconRadioButton"));
 
   // A recognised kind with no mapping names the KIND and asks for a mapping — it does not assert which Freedom
   // component that should be (choosing one is the mapping task, and a target asserted here would pre-empt it).
@@ -7486,9 +7730,343 @@ try {
     gapOf("Planner")?.itemKind === "SCHEDULE_EDIT" && /missing MAPPING rather than unknown UI/.test(gapOf("Planner").reason)
     && !/crt\./.test(gapOf("Planner").reason),
     () => gapOf("Planner"));
-  check("ENG-95412: a BUTTON keeps its card-action guidance (its click handler is the part that needs porting)",
-    /card action/.test(gapOf("Btn")?.reason || ""),
-    () => gapOf("Btn"));
+  // REWRITTEN for ENG-95543. A custom BUTTON used to produce nothing at all, so the ⚠ advised wiring it as a card
+  // action — advice born of the gap, not of the classic body (a button in the page's own layout is not the ACTIONS
+  // menu). It is now BUILT as a `crt.Button` at its classic place, and the part that genuinely does not migrate —
+  // the imperative click — is what remains on the worklist.
+  check("ENG-95543: a custom BUTTON is BUILT (crt.Button) instead of being reported as unmapped",
+    !gapOf("Btn") && gaps.changeSet.viewConfigDiff.some((o) => o.name === "Btn" && o.values?.type === "crt.Button"),
+    () => ({ decision: gapOf("Btn"), emitted: gaps.changeSet.viewConfigDiff.filter((o) => o.name === "Btn") }));
+
+  // ---- ENG-95543: REGISTRY VALIDATION of the table (the check that replaces "confirm the crt.* on-stand") ----
+  const idx = vendoredIndex();
+  check("ENG-95543: the vendored component index is internally consistent — a version list, a source SHA per version, and a componentCount that matches the map it describes",
+    idx.meta.versions.length >= 2 && idx.meta.sources.length === idx.meta.versions.length
+    && idx.meta.sources.every((s) => /^[0-9a-f]{64}$/.test(s.sha256))
+    && idx.meta.componentCount === Object.keys(idx.components).length,
+    () => ({ versions: idx.meta.versions, sources: idx.meta.sources.length, count: idx.meta.componentCount, actual: Object.keys(idx.components).length }));
+  // THE CI CHECK the ticket asks for, and it is run against the OLDEST version the index carries, not the union:
+  // `latest` is a superset (205 components against 152 at 8.3.0), so a union check green-lights a target that
+  // cannot render on an 8.3 stand — which is precisely the failure this validation exists to catch.
+  const oldest = idx.meta.versions[0];
+  const vOldest = validateTable({ version: oldest });
+  check(`ENG-95543: every row's componentType, propMap key and event resolves in the registry at ${oldest} — zero errors`,
+    vOldest.errors.length === 0, () => vOldest.errors);
+  check("ENG-95543: ...and on the union of every version the index carries (a row must not depend on which snapshot is read)",
+    validateTable({}).errors.length === 0, () => validateTable({}).errors);
+  // `compositeOnly` is NOT an error: it means no Designer TOOLBAR entry, and inserting the component into a page
+  // schema directly — what this engine emits — is valid. Two rows rely on that reading (crt.IconRadioButton,
+  // crt.Link), so a change that made it an error would block the first wave outright.
+  check("ENG-95543: compositeOnly is reported as an ADVISORY, never an error — it means no toolbar entry, not an unusable type",
+    vOldest.advisories.some((a) => a.kind === "composite-only" && a.componentType === "crt.IconRadioButton")
+    && vOldest.advisories.every(isAdvisory) && !vOldest.errors.some((e) => e.kind === "composite-only"),
+    () => vOldest.advisories);
+  // NEGATIVE ARMS. Each is a fabricated row, so the checks bite without touching the real table — and each is a
+  // mistake that has actually been made in this engine's history: `crt.ContactCommunication` was a fabricated type,
+  // and an input that exists only on some versions is exactly the 8.3.0-vs-8.3.3 `handleItemClick` case.
+  const fakeRow = (target) => ({ match: { by: MATCH.ITEM_TYPE, itemType: 999 }, role: "mapped", tier: TIER.AUTO, ownedBy: OWNER.TABLE, target });
+  const kindsOf = (r) => r.map((f) => f.kind).sort((a, b) => a.localeCompare(b));
+  check("ENG-95543(neg): a fabricated componentType is an `unknown-component` error — the fabricated-type defect this check exists to prevent",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} }))).includes("unknown-component"),
+    () => validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} })));
+  check("ENG-95543(neg): a propMap key that is not an input of that component is an `unknown-input` error",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { notAnInput: { from: SOURCE.CAPTION } } }))).includes("unknown-input"),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { notAnInput: { from: SOURCE.CAPTION } } })));
+  check("ENG-95543(neg): an event that is not an OUTPUT of that component is an `unknown-output` error — outputs are validated against `outputs`, not `inputs`",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {}, events: { clicked: true } }))).includes("unknown-output"),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {}, events: { clicked: true } })));
+  // The version arm, on a REAL registry fact: `crt.MenuItem.handleItemClick` exists at 8.3.0/8.3.1 and is gone by
+  // 8.3.3. A row using it must pass on the old versions and FAIL on the new ones — which is the whole argument for
+  // per-version data rather than one snapshot.
+  const hicRow = fakeRow({ componentType: "crt.MenuItem", slot: "items", propMap: { handleItemClick: { from: SOURCE.CAPTION } } });
+  check("ENG-95543(neg): an input present only in older versions passes at 8.3.0 and is `input-absent-in-version` at 8.3.3 (crt.MenuItem.handleItemClick — a measured registry fact)",
+    !kindsOf(validateRow(hicRow, { version: "8.3.0" })).includes("input-absent-in-version")
+    && kindsOf(validateRow(hicRow, { version: "8.3.3" })).includes("input-absent-in-version"),
+    () => ({ at830: validateRow(hicRow, { version: "8.3.0" }), at833: validateRow(hicRow, { version: "8.3.3" }) }));
+  check("ENG-95543(neg): a LITERAL propMap value outside the input's declared `values` is reported — an invented enum member renders as nothing",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Link", slot: "items", propMap: { mode: { from: SOURCE.LITERAL, value: "notAMode" } } }))).includes("literal-not-in-values"),
+    () => validateRow(fakeRow({ componentType: "crt.Link", slot: "items", propMap: { mode: { from: SOURCE.LITERAL, value: "notAMode" } } })));
+  // A framework-level base input (`name`) is known through `references.baseInputs`, not through the component's own
+  // `inputs`. Without that union the check would report base props as unknown on every component that used one.
+  check("ENG-95543: a base input (references.baseInputs) counts as known — `name` on crt.Label is not an unknown input",
+    validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { name: { from: SOURCE.CAPTION } } })).every((f) => isAdvisory(f)),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { name: { from: SOURCE.CAPTION } } })));
+  // A version the index never saw is UNKNOWN, not ABSENT: answering "your component does not exist there" about a
+  // version nobody has data for would be a fabricated finding.
+  check("ENG-95543: an unseen version yields `unknown-version`, never a false `component-absent-in-version`",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {} }), { version: "7.1.0" })).includes("unknown-version"),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {} }), { version: "7.1.0" }));
+  // Candidate ranking: taxonomy evidence OUTRANKS a name match, and every candidate says which one put it there.
+  // The taxonomy covers 8 of 205 components, so a ranking that did not distinguish the two would present a name
+  // coincidence as a documented recommendation.
+  const ranked = rankCandidates(["approval"], { version: oldest });
+  check("ENG-95543: candidate ranking states its EVIDENCE per candidate and scores published taxonomy above a type-name match",
+    ranked.length > 0 && ranked.every((c) => Array.isArray(c.evidence) && c.evidence.length > 0)
+    && ranked.every((c, i) => i === 0 || ranked[i - 1].score >= c.score)
+    && ranked.some((c) => /taxonomy mentions/.test(c.evidence.join(" ")) || /type name contains/.test(c.evidence.join(" "))),
+    () => ranked);
+  // A candidate absent on the target version is not a candidate at all — recommending it would send a build agent
+  // to insert a component the stand cannot resolve.
+  const newOnly = Object.entries(idx.components).find(([, c]) => versionsOf(c.v, idx).length === 1 && versionsOf(c.v, idx)[0] === idx.meta.versions.at(-1));
+  check("ENG-95543: ranking is scoped to the target version — a component that exists only in the newest snapshot is not offered for the oldest",
+    !newOnly || !rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }).some((c) => c.componentType === newOnly[0]),
+    () => ({ newestOnly: newOnly?.[0], ranked: newOnly ? rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }) : null }));
+
+  // ---- ENG-95543: the RUN-TIME registry (the half that keeps this reachable without the clio change) ----------
+  // Three sources, deliberately distinguished, because "checked against the stand", "checked against a pinned
+  // version" and "checked against a union of seven versions" are three different strengths of evidence.
+  const exportJson = { resolvedTargetVersion: "8.3.5", components: [{ componentType: "crt.Button", inputs: { caption: { type: "string" } }, outputs: { clicked: {} } }],
+    references: { baseInputs: { name: { type: "string" } } } };
+  const strip = ({ index, ...rest }) => rest;
+  check("ENG-95543: the run resolves its registry source and NAMES it — stand export, a pinned vendored version, or the vendored UNION",
+    strip(resolveRunIndex({ componentRegistry: exportJson })).source === "stand-export"
+    && strip(resolveRunIndex({ platformVersion: "8.3.3" })).source === "vendored-pinned"
+    && strip(resolveRunIndex({})).source === "vendored-union"
+    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).source === "vendored-union",
+    () => [resolveRunIndex({ componentRegistry: exportJson }), resolveRunIndex({ platformVersion: "8.3.3" }), resolveRunIndex({})].map(strip));
+  // A registry the manifest NAMED but the engine could not read must be REPORTED, never silently downgraded: the
+  // operator asked for the stand's answer and has to know they did not get it.
+  check("ENG-95543: a named-but-unreadable registry file is reported as `unreadable-export`, not silently replaced by the vendored index",
+    strip(resolveRunIndex({ componentRegistry: { file: "/no/such.json" } }, { readFile: () => { throw new Error("ENOENT"); } })).source === "unreadable-export",
+    () => strip(resolveRunIndex({ componentRegistry: { file: "/no/such.json" } }, { readFile: () => { throw new Error("ENOENT"); } })));
+  // The export shape (what a clio registry export / the CDN registry looks like) converts into the index shape, so
+  // ONE validator serves both the vendored index and a stand's answer.
+  const exportIdx = indexFromRegistryExport(exportJson);
+  check("ENG-95543: a registry EXPORT converts into the index shape — one validator for the vendored index and the stand's own answer",
+    exportIdx.meta.versions[0] === "8.3.5" && exportIdx.components["crt.Button"].inputs.caption.type === "string"
+    && exportIdx.components["crt.Button"].outputs.clicked && exportIdx.baseInputs.name.type === "string",
+    () => exportIdx);
+  // A run is judged on what IT emits, not on the whole table: a check that reports rows the run never touched is a
+  // check a reader learns to skip.
+  const runCs = { tableElements: [{ classic: "B", classicKind: "BUTTON", componentType: "crt.Button" }],
+    viewConfigDiff: [{ name: "F", values: { type: "crt.Input", control: "$F" } }], standardFeatures: [{ feature: "Approvals" }], profileCards: [] };
+  const rt = runTypes(runCs);
+  check("ENG-95543: the run-time check covers exactly the types the run emits or gates on — including a standard feature's gate type, read from the shared table",
+    rt.has("crt.Button") && rt.has("crt.Input") && rt.has("crt.ApprovalList") && rt.size === 3,
+    () => [...rt.entries()]);
+  // And a fabricated emitted type is a finding at RUN time too, with the reason naming WHAT emitted it.
+  const badRun = validateRun({ viewConfigDiff: [{ name: "X", values: { type: "crt.NotAComponent" } }] }, { version: "8.3.0" });
+  check("ENG-95543: a run that emits a non-existent componentType produces a finding that names the element which emitted it",
+    badRun.findings.length === 1 && badRun.findings[0].kind === "unknown-component" && /emitted as 'X'/.test(badRun.findings[0].why),
+    () => badRun);
+  // The same run through the CLI-level pipeline: the finding reaches the ⚠ worklist, and the item SAYS which
+  // registry answered — an operator has to be able to tell "your stand lacks this" from "nobody asked your stand".
+  const unionRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NoteCaption"}}}`,
+    "", { resources: { NoteCaption: "Read this" } });
+  check("ENG-95543: a clean run against the vendored UNION raises NO registry ⚠ — the check must not nag when every emitted type resolves",
+    !unionRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" || d.kind === "registry-source"),
+    () => unionRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+  // A stand whose registry does NOT carry a type this run emits: the ⚠ must reach the worklist, name the element
+  // that emitted it, and say the stand's own registry answered. Without a run-level test the whole reporting loop
+  // in migrate.mjs could be deleted and every other check here would still pass (proven by mutation).
+  const standRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NoteCaption"}}}`,
+    "", { resources: { NoteCaption: "Read this" },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] } });
+  const standWarn = standRun.changeSet.needsDecision.find((d) => d.kind === "registry-target" && d.item === "crt.Label");
+  check("ENG-95543: a run whose STAND registry lacks an emitted type raises a `registry-target` ⚠ naming the element, the missing type and the stand as the source",
+    !!standWarn && /NoteLbl/.test(standWarn.reason) && /carries NO component of that name/.test(standWarn.reason)
+    && /TARGET STAND's own component registry \(version 8\.3\.9\)/.test(standWarn.reason),
+    () => standRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  const badFileRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL}}`,
+    "", { componentRegistry: { file: "/definitely/not/here.json" } });
+  check("ENG-95543: a manifest naming an unreadable registry file raises a `registry-source` ⚠ saying the run fell back and reflects no stand",
+    badFileRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /could not read it/.test(d.reason) && /reflects no stand|nothing here reflects your stand/.test(d.reason)),
+    () => badFileRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // A RELATIVE registry path is contained to the manifest's base dir, like a schema entry's `file`. An escape is
+  // refused and lands on the `registry-source` ⚠ (the run continues on the vendored index and SAYS so) — never a
+  // silent read of a file outside the manifest's directory.
+  const escRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:6}}`,
+    "", { componentRegistry: { file: "../../../etc/hosts" } });
+  check("ENG-95543: a RELATIVE componentRegistry path that escapes the manifest base dir is refused, and the refusal is reported (not a silent read, not a silent fallback)",
+    escRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /escapes the manifest base directory/.test(d.reason)),
+    () => escRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // NO FALSE ⚠ from the run-time check. `runTypes` scans every emitted `values.type`, which includes types the
+  // MAPPING TABLE never chose — the container builder's `crt.TabContainer` / `crt.GridContainer`, the image
+  // builder's `crt.ImageInput`, and the field control table's `crt.Input` / `crt.ComboBox` / `crt.NumberInput`.
+  // Those were never registry-checked before, so a rich page is the case that decides whether this check helps or
+  // blames the operator for a type the engine itself picked.
+  const richRun = gmRun([
+    `{operation:"insert",name:"Tabs",values:{itemType:0}}`,
+    `{operation:"insert",name:"T1",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,caption:{bindTo:"Resources.Strings.T1"}}}`,
+    `{operation:"insert",name:"Amount",parentName:"T1",propertyName:"items",values:{bindTo:"Amount"}}`,
+    `{operation:"insert",name:"Owner",parentName:"T1",propertyName:"items",values:{bindTo:"Owner"}}`,
+    `{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"PhotoId"}}`,
+  ].join(","), "", { platformVersion: "8.3.0", resources: { T1: "Tab one" },
+    entityColumns: { Name: { type: "ShortText" }, Amount: { type: "Currency2" }, Owner: { type: "Lookup", ref: "Contact" }, PhotoId: { type: "ImageLookup" } } });
+  const richTypes = [...new Set(richRun.changeSet.viewConfigDiff.map((o) => o.values?.type).filter(Boolean))];
+  check("ENG-95543: a tabbed page with fields and an image raises ZERO registry ⚠ at 8.3.0 — the check must not blame the operator for the container/field/image types the ENGINE picked",
+    richTypes.length >= 5 && !richRun.changeSet.needsDecision.some((d) => d.kind.startsWith("registry-")),
+    () => ({ types: richTypes, warnings: richRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")) }));
+
+  // The PLAN VERSION covers the registry the run was planned against. Recorded as a decision reversed on
+  // inspection: hashing only the version identity would have kept approvals alive across a CDN refresh, but the
+  // registry changes which `registry-target` ⚠ items a plan carries, so an approval must not survive it.
+  const verOf = (extra) => runMigration({ entity: "X", noParentTemplate: true,
+    schemas: [{ pkg: "P", body: gmBody("", `{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:6}}`) }], ...extra },
+    { baseDir: FIX }).planVersion;
+  const vPlain = verOf({});
+  check("ENG-95543: the plan version is stable for one manifest, and MOVES when the registry the plan was checked against changes (platformVersion / a stand export)",
+    vPlain === verOf({}) && verOf({ platformVersion: "8.3.0" }) !== vPlain
+    && verOf({ platformVersion: "8.3.3" }) !== verOf({ platformVersion: "8.3.0" })
+    && verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) !== vPlain,
+    () => ({ plain: vPlain, pinned830: verOf({ platformVersion: "8.3.0" }), pinned833: verOf({ platformVersion: "8.3.3" }),
+      withExport: verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) }));
+
+  // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
+  // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
+  // names. Both halves are asserted together on purpose — emitting the binding without the options is exactly the
+  // failure ("builds a plain input and silently drops the option captions") the row exists to prevent.
+  const rgFull = gmRun([
+    `{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"},caption:{bindTo:"Resources.Strings.IsPrimaryCaption"}}}`,
+    `{operation:"insert",name:"OptYes",parentName:"IsPrimary",propertyName:"items",values:{value:true,caption:{bindTo:"Resources.Strings.YesCaption"}}}`,
+    `{operation:"insert",name:"OptNo",parentName:"IsPrimary",propertyName:"items",values:{value:false,caption:{bindTo:"Resources.Strings.NoCaption"}}}`,
+  ].join(","), "", { entityColumns: { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" } },
+    resources: { IsPrimaryCaption: "Is primary", YesCaption: "Yes", NoCaption: "No" } });
+  const rgEl = rgFull.changeSet.viewConfigDiff.find((o) => o.name === "IsPrimary");
+  check("ENG-95543: a complete RADIO_GROUP is BUILT as crt.IconRadioButton — control from the NESTED value.bindTo, label from the caption",
+    rgEl?.values?.type === "crt.IconRadioButton" && rgEl.values.control === "$IsPrimary"
+    && rgEl.values.label === "$Resources.Strings.IsPrimaryCaption",
+    () => rgEl);
+  // `false` is a legal option value and must survive: a truthiness test anywhere on this path drops the "No"
+  // option and leaves a one-option radio group that always answers yes.
+  check("ENG-95543: the option sub-items become items[] with their own captions, and the `false` option SURVIVES (never a truthiness test)",
+    Array.isArray(rgEl?.values?.items) && rgEl.values.items.length === 2
+    && rgEl.values.items[0].value === true && rgEl.values.items[1].value === false
+    && rgEl.values.items[1].caption === "$Resources.Strings.NoCaption",
+    () => rgEl?.values?.items);
+  // The selection IS an entity column, so it needs the field 3-part binding. Without the attribute the `control`
+  // binding points at nothing and the built control never loads a value.
+  const rgAttrs = rgFull.changeSet.viewModelConfigDiff?.[0]?.values || {};
+  const rgPds = rgFull.changeSet.modelConfigDiff?.[0]?.values || {};
+  check("ENG-95543: the radio group registers its attribute + PDS column like a field — the `control` binding is not left dangling",
+    rgAttrs.IsPrimary?.modelConfig?.path === "PDS.IsPrimary" && rgPds.IsPrimary?.path === "IsPrimary",
+    () => ({ rgAttrs, rgPds }));
+  // The absorbed sub-items must be ACCOUNTED FOR: they are part of the emitted control, so the drop sweep must not
+  // report each option as an element that produced nothing.
+  check("ENG-95543: the absorbed option sub-items are accounted for and raise NO unmapped-component ⚠ of their own",
+    rgFull.changeSet.accountedFor.includes("OptYes") && rgFull.changeSet.accountedFor.includes("OptNo")
+    && !rgFull.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && ["OptYes", "OptNo", "IsPrimary"].includes(d.item)),
+    () => rgFull.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component"));
+
+  // ONE row per emitted control, the rule the repo already states for the `fieldImages` fold. `crt.IconRadioButton`
+  // carries `values.control`, so it satisfies `isField` — publishing it in `tableElements` too gave it a second
+  // Layout row and a second coverage row for one control. Counting RENDERED lines is the only check that sees it:
+  // both producers were individually correct, and the ChangeSet was correct as well.
+  const rgSpec = renderDesignSpec(rgFull, {});
+  check("ENG-95543: a control-bound table element is reported ONCE — the field path owns it, so no duplicate Layout/coverage row",
+    rgSpec.split("\n").filter((l) => /\|/.test(l) && /IsPrimary/.test(l)).length === 1
+    && (rgFull.changeSet.tableElements || []).length === 0,
+    () => ({ lines: rgSpec.split("\n").filter((l) => /IsPrimary/.test(l)), tableElements: rgFull.changeSet.tableElements }));
+
+  // A BUTTON with a click handler and a MENU: tier B. The view is built (caption + menuItems), and the imperative
+  // part is published as a `clicked` request on the worklist rather than left implicit.
+  const btnRun = gmRun([
+    `{operation:"insert",name:"SendBtn",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON,caption:{bindTo:"Resources.Strings.SendCaption"},click:{bindTo:"onSendClick"}}}`,
+    `{operation:"insert",name:"SendMenu",parentName:"SendBtn",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU}}`,
+    `{operation:"insert",name:"SendNow",parentName:"SendMenu",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU_ITEM,caption:{bindTo:"Resources.Strings.NowCaption"},click:{bindTo:"onSendNow"}}}`,
+  ].join(","), "", { resources: { SendCaption: "Send", NowCaption: "Send now" } });
+  const btnEl = btnRun.changeSet.viewConfigDiff.find((o) => o.name === "SendBtn");
+  check("ENG-95543: a BUTTON is built as crt.Button with its caption, and its MENU/MENU_ITEM descendants fold into menuItems (through the intermediate MENU)",
+    btnEl?.values?.type === "crt.Button" && btnEl.values.caption === "$Resources.Strings.SendCaption"
+    && btnEl.values.menuItems?.length === 1 && btnEl.values.menuItems[0].caption === "$Resources.Strings.NowCaption",
+    () => btnEl);
+  const rh = (btnRun.changeSet.requestHandlers || []).find((r) => r.element === "SendBtn");
+  check("ENG-95543 tier B: the button's `clicked` request is wired on the element AND published with the classic handler it came from",
+    btnEl?.values?.clicked?.request === "usr.SendBtnClicked"
+    && rh?.request === "usr.SendBtnClicked" && rh.classicHandler === "onSendClick" && rh.tier === "B",
+    () => ({ clicked: btnEl?.values?.clicked, published: btnRun.changeSet.requestHandlers }));
+  check("ENG-95543: the folded MENU and MENU_ITEM are accounted for — they are part of the button, not elements that produced nothing",
+    ["SendMenu", "SendNow"].every((n) => btnRun.changeSet.accountedFor.includes(n))
+    && !btnRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component"),
+    () => btnRun.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component"));
+
+  // A standalone LABEL carries author copy: tier A, nothing left to decide.
+  const lblRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NoteCaption"}}}`,
+    "", { resources: { NoteCaption: "Read this first" } });
+  check("ENG-95543: a standalone LABEL is built as crt.Label with a localizable caption BINDING (never the literal text)",
+    lblRun.changeSet.viewConfigDiff.some((o) => o.name === "NoteLbl" && o.values?.type === "crt.Label"
+      && o.values.caption === "$Resources.Strings.NoteCaption")
+    && lblRun.changeSet.resources?.NoteCaption === "Read this first"
+    && !lblRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && d.item === "NoteLbl"),
+    () => lblRun.changeSet.viewConfigDiff.filter((o) => o.name === "NoteLbl"));
+  // ...but the record TITLE label is not one: the Freedom page titles itself from the primary display column, so
+  // building a crt.Label for it would put the record name on the page twice.
+  const titleRun = gmRun(`{operation:"insert",name:"TitleLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"getPrimaryDisplayColumnValue"}}}`);
+  check("ENG-95543: a primary-display LABEL is NOT built — the Freedom page title already shows it, and a crt.Label would duplicate it",
+    !titleRun.changeSet.viewConfigDiff.some((o) => o.name === "TitleLbl")
+    && !titleRun.changeSet.needsDecision.some((d) => d.item === "TitleLbl"),
+    () => ({ emitted: titleRun.changeSet.viewConfigDiff.filter((o) => o.name === "TitleLbl"), decisions: titleRun.changeSet.needsDecision.filter((d) => d.item === "TitleLbl") }));
+
+  // HYPERLINK -> crt.Link. `mode: "preventDefault"` is the registry's contract for a link whose destination comes
+  // from a click handler rather than an href — which is every classic hyperlink, since the schema has no URL.
+  const linkRun = gmRun(`{operation:"insert",name:"OpenLink",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.HYPERLINK,caption:{bindTo:"Resources.Strings.OpenCaption"},click:{bindTo:"onOpenClick"}}}`,
+    "", { resources: { OpenCaption: "Open" } });
+  const linkEl = linkRun.changeSet.viewConfigDiff.find((o) => o.name === "OpenLink");
+  check("ENG-95543: a HYPERLINK is built as crt.Link (NOT a link-styled crt.Label, which has no href input in any version) with mode preventDefault + a clicked request",
+    linkEl?.values?.type === "crt.Link" && linkEl.values.mode === "preventDefault"
+    && linkEl.values.clicked?.request === "usr.OpenLinkClicked",
+    () => linkEl);
+
+  // review (PR#114) — a folded MENU_ITEM's `clicked` carries ONLY the request. `classicHandler` is engine
+  // knowledge: it belongs on the `requestHandlers` worklist beside the button's, not inside `values.menuItems`,
+  // which IS the schema the executor applies (no component contract declares that key). It went into `values`
+  // while the owning button's went to the worklist — the two paths sit 55 lines apart in one function.
+  const miRun = gmRun([
+    `{operation:"insert",name:"SendBtn2",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON,caption:{bindTo:"Resources.Strings.SendCaption"},click:{bindTo:"onSendClick"}}}`,
+    `{operation:"insert",name:"SendNow2",parentName:"SendBtn2",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU_ITEM,caption:{bindTo:"Resources.Strings.NowCaption"},click:{bindTo:"onSendNow"}}}`,
+  ].join(","), "", { resources: { SendCaption: "Send", NowCaption: "Send now" } });
+  const miEntry = miRun.changeSet.viewConfigDiff.find((o) => o.name === "SendBtn2")?.values?.menuItems?.[0];
+  const miHandler = (miRun.changeSet.requestHandlers || []).find((r) => r.element === "SendNow2");
+  check("review(PR#114): a folded MENU_ITEM emits ONLY `clicked.request` — its classic handler is published on requestHandlers (crt.MenuItem), never inside the page schema",
+    () => Object.keys(miEntry.clicked).join(",") === "request" && miEntry.clicked.request === "usr.SendNow2Clicked"
+    && miHandler.classicHandler === "onSendNow" && miHandler.componentType === "crt.MenuItem" && miHandler.tier === "B",
+    () => ({ entry: miEntry, handler: miHandler }));
+
+  // review (PR#114) — a table-emitted element's NAME goes through the same uniquifier the field pass uses. A field
+  // is emitted under its COLUMN name, not its classic element name, so a classic LABEL named after a column
+  // produced TWO inserts with one name in one container and applying the diff overwrote one control with the other.
+  const collRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+    resources: { NameCaption: "Full name" },
+    schemas: [{ pkg: "P", body: gmBody("", [
+      `{operation:"insert",name:"NameEdit",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
+      `{operation:"insert",name:"Name",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NameCaption"}}}`,
+    ].join(",")) }] }, { baseDir: FIX });
+  const collNames = collRun.changeSet.viewConfigDiff.map((o) => o.name);
+  check("review(PR#114): a table-emitted element cannot collide with a field's element name — the classic LABEL 'Name' emits as 'Name_2' beside the field bound to column 'Name'",
+    collNames.filter((n) => n === "Name").length === 1 && collNames.includes("Name_2")
+    && collRun.changeSet.viewConfigDiff.find((o) => o.name === "Name_2")?.values?.type === "crt.Label"
+    && collRun.changeSet.accountedFor.includes("Name"),   // accounting keeps the CLASSIC name
+    () => collNames);
+
+  // review(PR#114) — the five standard ACTIONS-menu items are `mapCardActions`' business. Emitting one here too
+  // built the same classic action twice: a card action AND a crt.Button in the side profile.
+  const caRun = gmRun(`{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON,caption:{bindTo:"Resources.Strings.PrintCaption"}}}`,
+    "", { resources: { PrintCaption: "Print" } });
+  check("review(PR#114): a standard card-action button is claimed ONLY by mapCardActions — the table does not also emit it as a form crt.Button",
+    caRun.changeSet.cardActions.includes("PrintButton")
+    && !caRun.changeSet.viewConfigDiff.some((o) => o.name === "PrintButton")
+    && !(caRun.changeSet.tableElements || []).some((e) => e.classic === "PrintButton"),
+    () => ({ cardActions: caRun.changeSet.cardActions, ops: caRun.changeSet.viewConfigDiff.filter((o) => o.name === "PrintButton") }));
+
+  // review(PR#114) — the caption decision is a side effect of RESOLVING a prop, so an element that then falls short
+  // of its row's tier used to leave it behind: the plan asked the reader to author a caption for a control the
+  // engine deliberately did NOT build, right beside the ⚠ saying it was not built.
+  const gapRun = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"}}}`);
+  check("review(PR#114): an element that degrades to a typed ⚠ leaves NO caption decision behind — only the unmapped-component item",
+    gapRun.changeSet.needsDecision.filter((d) => d.item === "IsPrimary").map((d) => d.kind).join(",") === "unmapped-component",
+    () => gapRun.changeSet.needsDecision.filter((d) => d.item === "IsPrimary"));
+
+  // A `generator` OVERRIDES the itemType in Classic (`generateItem` checks it first), so the element is whatever
+  // the generator draws — the table must not answer for it. Without this the engine would emit a crt.Label over a
+  // generator-drawn widget and call the page migrated.
+  const genRun = gmRun(`{operation:"insert",name:"GenLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,generator:"CustomWidgetGenerator",caption:{bindTo:"Resources.Strings.NoteCaption"}}}`);
+  check("ENG-95543: a `generator` override beats the table — a generator-drawn LABEL is NOT built as crt.Label (mirroring generateItem's own precedence)",
+    !genRun.changeSet.viewConfigDiff.some((o) => o.name === "GenLbl")
+    && genRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && d.item === "GenLbl"),
+    () => genRun.changeSet.viewConfigDiff.filter((o) => o.name === "GenLbl"));
 
   // Decoration: a recorded disposition, NOT a suppression and NOT a ⚠. Both halves matter — a filter would leave
   // the reader unable to audit what the engine decided to ignore.
@@ -7665,13 +8243,15 @@ try {
     () => ({ itemKind: pbDec?.itemKind, reason: pbDec?.reason }));
   // Negative control: the generic typed text must survive for every OTHER known kind, or the branch above would
   // just have replaced the message for all of them.
-  const rgRun = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP}}`);
-  const rgDec = rgRun.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "IsPrimary");
-  check("ENG-95412: a RADIO_GROUP still gets the GENERIC typed text — the PROGRESS_BAR branch is one kind, not a rewrite of every kind's message",
-    !!rgDec && rgDec.itemKind === "RADIO_GROUP"
-    && /missing MAPPING rather than unknown UI/.test(rgDec.reason)
-    && !/NO dispatch branch/.test(rgDec.reason),
-    () => ({ itemKind: rgDec?.itemKind, reason: rgDec?.reason }));
+  // The control kind is SCHEDULE_EDIT, not RADIO_GROUP: RADIO_GROUP has a mapping since ENG-95543, so it no longer
+  // takes the generic text and would make this control vacuous. SCHEDULE_EDIT is still tier C.
+  const seRun = gmRun(`{operation:"insert",name:"Planner",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.SCHEDULE_EDIT}}`);
+  const seDec = seRun.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "Planner");
+  check("ENG-95412: a still-unmapped kind gets the GENERIC typed text — the PROGRESS_BAR branch is one kind, not a rewrite of every kind's message",
+    !!seDec && seDec.itemKind === "SCHEDULE_EDIT"
+    && /missing MAPPING rather than unknown UI/.test(seDec.reason)
+    && !/NO dispatch branch/.test(seDec.reason),
+    () => ({ itemKind: seDec?.itemKind, reason: seDec?.reason }));
 
   // ---- ENG-95412: the reclassified decoration kinds, BOTH arms ----
   // Arm A: a TIP_LABEL whose subtree produced nothing now SURFACES. As `chrome` it was auto-accounted by

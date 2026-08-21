@@ -328,6 +328,17 @@ check("ENG-95412: `remove` with a `properties` array clears ONLY those keys and 
   !!rmPropsItem && rmPropsItem.caption === null && rmPropsItem.bindTo === "Name" && rmPropsItem.itemType === 6
   && !rmProps.removed.some((r) => r.name === "Fld"),
   () => ({ item: rmPropsItem, removed: rmProps.removed.map((r) => r.name) }));
+// review (PR#114) — `value` is the one removable key modelled as TWO fields (`valueBindTo` + `optionValue`), and
+// its branch recorded provenance itself on top of the unconditional record after the loop: the layer that cleared
+// the key was listed TWICE as having touched the element. Both fields must clear, and the package must appear once.
+const rmValue = realRun2(
+  `{operation:"insert",name:"Opt",parentName:"Header",propertyName:"items",values:{itemType:19,value:{bindTo:"IsPrimary"}}}`,
+  `{operation:"remove",name:"Opt",properties:["value"]}`);
+const rmValueItem = rmValue.items.find((i) => i.name === "Opt");
+check("review(PR#114): `remove properties:[\"value\"]` clears BOTH derived fields and lists the removing package ONCE (its branch pushed provenance on top of the unconditional record)",
+  () => rmValueItem.valueBindTo === null && rmValueItem.optionValue === null
+  && rmValueItem.provenance.join(",") === "A,B",
+  () => rmValueItem);
 // The control arm: a plain `remove` must still tombstone. Without it, "keeps the element" could be implemented by
 // making every remove a no-op.
 const rmPlain = realRun2(

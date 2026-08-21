@@ -12,6 +12,8 @@ import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -1924,6 +1926,93 @@ const guidelinesReturnFor = () => ""
       () => !/\/m\/slices\//.test(rendered.app) && !/\/m\/slices\//.test(rendered.appNoMenu) && !/\/m\/slices\//.test(rendered.reach),
       () => ({ app: /\/m\/slices\//.test(rendered.app || ""), reach: /\/m\/slices\//.test(rendered.reach || "") }));
   }
+}
+
+
+/* ---- ENG-95543: the reference doc is LINT-CHECKED against the shared mapping table -------------------------
+ * The ticket asks for the doc's classification rows to be generated from, or lint-checked against, the table.
+ * Lint-checked, not generated: the rows carry build recipes, on-stand checks and a "Do NOT" column that no table
+ * holds, and generating the file would delete exactly the part a human wrote. What the lint covers is the part
+ * that CAN silently drift — a `crt.*` type that does not exist, and a table row nobody documented.
+ */
+{
+  const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
+  const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
+  const index = vendoredIndex();
+  // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect (ENG-95555) in its
+  // DOC form: `crt.ContactCommunication` was written in prose long before anyone checked it against a stand, and
+  // prose is what an agent reads when Node is unavailable.
+  const allDocTypes = [...new Set((doc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || []))];
+  // A `crt.*Request` / `crt.*Service` is NOT a component: requests live in the CDN's separate RequestRegistry
+  // (published for `latest` only, and it does not carry all of them — `crt.HandlerChainService` is an Angular
+  // service, `crt.EntityStageProgressBarLoadDataRequest` a component-specific request). The component index cannot
+  // judge them, so they are excluded here and remain UNCHECKED — stated rather than silently folded in.
+  const isComponentName = (t) => !/(?:Request|Service)$/.test(t);
+  // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
+  // it is the warning that it does not. Those are checked the other way round below.
+  const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
+  const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t));
+  const unknownDocTypes = docTypes.filter((t) => !index.components[t]);
+  check(`ENG-95543 doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index`,
+    docTypes.length >= 5 && unknownDocTypes.length === 0,
+    () => ({ checked: docTypes.length, unknown: unknownDocTypes, excludedAsRequests: allDocTypes.filter((t) => !isComponentName(t)) }));
+  // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
+  // registry really carries is telling the reader to avoid something valid.
+  const wrongCounterExamples = [...counterExamples].filter((t) => index.components[t]);
+  check("ENG-95543 doc lint: a type the doc names as a counter-example (\"NOT `crt.X`\") really is absent from the registry — otherwise the doc warns against a real component",
+    counterExamples.size >= 1 && wrongCounterExamples.length === 0,
+    () => ({ counterExamples: [...counterExamples], alsoRealComponents: wrongCounterExamples }));
+  // Every feature / widget the TABLE carries must be NAMED in the doc's standard-features section. Direction
+  // matters: table → doc catches a row added without documenting it, while doc → table would flag the many rows
+  // that are deliberately doc-only (Print, Run process, section actions — no table row emits those).
+  const section = doc.slice(doc.indexOf("## Standard features, widgets & actions"));
+  // A widget's label may carry a parenthetical qualifier the prose does not repeat (`Feed (ESN)` is documented as
+  // "Feed"), so the comparison is on the label without it. The NAME still has to appear — this trims a suffix, it
+  // does not accept a near-match.
+  // No regex: `\s*\(...\)\s*$` backtracks super-linearly (S8786), and the rule is simple enough to state
+  // directly — drop a TRAILING parenthetical and trim.
+  const bare = (n) => { const t = n.trim(); const i = t.lastIndexOf("("); return (i > 0 && t.endsWith(")") ? t.slice(0, i) : t).trim(); };
+  const tableNames = [...new Set(MAPPING_ROWS.flatMap((r) => [r.meta?.feature, ...(r.meta?.widgets || []).map((w) => w.widget)]).filter(Boolean))];
+  const undocumented = tableNames.filter((n) => !section.includes(n) && !section.includes(bare(n)));
+  check("ENG-95543 doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
+    tableNames.length >= 8 && undocumented.length === 0,
+    () => ({ names: tableNames, undocumented }));
+  // A CODE-level audit, the counterpart of the doc lint: every `crt.*` COMPONENT type the engine's own modules
+  // name must exist in the index. This is what catches a new control-table entry or a new row naming a type that
+  // does not exist — the run-time check would only find it once some real page emitted it.
+  //
+  // Two exclusions, both stated: `crt.*Request` / `crt.*Service` are not components (see above), and `crt.Tab` is
+  // an ACCEPTANCE spelling — `TAB_TYPES` carries it so `--verify` accepts a built page that still reports it,
+  // measured on a live stand as a type no platform builds. The engine never EMITS it, and the golden suite asserts
+  // that separately (a rich tabbed page emits `crt.TabContainer`).
+  const engineSrc = ["mapper.mjs", "designspec.mjs", "migrate.mjs", "mapping-table.mjs", "mapping-registry.mjs"]
+    .map((f) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/" + f, import.meta.url)), "utf8")).join("\n");
+  const ACCEPTANCE_ONLY = new Set(["crt.Tab"]);
+  // The same counter-example rule the doc lint applies: a note saying "NOT `crt.X`" is a WARNING that the type does
+  // not exist, and the engine's own notes carry one (`crt.ContactCommunication` — the `ContactCommunication` ENTITY
+  // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
+  const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
+  const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
+    .filter((t) => !/(?:Request|Service)$/.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
+  const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
+  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services and the crt.Tab acceptance spelling)",
+    engineTypes.length >= 15 && unknownEngineTypes.length === 0,
+    () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
+  // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
+  // a convenient way to hide a type. If the registry ever carries it, the exclusion is wrong.
+  check("ENG-95543 code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
+    codeCounterExamples.size >= 1 && [...codeCounterExamples].every((t) => !index.components[t]),
+    () => [...codeCounterExamples].filter((t) => index.components[t]));
+  check("ENG-95543 code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
+    !index.components["crt.Tab"],
+    () => Object.keys(index.components).filter((t) => t.startsWith("crt.Tab")));
+
+  // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
+  // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,
+  // which is how the "change both in the same commit" rule quietly stops being followed.
+  check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
+    /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
+    () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
