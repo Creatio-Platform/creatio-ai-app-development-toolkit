@@ -690,7 +690,9 @@ check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
-  /const mergeOk = !!\(merged && merged\.reportPath && merged\.indexPath\)/.test(bhSrc)
+  // Optional chaining now (the null-guard was spelled out longhand); the GUARANTEE is unchanged — the verdict
+  // requires a Merge that produced BOTH deliverables, not merely a coverage count.
+  /const mergeOk = !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(bhSrc)
     && /const complete = mergeOk && isComplete\(/.test(bhSrc));
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
