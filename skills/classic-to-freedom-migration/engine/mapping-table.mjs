@@ -569,6 +569,7 @@ export function gateConflicts(rows = MAPPING_ROWS) {
 // extension point.
 const GATE_KEYS = new Set(["kind", "id", "feature"]);
 const nonEmptyString = (v) => typeof v === "string" && v.length > 0;
+const backticked = (k) => `\`${k}\``;              // named so the message below is not a nested template (Sonar S4624)
 export function gateShapeIssues(rows = MAPPING_ROWS) {
   const out = [];
   for (const r of rows) {
@@ -578,7 +579,8 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
     const bad = (why) => out.push({ kind: "gate-shape", componentType, gate: g, why });
     if (typeof g !== "object" || Array.isArray(g)) { bad("a gate must be an object"); continue; }
     const stray = Object.keys(g).filter((k) => !GATE_KEYS.has(k));
-    if (stray.length) bad(`unknown gate key(s) ${stray.map((k) => `\`${k}\``).join(", ")} — a mistyped key is read as an ABSENT one`);
+    const strayList = stray.map(backticked).join(", ");
+    if (stray.length) bad(`unknown gate key(s) ${strayList} — a mistyped key is read as an ABSENT one`);
     if (g.kind !== GATE_KIND.COMPOSITE)
       bad(`gate kind \`${String(g.kind)}\` is not read by the guidance — \`${GATE_KIND.COMPOSITE}\` is the only kind a row may carry today`);
     else if (!nonEmptyString(g.id)) bad(`a \`${GATE_KIND.COMPOSITE}\` gate needs a non-empty string \`id\` (the package to install)`);
