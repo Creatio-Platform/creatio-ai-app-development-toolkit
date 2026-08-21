@@ -25,7 +25,9 @@ python cost_counter.py <export-dir> [section] [--pages N] [--format text|md|json
 ```
 
 - `<export-dir>` — the folder that holds `transcript.jsonl` and the
-  `<session-id>/` subtree (see layout below).
+  `<session-id>/` subtree (see layout below). Absolute or relative; it must
+  live **somewhere under your home directory** (see
+  [Where the export may live](#where-the-export-may-live)).
 - `section` — one of `all` (default), `stage`, `tool`, `role`, `agent`,
   `ttl`, `check`.
 - `--pages N` — override the built-page count used for per-page normalization
@@ -83,6 +85,32 @@ python cost_counter.py /path/to/session-export ttl         # cache-write TTL spl
 
 The output is UTF-8 (transcripts carry Cyrillic captions and box glyphs); the
 tool forces UTF-8 on stdout so it renders on a Windows `cp1252` console.
+
+## Where the export may live
+
+The path arguments (`<export-dir>` and `--compare`) go through the repository's
+shared resolver, [`runtime/path_store.py`](../../../../runtime/path_store.py),
+before anything is opened. The string you type is never used as a path: it is
+split into names, each name is matched against the listing of the directory
+reached so far, and the component that actually gets joined is the one the
+listing reported. `..`, an absolute path elsewhere on the machine and a symlink
+that leads out are not so much rejected as inexpressible - you can only descend
+into an entry that is really there.
+
+The practical consequence: **the export has to sit somewhere under your home
+directory**. That is where session exports land anyway (`~/Downloads/...`), and
+both absolute and relative paths work as long as they resolve under the
+profile. An export elsewhere is refused with a message naming the base:
+
+```
+path is outside the directory this tool may read
+    requested : C:\Projects\some\export
+    allowed   : C:\Users\you (and anything beneath it)
+```
+
+Move it under your profile, or construct the tool with a store rooted where the
+input already lives (`main(argv, store=PathStore(...))`, which is how the tests
+stand up fixtures in a temp directory).
 
 ## Expected export layout
 

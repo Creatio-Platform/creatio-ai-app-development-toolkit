@@ -17,6 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
+import { featureVerifyType, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -242,6 +243,25 @@ function rowsForCardActions(cardActions, result, opts) {
     return { region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] };
   });
 }
+// ENG-95543 — one Layout row per element the shared mapping table emitted (`crt.Label` / `crt.Button` /
+// `crt.Link`). These carry no `values.control`, so `isField` cannot see them and without this builder they would be
+// built and invisible in every table the reader looks at. A tier-B element says so in its note: the view is built,
+// the classic click still has to be ported into the named request.
+function rowsForTableElements(elements, regionOf) {
+  return (elements || []).map((el) => {
+    const src = `classic ${esc(String(el.classicKind || "element"))}`;
+    // Built in two statements rather than one nested template: the inner backtick-quoting of each folded name is
+    // its own expression, so the note below reads as prose instead of as three levels of interpolation.
+    const foldedNames = (el.folded || []).map((f) => "`" + esc(f) + "`").join(", ");
+    const foldNote = foldedNames ? ` (folds ${foldedNames})` : "";
+    const note = el.request
+      ? `→ \`${esc(el.componentType)}\`${foldNote} — view built; its classic click is NOT ported: wire the \`${esc(el.request)}\` request handler`
+      : `→ \`${esc(el.componentType)}\`${foldNote} — built from the classic element's own config`;
+    return { region: el.parent ? regionOf(el.parent) : "⚠ unplaced", sort: 0,
+      cells: [esc(el.classic), esc(el.componentType), src, el.tier === "B" ? "behaviour stub" : DASH, note] };
+  });
+}
+
 function rowsForImages(images, regionOf) {
   return (images || []).map((im) => {
     // Source = the resolved IMAGELOOKUP column when known; a related-object photo shows its lookup path; a FILL
@@ -676,6 +696,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForWidgets(cs.widgets),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
+    ...rowsForTableElements(cs.tableElements, regionOf),
     ...rowsForProfileCards(cs.profileCards, regionOf),
   ];
   // group by region (first-seen order), then reading order: side profile FIRST, tabs, widgets, actions, flagged.
@@ -1109,11 +1130,19 @@ const LEDGER_PREAMBLE = [
   "> Every member of every merged schema layer, and what happened to it. **mapped** = the ChangeSet carries a",
   "> Freedom artifact · **decision** = it is on a ⚠ worklist above · **resolved** = you recorded a disposition in",
   "> `manifest.memberDispositions` · **context** = inherited base-template content, excluded by design ·",
+  "> **decoration** = pure UI furniture (a menu separator — and only that) — identified by its classic kind, and",
+  "> carrying no migration answer to give. A tooltip, a control's own label and the grid-settings editor were",
+  "> provisionally counted here and are NOT decoration: each carries author-written text or its own child items,",
+  "> so each gets a normal ⚠ row instead of being auto-accounted ·",
   "> **unaccounted** = a gap, and the coverage gate blocks on it.", "",
-  "| Member kind | Mapped | Decision | Resolved | Context | Unaccounted |",
-  "| --- | --- | --- | --- | --- | --- |",
+  "| Member kind | Mapped | Decision | Resolved | Context | Decoration | Unaccounted |",
+  "| --- | --- | --- | --- | --- | --- | --- |",
 ];
-const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "unaccounted"];
+// Column order = the header above, and nothing else — this list is a RENDERING order, not a rank. It deliberately
+// does NOT mirror `disposition()` (migrate.mjs), which returns `chrome` ahead of `context`: the table reads better
+// with the two auto-accounted columns in template-then-decoration order, and the header is the only contract a
+// reader can check. Claiming the two orders coincide would be a claim a reader can falsify in thirty seconds.
+const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "chrome", "unaccounted"];
 // explicit locale-aware comparator (Array#sort's default coerces to string and orders by code unit) — the same
 // determinism discipline engine.mjs applies to its own diagnostic lists, and a golden test asserts byte-identical
 // output across two runs of the same manifest.
@@ -1586,17 +1615,28 @@ function buildCoverageRows(cs, pm, result) {
     .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
   const expImages = (cs.images || []).length + fieldImageCount;
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
+  // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
+  // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
+  // page that dropped every one of them, and the executor would never fetch their documentation.
+  const byType = new Map();
+  for (const el of cs.tableElements || []) {
+    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
+    e.n++; e.kinds.add(String(el.classicKind || "element"));
+    byType.set(el.componentType, e);
+  }
+  for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
+    cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
+      vk: { type: "element", ctype, n: e.n } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
   // published in `componentTypesOf` (→ `--units.pages[].componentTypes`), so it must be a type the built page really
-  // carries and the stand really resolves. "Communication options" is the native `crt.CommunicationOptions`
-  // (a compositeOnly widget the "Communication options" composite assembles) — NOT `crt.ContactCommunication`, which
-  // was a fabricated name (the `ContactCommunication` ENTITY with a `crt.` prefix) that resolves to nothing on-stand;
-  // verified on-stand (ENG-95468). The other three resolve as-is.
-  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.CommunicationOptions", Attachments: "crt.FileList", Feed: "crt.Feed" };
+  // carries and the stand really resolves. It comes from the SHARED MAPPING TABLE (ENG-95543): this used to be a
+  // local `FEATURE_TYPE` map — a SECOND home for the same knowledge the mapper asserted in prose, so the gate and
+  // the plan could disagree about which component a feature means. The table's types are checked against the
+  // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
   for (const s of cs.standardFeatures || []) {
-    const f = s.feature || s.caption || ""; const t = FEATURE_TYPE[f];
+    const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
     cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
   }
@@ -2164,24 +2204,38 @@ function pageExpect(rows) {
 // derivable here — the fold keeps a child's rendered spec, not its ChangeSet — but they are also not plan-specific:
 // they are the same small set on every migration, so they belong to the executor's own fixed list. Publishing a
 // half-guessed superset would be worse than publishing exactly what is known.
+// The FIXED type each vk kind publishes. A table, not an if/else chain: every arm was "this kind means that one
+// component", and stating it as data keeps the two kinds that need real logic (`feature`, `element`) visible
+// instead of buried in a chain the reader has to scan to the end of (Sonar CC 15).
+//
+// TAB_TYPES carries the LEGACY spelling too, because the gate must accept a page that still reports it. This list
+// is for FETCHING a component's documentation, so it takes only the spelling a current platform actually builds
+// (`TAB_TYPES[0]`, the same choice `resolveCountVk` makes for its message) — asking the stand about `crt.Tab` is a
+// call that cannot succeed.
+const VK_FIXED_TYPE = new Map([
+  ["dcm-bar", "crt.EntityStageProgressBar"],
+  ["dcm-next", "crt.NextSteps"],
+  ["card", "crt.Button"],
+  ["image", "crt.ImageInput"],
+  ["tabs", TAB_TYPES[0]],
+  ["details", "crt.DataGrid"],
+]);
 function componentTypesOf(rows) {
   const out = new Set();
   for (const r of rows || []) {
     const vk = r.vk;
     if (!vk) continue;
+    const fixed = VK_FIXED_TYPE.get(vk.type);
+    if (fixed) { out.add(fixed); continue; }
     // The planned type AND its curated Freedom analog (ENG-95470): a migration builds the native analog, so the
     // executor must fetch ITS documentation and `--verify` accepts it — the typed component intent both sides match on.
-    if (vk.type === "feature" && typeof vk.ftype === "string") { out.add(vk.ftype); for (const a of componentAnalogsOf(vk.ftype)) out.add(a); }
-    else if (vk.type === "dcm-bar") out.add("crt.EntityStageProgressBar");
-    else if (vk.type === "dcm-next") out.add("crt.NextSteps");
-    else if (vk.type === "card") out.add("crt.Button");
-    else if (vk.type === "image") out.add("crt.ImageInput");
-    // TAB_TYPES carries the LEGACY spelling too, because the gate must accept a page that still reports it. This
-    // list is for FETCHING a component's documentation, so it takes only the spelling a current platform actually
-    // builds (`TAB_TYPES[0]`, the same choice `resolveCountVk` makes for its message) — asking the stand about
-    // `crt.Tab` is a call that cannot succeed.
-    else if (vk.type === "tabs") out.add(TAB_TYPES[0]);
-    else if (vk.type === "details") out.add("crt.DataGrid");
+    if (vk.type === "feature" && typeof vk.ftype === "string") {
+      out.add(vk.ftype);
+      for (const a of componentAnalogsOf(vk.ftype)) out.add(a);
+    }
+    // A table-emitted element's own type. It belongs here for the same reason the feature types do: this list is
+    // what the executor fetches documentation from once per run, and what the gate then judges the build against.
+    else if (vk.type === "element" && typeof vk.ctype === "string") out.add(vk.ctype);
   }
   for (const t of listComponentTypes(rows)) out.add(t);
   return [...out].sort((a, b) => a.localeCompare(b));
@@ -2636,9 +2690,21 @@ const BUILT_TYPES = {
   tabs: TAB_TYPES,
   details: ["crt.DataGrid"],
 };
+// ENG-95543 — a table-emitted componentType, with the SAME tri-state every other count row applies: an absent
+// `--built.pages` entry means nobody looked (⚠), a partial count is ⚠, zero built is ❌. Reusing the tri-state
+// rather than a bare `hasType` check is what keeps "the verifier never fetched this page" from reading as
+// "you failed to build it".
+function resolveElementVk(vk, ctx) {
+  const b = ctx.typeCount(vk.ctype);
+  if (b >= vk.n) return ["✅ Done", `${b} ${vk.ctype} built`, "ok"];
+  if (b > 0) return ["⚠ verify", `${b}/${vk.n} ${vk.ctype} built`, "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.ctype} element(s)`);
+  return ["❌ MISSING", `no ${vk.ctype} built (${vk.n} expected)`, "missing"];
+}
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") return resolveFieldsVk(vk, ctx);
   if (vk.type === "image") return resolveImageVk(vk, ctx);
+  if (vk.type === "element") return resolveElementVk(vk, ctx);
   const accepted = BUILT_TYPES[vk.type === "tabs" ? "tabs" : "details"];
   const noun = accepted[0]; // what the message names: the spelling a current platform actually builds
   const b = accepted.reduce((n, t) => n + ctx.typeCount(t), 0);
@@ -2654,21 +2720,18 @@ function componentNoun(vk) {
   if (vk.type === "feature") return esc(String(vk.ftype || "the standard feature"));
   return COMPONENT_NOUN[vk.type] || "this page's components";
 }
-// The INTERIM role/analog table (ENG-95470). A planned Classic-derived component type is SATISFIED by its curated
-// Freedom analog: a migration builds the NATIVE Freedom component, not a literal of the Classic name, so a row that
-// expected `crt.ContactCommunication` (the ContactCommunication entity with a `crt.` prefix) is Done when the built
-// page carries `crt.CommunicationOptions` (the native Communication-options component). Without this the analog read
-// ❌ MISSING on a correctly built page — the false MISSING this ticket removes. Matched STRICTLY against curated
-// pairs (never a fuzzy family), so a wrong component cannot falsely satisfy a row. Sourced by hand from
-// `classic-to-freedom-mapping.md` until ENG-95543's registry lands, then repointed there (same expected set, one
-// call site). Keys and values are `crt.*` component types.
-const COMPONENT_ANALOGS = {
-  "crt.ContactCommunication": ["crt.CommunicationOptions"],
-};
+// ROLE/ANALOG matching (ENG-95470), now sourced from the SHARED MAPPING TABLE (ENG-95543) — the repoint that
+// ticket's own comment asked for. A planned Classic-derived component type is SATISFIED by the real Freedom
+// component whose row declares it: a plan that expected `crt.ContactCommunication` (the ContactCommunication
+// ENTITY with a `crt.` prefix, a name no stand resolves) is Done when the built page carries
+// `crt.CommunicationOptions`. Without this the analog read ❌ MISSING on a correctly built page. Still matched
+// STRICTLY against declared pairs, never a fuzzy family, so a wrong component cannot falsely satisfy a row — and
+// the pairs now sit beside the mapping they belong to, with the registry check asserting that a legacy name is one
+// the registry does NOT carry.
 // The Freedom analog types accepted for a planned component type — the curated pair, or `[]` when none. Own fn so
 // both `resolveComponentVk` (matching) and `componentTypesOf` (publishing the expected set) read ONE table.
 export function componentAnalogsOf(ftype) {
-  return COMPONENT_ANALOGS[ftype] || [];
+  return analogsOf(ftype);
 }
 // ROLE/ANALOG match (ENG-95470): the expected component type first, then its curated Freedom analog — a migration
 // builds the NATIVE Freedom component, so `crt.CommunicationOptions` satisfies a planned `crt.ContactCommunication`
@@ -2734,7 +2797,7 @@ export function resolveRuleVk(vk, ctx) {
   return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
-const VK_COUNT = new Set(["fields", "tabs", "details", "image"]);
+const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
 const VK_RULE = new Set(["rule"]);
 // A REACHABILITY / wiring deliverable (per-type routing, mini-page "+ New" binding, section registration, typed-form
