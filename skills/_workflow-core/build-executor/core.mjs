@@ -27,9 +27,10 @@
 // unit. A stop is always a PAGE BOUNDARY and always returns `stopped: 'paused-at-checkpoint'` — never `complete`.
 
 import { step, ACCESS } from '../work-item.mjs'
-import { makeContext, makePaths, normalizeInput, assertContextInput, resolveEngineCli, resolveSkillsRoot, q } from './context.mjs'
+import { makeContext, makePaths, normalizeInput, assertContextInput, resolveEngineCli, q } from './context.mjs'
 import {
-  answeredNoteFor, appUnitFor, approvalStop, blockedByParked,
+  absorbPreflight, answeredNoteFor, appUnitFor, approvalStop,
+  batchPreflight, blockedByParked,
   buildSchemaKind, claimsBlock, componentReplanClause, componentTypeList,
   componentTypeMismatches, composeBuildPrompt, earnedFrom, findingsFor,
   guidelinesCloseMiss, guidelinesReturnFor, isUnitOpenWithFindings, owesGuidelines,
@@ -346,6 +347,142 @@ Return the schema. Numbers only — this script does the judging.`
   // nothing, so there is no suspension point. A `function*` here would advertise one that cannot happen.
   //
   // `approval` is hoisted to the run's scope because every later return reports it — the gates only ASSIGN it.
+  // HARD STOPS 3 and 3.5, together: both read the SAME baseline Reconcile facts, and a re-plan should see both at
+  // once — a real run stopped on placement in round 1 and only met the fabricated component type rounds later. Its
+  // own function so `baselineGates` reads as a list of gates rather than a nest of compositions.
+  function placementAndComponentStop() {
+  // --- HARD STOP 3: the target package cannot be established or created -------
+  // Deliberately NOT a stop for the common case: an absent package WITH a name is what the `app` unit exists to
+  // build. What stops the run is a state it cannot act on — see `packagePreconditionStop`.
+  // The component-type pre-build gate (ENG-95468) shares this stop point — it runs on the SAME baseline Reconcile
+  // facts, before any unit is built. Computed here so a placement stop can carry the component mismatches too: the
+  // Applicant run stopped on placement in round 1 and only hit the fabricated component type rounds later, so a
+  // re-plan that sees BOTH at once fixes them in one pass.
+  const componentMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
+  // Non-gating VISIBILITY (ENG-95468, PR #102 review): a published type with NO resolution entry at all is not a
+  // failure — the gate deliberately stops only on an explicit `resolved: false` (absence is not evidence). But an
+  // incomplete sweep that resolved only some of the plan's types would otherwise leave no trace, and the builder
+  // would still hit the wall mid-Build on the un-swept one. Name the un-swept published types once, here, WITHOUT
+  // stopping, so a partial sweep is visible in the log instead of surfacing as a repair round later.
+  const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
+  const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
+  if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
+  const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
+  if (stopOnPackage) {
+    const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
+    log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}`)
+    return runReturn({
+      ...stopOnPackage,
+      componentMismatches,
+      // `...stopOnPackage` carries the package fix in `next`; when component types ALSO fail, spell them out in the
+      // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
+      // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
+      next: componentMismatches.length
+        ? stopOnPackage.next + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
+          + componentReplanClause(componentMismatches)
+        : stopOnPackage.next,
+      targetPackage: state.targetPackage || null,
+      packageState: state.packageState || null,
+      approval,
+      planVersion: state.planVersion || null,
+      verdict: verdictOf(state.verify),
+      staleQueueKeys: state.staleQueueKeys || [],
+      newKeys: state.newKeys || [],
+    })
+  }
+
+  // --- HARD STOP 3.5: a named component type that does not resolve on the stand (ENG-95468) ------------------
+  // The plan asserts `crt.*` types the build will look for; one that is not a real type on THIS stand makes a
+  // builder fail mid-Build and the run pay repair rounds for it. Catch it here, before the first unit, naming
+  // EVERY unresolved type at once so a re-plan fixes them in a single pass. Read-only: the resolution was
+  // Reconcile's `get-component-info` sweep. (When placement ALSO fails, the stop above already carried these.)
+  if (componentMismatches.length) {
+    log(`STOP — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(componentMismatches)}`)
+    return runReturn({
+      stopped: 'plan-invalid-against-stand',
+      componentMismatches,
+      targetPackage: state.targetPackage || null,
+      packageState: state.packageState || null,
+      approval,
+      planVersion: state.planVersion || null,
+      verdict: verdictOf(state.verify),
+      staleQueueKeys: state.staleQueueKeys || [],
+      newKeys: state.newKeys || [],
+      next: planInvalidNext(componentMismatches, 'Nothing was built.'),
+    })
+  }
+    return null
+  }
+
+  // HARD STOP 4, for both key channels. A checkpoint key and a finding key fail the same way — SILENTLY, in the
+  // worst direction: nothing schedules them, so the run would never stop and would close green with the reported
+  // defect untouched. Same check, same refusal, one place.
+  function unknownKeyStop() {
+  // --- HARD STOP 4: a checkpoint key that names no unit ----------------------
+  // Checked HERE because this is the first point where the published keys are known, and checked at ALL because a
+  // checkpoint that matches nothing fails SILENTLY in the worst possible direction: the operator asked to be
+  // stopped for a look, the run would never stop, and the whole section would be written before they found out.
+  // Same rule the run applies to page keys and evidence ids everywhere else — keys are read, never constructed.
+  // Operator findings name units too, and an unknown key there fails the same way a checkpoint key does — silently
+  // in the wrong direction. Nothing schedules it, so the run reaches a green verdict having never looked at the defect
+  // the operator reported. Same check, same refusal, for the same reason.
+  const badFindings = unknownCheckpointKeys([...FINDING_KEYS], [
+    ...(appUnitFor(state.targetPackage, state.packageState) ? ['app'] : []),
+    ...(state.unitKeys || []),
+    ...(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key),
+  ])
+  if (badFindings.length) {
+    log(`STOP — ${badFindings.length} finding(s) name no published unit: ${badFindings.join(', ')}`)
+    return runReturn({
+      stopped: 'unknown-finding-key',
+      unknownFindings: badFindings,
+      unitKeys: state.unitKeys || [],
+      approval,
+      planVersion: state.planVersion || null,
+      verdict: verdictOf(state.verify),
+      next: `\`findings[].unit\` must name a key \`--units\` publishes — this manifest publishes: ${(state.unitKeys || []).join(', ') || '(none)'}. Nothing was built: a finding nothing schedules would let the run close green with the reported defect untouched. Fix the key and re-run.`,
+    })
+  }
+  // Every SCHEDULED key, not just the page keys: the `app` unit and each applicable reachability key are scheduled
+  // too, and `shouldPauseAfter` already pauses after them — so rejecting them here broke the mode's own contract for
+  // exactly the two things an operator most wants to check by hand (the package, and the routing/wiring).
+  const schedulableKeys = [
+    ...(appUnitFor(state.targetPackage, state.packageState) ? ['app'] : []),
+    ...(state.unitKeys || []),
+    ...(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key),
+  ]
+  const badCheckpoints = unknownCheckpointKeys(CHECKPOINT_AFTER, schedulableKeys)
+  if (badCheckpoints.length) {
+    log(`STOP — ${badCheckpoints.length} checkpoint key(s) name no published unit: ${badCheckpoints.join(', ')}`)
+    return runReturn({
+      stopped: 'unknown-checkpoint-key',
+      unknownCheckpoints: badCheckpoints,
+      unitKeys: state.unitKeys || [],
+      approval,
+      planVersion: state.planVersion || null,
+      verdict: verdictOf(state.verify),
+      staleQueueKeys: state.staleQueueKeys || [],
+      newKeys: state.newKeys || [],
+      next: `\`checkpointAfter\` must name a SCHEDULED unit — this run schedules: ${schedulableKeys.join(', ') || '(none)'}. That includes \`app\` when the target package has to be created, and each applicable reachability key. Nothing was built. Fix the key(s) and re-run.`,
+    })
+  }
+    return null
+  }
+
+  // The notices that are only notices — what the operator asked to watch, and what they reported. No gate.
+  function logModeAndFindings() {
+  if (MODE !== 'auto') {
+    const modeSuffix = MODE === 'checkpoints' ? ` — will stop after: ${CHECKPOINT_AFTER.join(', ')}` : ' — will stop after EVERY unit'
+    log(`mode: ${MODE}${modeSuffix}`)
+  }
+  if (MODE === 'checkpoints' && !CHECKPOINT_AFTER.length) {
+    log('mode `checkpoints` with an EMPTY `checkpointAfter` — nothing will stop this run. Pass the unit keys to stop after, or use mode `guided` to stop after every unit.')
+  }
+  if (FINDINGS.length) {
+    log(`${FINDINGS.length} operator finding(s) carried in — re-opening: ${[...FINDING_KEYS].join(', ')}`)
+  }
+  }
+
   function baselineGates() {
     // --- HARD STOP 1: the approval precondition (design point 12) ---------------
     approval = state.approval || { found: false }
@@ -377,125 +514,15 @@ Return the schema. Numbers only — this script does the judging.`
       })
     }
 
-    // --- HARD STOP 3: the target package cannot be established or created -------
-    // Deliberately NOT a stop for the common case: an absent package WITH a name is what the `app` unit exists to
-    // build. What stops the run is a state it cannot act on — see `packagePreconditionStop`.
-    // The component-type pre-build gate (ENG-95468) shares this stop point — it runs on the SAME baseline Reconcile
-    // facts, before any unit is built. Computed here so a placement stop can carry the component mismatches too: the
-    // Applicant run stopped on placement in round 1 and only hit the fabricated component type rounds later, so a
-    // re-plan that sees BOTH at once fixes them in one pass.
-    const componentMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
-    // Non-gating VISIBILITY (ENG-95468, PR #102 review): a published type with NO resolution entry at all is not a
-    // failure — the gate deliberately stops only on an explicit `resolved: false` (absence is not evidence). But an
-    // incomplete sweep that resolved only some of the plan's types would otherwise leave no trace, and the builder
-    // would still hit the wall mid-Build on the un-swept one. Name the un-swept published types once, here, WITHOUT
-    // stopping, so a partial sweep is visible in the log instead of surfacing as a repair round later.
-    const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
-    const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
-    if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
-    const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
-    if (stopOnPackage) {
-      const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
-      log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}`)
-      return runReturn({
-        ...stopOnPackage,
-        componentMismatches,
-        // `...stopOnPackage` carries the package fix in `next`; when component types ALSO fail, spell them out in the
-        // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
-        // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
-        next: componentMismatches.length
-          ? stopOnPackage.next + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
-            + componentReplanClause(componentMismatches)
-          : stopOnPackage.next,
-        targetPackage: state.targetPackage || null,
-        packageState: state.packageState || null,
-        approval,
-        planVersion: state.planVersion || null,
-        verdict: verdictOf(state.verify),
-        staleQueueKeys: state.staleQueueKeys || [],
-        newKeys: state.newKeys || [],
-      })
-    }
+    // --- HARD STOPS 3 and 3.5: the target package, and the plan's component types on THIS stand -------
+    const stopOnPlacement = placementAndComponentStop()
+    if (stopOnPlacement) return stopOnPlacement
 
-    // --- HARD STOP 3.5: a named component type that does not resolve on the stand (ENG-95468) ------------------
-    // The plan asserts `crt.*` types the build will look for; one that is not a real type on THIS stand makes a
-    // builder fail mid-Build and the run pay repair rounds for it. Catch it here, before the first unit, naming
-    // EVERY unresolved type at once so a re-plan fixes them in a single pass. Read-only: the resolution was
-    // Reconcile's `get-component-info` sweep. (When placement ALSO fails, the stop above already carried these.)
-    if (componentMismatches.length) {
-      log(`STOP — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(componentMismatches)}`)
-      return runReturn({
-        stopped: 'plan-invalid-against-stand',
-        componentMismatches,
-        targetPackage: state.targetPackage || null,
-        packageState: state.packageState || null,
-        approval,
-        planVersion: state.planVersion || null,
-        verdict: verdictOf(state.verify),
-        staleQueueKeys: state.staleQueueKeys || [],
-        newKeys: state.newKeys || [],
-        next: planInvalidNext(componentMismatches, 'Nothing was built.'),
-      })
-    }
+    // --- HARD STOP 4: a checkpoint or finding key that names no scheduled unit ---
+    const stopOnKeys = unknownKeyStop()
+    if (stopOnKeys) return stopOnKeys
 
-    // --- HARD STOP 4: a checkpoint key that names no unit ----------------------
-    // Checked HERE because this is the first point where the published keys are known, and checked at ALL because a
-    // checkpoint that matches nothing fails SILENTLY in the worst possible direction: the operator asked to be
-    // stopped for a look, the run would never stop, and the whole section would be written before they found out.
-    // Same rule the run applies to page keys and evidence ids everywhere else — keys are read, never constructed.
-    // Operator findings name units too, and an unknown key there fails the same way a checkpoint key does — silently
-    // in the wrong direction. Nothing schedules it, so the run reaches a green verdict having never looked at the defect
-    // the operator reported. Same check, same refusal, for the same reason.
-    const badFindings = unknownCheckpointKeys([...FINDING_KEYS], [
-      ...(appUnitFor(state.targetPackage, state.packageState) ? ['app'] : []),
-      ...(state.unitKeys || []),
-      ...(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key),
-    ])
-    if (badFindings.length) {
-      log(`STOP — ${badFindings.length} finding(s) name no published unit: ${badFindings.join(', ')}`)
-      return runReturn({
-        stopped: 'unknown-finding-key',
-        unknownFindings: badFindings,
-        unitKeys: state.unitKeys || [],
-        approval,
-        planVersion: state.planVersion || null,
-        verdict: verdictOf(state.verify),
-        next: `\`findings[].unit\` must name a key \`--units\` publishes — this manifest publishes: ${(state.unitKeys || []).join(', ') || '(none)'}. Nothing was built: a finding nothing schedules would let the run close green with the reported defect untouched. Fix the key and re-run.`,
-      })
-    }
-    // Every SCHEDULED key, not just the page keys: the `app` unit and each applicable reachability key are scheduled
-    // too, and `shouldPauseAfter` already pauses after them — so rejecting them here broke the mode's own contract for
-    // exactly the two things an operator most wants to check by hand (the package, and the routing/wiring).
-    const schedulableKeys = [
-      ...(appUnitFor(state.targetPackage, state.packageState) ? ['app'] : []),
-      ...(state.unitKeys || []),
-      ...(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key),
-    ]
-    const badCheckpoints = unknownCheckpointKeys(CHECKPOINT_AFTER, schedulableKeys)
-    if (badCheckpoints.length) {
-      log(`STOP — ${badCheckpoints.length} checkpoint key(s) name no published unit: ${badCheckpoints.join(', ')}`)
-      return runReturn({
-        stopped: 'unknown-checkpoint-key',
-        unknownCheckpoints: badCheckpoints,
-        unitKeys: state.unitKeys || [],
-        approval,
-        planVersion: state.planVersion || null,
-        verdict: verdictOf(state.verify),
-        staleQueueKeys: state.staleQueueKeys || [],
-        newKeys: state.newKeys || [],
-        next: `\`checkpointAfter\` must name a SCHEDULED unit — this run schedules: ${schedulableKeys.join(', ') || '(none)'}. That includes \`app\` when the target package has to be created, and each applicable reachability key. Nothing was built. Fix the key(s) and re-run.`,
-      })
-    }
-    if (MODE !== 'auto') {
-      const modeSuffix = MODE === 'checkpoints' ? ` — will stop after: ${CHECKPOINT_AFTER.join(', ')}` : ' — will stop after EVERY unit'
-      log(`mode: ${MODE}${modeSuffix}`)
-    }
-    if (MODE === 'checkpoints' && !CHECKPOINT_AFTER.length) {
-      log('mode `checkpoints` with an EMPTY `checkpointAfter` — nothing will stop this run. Pass the unit keys to stop after, or use mode `guided` to stop after every unit.')
-    }
-    if (FINDINGS.length) {
-      log(`${FINDINGS.length} operator finding(s) carried in — re-opening: ${[...FINDING_KEYS].join(', ')}`)
-    }
+    logModeAndFindings()
     return null
   }
 
@@ -633,6 +660,20 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
     log(`carried over ${seededParks.length} park(s) from the queue file / spent budget: ${seededParks.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence)`)
   }
 
+  // The zero-work exit's two sentences. Both read run state and neither is a decision the exit itself makes, so
+  // they live beside it: a green gate with nothing open and a stand where everything is closed-or-parked are
+  // different facts, and the operator has to be told which one they got.
+  function zeroWorkReason() {
+    return state.verify?.complete === true
+      ? 'the engine gate is already green on this stand and no unit is open — nothing to build'
+      : 'every published unit is either already closed on this stand or parked — nothing left this run can build'
+  }
+  function zeroWorkNext() {
+    return parked.length
+      ? `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
+      : `present ${VERIFY_TABLE} verbatim as the completion report`
+  }
+
   // --- NOTHING PUBLISHED ------------------------------------------------------
   // An empty schedule is not "all done": `--units` published no page and no applicable reachability key,
   // which means the reconcile agent's run of it failed or returned nothing. Reporting that as a green
@@ -657,9 +698,7 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   // handler carries no verification key, reopened by a finding — `openNow()` returned it and this branch returned
   // before anything was scheduled. If the gate is green AND nothing is open, the message still says so.
   if (!openNow().length) {
-    const why = state.verify?.complete === true
-      ? 'the engine gate is already green on this stand and no unit is open — nothing to build'
-      : 'every published unit is either already closed on this stand or parked — nothing left this run can build'
+    const why = zeroWorkReason()
     log(why)
     // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
     yield* persistPending('nothing left to build')
@@ -681,9 +720,7 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       unknownSchema: unknownSchemaNow(),
       staleQueueKeys: state.staleQueueKeys || [],
       newKeys: state.newKeys || [],
-      next: parked.length
-        ? `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
-        : `present ${VERIFY_TABLE} verbatim as the completion report`,
+      next: zeroWorkNext(),
     })
   }
 
@@ -729,9 +766,7 @@ AN ITEM MARKED **✔ THE OPERATOR ALREADY ANSWERED THIS** IS SETTLED. Those are 
     }
     if (preflightItems.length) {
       phase('Preflight')
-      const size = Math.max(1, Math.ceil(preflightItems.length / MAX_PREFLIGHT))
-      const batches = []
-      for (let i = 0; i < preflightItems.length; i += size) batches.push(preflightItems.slice(i, i + size))
+      const batches = batchPreflight(preflightItems, MAX_PREFLIGHT)
       log(`${preflightItems.length} ⚠ Confirm item(s) → ${batches.length} read-only preflight agent(s), one output file each`)
       // The prompt is built OUT of the thunk now: a work item carries its prompt as DATA, so the host receives the
       // finished text rather than a closure it has to call. Same text, same order, same fan-out.
@@ -798,12 +833,12 @@ Return \`written: true\` once the built file is saved (this run treats a missing
       if (!merged?.written) {
         log('WARNING: the preflight merge step did not confirm a write — the ⚠ Confirm records may not have reached the built file; their rows stay open and the next reconcile will report them unverified')
       }
-      for (const r of results) {
-        unresolvedPreflight.push(...(r.unresolved || []))
-        // Only a filed RECORD needs a verdict: `filedAsFalse` is already a hard MISSING whatever a judge says.
-        for (const x of r.resolved || []) if (x?.id && !x.filedAsFalse) pendingJudgeIds.add(x.id)
-      }
-      const resolvedCount = results.reduce((n, r) => n + (r.resolved || []).length, 0)
+      // Folded in ONE place (`absorbPreflight`), so "what could not be settled" and "what the judge must rule on"
+      // are one reading of the fan-out rather than two loops that can drift.
+      const absorbed = absorbPreflight(results)
+      unresolvedPreflight.push(...absorbed.unresolved)
+      for (const id of absorbed.toJudge) pendingJudgeIds.add(id)
+      const resolvedCount = absorbed.resolvedCount
       log(`preflight: ${resolvedCount} resolved · ${unresolvedPreflight.length} unresolved · ${pendingJudgeIds.size} record(s) queued for the judge`)
       // WHERE AN ANSWER GOES. An unresolved ⚠ Confirm item is the one moment the operator can shortcut this run by
       // recording a decision, and the reports never named the file — so the path is said here, once, with the count.
@@ -850,20 +885,25 @@ Return \`written: true\` once the built file is saved (this run treats a missing
       // necessarily the one the plan targets, and a near-match is a blocker rather than a judgement call. Every
       // page unit's `placement` row gates on the plan's package, so building into a substitute fails the gate later
       // and wastes the whole tree.
-      kindBlock = `YOUR UNIT is \`app\` — the APPLICATION AND PACKAGE every page unit is waiting for. It is NOT a page.
+        // THE STEP-4 TEXT, hoisted out of the prompt. A plan whose section host is `pages-only-no-menu` tells this
+      // unit NOT to create a section; the other branch is the migration's whole point (bind the section to the
+      // MIGRATED object, not to the stub `create-app` mints). A function, so the prompt does not nest one
+      // template literal inside another and so which text the unit receives is a decision you can read.
+      const sectionStep = () => unit.sectionHost === 'pages-only-no-menu'
+          ? `4. **DO NOT CREATE A SECTION.** The approved plan's section host is \`pages-only-no-menu\`: it ships pages WITHOUT a menu entry, deliberately. You are creating this application only because it is the only route to the package \`${unit.package}\`. Registering a section here would build the exact deliverable the plan dropped — and the gate publishes no \`sectionRegistered\` row to catch it, because the plan says there is none. So: no \`create-app-section\`, and leave \`starterFormPage\` / \`starterListPage\` unset — \`main\` creates its own page in this package.
+5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the new app carries no orphan object of its own. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
+6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, and no stub section left behind.`
+          : `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits.
+5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
+6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, and no stub left behind.`
+    kindBlock = `YOUR UNIT is \`app\` — the APPLICATION AND PACKAGE every page unit is waiting for. It is NOT a page.
 
 The plan targets the package \`${unit.package}\`, and the stand does not have it. Create it, and create NOTHING else.
 
 1. Read the tool contracts before you call anything: \`get-tool-contract\` for \`create-app\` AND for \`create-app-section\`. Do not guess an argument shape.
 2. Create the application with template \`AppFreedomUI\` (do NOT substitute another template) and \`with-mobile-pages\` false unless the plan asks for mobile pages. Choose the \`code\` so that the package clio produces is EXACTLY \`${unit.package}\` — clio applies the environment's \`SchemaNamePrefix\` to \`code\`, so the code you pass and the package you get are usually NOT the same string. Read the prefix off the stand rather than assuming it.
 3. CONFIRM what you actually got: \`list-packages\` / \`find-app\`, and report the real \`packageName\`. **If it is not exactly \`${unit.package}\`, that is a \`blocked\`, not a near-enough.** Every page unit's placement row gates on the plan's package name: building into a substitute passes here and fails the whole tree later.
-${unit.sectionHost === 'pages-only-no-menu'
-    ? `4. **DO NOT CREATE A SECTION.** The approved plan's section host is \`pages-only-no-menu\`: it ships pages WITHOUT a menu entry, deliberately. You are creating this application only because it is the only route to the package \`${unit.package}\`. Registering a section here would build the exact deliverable the plan dropped — and the gate publishes no \`sectionRegistered\` row to catch it, because the plan says there is none. So: no \`create-app-section\`, and leave \`starterFormPage\` / \`starterListPage\` unset — \`main\` creates its own page in this package.
-5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the new app carries no orphan object of its own. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
-6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, and no stub section left behind.`
-    : `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits.
-5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
-6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, and no stub left behind.`}`
+${sectionStep()}`
     } else if (unit.kind === 'reach') {
       // The app-menu registration is the ONE reachability key that needs a fact from outside the page graph: WHICH
       // application to register into. `--units.applicationCode` carries the approved answer, so the agent reads it
@@ -872,9 +912,12 @@ ${unit.sectionHost === 'pages-only-no-menu'
       // Read off the run state (same closure `pageSchemas` comes from), not threaded through the unit: the value is
       // per-RUN, not per-unit, and Reconcile is the only thing that sets it.
       const appCode = state?.applicationCode || null
-      const appNote = unit.key !== 'sectionRegistered' ? '' : (appCode
-        ? ` REGISTER IT INTO THE APPROVED APPLICATION: \`${appCode}\` — that code comes from the approved plan's placement. Do NOT resolve an application by name/caption off the stand, and do NOT fall back to another one if this one errors: a \`create-app-section\` failure here is a REPORT (\`blocked\`), never a cue to pick a different app.`
-        : ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.')
+      // Only the app-menu registration needs this, and only one of the two answers applies — two named strings and
+      // one `if`, not a ternary nested in a ternary, which is the shape that hides which branch you are reading.
+      const appNoteWhenKnown = ` REGISTER IT INTO THE APPROVED APPLICATION: \`${appCode}\` — that code comes from the approved plan's placement. Do NOT resolve an application by name/caption off the stand, and do NOT fall back to another one if this one errors: a \`create-app-section\` failure here is a REPORT (\`blocked\`), never a cue to pick a different app.`
+      const appNoteWhenMissing = ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.'
+      let appNote = ''
+      if (unit.key === 'sectionRegistered') appNote = appCode ? appNoteWhenKnown : appNoteWhenMissing
       kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
     } else {
       const schemaNote = known
@@ -977,6 +1020,26 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     if (!(state.evidenceIds || []).length) log('no evidence ids were published this round — the UI-guidelines close row is inert; check that Reconcile returned `evidenceIds`')
   }
 
+  // THE STARTER PAGES `create-app` MINTED, recorded. Its own function so the app unit's three outcomes read as
+  // three outcomes; it never OVERWRITES a schema the queue already holds.
+  function recordStarterPages(res) {
+      // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
+      // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
+      // per-page recipe documents — instead of a second creation attempt that would collide.
+      if (res.starterFormPage && !pageSchemas.main) {
+        pageSchemas.main = res.starterFormPage
+        log(`main resolves to the starter page \`${res.starterFormPage}\` created with the app`)
+      }
+      // Same for the LIST page: `create-app-section` mints it, and it is the `list` unit's deliverable. Recording it
+      // here is what keeps that unit on the edit-the-page-already-there path — without it the run discards a schema
+      // name it already holds and sends the builder to resolve one with `list-pages`, whose documented no-match and
+      // several-matches cases are what leave `--built.pages.list` absent and the list gate permanently unverified.
+      if (res.starterListPage && !pageSchemas.list) {
+        pageSchemas.list = res.starterListPage
+        log(`list resolves to the starter page \`${res.starterListPage}\` created with the app`)
+      }
+  }
+
   // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report — its own function because it is
   // three outcomes over five facts, and inline it made the dispatch loop the most complex thing in the run.
   function settleAppUnit(unit, res) {
@@ -1001,21 +1064,7 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
         log(sectionPage
           ? `app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`
           : `app unit: package \`${got}\` exists — no section was created (sectionHost: ${unit.sectionHost}), so \`main\` builds its own page in it`)
-        // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
-        // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
-        // per-page recipe documents — instead of a second creation attempt that would collide.
-        if (res.starterFormPage && !pageSchemas.main) {
-          pageSchemas.main = res.starterFormPage
-          log(`main resolves to the starter page \`${res.starterFormPage}\` created with the app`)
-        }
-        // Same for the LIST page: `create-app-section` mints it, and it is the `list` unit's deliverable. Recording it
-        // here is what keeps that unit on the edit-the-page-already-there path — without it the run discards a schema
-        // name it already holds and sends the builder to resolve one with `list-pages`, whose documented no-match and
-        // several-matches cases are what leave `--built.pages.list` absent and the list gate permanently unverified.
-        if (res.starterListPage && !pageSchemas.list) {
-          pageSchemas.list = res.starterListPage
-          log(`list resolves to the starter page \`${res.starterListPage}\` created with the app`)
-        }
+        recordStarterPages(res)
       } else if (got && got === unit.package) {
         // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named, rather than closed on
         // the one third that worked: `main` has no section to edit, and a stub section left behind is an orphan
@@ -1054,69 +1103,78 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     let pausedAfter = null
     const deferred = []
     let checkFirst = []
+    // ONE UNIT, DISPATCHED AND ABSORBED. Nested so it closes over this round's accumulators, and extracted so the
+    // loop below is a loop: the per-unit decisions live here (an absent answer recorded as absent, the app unit's
+    // equality check, the Freedom schema only the builder holds, the checkpoint stop), and reading them next to the
+    // iteration made the dispatch the most complex thing in the run.
+    function* dispatchUnit(unit) {
+        const st = unit.kind === 'page' ? pageStateOf(state.verify, unit.key) : null
+        localRounds[unit.key] = (localRounds[unit.key] ?? 0) + 1
+        dispatched.add(unit.key)
+        const nth = Math.max(state.roundOf?.[unit.key] ?? 0, localRounds[unit.key])
+        const res = yield* dispatch(`build.${unit.key}.r${nth}`, buildPrompt(unit, st, nth), {
+          phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
+          // THE ONE STEP THAT WRITES TO THE STAND, and it is dispatched one unit at a time by construction — the
+          // stand is a shared mutable resource, so this step is never part of a parallel batch.
+          access: ACCESS.STAND_WRITE, role: 'builder',
+          inputFiles: [paths.worklogFile(unit.key), ctx.input.planFile],
+          note: `build unit ${unit.key}`,
+          // Four obligations, four schemas, one decision. A PAGE unit must return `schemaName`; a reachability unit has
+          // no page and must not be asked for one; the APP unit must return the package it produced; and `guidelines` is
+          // required only of a page that OWES the record — an unfolded or reuse child publishes no quality-gates id, so
+          // requiring it there would force the builder to fabricate the one thing it must copy.
+          schema: BUILD_SCHEMAS[buildSchemaKind(unit, state.evidenceIds)],
+        })
+        if (!res) {
+          log(`build agent returned nothing for ${unit.key} — it stays open`)
+          // An ABSENT claim is recorded as absent. Dropping the unit here would let the verifier read "this unit
+          // claimed nothing" off a silence that actually means "the builder never answered" — two different facts.
+          claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true, owesGuidelines: owesGuidelines(unit, state.evidenceIds) })
+          return
+        }
+        built.push(unit.key)
+        // The finding has now had its repair attempt. Consumed here, at dispatch, rather than after the verifier: the
+        // machine verdict cannot confirm a fix it could not see the defect in, so waiting for it would never consume.
+        if (findingsPending.delete(unit.key)) log(`operator finding for \`${unit.key}\` has had its repair round — it no longer forces the unit open`)
+        claims.push({
+          unit: unit.key, kind: unit.kind,
+          schemaName: res.schemaName || pageSchemas[unit.key] || null,
+          packageName: res.packageName || null,
+          template: res.template || null,
+          claimedBuilt: res.claimedBuilt || [],
+          guidelines: res.guidelines || null,
+          // The close row's decision, computed ONCE and carried: the verifier instruction renders this and re-derives
+          // nothing, so a returned id that failed validation is never handed on as a filing target.
+          guidelinesMiss: guidelinesCloseMiss(unit, res, state.evidenceIds, earnedEvidenceIds()),
+          owesGuidelines: owesGuidelines(unit, state.evidenceIds),
+          reboundFrom: res.reboundFrom || null,
+        })
+        reportGuidelinesMiss(unit.key, claims.at(-1).guidelinesMiss)
+        // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report. The equality is the whole
+        // point: an app created under a different package name unblocks nothing, because every page unit's placement
+        // row gates on the plan's package. A mismatch leaves `packageState` untouched — so the unit stays open, the
+        // round budget keeps counting, and the run parks it and stops instead of building a tree into the wrong place.
+        if (unit.kind === 'app') settleAppUnit(unit, res)
+        // The Freedom schema is the one fact only the builder holds. Recorded here, persisted by the next
+        // Reconcile; a page unit that comes back without one is named, not silently left unverifiable.
+        if (unit.kind === 'page') {
+          if (res.schemaName) pageSchemas[unit.key] = res.schemaName
+          else if (!pageSchemas[unit.key]) noSchema.push(unit.key)
+        }
+        proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
+        blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
+        // Only a unit that actually got BUILT can be a checkpoint: pausing after a builder that returned nothing
+        // would send the operator to look at a page this round never touched.
+        if (shouldPauseAfter(MODE, CHECKPOINT_SET, unit.key)) {
+          pausedAfter = unit.key
+          checkFirst = (res.checkFirst || []).map((c) => ({ unit: unit.key, ...c }))
+        }
+    }
     for (const unit of open) {
+      // Once a checkpoint unit has been BUILT the rest of the round is DEFERRED and reported — never silently
+      // dropped, and never dispatched behind the operator's back.
       if (pausedAfter) { deferred.push(unit.key); continue }
-      const st = unit.kind === 'page' ? pageStateOf(state.verify, unit.key) : null
-      localRounds[unit.key] = (localRounds[unit.key] ?? 0) + 1
-      dispatched.add(unit.key)
-      const nth = Math.max(state.roundOf?.[unit.key] ?? 0, localRounds[unit.key])
-      const res = yield* dispatch(`build.${unit.key}.r${nth}`, buildPrompt(unit, st, nth), {
-        phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
-        // THE ONE STEP THAT WRITES TO THE STAND, and it is dispatched one unit at a time by construction — the
-        // stand is a shared mutable resource, so this step is never part of a parallel batch.
-        access: ACCESS.STAND_WRITE, role: 'builder',
-        inputFiles: [paths.worklogFile(unit.key), ctx.input.planFile],
-        note: `build unit ${unit.key}`,
-        // Four obligations, four schemas, one decision. A PAGE unit must return `schemaName`; a reachability unit has
-        // no page and must not be asked for one; the APP unit must return the package it produced; and `guidelines` is
-        // required only of a page that OWES the record — an unfolded or reuse child publishes no quality-gates id, so
-        // requiring it there would force the builder to fabricate the one thing it must copy.
-        schema: BUILD_SCHEMAS[buildSchemaKind(unit, state.evidenceIds)],
-      })
-      if (!res) {
-        log(`build agent returned nothing for ${unit.key} — it stays open`)
-        // An ABSENT claim is recorded as absent. Dropping the unit here would let the verifier read "this unit
-        // claimed nothing" off a silence that actually means "the builder never answered" — two different facts.
-        claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true, owesGuidelines: owesGuidelines(unit, state.evidenceIds) })
-        continue
-      }
-      built.push(unit.key)
-      // The finding has now had its repair attempt. Consumed here, at dispatch, rather than after the verifier: the
-      // machine verdict cannot confirm a fix it could not see the defect in, so waiting for it would never consume.
-      if (findingsPending.delete(unit.key)) log(`operator finding for \`${unit.key}\` has had its repair round — it no longer forces the unit open`)
-      claims.push({
-        unit: unit.key, kind: unit.kind,
-        schemaName: res.schemaName || pageSchemas[unit.key] || null,
-        packageName: res.packageName || null,
-        template: res.template || null,
-        claimedBuilt: res.claimedBuilt || [],
-        guidelines: res.guidelines || null,
-        // The close row's decision, computed ONCE and carried: the verifier instruction renders this and re-derives
-        // nothing, so a returned id that failed validation is never handed on as a filing target.
-        guidelinesMiss: guidelinesCloseMiss(unit, res, state.evidenceIds, earnedEvidenceIds()),
-        owesGuidelines: owesGuidelines(unit, state.evidenceIds),
-        reboundFrom: res.reboundFrom || null,
-      })
-      reportGuidelinesMiss(unit.key, claims.at(-1).guidelinesMiss)
-      // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report. The equality is the whole
-      // point: an app created under a different package name unblocks nothing, because every page unit's placement
-      // row gates on the plan's package. A mismatch leaves `packageState` untouched — so the unit stays open, the
-      // round budget keeps counting, and the run parks it and stops instead of building a tree into the wrong place.
-      if (unit.kind === 'app') settleAppUnit(unit, res)
-      // The Freedom schema is the one fact only the builder holds. Recorded here, persisted by the next
-      // Reconcile; a page unit that comes back without one is named, not silently left unverifiable.
-      if (unit.kind === 'page') {
-        if (res.schemaName) pageSchemas[unit.key] = res.schemaName
-        else if (!pageSchemas[unit.key]) noSchema.push(unit.key)
-      }
-      proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
-      blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
-      // Only a unit that actually got BUILT can be a checkpoint: pausing after a builder that returned nothing
-      // would send the operator to look at a page this round never touched.
-      if (shouldPauseAfter(MODE, CHECKPOINT_SET, unit.key)) {
-        pausedAfter = unit.key
-        checkFirst = (res.checkFirst || []).map((c) => ({ unit: unit.key, ...c }))
-      }
+      yield* dispatchUnit(unit)
     }
     if (noSchema.length) log(`no Freedom schema reported for: ${noSchema.join(', ')} — those units cannot be verified until one is`)
     if (pausedAfter) {
@@ -1438,6 +1496,29 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // checkpoint. Extracted so the loop below stays flat and this stays measurable (Sonar cognitive complexity) —
   // the round is where most of the run's branching lives. Returns the run's RETURN VALUE when the round must end
   // the run, and nothing when the loop should carry on.
+  // WHAT THE VERIFIER SAW, folded into run state. Four reads of one answer — the discrepancies it recorded, the
+  // schemas it confirmed, the keys it could not fetch, the evidence it filed — in one place, so a later change
+  // cannot absorb three of them and quietly drop the fourth.
+  function absorbVerifier(res) {
+    discrepancies = [...discrepancies, ...((res?.discrepancies || []).map((d) => ({ round, ...d })))]
+    for (const [k, schema] of Object.entries(res?.schemasConfirmed || {})) if (schema) pageSchemas[k] = schema
+    for (const k of res?.unknownSchema || []) unknownSchemaSeen.add(k)
+    for (const id of res?.evidenceWritten || []) pendingJudgeIds.add(id)
+  }
+
+  // The judge rules on the UNION of what this run filed and what the built file still has unjudged — a record no
+  // later phase re-files would otherwise never be ruled on, and an unjudged record keeps its page open forever.
+  // Nothing waiting is a normal round, and it is SAID rather than silently skipped.
+  function* judgeIfWaiting() {
+    const judgeIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
+    if (!judgeIds.length) {
+      log(`round ${round}: no evidence record is waiting on a verdict — Judge skipped`)
+      return
+    }
+    yield* judgeRound(judgeIds)
+    pendingJudgeIds.clear()   // whatever the judge skipped comes back as `unjudgedEvidenceIds` next reconcile
+  }
+
   function* oneRound(open) {
       const { built: builtThisRound, claims, pausedAfter, deferred, checkFirst } = yield* buildRound(open)
 
@@ -1473,10 +1554,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
           next: 'the verdict shown is from BEFORE this round — re-run to re-read the stand and get a current one; nothing needs undoing, the queue and built file are intact',
         })
       }
-      discrepancies = [...discrepancies, ...((lastVerifier?.discrepancies || []).map((d) => ({ round, ...d })))]
-      for (const [k, s] of Object.entries(lastVerifier?.schemasConfirmed || {})) if (s) pageSchemas[k] = s
-      for (const k of lastVerifier?.unknownSchema || []) unknownSchemaSeen.add(k)
-      for (const id of lastVerifier?.evidenceWritten || []) pendingJudgeIds.add(id)
+      absorbVerifier(lastVerifier)
 
       // CLOSE THE ROUND ON DISK, before the next one starts — the same rule the round counter already follows.
       // Everything this round learned (proposals, blockers, discrepancies, the Freedom schemas) is written now,
@@ -1485,13 +1563,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // round decided nothing new.
       yield* persistPending(`closing round ${round}`)
 
-      const judgeIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
-      if (judgeIds.length) {
-        yield* judgeRound(judgeIds)
-        pendingJudgeIds.clear()   // whatever the judge skipped comes back as `unjudgedEvidenceIds` next reconcile
-      } else {
-        log(`round ${round}: no evidence record is waiting on a verdict — Judge skipped`)
-      }
+      yield* judgeIfWaiting()
 
       phase('Reconcile')
       const next = yield* dispatch(`reconcile.round-${round + 1}`, reconcilePrompt(round, carryNow()), {
@@ -1600,7 +1672,13 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // it; the documentation standard still requires `worklog.md` as the append-only record of what happened, so it is
   // assembled here, once, from those files. Chronological by the run's own build order, which is the order things
   // actually happened.
-  if (round > 0) {
+  yield* assembleWorklog()
+
+  // THE HUMAN WORKLOG. Builders write one file per unit so none of them has to read a growing shared log to append
+  // to it; the documentation standard still requires `worklog.md` as the append-only record of what happened, so it
+  // is assembled here, once, from those files — and only when a round actually ran.
+  function* assembleWorklog() {
+    if (round === 0) return
     const wl = yield* dispatch('close.worklog',
       `You are the CLOSE step of a Freedom build run. You write ONE document and touch nothing else.
 
@@ -1626,10 +1704,14 @@ Return \`written\` and \`notes\`.`,
   // loses the question. One short agent, and only when there is something unpersisted.
   yield* persistPending('closing the run')
 
+  // The closing line, as a function: the two sentences report different facts and neither is the verdict itself.
+  function completionLine(isComplete) {
+    return isComplete
+      ? `COMPLETE after ${round} round(s): the engine gate is green`
+      : `NOT COMPLETE after ${round} round(s): ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s)`
+  }
   const complete = state.verify?.complete === true && parked.length === 0
-  log(complete
-    ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s)`)
+  log(completionLine(complete))
 
   // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it.
   return runReturn({

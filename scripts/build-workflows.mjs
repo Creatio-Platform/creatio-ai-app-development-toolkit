@@ -75,29 +75,34 @@ const TARGETS = [
 // Drop `import` statements (single- and multi-line) and turn `export X` into `X`.
 // Nothing else is rewritten: the inlined text is the module's own source, so a
 // reviewer diffing the generated file against the core sees only these removals.
+// Is this line an `import` (single- or multi-line) or a RE-EXPORT? Both are dropped: the inlined modules share one
+// scope, so every name is already in it. Split out so `inlineOne` stays a loop over lines.
+const isImportStart = (line) => /^import\s/.test(line)
+const endsImport = (line) => /from\s+'[^']+'\s*$/.test(line.trim()) || /^\}\s+from\s+'[^']+'/.test(line.trim())
+// A re-export has nothing to inline. Stripping `export ` off one left a bare `{ a, b }` — a block of expression
+// statements that does nothing and reads like a mistake, which is what it was. Two questions, asked separately,
+// because one regex with an optional trailing group next to `\s*$` backtracks super-linearly.
+function isReExport(line) {
+  const trimmed = line.trim()
+  if (!/^export\s*\{/.test(trimmed)) return false
+  return trimmed.endsWith('}') || /\}\s*from\s+'[^']+'$/.test(trimmed)
+}
+
 function inlineOne(rel) {
   const src = readFileSync(path.join(CORE, rel), 'utf8')
-  const lines = src.split('\n')
   const out = []
   let skipping = false
-  for (const line of lines) {
+  for (const line of src.split('\n')) {
     if (skipping) {
-      if (/from\s+'[^']+'\s*$/.test(line.trim()) || /^\}\s+from\s+'[^']+'/.test(line.trim())) skipping = false
+      if (endsImport(line)) skipping = false
       continue
     }
-    if (/^import\s/.test(line)) {
+    if (isImportStart(line)) {
       // A single-line import ends on this line; a braced one continues.
-      if (!/from\s+'[^']+'\s*$/.test(line.trim())) skipping = true
+      if (!endsImport(line)) skipping = true
       continue
     }
-    // A RE-EXPORT (`export { a, b }` / `export { a } from '…'`) has nothing to inline: the names are already in
-    // scope here. Stripping `export ` off it left a bare `{ a, b }` — a block of expression statements that does
-    // nothing and reads like a mistake (Sonar S905), which is exactly what it was.
-    // Split rather than one regex with an optional trailing group next to `\s*$` — that shape backtracks
-    // super-linearly (Sonar S8786), and the two questions are independent anyway.
-    const trimmed = line.trim()
-    if (trimmed.startsWith('export') && /^export\s*\{/.test(trimmed) && trimmed.endsWith('}')) continue
-    if (trimmed.startsWith('export') && /^export\s*\{/.test(trimmed) && /\}\s*from\s+'[^']+'$/.test(trimmed)) continue
+    if (isReExport(line)) continue
     out.push(line.replace(/^export\s+(default\s+)?/, ''))
   }
   return `// ===== inlined from _workflow-core/${rel} =====\n${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`

@@ -596,7 +596,10 @@ console.log("\n===== the generated Claude workflow =====");
 // `.args` property or an `args:` key)? Written as a bounded scan rather than one regex with `^`/`$` alternations,
 // which backtracks super-linearly on a long line (Sonar S8786).
 const mentionsArgs = (line) => {
-  const code = line.replace(/\/\/.*$/, "");
+  // `indexOf`, not `replace(/\/\/.*$/)`: a `.*$` pattern is the backtracking shape Sonar flags (S8786), and the
+  // question here is only "where does the comment start".
+  const slashes = line.indexOf("//");
+  const code = slashes < 0 ? line : line.slice(0, slashes);
   let i = code.indexOf("args");
   while (i >= 0) {
     const before = i === 0 ? "" : code[i - 1];
