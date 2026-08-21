@@ -8010,6 +8010,55 @@ try {
     && linkEl.values.clicked?.request === "usr.OpenLinkClicked",
     () => linkEl);
 
+  // review (PR#114) — a folded MENU_ITEM's `clicked` carries ONLY the request. `classicHandler` is engine
+  // knowledge: it belongs on the `requestHandlers` worklist beside the button's, not inside `values.menuItems`,
+  // which IS the schema the executor applies (no component contract declares that key). It went into `values`
+  // while the owning button's went to the worklist — the two paths sit 55 lines apart in one function.
+  const miRun = gmRun([
+    `{operation:"insert",name:"SendBtn2",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON,caption:{bindTo:"Resources.Strings.SendCaption"},click:{bindTo:"onSendClick"}}}`,
+    `{operation:"insert",name:"SendNow2",parentName:"SendBtn2",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU_ITEM,caption:{bindTo:"Resources.Strings.NowCaption"},click:{bindTo:"onSendNow"}}}`,
+  ].join(","), "", { resources: { SendCaption: "Send", NowCaption: "Send now" } });
+  const miEntry = miRun.changeSet.viewConfigDiff.find((o) => o.name === "SendBtn2")?.values?.menuItems?.[0];
+  const miHandler = (miRun.changeSet.requestHandlers || []).find((r) => r.element === "SendNow2");
+  check("review(PR#114): a folded MENU_ITEM emits ONLY `clicked.request` — its classic handler is published on requestHandlers (crt.MenuItem), never inside the page schema",
+    () => Object.keys(miEntry.clicked).join(",") === "request" && miEntry.clicked.request === "usr.SendNow2Clicked"
+    && miHandler.classicHandler === "onSendNow" && miHandler.componentType === "crt.MenuItem" && miHandler.tier === "B",
+    () => ({ entry: miEntry, handler: miHandler }));
+
+  // review (PR#114) — a table-emitted element's NAME goes through the same uniquifier the field pass uses. A field
+  // is emitted under its COLUMN name, not its classic element name, so a classic LABEL named after a column
+  // produced TWO inserts with one name in one container and applying the diff overwrote one control with the other.
+  const collRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+    resources: { NameCaption: "Full name" },
+    schemas: [{ pkg: "P", body: gmBody("", [
+      `{operation:"insert",name:"NameEdit",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}`,
+      `{operation:"insert",name:"Name",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NameCaption"}}}`,
+    ].join(",")) }] }, { baseDir: FIX });
+  const collNames = collRun.changeSet.viewConfigDiff.map((o) => o.name);
+  check("review(PR#114): a table-emitted element cannot collide with a field's element name — the classic LABEL 'Name' emits as 'Name_2' beside the field bound to column 'Name'",
+    collNames.filter((n) => n === "Name").length === 1 && collNames.includes("Name_2")
+    && collRun.changeSet.viewConfigDiff.find((o) => o.name === "Name_2")?.values?.type === "crt.Label"
+    && collRun.changeSet.accountedFor.includes("Name"),   // accounting keeps the CLASSIC name
+    () => collNames);
+
+  // review(PR#114) — the five standard ACTIONS-menu items are `mapCardActions`' business. Emitting one here too
+  // built the same classic action twice: a card action AND a crt.Button in the side profile.
+  const caRun = gmRun(`{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON,caption:{bindTo:"Resources.Strings.PrintCaption"}}}`,
+    "", { resources: { PrintCaption: "Print" } });
+  check("review(PR#114): a standard card-action button is claimed ONLY by mapCardActions — the table does not also emit it as a form crt.Button",
+    caRun.changeSet.cardActions.includes("PrintButton")
+    && !caRun.changeSet.viewConfigDiff.some((o) => o.name === "PrintButton")
+    && !(caRun.changeSet.tableElements || []).some((e) => e.classic === "PrintButton"),
+    () => ({ cardActions: caRun.changeSet.cardActions, ops: caRun.changeSet.viewConfigDiff.filter((o) => o.name === "PrintButton") }));
+
+  // review(PR#114) — the caption decision is a side effect of RESOLVING a prop, so an element that then falls short
+  // of its row's tier used to leave it behind: the plan asked the reader to author a caption for a control the
+  // engine deliberately did NOT build, right beside the ⚠ saying it was not built.
+  const gapRun = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"}}}`);
+  check("review(PR#114): an element that degrades to a typed ⚠ leaves NO caption decision behind — only the unmapped-component item",
+    gapRun.changeSet.needsDecision.filter((d) => d.item === "IsPrimary").map((d) => d.kind).join(",") === "unmapped-component",
+    () => gapRun.changeSet.needsDecision.filter((d) => d.item === "IsPrimary"));
+
   // A `generator` OVERRIDES the itemType in Classic (`generateItem` checks it first), so the element is whatever
   // the generator draws — the table must not answer for it. Without this the engine would emit a crt.Label over a
   // generator-drawn widget and call the page migrated.

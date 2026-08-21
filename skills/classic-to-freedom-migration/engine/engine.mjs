@@ -1381,7 +1381,9 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
     if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
     // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
     // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
-    if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; cur.provenance.push(pkg); if (!seed) cur.schemaTouched = true; continue; }
+    // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
+    // here as well listed the same package twice on an element whose `value` a layer cleared.)
+    if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
     // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
     // "absent vs unreadable" ambiguity this ticket removed elsewhere.
     cur[k] = null;

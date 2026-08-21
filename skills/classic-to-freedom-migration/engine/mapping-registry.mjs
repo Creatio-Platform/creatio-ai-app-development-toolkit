@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -68,16 +68,21 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
   if (version && bit === null) add("unknown-version", { componentType: ctype, version });
   else if (bit !== null && (c.v & bit) === 0)
     add("component-absent-in-version", { componentType: ctype, version, presentIn: versionsOf(c.v, index) });
-  const inputKnown = (k) => !!c.inputs?.[k] || !!index.baseInputs?.[k];
+  // The prop's contract, from the component's OWN inputs or from the shared base inputs. Both carry a version
+  // mask, so a base input is version-checked exactly like a component input — resolving it without that test was
+  // how a base input introduced in a newer platform validated clean at the oldest indexed version.
+  const inputMeta = (k) => c.inputs?.[k] || index.baseInputs?.[k] || null;
   for (const [prop, spec] of Object.entries(row.target?.propMap || {})) {
-    if (!inputKnown(prop)) { add("unknown-input", { componentType: ctype, prop }); continue; }
-    const meta = c.inputs?.[prop];
-    if (meta && bit !== null && (meta.v & bit) === 0)
+    const meta = inputMeta(prop);
+    if (!meta) { add("unknown-input", { componentType: ctype, prop }); continue; }
+    // `meta.v == null` = an index generated before base inputs carried masks: it states no version membership, so
+    // there is nothing to test. Skipped rather than reported — an absent record is not evidence of absence.
+    if (meta.v != null && bit !== null && (meta.v & bit) === 0)
       add("input-absent-in-version", { componentType: ctype, prop, version, presentIn: versionsOf(meta.v, index) });
     // Per-INPUT deprecation is the only deprecation signal the registry carries. Advisory, not an error: a
     // deprecated input still works, and the row's author has to decide with the reason in front of them.
     if (meta?.deprecated) add("deprecated-input", { componentType: ctype, prop, reason: meta.deprecationReason || null });
-    if (spec?.from === "literal" && meta?.values && !meta.values.includes(spec.value))
+    if (spec?.from === SOURCE.LITERAL && meta?.values && !meta.values.includes(spec.value))
       add("literal-not-in-values", { componentType: ctype, prop, value: spec.value, allowed: meta.values });
   }
   for (const ev of Object.keys(row.target?.events || {})) {
@@ -153,7 +158,7 @@ export function indexFromRegistryExport(json, { version = null } = {}) {
   }
   return {
     meta: { versions: [v], sources: [{ version: v, from: "registry-export" }], componentCount: Object.keys(components).length },
-    baseInputs: Object.fromEntries(Object.entries(json?.references?.baseInputs || {}).map(([k, m]) => [k, pickMeta(m)])),
+    baseInputs: Object.fromEntries(Object.entries(json?.references?.baseInputs || {}).map(([k, m]) => [k, { v: 1, ...pickMeta(m) }])),
     components,
   };
 }

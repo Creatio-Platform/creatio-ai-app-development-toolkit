@@ -82,7 +82,15 @@ for (const [vi, v] of versions.entries()) {
   const raw = readFileSync(file);
   sources.push({ version: v, sha256: createHash("sha256").update(raw).digest("hex"), bytes: raw.length });
   const reg = JSON.parse(raw.toString("utf8"));
-  for (const [name, meta] of Object.entries(reg.references?.baseInputs || {})) baseInputs.set(name, pick(meta, INPUT_META));
+  // Base inputs carry the SAME per-version bitmask component inputs do. Without one they were a union across every
+  // registry read, and `validateRow` had nothing to test a target version against — so a base input introduced in a
+  // newer platform would validate clean at the oldest indexed version, which is the "`latest` is a superset" trap
+  // this whole index exists to close. Metadata follows the same last-version-wins rule as a component's own inputs.
+  for (const [name, meta] of Object.entries(reg.references?.baseInputs || {})) {
+    const cur = baseInputs.get(name) || { v: 0 };
+    Object.assign(cur, pick(meta, INPUT_META), { v: cur.v | bit });
+    baseInputs.set(name, cur);
+  }
   for (const c of reg.components || []) {
     const entry = components.get(c.componentType)
       || { mask: 0, compositeOnly: false, inputs: {}, outputs: {}, taxonomy: {} };

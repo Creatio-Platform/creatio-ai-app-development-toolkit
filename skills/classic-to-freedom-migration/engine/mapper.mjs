@@ -931,11 +931,17 @@ function mapFields(ctx, containers) {
     if (bucket) bucket.push(it); else childrenByParent.set(it.parent, [it]);
   }
   const orderedChildren = (name) => [...(childrenByParent.get(name) || [])].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+  // Everything one candidate produces WHILE its props are being resolved, held until the element really emits:
+  // `claimed` sub-items, `decisions` (caption gaps) and `handlers` (tier-B wiring). Buffered rather than pushed
+  // straight to the page sinks because a candidate can still fall short of its row's tier on a later required
+  // prop — and a plan that asks the reader to author a caption for a control the engine deliberately did NOT
+  // build is the same cry-wolf noise the drop sweep exists to avoid.
+  const newSink = () => ({ claimed: [], decisions: [], handlers: [] });
   // A caption for a table-emitted element: the localizable BINDING for the page body, plus the same unresolved-key
   // decision the tab/group builders raise (an unresolved key is a real gap — the built page would show nothing).
-  const elementCaption = (it) => {
+  const elementCaption = (it, sink) => {
     const c = ctx.caption(it.caption, it.name);
-    if (!c.resolved) needsDecision.push({ kind: "element-caption", item: it.name,
+    if (!c.resolved) sink.decisions.push({ kind: "element-caption", item: it.name,
       reason: c.synthesized
         ? `element '${it.name}' has no classic caption in the model — a caption key '${c.key}' was synthesized; author the localized string for it or confirm the element needs no visible text`
         : `caption '${c.key}' on '${it.name}' is an unresolved resource key — pass the schema's localizable strings as manifest.resources to resolve it, or confirm the real text` });
@@ -943,54 +949,64 @@ function mapFields(ctx, containers) {
   };
   // MENU / MENU_ITEM descendants of a button, folded into ONE `menuItems` array. Recursive because classic nests
   // the items under an intermediate MENU element as often as directly under the button.
-  const menuEntriesOf = (owner, claimed) => {
+  const menuEntriesOf = (owner, sink) => {
     const out = [];
     for (const child of orderedChildren(owner.name)) {
-      if (child.itemType === VIEW_ITEM_TYPE.MENU) { claimed.push(child.name); out.push(...menuEntriesOf(child, claimed)); continue; }
+      if (child.itemType === VIEW_ITEM_TYPE.MENU) { sink.claimed.push(child.name); out.push(...menuEntriesOf(child, sink)); continue; }
       if (child.itemType !== VIEW_ITEM_TYPE.MENU_ITEM) continue;
-      claimed.push(child.name);
-      const entry = { caption: elementCaption(child) };
+      sink.claimed.push(child.name);
+      const entry = { caption: elementCaption(child, sink) };
       // The classic per-item click, kept per item: `clicked` is an OUTPUT on `crt.MenuItem` in every checked
-      // platform version, so the wiring does not have to collapse onto the owning button.
-      if (child.handlers?.click) entry.clicked = { request: freedomRequest(child.name), classicHandler: child.handlers.click };
+      // platform version, so the wiring does not have to collapse onto the owning button. `values` carries ONLY
+      // the `request` — the classic method behind it is engine knowledge and goes on the worklist, exactly like a
+      // button's; emitting it inside `menuItems` would put a key no component contract declares on the built page.
+      if (child.handlers?.click) {
+        const request = freedomRequest(child.name);
+        entry.clicked = { request };
+        sink.handlers.push({ request, element: child.name, componentType: "crt.MenuItem",
+          classicHandler: child.handlers.click, tier: rowForItem(child)?.tier ?? null });
+      }
       out.push(entry);
     }
     return out;
   };
   // The radio group's options: the CHILD items carrying a literal `value`. Their captions are the option captions —
   // the pair the ticket names, captured at parse time precisely so this row can consume both at once.
-  const optionEntriesOf = (owner, claimed) => {
+  const optionEntriesOf = (owner, sink) => {
     const out = [];
     for (const child of orderedChildren(owner.name)) {
       if (child.optionValue === null || child.optionValue === undefined) continue;
-      claimed.push(child.name);
-      out.push({ value: child.optionValue, caption: elementCaption(child) });
+      sink.claimed.push(child.name);
+      out.push({ value: child.optionValue, caption: elementCaption(child, sink) });
     }
     return out;
   };
   // One propMap entry -> the value to emit, or null when this element cannot source it.
-  const resolveSource = (spec, it, claimed) => {
+  const resolveSource = (spec, it, sink) => {
     if (spec.from === SOURCE.LITERAL) return spec.value;
-    if (spec.from === SOURCE.CAPTION) return elementCaption(it);
+    if (spec.from === SOURCE.CAPTION) return elementCaption(it, sink);
     if (spec.from === SOURCE.VALUE_ATTR) return it.valueBindTo ? "$" + it.valueBindTo : null;
-    if (spec.from === SOURCE.OPTION_CHILDREN) { const o = optionEntriesOf(it, claimed); return o.length ? o : null; }
-    if (spec.from === SOURCE.MENU_CHILDREN) { const m = menuEntriesOf(it, claimed); return m.length ? m : null; }
+    if (spec.from === SOURCE.OPTION_CHILDREN) { const o = optionEntriesOf(it, sink); return o.length ? o : null; }
+    if (spec.from === SOURCE.MENU_CHILDREN) { const m = menuEntriesOf(it, sink); return m.length ? m : null; }
     return null;
   };
   // A candidate is CLIENT-authored, has no `generator` (in Classic a generator override wins over the itemType
   // switch — the element is whatever it draws, so the table must not answer for it), is not the native page title,
-  // and is not an image the image builder already emits.
+  // is not an image the image builder already emits, and is not one of the standard ACTIONS-menu items:
+  // `mapCardActions` claims those by NAME and wires them as Freedom card actions, so emitting one here as well
+  // would build the same classic action twice — once as a card action and once as a form button.
   const tableCandidates = allItems
-    .filter((it) => !it.templateOwned && !it.generator && !isPrimaryDisplayItem(it) && !isImageItem(it))
+    .filter((it) => !it.templateOwned && !it.generator && !isPrimaryDisplayItem(it) && !isImageItem(it)
+      && !KNOWN_ACTION_ITEMS.has(it.name))
     .map((it, n) => ({ it, n, row: rowForItem(it) }))
     .filter((x) => x.row?.ownedBy === OWNER.TABLE)
     .sort((a, b) => ((a.it.order ?? Infinity) - (b.it.order ?? Infinity)) || (a.n - b.n));
   for (const { it, row } of tableCandidates) {
-    const claimed = [];                       // sub-items this element absorbed (menu items, radio options)
+    const sink = newSink();                   // sub-items absorbed + decisions/handlers held until it really emits
     const values = { type: row.target.componentType };
     const missing = [];
     for (const [prop, spec] of Object.entries(row.target.propMap || {})) {
-      const v = resolveSource(spec, it, claimed);
+      const v = resolveSource(spec, it, sink);
       if (v === null || v === undefined) { if (spec.required) missing.push(`${prop} (from classic ${spec.from})`); continue; }
       values[prop] = v;
     }
@@ -1011,21 +1027,30 @@ function mapFields(ctx, containers) {
     if (row.target.events?.clicked && it.handlers?.click) {
       const request = freedomRequest(it.name);
       values.clicked = { request };
-      requestHandlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
+      sink.handlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
     }
-    viewConfigDiff.push({ operation: "insert", name: it.name, values, parentName: parent, propertyName: row.target.slot });
+    // The EMITTED element name goes through the same uniquifier the field pass uses. A field is emitted under its
+    // COLUMN name, not its classic element name, so a classic LABEL named `Name` beside a field element bound to
+    // column `Name` produced TWO inserts called `Name` in one container — applying that diff overwrites one
+    // control with the other. `accountedFor` and `tableElements.classic` keep the CLASSIC name: that is what the
+    // drop sweep and the reader match on.
+    nameCount[it.name] = (nameCount[it.name] || 0) + 1;
+    const elName = nameCount[it.name] === 1 ? it.name : `${it.name}_${nameCount[it.name]}`;
+    needsDecision.push(...sink.decisions);
+    requestHandlers.push(...sink.handlers);
+    viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: row.target.slot });
     // Report it as a table element ONLY when it is not already a FIELD. `isField` (designspec) keys on
     // `values.control`, so a control-bound element — `crt.IconRadioButton` is the first — is ALREADY carried by the
     // field row, the field count and the field gate. Publishing it here as well gave it TWO Layout rows and two
     // coverage rows for one control, against the repo's own "exactly one Layout row per emitted control" rule.
     // The test is the emitted `values.control`, not the row's propMap, so the two predicates cannot drift.
     if (values.control == null) {
-      tableElements.push({ classic: it.name, componentType: row.target.componentType, classicKind: itemKindName(it),
+      tableElements.push({ classic: it.name, element: elName, componentType: row.target.componentType, classicKind: itemKindName(it),
         parent, tier: row.tier, caption: values.caption ?? values.label ?? null,
-        request: values.clicked?.request || null, folded: claimed.length ? [...claimed] : null });
+        request: values.clicked?.request || null, folded: sink.claimed.length ? [...sink.claimed] : null });
     }
     accountedFor.add(it.name);
-    claimed.forEach((c) => accountedFor.add(c));
+    sink.claimed.forEach((c) => accountedFor.add(c));
     // A radio group's selection IS an entity column, so it needs the same attribute + PDS column a field gets —
     // without them the `control` binding points at an attribute nothing defines and the control never loads.
     if (row.target.propMap?.control && it.valueBindTo) {

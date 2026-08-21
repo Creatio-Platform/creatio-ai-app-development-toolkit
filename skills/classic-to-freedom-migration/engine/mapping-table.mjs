@@ -179,7 +179,6 @@ const ITEM_TYPE_ROWS = [
         // the silent drop this row exists to prevent. No options ⇒ the instance degrades to a typed decision.
         items: { from: SOURCE.OPTION_CHILDREN, required: true } } },
     verify: { componentType: "crt.IconRadioButton" },
-    uiShape: "component",
     notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become `items[]` and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning.",
   }),
   // HYPERLINK -> crt.Link. The caption is derivable; the destination is not — a classic hyperlink navigates from
