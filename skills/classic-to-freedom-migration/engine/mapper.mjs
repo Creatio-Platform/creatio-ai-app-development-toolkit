@@ -463,6 +463,9 @@ export function mapToFreedom(eff, opts = {}) {
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
+  // ---- Moment 4b: the on-save duplicate check — invisible in the page body, so driven by the on-stand signal ----
+  mapDedupOnSave({ signals: opts.signals, ownSignals: opts.ownSignals, isChildPage }).forEach(d => needsDecision.push(d));
+
   // ---- image / photo components → a REAL crt.ImageInput element (view+viewModel+model diffs) ----
   const _img = mapImages(eff, ctx, F);
   const images = _img.images;
@@ -2083,6 +2086,63 @@ function mapWidgets(eff, opts = {}) {
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
   return { widgets, chromeWidgets, needsDecision, accountedFor };
+}
+
+// Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
+// Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
+// `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
+// `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
+// classifies it as `context`. There is no member to map and no element to gate on — so a plan can only know about
+// it from a resolved on-stand fact. The RULES themselves live on the ENTITY (`DuplicatesRule`, columns `IsActive` /
+// `UseAtSave`), not on the page, so they survive a page migration untouched; what does not survive is the check.
+// MEASURED 2026-08-21 on a stand newer than 8.3.4 (core 10.1.496): Classic posts
+// `DeduplicationService/FindDuplicatesOnSave` and shows its duplicates screen, while the Freedom form page issues
+// only `InsertQuery` and saves the duplicate silently. The platform DOES ship a Freedom implementation —
+// `crt.ValidateDuplicatesOnSaveHandler` registered on `crt.SaveDataRequest`, scoped to `BasePageTemplate` /
+// `BaseMiniPageTemplate` (entity-generic), plus the `DuplicateNotificationPage` dialog — but it fired nothing,
+// and that stand had `DeduplicationWebApiUrl` empty with `ESDeduplication`/`BulkESDeduplication` off. Classic needs
+// no service because its `asyncValidate` falls back to the rule's SQL procedure.
+// Hence the wording rule this row must keep: it is a CHECK, never the claim "Freedom cannot do this". On a stand
+// where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
+// into a lie the day it does.
+function mapDedupOnSave(opts = {}) {
+  // `opts.signals` is the RUN-level answer set, in which a bundle's OWN `manifest.signals` key already won the
+  // merge (see runMigration/checklistOpts). `opts.ownSignals` is that bundle's own keys alone — the only way to
+  // tell "this page's operator answered for THIS entity" from "inherited from the parent".
+  const s = opts.signals?.deduplication;
+  if (s?.resolved !== true) return [];
+  // A CHILD edit page migrates a DIFFERENT entity, so the PARENT's answer states a fact about the wrong entity —
+  // but silence is the very failure this row exists to prevent (the child's own on-save check would disappear
+  // just as quietly). So without an answer of its own the child carries a child-scoped INSTRUCTION instead of a
+  // verdict, exactly like processActionNote / printActionNote do for the section-level Process / Print menus. It
+  // is gated on `resolved` only, never on the parent's `present`: "the parent entity has no rule" says nothing at
+  // all about this child's entity. Record `signals.deduplication` on the CHILD bundle and the instruction is
+  // replaced by the real verdict below — an operator who runs the query must have a way to close this row.
+  if (opts.isChildPage && opts.ownSignals?.deduplication?.resolved !== true) {
+    return [{ kind: "dedup-on-save", item: "on-save duplicate check (child entity)",
+      reason: "Child edit page — the answer recorded for the parent describes the PARENT's entity. Run the DuplicatesRule query (IsActive AND UseAtSave, filtered to THIS child's entity) for this page's own entity and record it as signals.deduplication on this child's own bundle; if a rule exists, the on-save check follows the same service rule as the parent's, so state whether it survives the migration." }];
+  }
+  if (!s.present) return [];
+  const named = (x) => (typeof x === "string" ? x : (x?.name || x?.caption) || "");
+  // `names` is the CANONICAL key for this signal (SKILL.md + references/classic-to-freedom-mapping.md pin it); `items` is
+  // accepted only because the sibling signals use it. `Array.isArray` because a hand-authored single rule is
+  // plausibly written as a bare string, and `.map` on a string would abort the whole --plan run.
+  const rawRules = s.names || s.items;
+  const rules = (Array.isArray(rawRules) ? rawRules : []).map(named).filter(Boolean);
+  const ruleList = rules.length ? ` (rule(s): ${rules.join(", ")})` : "";
+  // WORDING RULE for these tails: plain prose, NO backticks. `renderConfirmWorklist` escapes the whole `reason`
+  // with `esc` (deliberately — it interpolates stand-derived rule names via ${ruleList}), and `esc` maps every
+  // backtick to U+02CB, so a backticked identifier here renders as ˋlike thisˋ in the plan. Code identifiers
+  // belong in `item`, per the convention comment at designspec.mjs:615-640.
+  let tail;
+  if (s.serviceConfigured === true) {
+    tail = "The stand's deduplication service IS configured, so the platform's Freedom handler is expected to run — VERIFY it on the built page: save a known duplicate and confirm the Potential duplicates found dialog appears (Merge / Save anyway / Edit record).";
+  } else if (s.serviceConfigured === false) {
+    tail = "The stand's deduplication service is NOT configured (DeduplicationWebApiUrl empty and/or ESDeduplication / BulkESDeduplication off) and the Freedom flow runs only through it, so after this migration the check STOPS HAPPENING — silently, with duplicates saved as if clean. Classic keeps working because its asyncValidate falls back to the rule's SQL procedure. Decide one: configure the deduplication service on the target stand; keep the Classic page for this entity; install the Deduplication Freedom UI enhancements marketplace app; or accept the loss and say so.";
+  } else {
+    tail = "Record whether the target stand's deduplication service is configured — DeduplicationWebApiUrl populated AND ESDeduplication / BulkESDeduplication enabled — as signals.deduplication.serviceConfigured. The Freedom flow runs only through that service, so without it this check silently stops happening after the migration.";
+  }
+  return [{ kind: "dedup-on-save", item: "on-save duplicate check", reason: `Classic runs an on-save duplicate check for this entity${ruleList}. ${tail}` }];
 }
 
 // kind → category, ORDERED: the first match wins, so the more specific behaviour sits ahead of the more general

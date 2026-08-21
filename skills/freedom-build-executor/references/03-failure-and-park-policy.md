@@ -5,6 +5,7 @@ into an infinite loop or a silent drop.
 
 | What happened | Response | Who decides |
 |---|---|---|
+| a unit's own in-context gate is short as it builds | **one bounded fix** in that same context, then **PARK** | the builder, from its scoped `--verify --page` |
 | a unit's rows are short after a round | repair round on that unit | the script, from `--verify` |
 | a unit is still short after 3 rounds | **PARK** it, keep the rest going, exit once with all of them | the script |
 | the PLAN itself is incomplete (D12) | **STOP the whole run**, return to the caller | the script |
@@ -57,6 +58,52 @@ A repair round is handed the *specific* rows that are short — `verify.json`'s
 nothing is transcribed from the table on the way. It is not "try again": that text already names
 whether a field is absent by name, a component type is absent, a package is wrong, or a record
 was filed but not judged.
+
+## The in-context completeness gate — one bounded fix, then park (ENG-95469)
+
+Before a build agent reports its unit complete, it runs a **scoped single-unit gate** over its OWN
+page — `migrate.mjs <manifest> --verify --page <yourKey> --verify-json <self-verdict.json>`
+(recipe `./04-per-page-build-recipe.md`, step 10). This is the same detector the post-hoc `--verify`
+sweep uses — one module, two call sites — narrowed to one page, so a deliverable the slice *declared*
+but the build left short (a datasource-less grid, a component not on the page, a rule the slot does
+not carry) is caught **as the unit builds**, not a whole round later.
+
+Its park budget is different, and deliberately so. The gate allows **exactly one bounded fix** in
+the builder's own context: if the scoped verdict is not `complete`, the builder repairs the rows the
+verdict's `openRows` name, re-runs the gate **once**, and stops. Still short after that one attempt
+is a valid outcome — the unit **parks immediately**, with `inContextParkWhy` composed from the
+gate's still-short rows. It does **not** spend the 3-round post-hoc budget below: one bounded fix,
+then park, so a unit that cannot be completed in its own context does not burn three stand-writing
+rounds re-learning the same shortfall.
+
+Three guards keep this honest. The builder trusts the engine, not itself: `selfCheck.complete` /
+`missing` / `unverified` are copied **verbatim** from the engine's single-unit verdict file, never a
+self-graded claim. The script trusts neither blindly: an in-context park fires only when the
+**post-hoc verifier** (a separate read-only agent, re-reading the stand that round) also reports the
+unit open — a builder that mis-reported "still short" on a page the verifier finds green does not
+park it. And the script does not take the *self-report itself* on trust: at the bottom of the round
+it **cross-checks every page unit's `selfCheck` against that same independent verifier** and records
+a discrepancy where they disagree — a builder that self-reported the gate *passed* on a page the
+verifier finds open (a fabricated green the in-context park would miss, since it only fires on
+`complete: false`), or one that returned `ran: false` on a still-open unit (the gate bypassed). The
+cross-check changes no verdict — the `--verify` sweep remains the authoritative evidence — it only
+removes the "nothing independently checks the scoped gate ran" gap by naming where the self-report
+and the independent detector part ways.
+
+Read the "never a self-graded claim" guarantee no wider than it holds: it covers exactly
+`complete` / `missing` / `unverified`, the engine's arithmetic transcribed. The two fields the
+in-context park path actually gates on — `selfCheck.ran` and `selfCheck.fixAttempted` — are **not**
+in the engine's verdict file; they are the builder's own self-report, so a builder can keep its own
+unit out of the in-context park by reporting `ran: false` or `fixAttempted: false`. Their only
+backstop is the guard-3 cross-check above, which is **non-blocking** — it records the discrepancy in
+the run's audit trail, it does not force a park — and the round-budget post-hoc park, which still
+catches a genuinely-open unit within its round budget no matter what the self-report claimed. So the
+in-context gate is an *earlier-discovery* optimisation resting partly on builder honesty for `ran` /
+`fixAttempted`; the correctness floor is the independent post-hoc verifier, never the self-report.
+
+The in-context gate only moves the *discovery* of a shortfall
+earlier and caps the fix at one attempt. Never weaken the build to make the gate pass — a fabricated
+green is unrecoverable (see "Never weaken a gate to reach green" below).
 
 ## Park, and why the run does not stop at the first stuck unit
 
