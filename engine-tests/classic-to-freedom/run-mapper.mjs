@@ -7555,7 +7555,7 @@ try {
   // Absence of an itemType is NOT a kind: Classic reads a missing itemType as the field path, so the table must
   // return nothing rather than a row that would answer for an element the schema never classified.
   check("ENG-95543: rowForItem returns null for an item whose schema stated no itemType — absence is the field path, not a kind",
-    rowForItem({ itemType: null }) === undefined || rowForItem({ itemType: null }) === null,
+    rowForItem({ itemType: null }) === null,
     () => rowForItem({ itemType: null }));
   check("ENG-95543: rowForItemType has no fallback — an unlisted member resolves to undefined, which is what lets the coverage check above bite",
     rowForItemType(9999) === undefined && rowForItemType(VIEW_ITEM_TYPE.RADIO_GROUP)?.match.itemType === VIEW_ITEM_TYPE.RADIO_GROUP,
@@ -7666,6 +7666,16 @@ try {
     rgFull.changeSet.accountedFor.includes("OptYes") && rgFull.changeSet.accountedFor.includes("OptNo")
     && !rgFull.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && ["OptYes", "OptNo", "IsPrimary"].includes(d.item)),
     () => rgFull.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component"));
+
+  // ONE row per emitted control, the rule the repo already states for the `fieldImages` fold. `crt.IconRadioButton`
+  // carries `values.control`, so it satisfies `isField` — publishing it in `tableElements` too gave it a second
+  // Layout row and a second coverage row for one control. Counting RENDERED lines is the only check that sees it:
+  // both producers were individually correct, and the ChangeSet was correct as well.
+  const rgSpec = renderDesignSpec(rgFull, {});
+  check("ENG-95543: a control-bound table element is reported ONCE — the field path owns it, so no duplicate Layout/coverage row",
+    rgSpec.split("\n").filter((l) => /\|/.test(l) && /IsPrimary/.test(l)).length === 1
+    && (rgFull.changeSet.tableElements || []).length === 0,
+    () => ({ lines: rgSpec.split("\n").filter((l) => /IsPrimary/.test(l)), tableElements: rgFull.changeSet.tableElements }));
 
   // A BUTTON with a click handler and a MENU: tier B. The view is built (caption + menuItems), and the imperative
   // part is published as a `clicked` request on the worklist rather than left implicit.

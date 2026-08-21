@@ -1082,9 +1082,16 @@ function mapFields(ctx, containers) {
       requestHandlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
     }
     viewConfigDiff.push({ operation: "insert", name: it.name, values, parentName: parent, propertyName: row.target.slot });
-    tableElements.push({ classic: it.name, componentType: row.target.componentType, classicKind: itemKindName(it),
-      parent, tier: row.tier, caption: values.caption ?? values.label ?? null,
-      request: values.clicked?.request || null, folded: claimed.length ? [...claimed] : null });
+    // Report it as a table element ONLY when it is not already a FIELD. `isField` (designspec) keys on
+    // `values.control`, so a control-bound element — `crt.IconRadioButton` is the first — is ALREADY carried by the
+    // field row, the field count and the field gate. Publishing it here as well gave it TWO Layout rows and two
+    // coverage rows for one control, against the repo's own "exactly one Layout row per emitted control" rule.
+    // The test is the emitted `values.control`, not the row's propMap, so the two predicates cannot drift.
+    if (values.control == null) {
+      tableElements.push({ classic: it.name, componentType: row.target.componentType, classicKind: itemKindName(it),
+        parent, tier: row.tier, caption: values.caption ?? values.label ?? null,
+        request: values.clicked?.request || null, folded: claimed.length ? [...claimed] : null });
+    }
     accountedFor.add(it.name);
     claimed.forEach((c) => accountedFor.add(c));
     // A radio group's selection IS an entity column, so it needs the same attribute + PDS column a field gets —
