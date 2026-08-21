@@ -7,6 +7,7 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, resolveRow, rowForItem, rowForItemType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -7465,6 +7466,78 @@ try {
     && Object.values(VIEW_ITEM_TYPE).every((v) => itemRoleOf(v) !== undefined)
     && Object.values(VIEW_ITEM_TYPE).every((v) => itemKindName({ itemType: v }) !== `itemType ${v}`),
     () => Object.values(VIEW_ITEM_TYPE).filter((v) => itemRoleOf(v) === undefined));
+
+  // ---- ENG-95543: the SHARED MAPPING TABLE's own invariants ------------------------------------------------
+  // The role checks above pin WHAT the table says about each kind; these pin that every row is STRUCTURALLY
+  // complete. A row builder that forgot `tier` yields `tier: undefined`, which passes every truthiness test in
+  // the mapper and would ship a kind with no stated outcome at all.
+  const itRows = MAPPING_ROWS.filter((r) => r.match.by === MATCH.ITEM_TYPE);
+  const TIERS = new Set(Object.values(TIER)), OWNERS = new Set(Object.values(OWNER));
+  const malformed = itRows.filter((r) => !TIERS.has(r.tier) || !OWNERS.has(r.ownedBy) || typeof r.role !== "string");
+  check("ENG-95543: every itemType row carries a role, a tier from TIER and an owner from OWNER — an incomplete row fails here, not at runtime",
+    itRows.length === 29 && malformed.length === 0,
+    () => ({ rows: itRows.length, malformed: malformed.map((r) => r.match.itemType) }));
+  // One row per member. Two rows for the same itemType with no qualifier would make the resolver's answer depend
+  // on declaration order, and the LAST one would be dead code nobody notices.
+  const itKeys = itRows.filter((r) => !r.match.qualifiers).map((r) => r.match.itemType);
+  check("ENG-95543: no itemType has two unqualified rows — a duplicate would make resolution order-dependent and leave one row dead",
+    new Set(itKeys).size === itKeys.length,
+    () => itKeys.filter((k, i, all) => all.indexOf(k) !== i));
+  // The tier CONTRACT, both directions. A tier-C row that names a target is the exact failure ENG-95555 is about:
+  // a fabricated `crt.*` presented as the answer instead of the decision it really is.
+  const tierCWithTarget = itRows.filter((r) => r.tier === TIER.DECISION && r.target !== null);
+  const emitterWithoutType = itRows.filter((r) => r.ownedBy === OWNER.TABLE && !r.target?.componentType);
+  check("ENG-95543: a tier-C row names NO target, and a row the table itself emits always names a componentType",
+    tierCWithTarget.length === 0 && emitterWithoutType.length === 0,
+    () => ({ tierCWithTarget: tierCWithTarget.map((r) => r.match.itemType), emitterWithoutType: emitterWithoutType.map((r) => r.match.itemType) }));
+  // The tier DISTRIBUTION, pinned like the role distribution above and for the same reason: a kind quietly moved
+  // from C to A is a kind the engine started building without anyone deciding what it should build.
+  const tierTally = itRows.reduce((a, r) => ({ ...a, [r.tier]: (a[r.tier] || 0) + 1 }), {});
+  check("ENG-95543: the itemType tier distribution is exactly 10 tier-A (a builder owns them) / 19 tier-C (typed decision)",
+    tierTally[TIER.AUTO] === 10 && tierTally[TIER.DECISION] === 19 && (tierTally[TIER.VIEW_ONLY] || 0) === 0,
+    () => tierTally);
+  // Absence of an itemType is NOT a kind: Classic reads a missing itemType as the field path, so the table must
+  // return nothing rather than a row that would answer for an element the schema never classified.
+  check("ENG-95543: rowForItem returns null for an item whose schema stated no itemType — absence is the field path, not a kind",
+    rowForItem({ itemType: null }) === undefined || rowForItem({ itemType: null }) === null,
+    () => rowForItem({ itemType: null }));
+  check("ENG-95543: rowForItemType has no fallback — an unlisted member resolves to undefined, which is what lets the coverage check above bite",
+    rowForItemType(9999) === undefined && rowForItemType(VIEW_ITEM_TYPE.RADIO_GROUP)?.match.itemType === VIEW_ITEM_TYPE.RADIO_GROUP,
+    () => rowForItemType(9999));
+
+  // PRECEDENCE, checked against a FIXTURE table rather than the module's own rows: the rule must hold before the
+  // first qualified row exists, and a check written against the live table could only be added after one does.
+  // `ViewGeneratorV2.generateItem` applies the same rule (a `generator` override beats the itemType switch), and
+  // `FEATURE_CATALOG` needs it: VisaDetailV2 is Approvals, not merely a DETAIL.
+  const fx = (qualifiers, id) => ({ match: { by: MATCH.ITEM_TYPE, itemType: 7, qualifiers }, id });
+  const generic = fx(null, "generic"), qualified = fx({ entity: "ApplicantVisa" }, "qualified");
+  const pick = (rows, candidate) => resolveRow(rows, { by: MATCH.ITEM_TYPE, key: 7, candidate })?.id;
+  check("ENG-95543: a qualified row wins over the generic row for the same key — in EITHER declaration order (order-independence is the whole point)",
+    pick([generic, qualified], { entity: "ApplicantVisa" }) === "qualified"
+    && pick([qualified, generic], { entity: "ApplicantVisa" }) === "qualified"
+    && pick([generic, qualified], { entity: "SomethingElse" }) === "generic",
+    () => ({ a: pick([generic, qualified], { entity: "ApplicantVisa" }), b: pick([qualified, generic], { entity: "ApplicantVisa" }), c: pick([generic, qualified], { entity: "SomethingElse" }) }));
+  // A qualifier may be a PREDICATE, which is what the two entity fallbacks in mapDetails need (`endsWith("File")`
+  // is not an equality test and hardcoding it as one is how `ApplicantFile` stopped being Attachments).
+  const predRow = { match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } }, id: "file" };
+  check("ENG-95543: a qualifier can be a predicate, not only a literal — the `*File` detail fallback is not an equality test",
+    resolveRow([predRow], { by: MATCH.ENTITY, key: "*", candidate: { entity: "ApplicantFile" } })?.id === "file"
+    && resolveRow([predRow], { by: MATCH.ENTITY, key: "*", candidate: { entity: "ApplicantVisa" } }) === null,
+    () => resolveRow([predRow], { by: MATCH.ENTITY, key: "*", candidate: { entity: "ApplicantVisa" } }));
+  // SUFFIX matching is a distinct match kind, not a string compare: this is `matchFeature`'s live behaviour, and
+  // the reason `ApplicantEmailDetailV2` is recognised as Emails at all.
+  const sufRow = { match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "EmailDetailV2" }, id: "emails" };
+  check("ENG-95543: SCHEMA_SUFFIX matches an entity-prefixed variant and nothing else — ApplicantEmailDetailV2 resolves, EmailDetail does not",
+    resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "ApplicantEmailDetailV2" })?.id === "emails"
+    && resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "EmailDetailV2" })?.id === "emails"
+    && resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "EmailDetail" }) === null,
+    () => resolveRow([sufRow], { by: MATCH.SCHEMA_SUFFIX, key: "EmailDetail" }));
+  // Every row is FROZEN: the mapper hands rows to builders that also carry per-page state, and a builder that
+  // mutated a row would change the mapping for every later page in the same run (a whole-run corruption that
+  // reproduces only in multi-page folds).
+  check("ENG-95543: rows and their match keys are frozen — a builder cannot mutate the shared table mid-run",
+    Object.isFrozen(MAPPING_ROWS) && itRows.every((r) => Object.isFrozen(r) && Object.isFrozen(r.match)),
+    () => itRows.filter((r) => !Object.isFrozen(r)).length);
 
   // A RADIO_GROUP: recognised, and reported BY KIND. The old text ("classic component 'X' produced no Freedom
   // element — non-standard UI") told the reader nothing they could act on although the schema stated the kind.

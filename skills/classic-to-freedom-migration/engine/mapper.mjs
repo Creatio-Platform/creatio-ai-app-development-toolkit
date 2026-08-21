@@ -2,83 +2,29 @@
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
+import { ROLE as ITEM_ROLE_VALUES, rowForItem, rowForItemType } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
-// (`ViewGeneratorV2.generateStandardItem` → default → `generateModelItem`). This table is that switch expressed as
-// data: for each kind of the complete vocabulary, what this migration does with it. Roles:
-//  • `field`      — a data-bound control; the field builder owns it (Classic's own default).
-//  • `structural` — layout the container builder rebuilds (grids, tab panels, groups, details).
-//  • `container`  — a layout box that is structural ONLY when its subtree produced Freedom elements. A container
-//                   whose whole subtree mapped to nothing is real UI and must still surface, so the role is
-//                   conditional rather than structural.
-//  • `decoration` — UI furniture that carries no migration answer (a menu separator, a tooltip, a control's own
-//                   label, a designer-only grid editor). Recorded in the member ledger as `chrome`.
-//  • `unmapped`   — this engine emits no Freedom element for the kind. It states ENGINE COVERAGE only: WHICH Freedom
-//                   component should serve a kind is the mapping task's business, not this table's, so no target is
-//                   named here. The element gets a TYPED ⚠ naming its classic kind, which is what makes the gap
-//                   actionable without pre-deciding the answer.
-// Role constants: one spelling each, so a typo cannot silently read as a different role.
-const ROLE = { FIELD: "field", STRUCT: "structural", CONTAINER: "container", DECOR: "decoration", UNMAPPED: "unmapped" };
-const ITEM_ROLE = {
-  [VIEW_ITEM_TYPE.GRID_LAYOUT]: ROLE.STRUCT,
-  // NOT decoration: `generateGridLayoutEdit` (ViewGeneratorV2 L741-749) builds a LIVE `Terrasoft.GridLayoutEdit`
-  // and hands it `items: config.items || []` RAW, without recursing through `generateItem`. Calling it design-time
-  // discarded its whole child subtree, and because the children never go through the generator they exist only in
-  // the raw view config this engine itself walks — so this engine was the only thing that could have reported them.
-  [VIEW_ITEM_TYPE.GRID_LAYOUT_EDIT]: ROLE.CONTAINER,
-  [VIEW_ITEM_TYPE.TAB_PANEL]: ROLE.STRUCT,
-  [VIEW_ITEM_TYPE.IMAGE_TAB_PANEL]: ROLE.STRUCT,
-  [VIEW_ITEM_TYPE.DETAIL]: ROLE.STRUCT,
-  [VIEW_ITEM_TYPE.CONTROL_GROUP]: ROLE.STRUCT,
-  [VIEW_ITEM_TYPE.MODEL_ITEM]: ROLE.FIELD,
-  [VIEW_ITEM_TYPE.CONTAINER]: ROLE.CONTAINER,
-  // The ONE genuinely information-free kind: `generateSeparatorMenuItem` (L1289-1296) emits
-  // `{className: "Terrasoft.MenuSeparator"}` and pass-through props — no caption, no children, nothing to port.
-  [VIEW_ITEM_TYPE.MENU_SEPARATOR]: ROLE.DECOR,
-  // NOT decoration: `generateTip` (L1369-1391) merges the author's own tip config and generates BOTH `config.tools`
-  // (L1349-1360) and `config.items` (L1382-1389) RECURSIVELY through `generateItem`. A TIP can therefore contain
-  // buttons and arbitrary child items; treating it as a tooltip dropped that subtree unseen.
-  [VIEW_ITEM_TYPE.TIP]: ROLE.CONTAINER,
-  // NOT decoration: `TIP_LABEL` routes to `generateControlLabel` (L569 -> L1738-1760), whose caption comes from
-  // `getLabelCaption` (L1675-1689) — `config.caption`, then `labelConfig.caption`, then the column's. Classic logs
-  // an ERROR when that caption is empty (L986-992), which is the platform itself asserting the text is meant to be
-  // there. "Freedom fields label themselves" holds only while the label IS a field's own; a standalone TIP_LABEL
-  // whose caption differs from its control is author-written copy, and `chrome` deleted it with no ⚠ and no trace.
-  [VIEW_ITEM_TYPE.TIP_LABEL]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.MODULE]: ROLE.UNMAPPED,        // widget / profile-card builders claim the ones they know first
-  [VIEW_ITEM_TYPE.BUTTON]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.LABEL]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.MENU]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.MENU_ITEM]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.RADIO_GROUP]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.HYPERLINK]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.INFORMATION_BUTTON]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.COLOR_BUTTON]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.COMPONENT]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.GRID]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.SCHEDULE_EDIT]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.SECTION_VIEWS]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.SECTION_VIEW]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.DESIGN_VIEW]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.PROGRESS_BAR]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.IFRAMECONTROL]: ROLE.UNMAPPED,
-  [VIEW_ITEM_TYPE.EXTERNAL_WIDGET]: ROLE.UNMAPPED,
-};
+// (`ViewGeneratorV2.generateStandardItem` → default → `generateModelItem`). That switch now lives as DATA in
+// `mapping-table.mjs` — one row per kind, carrying its role, its tier and (where there is one) its Freedom
+// target — so the same rows serve the mapper, the `--verify` gate and the reference doc. The accessors below
+// are the mapper's view onto those rows; their semantics are unchanged.
+const ROLE = ITEM_ROLE_VALUES;
 // The member NAME for a kind, so a typed ⚠ reads `RADIO_GROUP 'IsPrimary'` — the identity a reviewer can act on.
 const ITEM_KIND_NAME = Object.fromEntries(Object.entries(VIEW_ITEM_TYPE).map(([k, v]) => [v, k]));
 // The kind the schema stated, or null when it stated none. Null is not "unknown element": Classic reads a missing
 // itemType as a field, and it is the one case where a name-shaped fallback applies (see `dropVerdict`).
-const itemRole = (i) => (i?.itemType == null ? null : ITEM_ROLE[i.itemType] || ROLE.UNMAPPED);
+const itemRole = (i) => (i?.itemType == null ? null : (rowForItem(i)?.role || ROLE.UNMAPPED));
 export const itemKindName = (i) => (i?.itemType == null ? null : ITEM_KIND_NAME[i.itemType] || `itemType ${i.itemType}`);
 // Pure decoration. Exported: the member ledger records it as `chrome` rather than letting it fall to `unaccounted`.
 export const isDecorationItem = (i) => itemRole(i) === ROLE.DECOR;
-// The role a KIND carries in the dispatch table, with NO fallback — `undefined` means the table has no entry for it.
-// Exported for the coverage golden only: `itemRole`'s `|| ROLE.UNMAPPED` tail and `itemKindName`'s `|| \`itemType n\``
-// tail both return something truthy for a member that was never listed, so neither can witness a member dropped
-// from `ITEM_ROLE`. This accessor can, which is what lets the suite assert the 29-member coverage AC 2 claims
-// instead of leaving it to a reader's tally.
-export const itemRoleOf = (itemType) => ITEM_ROLE[itemType];
+// The role a KIND carries in the table, with NO fallback — `undefined` means no row lists that member. Exported for
+// the coverage golden only: `itemRole`'s `|| ROLE.UNMAPPED` tail and `itemKindName`'s `|| \`itemType n\`` tail both
+// return something truthy for a member that was never listed, so neither can witness a member dropped from the
+// table. This accessor can, which is what lets the suite assert the 29-member coverage AC 2 claims instead of
+// leaving it to a reader's tally.
+export const itemRoleOf = (itemType) => rowForItemType(itemType)?.role;
 export const ITEM_ROLES = ROLE;
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
