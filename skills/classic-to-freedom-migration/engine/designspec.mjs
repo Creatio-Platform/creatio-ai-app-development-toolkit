@@ -451,9 +451,18 @@ function listRowActionsTable(rowActions) {
 // folded — the ⚠ Confirm item carries the question.
 function listCommandBarTable(actions) {
   if (!actions.length) return [];
-  const L = ["", "#### Command-bar actions", "| Action | Source | Freedom target |", "| --- | --- | --- |"];
+  const L = ["", "#### Command-bar actions",
+    "| Action | Caption | Icon | Condition | Menu position | Source package | Source | Freedom target |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const a of actions) {
-    L.push(`| \`${esc(a.name)}\` | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
+    // Same columns the Row actions table publishes: a name alone cannot build a button, and an action ported
+    // without its `Enabled` condition ships always-enabled. `Menu position` carries the separator-delimited
+    // group and the submenu container, which are the only record of the classic menu's shape.
+    const cap = a.caption ? `\`${esc(a.caption)}\`` : "⚠ none read — confirm on-stand";
+    const cond = a.condition ? `\`${esc(a.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ");
+    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
+      + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
   }
   return L;
 }
@@ -1767,7 +1776,16 @@ function buildListItems(pm, section, result, isMain) {
         cols.length, cols.map((c) => c.name), cols.map((c) => ({ name: c.name, code: c.code })))]
     : [{ label: "List columns" }];   // unresolved ⇒ nothing to gate; the spec's ⚠ line carries the question
   for (const f of filters) items.push(listRow(`Quick filter — \`${esc(f.name)}\` on ${esc(f.column || "?")}`, "filter", f.name, 1, [f.name]));
-  for (const a of actions) items.push(listRow(`Command-bar action — \`${esc(a.name)}\``, "action", a.name, 1, [a.name]));
+  for (const a of actions) {
+    // The label carries the metadata; the item stays the bare name because it keys the evidence id.
+    const bits = [a.caption ? `caption \`${esc(a.caption)}\`` : null,
+      a.condition ? `conditional: \`${esc(a.condition)}\`` : null,
+      a.icon ? `icon \`${esc(a.icon)}\`` : null,
+      a.parent ? `under \`${esc(a.parent)}\`` : null,
+      a.package ? `from \`${esc(a.package)}\`` : null].filter(Boolean);
+    const detail = bits.length ? ` (${bits.join(" · ")})` : "";
+    items.push(listRow(`Command-bar action — \`${esc(a.name)}\`${detail}`, "action", a.name, 1, [a.name]));
+  }
   // A row action is an EVIDENCE row for the same reason a command-bar action is, and more strongly: its Freedom
   // element name is not predictable here, so there is no identity to match against the built page.
   for (const ra of lcs?.rowActions || []) {

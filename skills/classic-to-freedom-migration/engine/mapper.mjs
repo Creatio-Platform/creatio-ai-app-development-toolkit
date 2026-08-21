@@ -2310,8 +2310,19 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
   // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
   if (section) {
     const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
+    // Two further ways the list can be short, each stated as what it is. `unresolved` = the method is defined
+    // nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
+    // claiming nobody defines it would be false.
+    const tick = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
+    const gapClause = (names, why) => {
+      if (!names.length) return "";
+      const behind = names.length > 1 ? "them" : "it";
+      return `; and ${names.map(tick).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
+    };
+    const helperGap = gapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
+      + gapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
     out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
-      reason: "only `getSectionActions()` items are read; a button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar" });
+      reason: `only \`getSectionActions()\` items are read; a button the section adds through its view \`diff\` (and a \`DataGridActiveRow…\` row action) is not folded at all, so neither reaches this ChangeSet${helperGap} — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar` });
   }
   for (const ra of rowActions) {
     const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
@@ -2335,7 +2346,12 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
   const columns = (section.listColumns || []).map((c) => listColumnSpec(c, entityColumns));
   const takenFilterNames = new Set();
   const filters = (section.quickFilters || []).map((qf, i) => listFilterSpec(qf, i, entityColumns, takenFilterNames));
-  const actions = (section.sectionActions || []).map((a) => ({ name: a, source: "getSectionActions" }));
+  // Actions arrive from the chain fold with their metadata; `source` names the classic surface they came from.
+  // A bare string still resolves to a name-only action, so a section object without metadata degrades rather
+  // than publishing `name: [object Object]`.
+  const actions = (section.sectionActions || []).map((a) => (typeof a === "string"
+    ? { name: a, source: "getSectionActions" }
+    : { ...a, source: "getSectionActions" }));
   const rowActions = (section.rowActions || []).map(listRowActionSpec);
   return {
     entity: boundEntity,

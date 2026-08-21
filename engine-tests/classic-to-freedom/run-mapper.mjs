@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -1071,7 +1071,8 @@ const secRun = runMigration({ entity: "Applicant",
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getAddRecordMiniPage:function(){return "ApplicantMiniPage";},getSectionActions:function(){var a=this.callParent(arguments);a.addItem({"Tag":"runBulkAssign"});return a;},getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
 }, { baseDir: FIX });
 check("section: add-record mini page detected (name)", secRun.section?.addRecordMiniPage === "ApplicantMiniPage");
-check("section: getSectionActions hint captured (#8b)", secRun.section?.sectionActions.includes("runBulkAssign"));
+check("section: getSectionActions hint captured (#8b)",
+  (secRun.section?.sectionActions || []).some((a) => a.name === "runBulkAssign"));
 check("section: list columns from getGridDataColumns (#2)", (secRun.section?.listColumns || []).join(",") === "Name,Stage");
 const resolvedColumnsRun = runMigration({ entity: "Applicant",
   planMeta: { sectionSchema: "Applicant1Section" },
@@ -4173,8 +4174,257 @@ check("section quick filters: reversed `{columnName, name}` order still pairs (o
   qfEdge.some((f) => f.name === "Owner" && f.column === "Owner" && f.type === "LOOKUP"),
   () => qfEdge);
 check("section actions: standard getButtonMenuItem/\"Click\".bindTo shape is caught (createRegistry), callParent excluded",
-  docSecParsed.sectionActions.includes("createRegistry") && !docSecParsed.sectionActions.includes("callParent"),
+  docSecParsed.sectionActions.some((a) => a.name === "createRegistry")
+  && !docSecParsed.sectionActions.some((a) => a.name === "callParent"),
   () => docSecParsed.sectionActions);
+
+/* ---- getSectionActions: per-item metadata, helper-built items, separators, submenu nesting ---- */
+const secActMk = (methods) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{${methods}},diff:[]};});`;
+// Unquoted `Click`, value spanning lines, handler name matching no navigate hint.
+const secActA = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `a.addItem(this.getButtonMenuItem({Type:"Terrasoft.MenuSeparator",Caption:""}));`
+  + `a.addItem(this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.ScoreLeadActionCaption"},Click:{\n`
+  + `  bindTo:"scoreLeadAction"\n},Enabled:{bindTo:"isAnySelected"},ImageConfig:$Resources.Images.MLIconSvg}));`
+  + `return a;}`), "MLLeadScoring").sectionActions;
+check("ENG-95254: an unquoted multi-line `Click` whose handler matches no navigate hint is still extracted (regression guard)",
+  secActA.length === 1 && secActA[0]?.name === "scoreLeadAction", () => secActA);
+check("ENG-95254: the item carries caption resource, icon, enablement condition and contributing package",
+  secActA[0]?.caption === "ScoreLeadActionCaption" && secActA[0]?.icon === "MLIconSvg"
+  && secActA[0]?.condition === "isAnySelected" && secActA[0]?.package === "MLLeadScoring", () => secActA[0]);
+check("ENG-95254: a MenuSeparator is NOT published as an action — it survives as the group boundary around it",
+  secActA[0]?.group === 1 && secActA.every((a) => a.name), () => secActA);
+// Both helper shapes: one handed the collection, one whose returned item is added.
+const secActB = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `this.setSyncSectionActions(a);a.addItem(this._getActualizeAgeButtonMenuItem());return a;},`
+  + `setSyncSectionActions:function(items){items.addItem(this.getButtonMenuItem(`
+  + `{Caption:{bindTo:"Resources.Strings.SyncContactsCaption"},Click:{bindTo:"openSyncSettings"}}));},`
+  + `_getActualizeAgeButtonMenuItem:function(){return this.getButtonMenuItem(`
+  + `{Caption:{bindTo:"Resources.Strings.ActualizeActionCaption"},Click:{bindTo:"actualizeAge"}});}`), "Exchange");
+check("ENG-95254: items appended by a helper method are extracted — BOTH the collection-handed and the item-returning shape",
+  secActB.sectionActions.map((a) => a.name).sort().join(",") === "actualizeAge,openSyncSettings",
+  () => secActB.sectionActions);
+check("ENG-95254: helper captions ride along, so a helper-built item is not a bare name either",
+  secActB.sectionActions.every((a) => a.caption) , () => secActB.sectionActions);
+check("ENG-95254: the RESOLVED helper names are reported (that is what lets the chain clear another layer's marker)",
+  secActB.sectionActionHelpers.slice().sort().join(",") === "_getActualizeAgeButtonMenuItem,setSyncSectionActions"
+  && secActB.sectionActionUnresolved.length === 0, () => secActB.sectionActionHelpers);
+const secActU = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `this.setSyncSectionActions(a);return a;}`), "Exchange");
+check("ENG-95254: a helper THIS layer does not define is reported unresolved, never silently dropped",
+  secActU.sectionActionUnresolved.join(",") === "setSyncSectionActions" && secActU.sectionActions.length === 0,
+  () => secActU.sectionActionUnresolved);
+check("ENG-95254: `this.get`/`this.set` are NOT reported as unresolved menu helpers — only the two contributing shapes count",
+  parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `this.set("X",this.get("Y"));return a;}`), "P").sectionActionUnresolved.length === 0);
+
+// A nested item's fields must never be read as its parent's. Both orderings, because the bug was order-dependent:
+// whichever `Click` appeared first in the parent's brace-matched span won.
+const secActNestA = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `a.addItem(this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.SyncGroupCaption"},`
+  + `Items:[this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.NowCaption"},Click:{bindTo:"syncNow"}})]}));`
+  + `return a;}`), "Exchange").sectionActions;
+check("ENG-95254: a handler-less submenu CONTAINER is not published as an action, and its caption becomes the child's parent label",
+  secActNestA.length === 1 && secActNestA[0]?.name === "syncNow"
+  && secActNestA[0]?.caption === "NowCaption" && secActNestA[0]?.parent === "SyncGroupCaption",
+  () => secActNestA);
+const secActNestB = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `a.addItem(this.getButtonMenuItem({Items:[this.getButtonMenuItem({Click:{bindTo:"childHandler"},`
+  + `Caption:{bindTo:"Resources.Strings.ChildCaption"}})],`
+  + `Caption:{bindTo:"Resources.Strings.ParentCaption"},Click:{bindTo:"parentHandler"}}));return a;}`), "Exchange").sectionActions;
+check("ENG-95254: a child declared BEFORE its parent's own fields does not steal the parent's name or caption",
+  secActNestB.length === 2
+  && secActNestB.find((a) => a.name === "parentHandler")?.caption === "ParentCaption"
+  && secActNestB.find((a) => a.name === "parentHandler")?.parent === null
+  && secActNestB.find((a) => a.name === "childHandler")?.caption === "ChildCaption"
+  && secActNestB.find((a) => a.name === "childHandler")?.parent === "parentHandler",
+  () => secActNestB);
+const secActNestC = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `a.addItem(this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.SyncGroupCaption"},`
+  + `Click:{bindTo:"syncGroup"},Items:[this.getButtonMenuItem({Click:{bindTo:"syncNow"}})]}));`
+  + `return a;}`), "Exchange").sectionActions;
+check("ENG-95254: a submenu container that DOES have a handler is published, and its child points at the handler name",
+  secActNestC.length === 2 && secActNestC.find((a) => a.name === "syncGroup")?.caption === "SyncGroupCaption"
+  && secActNestC.find((a) => a.name === "syncNow")?.parent === "syncGroup"
+  && secActNestC.find((a) => a.name === "syncNow")?.caption === null, () => secActNestC);
+// The three ways an item can go unread. Each must SAY so — a complete-looking empty set is the defect.
+const secActHop = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `this.addFirst(a);return a;},addFirst:function(items){this.addSecond(items);},`
+  + `addSecond:function(items){items.addItem(this.getButtonMenuItem({Click:{bindTo:"deepAction"}}));}`), "P");
+check("ENG-95254: a helper called BY a helper is reported as not-followed, NOT as unresolved — the method is defined, following stops at one hop",
+  secActHop.sectionActionNotFollowed.includes("addSecond")
+  && !secActHop.sectionActionUnresolved.includes("addSecond")
+  && secActHop.sectionActionHelpers.includes("addFirst"),
+  () => ({ nf: secActHop.sectionActionNotFollowed, un: secActHop.sectionActionUnresolved }));
+// A resolved helper that DELEGATES instead of building: the items are still missing, so it must say which method
+// carries them — routed by whether this src defines that method.
+const secActDeleg = (extra) => parseSchema(secActMk(
+  `getSectionActions:function(){var a=this.callParent(arguments);a.addItem(this._getAgeItem());return a;},` + extra), "P");
+const secActDelegIn = secActDeleg(`_getAgeItem:function(){return this._buildAgeItem();},`
+  + `_buildAgeItem:function(){return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`);
+check("ENG-95254: a paramless helper that delegates to a method THIS src defines reports it as not-followed",
+  secActDelegIn.sectionActionNotFollowed.includes("_buildAgeItem")
+  && secActDelegIn.sectionActionUnresolved.length === 0,
+  () => ({ nf: secActDelegIn.sectionActionNotFollowed, un: secActDelegIn.sectionActionUnresolved }));
+const secActDelegOut = secActDeleg(`_getAgeItem:function(){return this._buildAgeItem();}`);
+check("ENG-95254: a paramless helper that delegates to a method NO layer defines reports it as unresolved",
+  secActDelegOut.sectionActionUnresolved.includes("_buildAgeItem")
+  && !secActDelegOut.sectionActionNotFollowed.includes("_buildAgeItem"),
+  () => ({ nf: secActDelegOut.sectionActionNotFollowed, un: secActDelegOut.sectionActionUnresolved }));
+const secActDelegColl = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `this.addSync(a);return a;},addSync:function(){this.reallyAdd(this.get("Coll"));}`), "P");
+check("ENG-95254: a collection-handed helper DECLARED PARAMLESS still reports its carrier, and `this.get` is not mistaken for one",
+  secActDelegColl.sectionActionUnresolved.join(",") === "reallyAdd", () => secActDelegColl.sectionActionUnresolved);
+// A carrier guarded by a braceless `if`/`else` is still in statement position, so it is still reported.
+const secActGuard = (guard) => parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `this.addSync(a);return a;},addSync:function(){${guard}}`), "P");
+check("ENG-95254: a carrier guarded by a braceless `if` is reported — `)` is a statement position",
+  secActGuard(`if(this.ok())this.reallyAdd(this.get("C"));`).sectionActionUnresolved.join(",") === "reallyAdd",
+  () => secActGuard(`if(this.ok())this.reallyAdd(this.get("C"));`).sectionActionUnresolved);
+check("ENG-95254: a carrier after a braceless `else` is reported too",
+  secActGuard(`if(!this.ok()){return;}else this.reallyAdd(this.get("C"));`).sectionActionUnresolved.join(",") === "reallyAdd",
+  () => secActGuard(`if(!this.ok()){return;}else this.reallyAdd(this.get("C"));`).sectionActionUnresolved);
+check("ENG-95254: admitting `)` does NOT readmit a value-position read nested in another call's arguments",
+  (() => { const r = secActDeleg(`_getAgeItem:function(){return this.getButtonMenuItem({`
+    + `Click:{bindTo:"actualizeAge"},Tip:Ext.String.trim(this.getMessage("M"))});}`);
+    return r.sectionActions.map((a) => a.name).join(",") === "actualizeAge"
+      && r.sectionActionUnresolved.length === 0 && r.sectionActionNotFollowed.length === 0; })(),
+  () => secActDeleg(`_getAgeItem:function(){return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"},`
+    + `Tip:Ext.String.trim(this.getMessage("M"))});}`));
+check("ENG-95254: a helper that builds inline and READS a feature flag through another method emits NO gap — position discriminates, not the name",
+  (() => { const r = secActDeleg(`_getAgeItem:function(){return this.getButtonMenuItem({`
+    + `Caption:{bindTo:"Resources.Strings.ActualizeCaption"},Click:{bindTo:"actualizeAge"},`
+    + `Visible:this.getIsFeatureEnabled("Age")});}`);
+    return r.sectionActions.map((a) => a.name).join(",") === "actualizeAge"
+      && r.sectionActionUnresolved.length === 0 && r.sectionActionNotFollowed.length === 0; })(),
+  () => secActDeleg(`_getAgeItem:function(){return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"},`
+    + `Visible:this.getIsFeatureEnabled("Age")});}`));
+check("ENG-95254: a `var x = this.getMessage(...)` read inside a helper is not a carrier either",
+  (() => { const r = secActDeleg(`_getAgeItem:function(){var c=this.getMessage("X");`
+    + `return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`);
+    return r.sectionActionUnresolved.length === 0 && r.sectionActionNotFollowed.length === 0; })(),
+  () => secActDeleg(`_getAgeItem:function(){var c=this.getMessage("X");`
+    + `return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`));
+check("ENG-95254: a carrier called as a STATEMENT is still reported even when the same helper also builds an item inline",
+  (() => { const r = secActDeleg(`_getAgeItem:function(){this.addExtra();`
+    + `return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`);
+    return r.sectionActions.map((a) => a.name).join(",") === "actualizeAge"
+      && r.sectionActionUnresolved.includes("addExtra"); })(),
+  () => secActDeleg(`_getAgeItem:function(){this.addExtra();`
+    + `return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`));
+check("ENG-95254: a paramless helper that builds its item INLINE fires no gap — the delegate rule discriminates",
+  (() => { const r = secActDeleg(`_getAgeItem:function(){return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`);
+    return r.sectionActions.map((a) => a.name).join(",") === "actualizeAge"
+      && r.sectionActionUnresolved.length === 0 && r.sectionActionNotFollowed.length === 0; })(),
+  () => secActDeleg(`_getAgeItem:function(){return this.getButtonMenuItem({Click:{bindTo:"actualizeAge"}});}`));
+const secActLocal = parseSchema(secActMk(`getSectionActions:function(){var items=[];`
+  + `this.setSyncSectionActions(items);return items;},`
+  + `setSyncSectionActions:function(list){list.addItem(this.getButtonMenuItem({Click:{bindTo:"openSyncSettings"}}));}`), "P");
+check("ENG-95254: a collection NOT assigned from callParent is still recognised, so its helper's items are extracted",
+  secActLocal.sectionActions.some((a) => a.name === "openSyncSettings"), () => secActLocal.sectionActions);
+const secActDeepBody = (() => { let inner = `this.getButtonMenuItem({Click:{bindTo:"level6"}})`;
+  for (let i = 5; i >= 1; i--) inner = `this.getButtonMenuItem({Click:{bindTo:"level${i}"},Items:[${inner}]})`;
+  return secActMk(`getSectionActions:function(){var a=this.callParent(arguments);a.addItem(${inner});return a;}`); })();
+const secActDeep = parseSchema(secActDeepBody, "P");
+check("ENG-95254: nesting past the depth cap is reported as not-followed rather than silently truncated",
+  secActDeep.sectionActions.length === 4
+  && secActDeep.sectionActionNotFollowed.some((n) => /nested deeper/.test(n)), () => secActDeep);
+check("ENG-95254: an ordinary local handed to an undefined non-menu method does not become a false completeness warning",
+  parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);var x=[];`
+    + `this.doSomethingElse(x);return a;}`), "P").sectionActionUnresolved.length === 0);
+// A value already consumed as another field must not re-enter through the name-only hint fallback.
+check("ENG-95254: an `Enabled` value matching the navigate hint is NOT republished as a phantom action",
+  (() => { const r = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `a.addItem(this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.C"},Click:{bindTo:"doThing"},`
+    + `Enabled:{bindTo:"runIsAllowed"}}));return a;}`), "P").sectionActions;
+    return r.length === 1 && r[0].name === "doThing" && r[0].condition === "runIsAllowed"; })(),
+  () => parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `a.addItem(this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.C"},Click:{bindTo:"doThing"},`
+    + `Enabled:{bindTo:"runIsAllowed"}}));return a;}`), "P").sectionActions);
+// A separator BETWEEN two items splits them into two groups (the earlier assertion only had a leading separator).
+const secActGroups = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+  + `a.addItem(this.getButtonMenuItem({Click:{bindTo:"first"}}));`
+  + `a.addItem(this.getButtonMenuItem({Type:"Terrasoft.MenuSeparator",Caption:""}));`
+  + `a.addItem(this.getButtonMenuItem({Click:{bindTo:"second"}}));return a;}`), "P").sectionActions;
+check("ENG-95254: a separator between two items puts them in different groups, and order still runs 0,1",
+  secActGroups.map((a) => `${a.name}:${a.group}:${a.order}`).join(",") === "first:0:0,second:1:1", () => secActGroups);
+// The standard base menu alone is not a custom action set (the KnowledgeBaseSectionV2 negative case).
+const secActBase = parseSchema(secActMk(`getSectionActions:function(){return this.callParent(arguments);}`), "P");
+check("ENG-95254: a getSectionActions that only returns callParent yields NO custom actions and no false gap",
+  secActBase.sectionActions.length === 0 && secActBase.sectionActionUnresolved.length === 0
+  && secActBase.sectionActionNotFollowed.length === 0, () => secActBase);
+// `mergeSectionActions`, asserted directly like `mergeRowActions` beside it.
+check("ENG-95254: `mergeSectionActions` — the TOP layer's declaration wins while the first-seen position is kept",
+  (() => { const merged = mergeSectionActions([
+    { name: "b", caption: "BaseB", package: "Base", group: 0 },
+    { name: "a", caption: "BaseA", package: "Base", group: 0 },
+    { name: "b", caption: "TopB", package: "Top", group: 0 }]);
+    return merged.map((x) => `${x.name}:${x.caption}:${x.order}`).join(",") === "b:TopB:0,a:BaseA:1"; })(),
+  () => mergeSectionActions([{ name: "b", caption: "BaseB" }, { name: "a" }, { name: "b", caption: "TopB" }]));
+check("ENG-95254: `mergeSectionActions` renumbers `group` so two packages' group 0 do not collide",
+  (() => { const merged = mergeSectionActions([
+    { name: "a", package: "Base", group: 0 }, { name: "b", package: "Top", group: 0 },
+    { name: "c", package: "Top", group: 0 }]);
+    return merged.map((x) => x.group).join(",") === "0,1,1"; })(),
+  () => mergeSectionActions([{ name: "a", package: "Base", group: 0 }, { name: "b", package: "Top", group: 0 }]));
+check("ENG-95254: `mergeSectionActions` drops nameless entries and tolerates no argument at all",
+  mergeSectionActions([{ caption: "orphan" }, { name: "   " }, { name: "ok" }]).map((x) => x.name).join(",") === "ok"
+  && mergeSectionActions().length === 0);
+
+// A top layer overrides getSectionActions and calls a helper only the base layer defines.
+const secActChain = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [
+    { pkg: "CrtUIv2", body: secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+      + `this.setSyncSectionActions(a);return a;},setSyncSectionActions:function(items){items.addItem(`
+      + `this.getButtonMenuItem({Caption:{bindTo:"Resources.Strings.SyncContactsCaption"},`
+      + `Click:{bindTo:"openSyncSettings"},Enabled:{bindTo:"isSingleSelected"}}));}`) },
+    { pkg: "Exchange", body: secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+      + `this.setSyncSectionActions(a);return a;}`) },
+  ],
+}, { baseDir: FIX });
+check("ENG-95254: an unresolved helper in ONE layer is cleared by the layer that defines it — the chain resolves what a single `src` cannot",
+  (secActChain.section?.sectionActionUnresolved || []).length === 0
+  && (secActChain.section?.sectionActions || []).some((a) => a.name === "openSyncSettings" && a.package === "CrtUIv2"),
+  () => secActChain.section);
+const secActLcs = secActChain.listChangeSet;
+check("ENG-95254: the metadata reaches the ChangeSet — a command-bar action carries caption, condition and package beside its source",
+  (secActLcs?.commandBarActions || []).some((a) => a.name === "openSyncSettings" && a.caption === "SyncContactsCaption"
+    && a.condition === "isSingleSelected" && a.package === "CrtUIv2" && a.source === "getSectionActions"),
+  () => secActLcs?.commandBarActions);
+check("ENG-95254: exactly ONE list-command-bar decision survives the metadata change — ENG-95218's contract is per-run, never per action",
+  (secActLcs?.needsDecision || []).filter((d) => d.kind === "list-command-bar").length === 1,
+  () => (secActLcs?.needsDecision || []).filter((d) => d.kind === "list-command-bar"));
+check("ENG-95254: the design spec's Command-bar actions table publishes the caption / icon / condition / menu-position / package columns",
+  /#### Command-bar actions/.test(secActChain.designSpec)
+  && /\| Action \| Caption \| Icon \| Condition \| Menu position \| Source package \| Source \| Freedom target \|/.test(secActChain.designSpec)
+  && /openSyncSettings[\s\S]{0,240}?SyncContactsCaption[\s\S]{0,240}?isSingleSelected[\s\S]{0,240}?CrtUIv2/.test(secActChain.designSpec),
+  () => secActChain.designSpec.split("\n").filter((l) => /Command-bar|openSyncSettings/.test(l)));
+// A helper no layer defines is a completeness gap, reported on the single command-bar decision.
+const secActGap = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "Exchange", body: secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `this.setSyncSectionActions(a);a.addItem(this.getButtonMenuItem({Click:{bindTo:"doThing"}}));return a;}`) }],
+}, { baseDir: FIX });
+check("ENG-95254: a helper NO layer defines is named in the command-bar completeness reason, alongside the `diff` gap",
+  (() => { const d = (secActGap.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar");
+    return !!d && /setSyncSectionActions/.test(d.reason) && /not folded at all/.test(d.reason)
+      && /no layer in this chain defines/.test(d.reason) && /NOT in the list above/.test(d.reason); })(),
+  () => (secActGap.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
+check("ENG-95254: the resolvable item on that same section is still extracted — an unresolved helper does not poison the layer",
+  (secActGap.section?.sectionActions || []).some((a) => a.name === "doThing"),
+  () => secActGap.section?.sectionActions);
+// not-followed reaches the same reason, worded as what it is rather than as "nobody defines it".
+const secActHopRun = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "Exchange", body: secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `this.addFirst(a);return a;},addFirst:function(items){this.addSecond(items);},`
+    + `addSecond:function(items){items.addItem(this.getButtonMenuItem({Click:{bindTo:"deepAction"}}));}`) }],
+}, { baseDir: FIX });
+check("ENG-95254: a not-followed helper reaches the command-bar reason and is NOT described as undefined",
+  (() => { const d = (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar");
+    return !!d && /addSecond/.test(d.reason) && /saw but did not read/.test(d.reason)
+      && !/`addSecond` .{0,40}no layer in this chain defines/.test(d.reason); })(),
+  () => (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
 
 const docPlanMeta = { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "ListPageV3Template", formTemplate: "PageWithTabsFreedomTemplate" };
 const typedBundle = (nm, field) => ({ schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});` }], seed: CLEAN_SEED });
@@ -4188,7 +4438,8 @@ const docSecRun = runMigration({
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
 check("section analysis: quick filters + section actions reach the section object (union across layers)",
-  (docSecRun.section.quickFilters || []).length === 2 && (docSecRun.section.sectionActions || []).includes("createRegistry"));
+  (docSecRun.section.quickFilters || []).length === 2
+  && (docSecRun.section.sectionActions || []).some((a) => a.name === "createRegistry"));
 check("typed-page: manifest.typedPages surfaced on the result + a typed-page decision in the ⚠ worklist",
   (docSecRun.typedPages || []).length === 2
   && docSecRun.changeSet.needsDecision.some((n) => n.kind === "typed-page" && /precedence/i.test(n.reason)));

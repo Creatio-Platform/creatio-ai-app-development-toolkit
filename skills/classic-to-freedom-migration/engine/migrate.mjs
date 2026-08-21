@@ -1258,6 +1258,30 @@ function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns
   return notes;
 }
 
+// `sectionActions` folded across the chain, deduped by name. Layers arrive base->top and the TOP declaration wins,
+// matching the precedence `addRecordMiniPage` takes below. First-seen position is kept, so an override that only
+// restyles an action does not move it to the end of the menu. `group` is renumbered across the merged list: every
+// layer numbers its own groups from 0, so the raw ids collide between packages.
+// EXPORTED as the seam its three precedence rules are asserted through — top-layer-wins, first-seen position and
+// the nameless drop are not observable from `analyzeSectionChain`'s output alone.
+export function mergeSectionActions(fromLayers = []) {
+  const byName = new Map();
+  for (const a of fromLayers) {
+    // The name keys the ChangeSet row, the checklist row and the evidence id, so a blank one is not a deliverable.
+    const name = typeof a?.name === "string" ? a.name.trim() : "";
+    if (!name) continue;
+    const prev = byName.get(name);
+    byName.set(name, { ...a, name, order: prev ? prev.order : byName.size });
+  }
+  const merged = [...byName.values()].sort((x, y) => x.order - y.order);
+  const groups = new Map();
+  return merged.map((a, i) => {
+    const key = `${a.package ?? ""}#${a.group ?? 0}`;
+    if (!groups.has(key)) groups.set(key, groups.size);
+    return { ...a, order: i, group: groups.get(key) };
+  });
+}
+
 // Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
 // section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
 // EXPORTED because the layer arm is unreachable until the section view `diff` is folded — without a seam here the
@@ -1294,7 +1318,17 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     schemaGathered: sectionSchemas.length > 0,
     listColumnReadRejected,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
-    sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
+    sectionActions: mergeSectionActions(sectionSchemas.flatMap((l) => l.sectionActions || [])),
+    // Menu helpers no layer in the chain defines. Collected across layers, then cleared by any layer that resolved
+    // one: a layer's parse sees only its own src, so the chain resolves what a single src cannot. What survives is a
+    // completeness gap and rides into the command-bar decision.
+    sectionActionUnresolved: (() => {
+      const resolved = new Set(sectionSchemas.flatMap((l) => l.sectionActionHelpers || []));
+      return [...new Set(sectionSchemas.flatMap((l) => l.sectionActionUnresolved || []))].filter((n) => !resolved.has(n));
+    })(),
+    // Helpers and nesting the parser saw but did not read. Not cleared by another layer defining the method: the
+    // limit is this parser's one-hop/depth rule, so the items behind it stay missing however the chain resolves.
+    sectionActionNotFollowed: [...new Set(sectionSchemas.flatMap((l) => l.sectionActionNotFollowed || []))],
     listColumns: useResolved ? resolvedListColumns.columns : chainColumns,
     listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,

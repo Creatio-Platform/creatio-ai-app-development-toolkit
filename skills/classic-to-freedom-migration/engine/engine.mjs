@@ -63,6 +63,7 @@ function getAcornParse() {
 // Kept separate from the AST extraction so the "what fields the merge consumes" shape lives in one place.
 function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
   const methodKeys = safeKeys(s.methods); // reused for the name list AND the empty-body (stub) subset below
+  const secActions = sectionActionsOf(src, pkg); // menu items + resolved/unresolved helpers
   return {
     pkg,
     error: parseError,
@@ -135,24 +136,17 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
       }
       return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
     })(),
-    // section-level actions (bulk / section-toolbar) built in getSectionActions — a SEPARATE surface from
-    // the record page's getActions. Surface the handler tags / navigate hints (#8b).
-    sectionActions: (() => {
-      const body = extractFnBody(src, "getSectionActions");
-      if (!body) return [];
-      return [...new Set([
-        // classic STANDARD shape: actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "handler"} }))
-        // — the Click handler IS the action identity. Also the direct "Click": "handler" form. This is what the
-        // old Tag/navigate-only patterns missed (e.g. `createRegistry`), so real section actions were dropped.
-        // The key itself is UNQUOTED in most hand-written schemas (`Click: {bindTo: "setOwner"}`), so the quotes
-        // around Click / Tag must be optional — requiring them dropped every action written in that style, which is
-        // exactly the "section actions dropped" trap this pattern exists to prevent.
-        ...[...body.matchAll(/"?Click"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
-        // alternative/older shapes: menu-item handler Tags and navigate/run hints
-        ...[...body.matchAll(/"?Tag"?\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
-        ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
-      ])].filter((n) => n !== "callParent");
-    })(),
+    // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One entry
+    // per menu item with its metadata: a name alone cannot build a Freedom command-bar button, and an item ported
+    // without its `Enabled` condition ships always-enabled.
+    sectionActions: secActions.items,
+    // menu helpers resolved in this src — a helper defined in another layer of the chain is not a gap.
+    sectionActionHelpers: secActions.helpers,
+    // menu helpers called here but defined nowhere in this src: the item set is short by an unknown number of items.
+    sectionActionUnresolved: secActions.unresolved,
+    // seen and deliberately not read — a helper called by a helper, or nesting past the depth cap. The items behind
+    // these are missing too, but the cause is this parser's own limit, not a method nobody defines.
+    sectionActionNotFollowed: secActions.notFollowed,
     // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
     // it as data-driven (#2).
@@ -893,6 +887,203 @@ function fixedFilterObjects(body) {
     i++;
   }
   return objs;
+}
+
+// ---- getSectionActions items ----------------------------------------------------------------------------------
+// Depth cap for inline submenus. Items nested deeper are not read, and `notFollowed` says so.
+const MAX_MENU_NEST = 4;
+// Classic base API that shows up inside menu-building code but never carries menu items itself. `get`/`set` are
+// the view-model accessors a helper reads its data through, so treating them as carriers would report a gap on
+// ordinary sections.
+const NON_MENU_METHODS = new Set(["getButtonMenuItem", "callParent", "get", "set"]);
+const menuItemRe = () => /(?:getButtonMenuItem|addItem)\s*\(\s*\{/g;
+// One field per pattern. `Click` is the item's identity, `Tag` the older form; every quote is optional because
+// hand-written schemas omit them.
+const ITEM_CLICK = /"?Click"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/;
+const ITEM_TAG = /"?Tag"?\s*:\s*["']([^"']{2,})["']/;
+const ITEM_CAPTION = /"?Caption"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([^"']+)["']/;
+const ITEM_ENABLED = /"?Enabled"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z][\w.]*)["']/;
+const ITEM_SEPARATOR = /"?Type"?\s*:\s*["'](?:Terrasoft\.)?MenuSeparator["']/;
+// `ImageConfig` in its three forms — bound value, resource reference, bare literal — one pattern each, tried in
+// order. A single alternation covering all three is past the complexity a regex may carry here.
+const ITEM_ICON = [
+  /"?ImageConfig"?\s*:\s*\{\s*"?bindTo"?\s*:\s*["']([\w.$]+)["']/,
+  /"?ImageConfig"?\s*:\s*\$?Resources\.Images\.(\w+)/,
+  /"?ImageConfig"?\s*:\s*["']([^"']+)["']/,
+];
+// The locals a section builds its menu in: the one assigned from `callParent`, plus any local used with `.addItem(`
+// or handed back by `return`. Several are possible, and helper matching runs over all of them.
+function menuCollectionNames(body) {
+  const names = new Set();
+  const fromParent = /(?:var|let|const)\s+(\w+)\s*=\s*this\.callParent\s*\(/.exec(body);
+  if (fromParent) names.add(fromParent[1]);
+  for (const [, n] of body.matchAll(/(?:var|let|const)\s+(\w+)\s*=/g)) {
+    if (new RegExp(String.raw`\b${n}\.addItem\s*\(`).test(body) || new RegExp(String.raw`return\s+${n}\s*[;}]`).test(body)) names.add(n);
+  }
+  if (!names.size) names.add("actionMenuItems");
+  return [...names];
+}
+// Blank every nested item's span out of `text`, so an item's fields are read only from its OWN declaration. Without
+// this a child's `Click`/`Caption` inside `Items:[…]` is attributed to the parent, and whichever appears first in
+// the source wins. Equal-length whitespace keeps offsets valid while the scan continues over the original.
+function maskNestedItems(text) {
+  const re = menuItemRe();
+  let out = text;
+  let m;
+  while ((m = re.exec(text))) {
+    const open = m.index + m[0].length - 1;
+    const end = Math.min(open + 1 + sliceBracedBody(text, open).length + 1, text.length);
+    out = out.slice(0, m.index) + " ".repeat(end - m.index) + out.slice(end);
+    re.lastIndex = end;
+  }
+  return out;
+}
+// Every menu-item object in `body`, brace-matched as a unit, in source order, tagged with its nesting depth. Two
+// anchors: `getButtonMenuItem({…})` and a bare `<coll>.addItem({…})`. In `addItem(this.getButtonMenuItem({…}))`
+// only the inner one matches, so an item is never counted twice. A nested item is a submenu child, emitted right
+// after its parent. `state.truncated` records that the depth cap stopped the walk with items still below.
+function menuItemObjects(body, depth, state) {
+  if (depth >= MAX_MENU_NEST) {
+    if (menuItemRe().test(body)) state.truncated = true;
+    return [];
+  }
+  const out = [];
+  const re = menuItemRe();
+  let m;
+  while ((m = re.exec(body))) {
+    const open = m.index + m[0].length - 1;
+    const inner = sliceBracedBody(body, open);
+    out.push({ text: maskNestedItems(inner), depth });
+    out.push(...menuItemObjects(inner, depth + 1, state));
+    re.lastIndex = open + 1 + inner.length + 1;
+  }
+  return out;
+}
+// The first `ImageConfig` form that matches.
+function iconOf(text) {
+  for (const re of ITEM_ICON) {
+    const m = re.exec(text);
+    if (m) return m[1];
+  }
+  return null;
+}
+// One item's fields, each read inside that item's own braces.
+function readMenuItem(text) {
+  const click = ITEM_CLICK.exec(text);
+  const tag = ITEM_TAG.exec(text);
+  const caption = ITEM_CAPTION.exec(text);
+  const enabled = ITEM_ENABLED.exec(text);
+  return {
+    name: click?.[1] ?? tag?.[1] ?? null,
+    caption: caption ? resourceKey(caption[1]) : null,   // stored as the lookup key, not a qualified path
+    condition: enabled?.[1] ?? null,
+    icon: iconOf(text),
+    separator: ITEM_SEPARATOR.test(text),
+  };
+}
+// Helpers that contribute items: one handed a collection (`this.foo(actionMenuItems)`), one whose returned item is
+// added (`actionMenuItems.addItem(this.foo())`). Only these two shapes — matching every `this.x(` would report
+// `this.get`/`this.set` as menu helpers.
+function menuHelperNames(body, colls) {
+  const names = [];
+  for (const coll of colls) {
+    const handed = new RegExp(String.raw`this\.(\w+)\s*\(\s*` + coll + String.raw`\b`, "g");
+    const added = new RegExp(coll + String.raw`\.addItem\s*\(\s*this\.(\w+)\s*\(`, "g");
+    names.push(...[...body.matchAll(handed)].map((m) => m[1]), ...[...body.matchAll(added)].map((m) => m[1]));
+  }
+  return [...new Set(names)].filter((n) => !NON_MENU_METHODS.has(n));
+}
+// The parameter a helper receives its collection through, so its body can be scanned for further helper calls.
+function helperParamName(src, name) {
+  const m = new RegExp(name + String.raw`\s*[:=]\s*function\s*\(\s*(\w+)`).exec(src);
+  return m ? m[1] : null;
+}
+// The methods a PARAMLESS helper delegates to. Such a helper takes no collection, so it cannot be scanned by
+// collection name. A carrier is CALLED — as a statement, or as the returned value; a data read sits in value
+// position (after `:` or `=`, inside another call's arguments, behind an operator). Discriminating by POSITION is
+// what keeps a feature-flag or message read from being reported as a missing menu item; a name denylist cannot,
+// because the Classic base API is far larger than any list kept here. `)` and `else` are statement positions
+// too — a braceless `if`/`else` guarding the call — and neither can precede a value-position `this.x(` in
+// valid JS. A `case "x": this.addOne(c);` carrier stays missed: `:` cannot join the list without readmitting
+// every `Enabled:`/`Visible:` data read.
+function delegateCallees(body) {
+  const out = new Set();
+  for (const [, name] of body.matchAll(/(?:^|[;{})]|\breturn|\belse)\s*this\.(\w+)\s*\(/g)) {
+    if (!NON_MENU_METHODS.has(name)) out.add(name);
+  }
+  return [...out];
+}
+// Identity, order and separator-delimited group. A separator is a group boundary, not an action. An item with no
+// handler is a submenu CONTAINER: it is not published, because a checklist row for it could never be built, but its
+// caption becomes the `parent` label its children carry.
+function shapeMenuItems(raw, pkg) {
+  const out = [];
+  const parents = [];
+  let group = 0;
+  for (const r of raw) {
+    if (r.depth === 0) parents.length = 0;
+    const { separator, ...item } = readMenuItem(r.text);
+    if (separator) { group++; continue; }
+    parents[r.depth] = item.name || item.caption || null;
+    if (!item.name || item.name === "callParent") continue;
+    out.push({ ...item, parent: r.depth > 0 ? (parents[r.depth - 1] ?? null) : null,
+      order: out.length, group, package: pkg });
+  }
+  return out;
+}
+// The helper arm of the scan: resolve each menu helper, take the items it adds, and record what it delegates to.
+// Appends to `raw`; returns the three name channels.
+function scanMenuHelpers(src, body, raw, state) {
+  const helpers = [];
+  const unresolved = [];
+  const notFollowed = [];
+  for (const name of menuHelperNames(body, menuCollectionNames(body))) {
+    const helperBody = extractFnBody(src, name);
+    if (!helperBody) { unresolved.push(name); continue; }
+    helpers.push(name);
+    raw.push(...menuItemObjects(helperBody, 0, state));
+    // One hop: a method the helper delegates to is RECORDED, never followed. Routed by whether this src defines it,
+    // so "nobody defines this" and "seen but not read" each stay true.
+    const param = helperParamName(src, name);
+    for (const callee of param ? menuHelperNames(helperBody, [param]) : delegateCallees(helperBody)) {
+      (extractFnBody(src, callee) ? notFollowed : unresolved).push(callee);
+    }
+  }
+  return { helpers, unresolved, notFollowed };
+}
+// Name-only fallback for a section registering an action through neither anchor shape. Every value the parsed items
+// already consumed is excluded, so a condition or caption matching the hint is not republished as an action.
+function appendHintActions(items, body, pkg) {
+  const seen = new Set();
+  for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
+  for (const [, hint] of body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)) {
+    if (hint === "callParent" || seen.has(hint)) continue;
+    seen.add(hint);
+    items.push({ name: hint, caption: null, condition: null, icon: null, parent: null,
+      order: items.length, group: 0, package: pkg });
+  }
+}
+// `{ items, helpers, unresolved, notFollowed }` for one layer's src:
+//   items       — `{ name, caption, condition, icon, parent, order, group, package }` per menu item
+//   helpers     — helper methods resolved here
+//   unresolved  — helper methods called but defined NOWHERE in this src
+//   notFollowed — seen and deliberately not read: a helper called by a helper (following is one hop), and the
+//                 depth cap. Distinct from `unresolved`, which claims nobody defines the method.
+function sectionActionsOf(src, pkg) {
+  const body = extractFnBody(src, "getSectionActions");
+  if (!body) return { items: [], helpers: [], unresolved: [], notFollowed: [] };
+  const state = { truncated: false };
+  const raw = menuItemObjects(body, 0, state);
+  const { helpers, unresolved, notFollowed } = scanMenuHelpers(src, body, raw, state);
+  const items = shapeMenuItems(raw, pkg);
+  if (state.truncated) notFollowed.push(`submenu items nested deeper than ${MAX_MENU_NEST} levels`);
+  appendHintActions(items, body, pkg);
+  return {
+    items,
+    helpers,
+    unresolved: [...new Set(unresolved)],
+    notFollowed: [...new Set(notFollowed)].filter((n) => !helpers.includes(n)),
+  };
 }
 
 // One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a
