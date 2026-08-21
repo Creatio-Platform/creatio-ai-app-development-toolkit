@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -2464,6 +2464,30 @@ try {
   const vBadJson = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: invalid-JSON built file → exit 1 ('cannot read --built'), NOT the exit-2 gate",
     vBadJson.status === 1 && /cannot read --built/.test(vBadJson.stderr || ""));
+  // (e) ENG-95469 — THE IN-CONTEXT SINGLE-UNIT GATE, end to end through the CLI. `--verify --page main --verify-json`
+  // is no longer a pure read: it runs the same detector SCOPED to `main`, writes a per-unit verdict, and drives the
+  // HARD exit-2 done-gate on THIS page — so a build agent's bounded self-check fails loudly instead of closing a
+  // short unit. The empty `main` page is short, so the verdict is `complete: false` and the process exits 2.
+  const unitVerdictPath = path.join(os.tmpdir(), `c2f_unit_verdict_${process.pid}.json`);
+  try {
+    fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111" } } }));
+    const vUnit = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--page", "main", "--verify-json", unitVerdictPath], { input: verifyManifest, encoding: "utf8" });
+    const verdict = JSON.parse(fs.readFileSync(unitVerdictPath, "utf8"));
+    check("ENG-95469: `--verify --page main --verify-json` on a short page → HARD exit 2 (the in-context done-gate fires per unit) with the ❌ MISSING in the scoped table",
+      vUnit.status === 2 && /MISSING/.test(vUnit.stdout || ""),
+      () => ({ status: vUnit.status, stderr: (vUnit.stderr || "").slice(0, 240) }));
+    check("ENG-95469: the scoped `--verify-json` file is the SINGLE-UNIT verdict — `{ pageKey: 'main', complete: false, missing >= 1 }`, not the whole-tree report",
+      verdict.pageKey === "main" && verdict.complete === false && verdict.missing >= 1 && Array.isArray(verdict.openRows),
+      () => verdict);
+    // Backward-compat: `--verify --page` WITHOUT `--verify-json` stays the pure built-slice READ — exit 0, prints
+    // this page's slice, gates nothing. The new verdict behaviour is opt-in via `--verify-json`.
+    const vRead = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--page", "main"], { input: verifyManifest, encoding: "utf8" });
+    check("ENG-95469: `--verify --page main` WITHOUT `--verify-json` is unchanged — a pure built-slice read (exit 0, prints the slice), never the gate",
+      vRead.status === 0 && /"pageKey": "main"/.test(vRead.stdout || "") && /"pages"/.test(vRead.stdout || ""),
+      () => ({ status: vRead.status, stdoutHead: (vRead.stdout || "").slice(0, 160) }));
+  } finally {
+    fs.rmSync(unitVerdictPath, { force: true });
+  }
 } finally {
   fs.rmSync(builtPath, { force: true });
 }
@@ -8864,6 +8888,152 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("Applicant fixture: the Business rules row reads ✅ Done (11 of 11 present) rather than ☐ skip",
       /Business rules × 11 \| ✅ Done \| 11 of 11 business rule/.test(rv.markdown),
       () => rv.markdown.split("\n").filter((l) => /Business rules/.test(l)).join(" | "));
+  }
+}
+
+// ===== ENG-95469 — A3: the IN-CONTEXT completeness gate before a unit closes ===================================
+// A3 does NOT re-implement detection (N1/ENG-95470 owns `resolveVk` & family). It MOUNTS that one detector as a
+// SCOPED single-unit entrypoint — `verifyUnit(result, opts, built, pageKey)` — so a build agent can gate its OWN
+// unit in its OWN context BEFORE reporting complete, and the post-hoc `--verify` sweep still reads the SAME numbers
+// off the SAME rows. "One detector, two call sites": the whole point is that the two verdicts CANNOT diverge, so
+// every case below asserts the in-context verdict is BYTE-FOR-BYTE the page's slice of the post-hoc `renderVerify`.
+// Scoped to the three dispatch rows available today (list/tab/grid · component · business rule); ENG-95412's further
+// kinds arrive as new dispatch rows, never as a new branch here.
+{
+  // The Applicant round-1 unit, as a hand-built ChangeSet result (same construction the N1 fixture above uses):
+  // fields, FOUR related-list grids (one of them the "Current vacancies" tab's grid), the native
+  // Communication-options component (ContactCommunication → crt.CommunicationOptions), and one page rule per field.
+  const A3_COLS = ["Name", "Stage", "Salary", "Source", "Recruiter", "Priority", "Status", "Owner"];
+  const A3_GRIDS = ["Current vacancies", "Interviews", "Documents", "Notes"]; // 4 related lists → `details` vk n=4
+  const applicantR1 = { changeSet: {
+    viewConfigDiff: A3_COLS.map((c) => ({ name: c, values: { control: "$" + c } })),
+    images: [], cardActions: [],
+    details: A3_GRIDS.map((cap, i) => ({ detailSchema: cap.replace(/\s+/g, "") + "Detail", entity: "Rel" + i, caption: cap })),
+    standardFeatures: [{ feature: "Communication options", uiShape: "component" }],
+    pageBusinessRules: A3_COLS.map((c) => ({ action: "show", element: c, inverseAction: "hide" })),
+    entityBusinessRules: [],
+  }, signals: {} };
+  // A page BODY carrying `n` bound DataGrids, the field inputs, and (optionally) the Communication-options component.
+  const a3Body = (nGrids, { comm = true, extra = [] } = {}) => ({ items: [
+    ...A3_COLS.map((c) => ({ name: c, type: "crt.Input" })),
+    ...Array.from({ length: nGrids }, (_v, i) => ({ name: "Grid" + i, type: "crt.DataGrid" })),
+    ...(comm ? [{ name: "Comm", type: "crt.CommunicationOptions" }] : []),
+    ...extra,
+  ] });
+  const a3Rules = { count: A3_COLS.length, rules: A3_COLS.map((c) => ({ name: "BR_" + c, caption: c + " rule", enabled: true, condition: { leftExpression: { attribute: c } }, actions: [{ element: c }] })) };
+  // The BASELINE-complete built page: all four grids bound, the component present, every rule read off the slot.
+  const a3Complete = { pages: { main: { viewConfig: a3Body(4), businessRules: a3Rules } }, ...QG_EVIDENCE };
+
+  // The parity contract, asserted on every payload below: the in-context single-unit verdict IS the page's slice of
+  // the post-hoc sweep. `verifyUnit` returns the same `{ complete, missing, unverified, openRows }` the tally builds.
+  const parity = (built) => {
+    const unit = verifyUnit(applicantR1, {}, built, "main");
+    const sweep = renderVerify(applicantR1, {}, built).pages.main || { complete: true, missing: 0, unverified: 0, openRows: [] };
+    return { unit, sweep,
+      agree: unit.complete === sweep.complete && unit.missing === sweep.missing
+        && unit.unverified === sweep.unverified
+        && JSON.stringify(unit.openRows) === JSON.stringify(sweep.openRows) };
+  };
+
+  // T4 (R8) FIRST — the no-false-positive boundary. A functionally-complete unit passes with ZERO flagged
+  // deliverables, so the in-context gate triggers NO fix attempt on a page the baseline confirmed complete.
+  {
+    const { unit, agree } = parity(a3Complete);
+    check("ENG-95469 T4 (R8): the baseline-complete Applicant unit passes the in-context gate — complete, 0 MISSING, 0 unverified, no open row (so no fix attempt is triggered)",
+      unit.complete === true && unit.missing === 0 && unit.unverified === 0 && (unit.openRows || []).length === 0,
+      () => unit);
+    check("ENG-95469 T4/R5: verifyUnit is the SAME detector as the post-hoc sweep — its verdict equals renderVerify(...).pages.main byte-for-byte (one module, two call sites)",
+      agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, a3Complete).pages.main }));
+  }
+
+  // T1 (R2) — a tab/list/grid whose built viewConfig has NO bound datasource is flagged. The "Current vacancies"
+  // tab was built but carries no bound `crt.DataGrid` (nGrids 0), so the related-list deliverable reads ❌ MISSING:
+  // the unit CANNOT report complete on a datasource-less grid.
+  {
+    const builtNoGrid = { pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit, agree } = parity(builtNoGrid);
+    check("ENG-95469 T1 (R2): a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged incomplete by the in-context gate — not skip, not pass",
+      unit.complete === false && unit.missing >= 1
+        && (unit.openRows || []).some((r) => /Related lists/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)),
+      () => unit.openRows);
+    check("ENG-95469 T1/R5: the datasource-short verdict matches the post-hoc sweep exactly",
+      agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, builtNoGrid).pages.main }));
+  }
+
+  // T2 (R3) — a component built but NOT wired to the parent record is flagged. The Communication-options component
+  // (planned as ContactCommunication, satisfied by the native crt.CommunicationOptions analog) is absent from the
+  // built page body, so `resolveComponentVk` reads ❌ MISSING and the unit cannot close.
+  {
+    const builtNoComm = { pages: { main: { viewConfig: a3Body(4, { comm: false }), businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit, agree } = parity(builtNoComm);
+    check("ENG-95469 T2 (R3): Communication options built-but-not-wired (component absent from the page body) is flagged incomplete — ❌ MISSING via the component dispatch row",
+      unit.complete === false && unit.missing >= 1
+        && (unit.openRows || []).some((r) => /Communication options/.test(r.deliverable) && /crt\.CommunicationOptions/.test(r.evidence)),
+      () => unit.openRows);
+    check("ENG-95469 T2/R5: the component-missing verdict matches the post-hoc sweep exactly",
+      agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, builtNoComm).pages.main }));
+  }
+
+  // T3 (R4) — a declared business rule ABSENT from the built page's businessRules slot is flagged; a page entry with
+  // NO businessRules slot at all reads NOT-CHECKABLE (⚠ unverified), never a false MISSING. Both through the SAME
+  // scoped entrypoint the gate uses.
+  {
+    // Slot present but SHORT — one expected rule (Owner) has no governing built rule → the rule row is unverified.
+    const shortRules = { count: A3_COLS.length - 1, rules: A3_COLS.filter((c) => c !== "Owner").map((c) => ({ name: "BR_" + c, condition: { leftExpression: { attribute: c } }, actions: [{ element: c }] })) };
+    const builtRuleShort = { pages: { main: { viewConfig: a3Body(4), businessRules: shortRules } }, ...QG_EVIDENCE };
+    const short = verifyUnit(applicantR1, {}, builtRuleShort, "main");
+    check("ENG-95469 T3 (R4): a declared rule absent from the built businessRules slot flags the unit (rule row unverified, Owner named) — the unit does not close",
+      short.complete === false && (short.openRows || []).some((r) => /Business rules/.test(r.deliverable) && /Owner/.test(r.evidence)),
+      () => short.openRows);
+    // NO businessRules slot at all → not-checkable (unverified), NOT MISSING.
+    const builtNoSlot = { pages: { main: { viewConfig: a3Body(4) } }, ...QG_EVIDENCE };
+    const noSlot = verifyUnit(applicantR1, {}, builtNoSlot, "main");
+    check("ENG-95469 T3 (R4): a page entry with NO businessRules slot reads not-checkable (⚠ unverified), never a false MISSING — via verifyUnit",
+      (noSlot.openRows || []).some((r) => /Business rules/.test(r.deliverable) && /⚠/.test(r.status) && /not checkable/i.test(r.evidence))
+        && !(noSlot.openRows || []).some((r) => /Business rules/.test(r.deliverable) && /❌/.test(r.status)),
+      () => noSlot.openRows);
+    check("ENG-95469 T3/R5: both rule verdicts match the post-hoc sweep exactly (short + no-slot)",
+      parity(builtRuleShort).agree && parity(builtNoSlot).agree);
+  }
+
+  // R9 — the Applicant round-1 REPLAY. The round-1 built page missed exactly what round 3 had to pick up:
+  // Communication options not wired, the "Current vacancies" tab's grid absent, and only 3 of 4 grids built. Replayed
+  // through the in-context gate, the single unit does NOT close, and its open rows name the component AND the grid
+  // shortfall — the deferred-work rounds A3 exists to save.
+  {
+    const round1Built = { pages: { main: { viewConfig: a3Body(3, { comm: false }), businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit, agree } = parity(round1Built);
+    const openText = (unit.openRows || []).map((r) => r.deliverable + " :: " + r.evidence).join(" | ");
+    check("ENG-95469 R9: replaying Applicant round-1 through the in-context gate flags the unit incomplete AND names BOTH pickups — the missing Communication-options component and the short grid count (3 of 4)",
+      unit.complete === false
+        && /Communication options/.test(openText) && /crt\.CommunicationOptions/.test(openText)
+        && /Related lists/.test(openText) && /3\/4 crt\.DataGrid built/.test(openText),
+      () => unit.openRows);
+    check("ENG-95469 R9/R5: the replay verdict is identical whether read in-context (verifyUnit) or post-hoc (renderVerify.pages.main)",
+      agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, round1Built).pages.main }));
+  }
+
+  // A scoped entrypoint must NARROW, never leak: an unknown key never returns another unit's rows. And it must
+  // distinguish a page-this-plan-does-not-carry from a page that emitted zero gated rows — the first is a BROKEN
+  // GATE and must be LOUD (PR review T4), not a silent complete verdict a caller reads as "all good".
+  {
+    const u = verifyUnit(applicantR1, {}, a3Complete, "child:Nope");
+    check("ENG-95469 (review T4): verifyUnit on a key the plan does NOT carry returns a LOUD error verdict (error:'unknown page', complete:false) — never a false complete-empty green that masks a broken gate",
+      u.error === "unknown page" && u.complete === false && u.missing === 0 && u.unverified === 0 && (u.openRows || []).length === 0,
+      () => u);
+    // The distinction must NOT false-positive on a real page of this plan: `main` is a known page, so it is verdict'd
+    // for real (never the unknown-page error), whether it is complete or short.
+    const known = verifyUnit(applicantR1, {}, a3Complete, "main");
+    check("ENG-95469 (review T4): a KNOWN page of the plan (`main`) is verdict'd for real and is NEVER flagged unknown — the loud path fires only for an unplanned key",
+      known.error === undefined && known.complete === true,
+      () => known);
+    // PR review RC-11: `pageKey` has NO default. A call that OMITS the argument must fail the same LOUD way an
+    // unknown key does — never silently resolve to `main` and hand back a confident verdict for the wrong page
+    // (the exact silent-wrong-page mode the T4 loud-unknown fix above was added to close).
+    const omitted = verifyUnit(applicantR1, {}, a3Complete);
+    check("ENG-95469 (review RC-11): verifyUnit called with pageKey OMITTED is LOUD (error:'unknown page', complete:false) — no default 'main', so a missing arg cannot silently green a wrong page",
+      omitted.error === "unknown page" && omitted.complete === false,
+      () => omitted);
   }
 }
 

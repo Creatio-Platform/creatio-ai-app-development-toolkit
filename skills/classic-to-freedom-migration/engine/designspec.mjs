@@ -3151,7 +3151,11 @@ export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
   const tally = verifyTally();
-  const groups = checklistGroups(result, opts);
+  // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
+  // (ENG-95469), the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
+  // what `verifyUnit` reads its slice from, so the two never disagree about a page; scoping only drops OTHER pages'
+  // rows, leaving the kept page's rows (and thus its tally) identical.
+  const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
   const L = []; let n = 0;
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
@@ -3173,6 +3177,41 @@ export function renderVerify(result, opts = {}, built = {}) {
     ...planGapBanner(result),
     ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
   return { markdown: md, missing, unverified, complete: missing === 0 && unverified === 0, pages };
+}
+
+// THE IN-CONTEXT COMPLETENESS GATE'S OWN CALL SITE (ENG-95469, A3). The post-hoc `--verify` sweep above reconciles
+// the WHOLE page tree after the build; this returns ONE unit's slice of that SAME reconciliation, so a build agent
+// can gate its own page IN ITS OWN CONTEXT — before it reports the unit complete — instead of waiting for the tree
+// sweep to discover the shortfall a round later. It is deliberately a THIN wrapper over `renderVerify`, not a second
+// reconciliation: "one detector, two call sites" means the in-context verdict and the post-hoc verdict are computed
+// by the exact same rows and the exact same `resolveVk` family, so they CANNOT diverge — the field this returns is
+// byte-for-byte the page's entry in `renderVerify(...).pages[pageKey]` (`missing` / `unverified` / `complete` /
+// `openRows`, whose `evidence` cell IS the repair instruction the one bounded fix acts on). A key the plan does not
+// publish — or a page that emitted no gated row — resolves to a COMPLETE-EMPTY verdict, never another unit's
+// shortfall: a scoped entrypoint must NARROW, so a caller asking about one page is never handed the tree's numbers.
+// `planGaps` rides along so the gate can tell a repairable BUILD gap (build the piece, re-check) from a PLAN gap
+// (not buildable-out-of — return it to the caller), the same split `verifyReport` makes for the full sweep.
+// `pageKey` is REQUIRED and has NO default (PR review RC-11): a default (`= "main"`) would reopen the exact
+// silent-wrong-page mode the unknown-key guard below was added to close — any call site that OMITS the argument
+// (a future caller, a refactor that drops a parameter) would silently resolve to `main` and get a confident
+// verdict for the wrong page. An omitted / `undefined` key is UNKNOWN to the plan and fails the same LOUD way a
+// typo'd key does, via the guard below.
+export function verifyUnit(result, opts = {}, built = {}, pageKey) {
+  const p = renderVerify(result, opts, built).pages[pageKey];
+  const gaps = planGaps(result);
+  if (!p) {
+    // A page can be absent from `.pages` for TWO different reasons, and a completeness GATE must never read them
+    // alike (PR review T4): (1) the key IS a real page of this plan whose rows all resolved complete/☐-skip, so it
+    // emitted no gated row — a legitimate complete-empty verdict; or (2) the key is UNKNOWN to this plan — a typo'd
+    // or mismatched pageKey. Returning `complete: true` for the UNKNOWN case silently masks a broken gate (a caller
+    // asking about a page nobody planned is told "all good"). So the two are split on the plan's OWN page-key set —
+    // the same `checklistGroups` `renderVerify` reconciled over — and the unknown case returns a LOUD error verdict
+    // (`error`, `complete: false`) instead so the caller / CLI fails distinctly rather than reading a false green.
+    const known = new Set(checklistGroups(result, opts).map((g) => g.pageKey));
+    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
+    return { pageKey, complete: true, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
+  }
+  return { pageKey, complete: p.complete, missing: p.missing, unverified: p.unverified, openRows: p.openRows, planGaps: gaps };
 }
 
 // The MACHINE-READABLE verdict (`--verify --verify-json <file>`). Everything `renderVerify` already computed —
