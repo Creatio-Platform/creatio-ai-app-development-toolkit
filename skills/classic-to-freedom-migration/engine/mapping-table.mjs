@@ -93,11 +93,28 @@ export const SOURCE = {
   LITERAL: "literal",                 // a constant stated on the row itself (`value`)
 };
 
+// GATE KIND — the STRUCTURED {kind,id} intent a row carries about WHY its Freedom target might not resolve on a
+// given stand (ENG-95683). Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
+// the CrtCustomer360App package AND the CommonCommunicationsBehavior feature") — a human could read it, but the
+// registry gate could not branch on it, so a real component gated behind an absent package produced the same
+// "settle the target" guidance as a fabricated type that no re-plan-free action can fix. The taxonomy is aligned
+// with the registry's own `compositeOnly` flag so there is ONE source of truth for what a target IS:
+//   • component     — a plain, self-contained component; resolvable wherever its platform version carries it. No
+//                     gate is recorded for these (a missing one is a plan/target problem, not an install).
+//   • composite     — a component the platform assembles as part of a COMPOSITE, gated behind a package (`id`)
+//                     and sometimes a feature (`feature`). Absent on the stand ⇒ install/enable the gate and
+//                     re-run the BUILD; the plan itself is correct, so this is NOT a re-plan.
+//   • compositeOnly — a component with no Designer TOOLBAR entry but valid to insert into a page schema directly
+//                     (the registry `compositeOnly` flag). Not package-gated on its own.
+// A row's `gate` is `{ kind, id?, feature? }` or null. `id` is the gating PACKAGE, `feature` the gating FEATURE —
+// the two names the guidance tells an operator to install/enable, resolved BY KIND instead of parsed out of prose.
+export const GATE_KIND = { COMPONENT: "component", COMPOSITE: "composite", COMPOSITE_ONLY: "compositeOnly" };
+
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
-function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null }) {
+function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
   return Object.freeze({ match: Object.freeze(match), role, tier, ownedBy, target: target && Object.freeze(target),
-    verify: verify && Object.freeze(verify), uiShape, notes, meta: meta && Object.freeze(meta) });
+    verify: verify && Object.freeze(verify), uiShape, notes, meta: meta && Object.freeze(meta), gate: gate && Object.freeze(gate) });
 }
 const byItemType = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType }, ...rest });
 
@@ -232,21 +249,28 @@ const widgetRow = (by, key, widgets, verify = null) => row({
   match: { by, [by]: key }, role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET,
   verify, meta: { widgets },
 });
+// A profile card's component is a COMPOSITE gated behind its `pkg` (a page-package dependency) when one is named —
+// so the typed gate is derived from the same `pkg` the row already carries, not a second hand-kept fact.
 const profileCardRow = (entity, componentType, pkg, shows) => row({
   match: { by: MATCH.PROFILE_ENTITY, profileEntity: entity }, role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET,
-  verify: { componentType }, meta: { profileCard: { type: componentType, pkg, shows } },
+  verify: { componentType }, gate: pkg ? { kind: GATE_KIND.COMPOSITE, id: pkg } : null,
+  meta: { profileCard: { type: componentType, pkg, shows } },
 });
-const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null }) =>
+const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null, gate = null }) =>
   row({
     match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix, ...(qualifiers ? { qualifiers } : {}) },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape,
     verify: componentType ? { componentType, ...(satisfies ? { satisfies } : {}) } : null,
-    notes,
+    notes, gate,
     meta: { feature: name, freedom, templateProvided, uiShape },
   });
 // The Communication-options note is shared by the SCHEMA row and the ENTITY fallback row: the entity fallback is
 // how a real site's detail is usually recognised (its schema is an auto-named `SchemaNDetail`), so pointing the
 // reader at a shorter note there would drop the package/feature prerequisites exactly where they are most needed.
+// The typed gate for the Communication-options composite — the SAME package + feature the prose note names, now in
+// the structured form the registry gate can branch on: absent on the stand ⇒ install `CrtCustomer360App` / enable
+// `CommonCommunicationsBehavior` and re-run the BUILD (the plan is correct), NOT a re-plan.
+const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" };
 const COMMS_NOTE = "means of communication = the NATIVE Communication-options component (crt.CommunicationOptions, the compositeOnly widget the \"Communication options\" composite assembles — NOT `crt.ContactCommunication`, which is not a real component type; `ContactCommunication` is the ENTITY the data lives in) — read get-component-info for its contract/wiring; it requires the CrtCustomer360App package AND the CommonCommunicationsBehavior feature. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package/feature is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid.";
 const FEATURE_ROWS = [
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
@@ -280,6 +304,7 @@ const FEATURE_ROWS = [
     // rather than ❌ MISSING. A `satisfies` entry is therefore a name the registry must NOT carry — if it does, it
     // is a real component being aliased away, and the registry check says so.
     satisfies: ["crt.ContactCommunication"],
+    gate: COMMS_GATE,
     notes: COMMS_NOTE }),
   // Feed. Its classic origin is the ESN feed CONTAINER, not a detail schema, so it is keyed by container name —
   // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry used to hold.
@@ -306,6 +331,7 @@ const FEATURE_ENTITY_ROWS = [
   row({ match: { by: MATCH.ENTITY, entity: "ContactCommunication" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.CommunicationOptions" },
+    gate: COMMS_GATE,
     notes: COMMS_NOTE,
     meta: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.CommunicationOptions)", templateProvided: false, uiShape: "component", byEntity: true } }),
 ];
@@ -484,4 +510,22 @@ export function analogsOf(plannedType) {
 // Every legacy name any row claims to satisfy — so a check can assert they are names the registry does NOT carry.
 export function satisfiedLegacyTypes() {
   return [...new Set(MAPPING_ROWS.flatMap((r) => r.verify?.satisfies || []))];
+}
+
+// The `crt.*` component type a row NAMES as its Freedom target — as the thing it emits (`target.componentType`) or
+// the thing the built page is gated on (`verify.componentType`). One helper so the gate lookup below and any future
+// reader agree on where a row's real type lives.
+const rowComponentType = (r) => r?.target?.componentType || r?.verify?.componentType || null;
+
+// The structured gate intent for a component type, resolved BY KIND from the shared rows (ENG-95683). This is the
+// typed replacement for reading a package/feature prerequisite out of a row's prose: given a `crt.*` type, return
+// the `{ kind, id?, feature? }` a row records for it, or null. A null answer is meaningful — it says "no row gates
+// this type", which the registry guidance reads as "not a package-install away" (a real component simply absent on
+// the target, or a fabricated name), as opposed to a gated composite an install/enable can recover.
+export function gateForComponentType(type) {
+  if (typeof type !== "string" || !type) return null;
+  for (const r of MAPPING_ROWS) {
+    if (r.gate && rowComponentType(r) === type) return r.gate;
+  }
+  return null;
 }

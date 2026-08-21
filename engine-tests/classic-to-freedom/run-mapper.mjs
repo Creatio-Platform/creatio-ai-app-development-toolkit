@@ -7,10 +7,10 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, consolidatedPlacementStop } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -7914,6 +7914,78 @@ try {
     && verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) !== vPlain,
     () => ({ plain: vPlain, pinned830: verOf({ platformVersion: "8.3.0" }), pinned833: verOf({ platformVersion: "8.3.3" }),
       withExport: verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) }));
+
+  // ---- ENG-95683: resolve component targets BY KIND -------------------------------------------------------
+  // The registry gate used to give ONE blanket "settle the target" for every missing type. A real component gated
+  // behind an absent package is recoverable by an install + rebuild; a fabricated name is not, and needs a re-plan.
+  // The row now carries a structured {kind,id} gate, the run-time finding carries it, and the guidance branches on
+  // it. T1/T2 are the two branches; T3 is the typed intent surfaced through FEATURE_CATALOG; T4 is the consolidated
+  // placement stop.
+
+  // T1 — a real component gated behind an absent package (Customer360 comms). The run emits crt.CommunicationOptions
+  // (the "Communication options" standard feature's gate type); a stand export that lacks it yields an
+  // unknown-component finding whose gate marks it a COMPOSITE, and whose guidance says install/enable and re-run the
+  // BUILD — explicitly NOT a re-plan.
+  const commsStandIdx = indexFromRegistryExport({ resolvedTargetVersion: "8.3.9",
+    components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] });
+  const commsRun = validateRun({ standardFeatures: [{ feature: "Communication options" }] },
+    { index: commsStandIdx, version: "8.3.9" });
+  const commsFinding = commsRun.findings.find((f) => f.componentType === "crt.CommunicationOptions");
+  check("ENG-95683 (T1/R1): a gated real component (crt.CommunicationOptions) absent on the stand is a finding whose gate marks it a COMPOSITE and names the package/feature",
+    !!commsFinding && commsFinding.kind === "unknown-component"
+    && commsFinding.gate?.kind === GATE_KIND.COMPOSITE && commsFinding.gate?.id === "CrtCustomer360App"
+    && commsFinding.gate?.feature === "CommonCommunicationsBehavior",
+    () => commsRun.findings);
+  const commsGuidance = registrySettleGuidance(commsFinding);
+  check("ENG-95683 (T1/R1): the guidance for a gated component says install `CrtCustomer360App`, enable `CommonCommunicationsBehavior`, re-run the BUILD, and NO re-plan",
+    /install the `CrtCustomer360App` package/.test(commsGuidance) && /enable the `CommonCommunicationsBehavior` feature/.test(commsGuidance)
+    && /re-run the BUILD/.test(commsGuidance) && /no re-plan/.test(commsGuidance) && !/--plan --out/.test(commsGuidance),
+    () => commsGuidance);
+
+  // T2 — a fabricated `crt.*` that is not a component type at all. No row gates it, so the finding carries no gate
+  // and the guidance keeps the "fix the mapping/plan and re-run `--plan --out`" branch (no install can make it real).
+  const fabRun = validateRun({ viewConfigDiff: [{ name: "X", values: { type: "crt.NotAComponent" } }] }, { version: "8.3.0" });
+  const fabFinding = fabRun.findings.find((f) => f.componentType === "crt.NotAComponent");
+  check("ENG-95683 (T2/R2): a fabricated non-component type carries NO gate and keeps the 'fix the mapping/plan, re-run `--plan --out`' guidance",
+    !!fabFinding && fabFinding.kind === "unknown-component" && fabFinding.gate == null
+    && /fix the mapping or the plan/.test(registrySettleGuidance(fabFinding)) && /--plan --out/.test(registrySettleGuidance(fabFinding))
+    && !/re-run the BUILD/.test(registrySettleGuidance(fabFinding)),
+    () => fabFinding);
+
+  // T3 — the typed intent is surfaced through the derived FEATURE_CATALOG view (not parsed out of `note`/`freedom`).
+  check("ENG-95683 (T3/R3): FEATURE_CATALOG exposes the structured {kind,id} gate for a known gated row",
+    FEATURE_CATALOG.ContactCommunicationDetail?.gate?.kind === GATE_KIND.COMPOSITE
+    && FEATURE_CATALOG.ContactCommunicationDetail?.gate?.id === "CrtCustomer360App"
+    && FEATURE_CATALOG.ContactCommunicationDetail?.gate?.feature === "CommonCommunicationsBehavior"
+    // ...and a plain, ungated feature row exposes gate: null rather than a fabricated one.
+    && (FEATURE_CATALOG.ActivityDetailV2?.gate ?? null) === null
+    // ...and the same typed intent resolves BY KIND from the componentType, the API the registry gate uses.
+    && gateForComponentType("crt.CommunicationOptions")?.id === "CrtCustomer360App"
+    && gateForComponentType("crt.NotAComponent") === null,
+    () => ({ comms: FEATURE_CATALOG.ContactCommunicationDetail?.gate, activity: FEATURE_CATALOG.ActivityDetailV2?.gate }));
+
+  // T4 — the three package-precondition conditions the build executor's `packagePreconditionStop` distinguishes as
+  // SEPARATE returns now route through ONE plan-side consolidated stop, reconciled against the manifest registry
+  // (OQ1: the provided `manifest.componentRegistry`, no live-stand call). `packagePreconditionStop` itself is left
+  // untouched (its three-return behaviour is locked in run-infra.mjs), and the `targetPackageEditable` check is not
+  // touched here either.
+  const stopNewAppExisting = consolidatedPlacementStop(
+    { targetPackage: "UsrPkg", placement: { sectionHost: { mode: "new-app" } } }, { packageState: "exists" });
+  const stopUnknown = consolidatedPlacementStop({ targetPackage: "UsrPkg" }, { packageState: "inconclusive" });
+  const stopUnnamed = consolidatedPlacementStop({ placement: {} }, { packageState: "absent" });
+  const causeOf = (s) => (s?.causes || []).map((c) => c.cause);
+  check("ENG-95683 (T4/R4): all three placement conditions produce ONE consolidated stop shape (`placement-unsettled`), each naming its cause",
+    stopNewAppExisting?.stopped === "placement-unsettled" && causeOf(stopNewAppExisting).includes("new-app-over-existing-package")
+    && stopUnknown?.stopped === "placement-unsettled" && causeOf(stopUnknown).includes("target-package-unknown")
+    && stopUnnamed?.stopped === "placement-unsettled" && causeOf(stopUnnamed).includes("target-package-unnamed"),
+    () => ({ newApp: stopNewAppExisting, unknown: stopUnknown, unnamed: stopUnnamed }));
+  check("ENG-95683 (T4/R4): the consolidated stop names the manifest re-check it reconciled against (stand export when provided, vendored otherwise) — no live-stand call",
+    consolidatedPlacementStop({ placement: {}, componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } },
+      { packageState: "absent" })?.registrySource === "stand-export"
+    && stopUnnamed.registrySource === "vendored-union" && /no live-stand call/.test(stopUnnamed.next),
+    () => ({ withExport: consolidatedPlacementStop({ placement: {}, componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }, { packageState: "absent" }), unnamed: stopUnnamed }));
+  check("ENG-95683 (T4/R4): a settled placement (named target, recorded absent, existing-app) is NOT a consolidated stop — the mechanism does not cry wolf",
+    consolidatedPlacementStop({ targetPackage: "UsrPkg", placement: { sectionHost: { mode: "existing-app" } } }, { packageState: "absent" }) === null);
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket

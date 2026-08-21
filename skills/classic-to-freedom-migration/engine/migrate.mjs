@@ -703,6 +703,51 @@ export function placementIssues(manifest) {
   }
   return issues;
 }
+
+// THE CONSOLIDATED PLACEMENT STOP (ENG-95683). The build executor's `packagePreconditionStop`
+// (freedom-build-executor.workflow.js) distinguishes three package-precondition causes as SEPARATE first-match
+// returns — `new-app-over-existing-package`, `target-package-unknown`, `target-package-unnamed` — each of which,
+// hit alone, costs its own re-plan round. This is the PLAN-SIDE consolidation: it reconciles the SAME three
+// conditions against the manifest's recorded facts and the component registry the run resolves (the A1 reg.source
+// model via `resolveRunIndex` — reconciling the PROVIDED `manifest.componentRegistry`, NOT a new live-stand call,
+// per ENG-95683 OQ1), and returns them as ONE stop carrying EVERY applicable cause, so a single re-plan settles
+// placement instead of paying a round per cause. `packagePreconditionStop` itself is deliberately left untouched —
+// this consolidates at plan time; it does not rewrite the executor's stop, and `targetPackageEditable` (checked by
+// `placementIssues`) is a different question this does not touch.
+//
+// `packageState` is the recorded package-existence fact ("exists" / "absent" / anything else = inconclusive). It is
+// a parameter, not read from a live call: the caller passes what the manifest recorded. A null/inconclusive state
+// with a NAMED target is the `target-package-unknown` cause; an unnamed target is `target-package-unnamed`; and a
+// `new-app` host over a package recorded as already existing is `new-app-over-existing-package`.
+export function consolidatedPlacementStop(manifest, { packageState = null, readFile = null } = {}) {
+  const m = manifest && typeof manifest === "object" ? manifest : {};
+  const target = typeof m.targetPackage === "string" ? m.targetPackage.trim() : "";
+  const mode = m.placement?.sectionHost?.mode ?? null;
+  const causes = [];
+  if (!target) {
+    causes.push({ cause: "target-package-unnamed",
+      detail: "manifest.targetPackage is unset — there is no package name to create or build into; set it before building." });
+  } else if (packageState !== "exists" && packageState !== "absent") {
+    causes.push({ cause: "target-package-unknown",
+      detail: `the recorded state of target package '${target}' is inconclusive — neither create it (a second create-app over an existing app is not a no-op) nor assume it is there; record it as exists/absent first.` });
+  }
+  if (mode === "new-app" && packageState === "exists") {
+    causes.push({ cause: "new-app-over-existing-package",
+      detail: `sectionHost is 'new-app' but the target package '${target || "(unnamed)"}' is recorded as ALREADY on the stand — create-app mints its own package and cannot produce one that exists; re-plan against a not-yet-existing package, or attach the existing one and use 'existing-app'.` });
+  }
+  if (!causes.length) return null;
+  // The manifest re-check the consolidation reconciles against — named on the stop so a reader knows whether the
+  // placement answer rests on the stand's own registry export or on the vendored fallback (per OQ1, this reconciles
+  // the provided registry; it never reaches out to the stand).
+  const reg = resolveRunIndex(m, readFile ? { readFile } : {});
+  return {
+    stopped: "placement-unsettled",
+    causes,
+    registrySource: reg.source,
+    registryVersion: reg.version,
+    next: `settle placement in ONE re-plan — ${causes.map((c) => c.detail).join(" ")} Then re-run \`--plan --out\` and re-approve. (Reconciled against ${reg.source}; no live-stand call. Nothing has been built.)`,
+  };
+}
 // ONE opts object for every row-rendering entry point (`--checklist`, `--verify`, the plan/spec renderers) and
 // for the sub-page folds. `--checklist` and `--verify` used to build their own, and the verify one was thinner
 // (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agreed only for as long
@@ -1758,6 +1803,24 @@ function computePlanVersion(manifest, readBody) {
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
+// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE (ENG-95683). A missing component used to get one
+// blanket "settle the target before building" whether it was a real component an install could recover or a name no
+// action short of a re-plan can fix. The finding now carries the row's structured `{kind,id}` gate, so the guidance
+// can say the actionable thing:
+//   • a gated COMPOSITE (a `gate.id` package, sometimes a `gate.feature`) — install/enable it and re-run the BUILD;
+//     the plan is correct, so this is explicitly NOT a re-plan.
+//   • anything else (no row gates the type — a fabricated `crt.*`, or a real component simply absent on the target)
+//     — fix the mapping or the plan and re-run `--plan --out`, because no package install makes it appear.
+// Pure and exported so the branch is unit-testable without driving a whole migration (mirrors placementIssues).
+export function registrySettleGuidance(finding) {
+  const g = finding?.gate;
+  if (g && g.id) {
+    const feat = g.feature ? ` and enable the \`${g.feature}\` feature` : "";
+    return `install the \`${g.id}\` package${feat} on the stand, then re-run the BUILD — the plan is correct, so no re-plan is needed.`;
+  }
+  return "this is not a package-install away — fix the mapping or the plan and re-run `--plan --out` before building.";
+}
+
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
 // that function's nesting weight.
@@ -1803,8 +1866,10 @@ function reportRegistryFindings(changeSet, manifest, baseDir) {
     const verdict = f.kind === "unknown-component"
       ? "the component registry carries NO component of that name"
       : `it is ABSENT in ${f.version}`;
-    changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType,
-      reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so settle the target before building.` });
+    // ENG-95683 — carry the row's structured gate on the item (so a consumer branches by kind, not by string), and
+    // let the SETTLE clause say the actionable fix for THIS cause instead of one blanket sentence for every miss.
+    changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
+      reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
   }
 }
 

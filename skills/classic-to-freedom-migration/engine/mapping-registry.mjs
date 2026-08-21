@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS, SOURCE } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE, gateForComponentType } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -246,11 +246,17 @@ export function validateRun(changeSet, { index = vendoredIndex(), version = null
   const findings = [];
   const bitCount = (index?.meta?.versions || []).length;
   for (const [ctype, why] of runTypes(changeSet)) {
+    // The structured gate intent for this type, resolved BY KIND from the shared rows (ENG-95683). Carried on the
+    // finding so the run-time guidance can branch by CAUSE — a gated composite (install/enable + re-run the build)
+    // vs. a type no row gates (fix the mapping/plan and re-run `--plan --out`) — instead of one blanket "settle the
+    // target" for both. It is attached to the resolution findings (absent / unknown), not to the compositeOnly
+    // advisory, because only an absent type raises the question the gate answers.
+    const gate = gateForComponentType(ctype);
     const c = index.components?.[ctype];
-    if (!c) { findings.push({ kind: "unknown-component", componentType: ctype, why }); continue; }
+    if (!c) { findings.push({ kind: "unknown-component", componentType: ctype, why, gate }); continue; }
     const i = version ? (index.meta.versions || []).indexOf(version) : -1;
     if (i >= 0 && (c.v & (1 << i)) === 0)
-      findings.push({ kind: "component-absent-in-version", componentType: ctype, version, why, presentIn: versionsOf(c.v, index) });
+      findings.push({ kind: "component-absent-in-version", componentType: ctype, version, why, presentIn: versionsOf(c.v, index), gate });
     if (c.compositeOnly) findings.push({ kind: "composite-only", componentType: ctype, why });
   }
   return { findings: findings.filter((f) => !isAdvisory(f)), advisories: findings.filter(isAdvisory), checkedVersions: bitCount };

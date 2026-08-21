@@ -282,7 +282,11 @@ export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
 // wording reaches the plan verbatim, so it is deliberately not reworded on the way through.
 function featureView(r) {
   return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
-    templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null };
+    templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null,
+    // ENG-95683 — the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
+    // package/feature prerequisite BY KIND instead of parsing it out of `note`/`freedom`. null when the row gates
+    // nothing (a plain component).
+    gate: r.gate || null };
 }
 // Freedom grid model (the confirmed target convention): the left profile island is a SINGLE-column grid;
 // tab/group containers are TWO columns. Classic pages use a 24-column grid, so classic field coordinates are
