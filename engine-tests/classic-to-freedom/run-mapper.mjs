@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, consolidatedPlacementStop } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -7919,8 +7919,8 @@ try {
   // The registry gate used to give ONE blanket "settle the target" for every missing type. A real component gated
   // behind an absent package is recoverable by an install + rebuild; a fabricated name is not, and needs a re-plan.
   // The row now carries a structured {kind,id} gate, the run-time finding carries it, and the guidance branches on
-  // it. T1/T2 are the two branches; T3 is the typed intent surfaced through FEATURE_CATALOG; T4 is the consolidated
-  // placement stop.
+  // it. T1/T2 are the two branches; T3 (with T3b/T3c/T3d) is the typed intent surfaced through FEATURE_CATALOG and
+  // resolved by kind, including the version-scoped branch and the one-gate-per-type invariant.
 
   // T1 — a real component gated behind an absent package (Customer360 comms). The run emits crt.CommunicationOptions
   // (the "Communication options" standard feature's gate type); a stand export that lacks it yields an
@@ -8001,29 +8001,6 @@ try {
     && gateConflicts([{ gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } },
       { gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } }]).length === 0,
     () => gateConflicts(MAPPING_ROWS));
-
-  // T4 — the three package-precondition conditions the build executor's `packagePreconditionStop` distinguishes as
-  // SEPARATE returns now route through ONE plan-side consolidated stop, reconciled against the manifest registry
-  // (OQ1: the provided `manifest.componentRegistry`, no live-stand call). `packagePreconditionStop` itself is left
-  // untouched (its three-return behaviour is locked in run-infra.mjs), and the `targetPackageEditable` check is not
-  // touched here either.
-  const stopNewAppExisting = consolidatedPlacementStop(
-    { targetPackage: "UsrPkg", placement: { sectionHost: { mode: "new-app" } } }, { packageState: "exists" });
-  const stopUnknown = consolidatedPlacementStop({ targetPackage: "UsrPkg" }, { packageState: "inconclusive" });
-  const stopUnnamed = consolidatedPlacementStop({ placement: {} }, { packageState: "absent" });
-  const causeOf = (s) => (s?.causes || []).map((c) => c.cause);
-  check("ENG-95683 (T4/R4): all three placement conditions produce ONE consolidated stop shape (`placement-unsettled`), each naming its cause",
-    stopNewAppExisting?.stopped === "placement-unsettled" && causeOf(stopNewAppExisting).includes("new-app-over-existing-package")
-    && stopUnknown?.stopped === "placement-unsettled" && causeOf(stopUnknown).includes("target-package-unknown")
-    && stopUnnamed?.stopped === "placement-unsettled" && causeOf(stopUnnamed).includes("target-package-unnamed"),
-    () => ({ newApp: stopNewAppExisting, unknown: stopUnknown, unnamed: stopUnnamed }));
-  check("ENG-95683 (T4/R4): the consolidated stop names the manifest re-check it reconciled against (stand export when provided, vendored otherwise) — no live-stand call",
-    consolidatedPlacementStop({ placement: {}, componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } },
-      { packageState: "absent" })?.registrySource === "stand-export"
-    && stopUnnamed.registrySource === "vendored-union" && /no live-stand call/.test(stopUnnamed.next),
-    () => ({ withExport: consolidatedPlacementStop({ placement: {}, componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }, { packageState: "absent" }), unnamed: stopUnnamed }));
-  check("ENG-95683 (T4/R4): a settled placement (named target, recorded absent, existing-app) is NOT a consolidated stop — the mechanism does not cry wolf",
-    consolidatedPlacementStop({ targetPackage: "UsrPkg", placement: { sectionHost: { mode: "existing-app" } } }, { packageState: "absent" }) === null);
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
