@@ -35,6 +35,14 @@ any base for exactly that reason.
 Symlinks get a second, belt-and-braces check: after each descent the resolved
 real path must still sit inside the base, so a symlinked entry cannot walk the
 caller out of the store.
+
+What it does NOT close is a time-of-check-to-time-of-use (TOCTOU) window: the
+directory listing and the subsequent real-path check are two separate system
+calls, so a symlink swapped in between them could be followed before the check
+runs. Shutting that window needs kernel support (opening each component with
+``O_NOFOLLOW`` / ``openat``) that is not portably reachable from userspace
+Python, so a caller defending against a hostile process writing concurrently
+into the same base cannot rely on this module alone.
 """
 from __future__ import annotations
 
@@ -106,6 +114,12 @@ class PathStore:
             if absolute_key == base_key:
                 return []
             if absolute_key.startswith(base_key.rstrip(os.sep) + os.sep):
+                # Slice the raw ``absolute`` by ``len(base)`` -- not by the key.
+                # Both ``base`` and ``absolute`` are already abspath-normalized,
+                # and normcase/normpath preserve length on a normalized path, so
+                # ``len(base) == len(base_key)`` always holds. Keep this
+                # length-based slice: a key-based alternative would misalign on a
+                # case-insensitive volume, where the key and the raw string differ.
                 relative = absolute[len(base):]
                 return [n for n in relative.replace("\\", "/").split("/") if n not in ("", ".")]
         raise PathOutsideStore(
@@ -134,8 +148,16 @@ class PathStore:
 
         entry = next((e for e in entries if e == wanted), None)
         if entry is None:
-            # Case-insensitive volumes (Windows, macOS by default): accept a
-            # differently-cased request when exactly one entry folds onto it.
+            # Accept a differently-cased request when exactly one entry folds
+            # onto it. This leans on ``os.path.normcase``, which folds case only
+            # on Windows (ntpath); on POSIX (macOS, Linux) normcase is a no-op,
+            # so this branch matches nothing the exact check above did not. That
+            # is deliberate: a case-insensitive *volume* on macOS still reports
+            # one canonical spelling from ``os.listdir``, and honouring a
+            # foreign-cased request there would need a real inode probe rather
+            # than a string fold -- out of scope here. On POSIX a wrong-case
+            # request is therefore refused; see the case-fold test in
+            # tests/test_path_store.py, which pins both directions.
             folded = [e for e in entries if os.path.normcase(e) == os.path.normcase(wanted)]
             entry = folded[0] if len(folded) == 1 else None
         if entry is None:

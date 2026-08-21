@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import cost_counter as counter
 import metrics
@@ -127,6 +128,31 @@ class CliSmokeTest(unittest.TestCase):
     def test_main_accepts_format_flag(self):
         self.assertEqual(counter.main([self.root, "role", "--format", "md"], store=self.store), 0)
         self.assertEqual(counter.main([self.root, "--format", "json"], store=self.store), 0)
+
+    def test_main_defaults_to_home_store_when_store_is_omitted(self):
+        # Every other main() test injects store=; this one pins the real
+        # default-wiring branch (`store = store or path_store.home_store()`) that
+        # every actual CLI invocation takes. Patch home_store so the assertion
+        # does not depend on where the machine puts $HOME, and confirm main()
+        # routes its resolution through the default store.
+        with patch.object(counter.path_store, "home_store",
+                          return_value=self.store) as home:
+            rc = counter.main([self.root, "stage"])
+        home.assert_called_once()
+        self.assertEqual(rc, 0)
+
+    def test_main_refuses_a_compare_the_store_cannot_serve(self):
+        # A valid export_dir but an out-of-store --compare must exit 2 from
+        # main() -- the --compare resolution path is otherwise only reached by
+        # compare() tests that bypass main()/store entirely.
+        store = counter.path_store.PathStore(self.root)  # base == the export dir
+        outside = tempfile.mkdtemp(prefix="cc-outside-compare-")
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = counter.main([self.root, "--compare", outside], store=store)
+        self.assertEqual(rc, 2)
+        self.assertIn("outside the directory this tool may read", buf.getvalue())
 
     def test_main_refuses_an_export_the_store_cannot_serve(self):
         # An export outside the store is reported and exits 2 -- never opened.

@@ -36,6 +36,15 @@ from report import Report
 # release manifest ships `runtime/` and `skills/` together, so this relative
 # hop holds in an installed plugin as well as in a checkout.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
+# parents[4] is the repo root only while this file stays 4 levels down, at
+# skills/classic-to-freedom-migration/tools/cost-counter/. If it ever moves, an
+# implicit index would silently anchor on a wrong ancestor (or import a foreign
+# `runtime`); fail loudly here instead, checking the marker the hop exists for.
+if not (_REPO_ROOT / "runtime" / "path_store.py").exists():
+    raise RuntimeError(
+        f"unexpected repo root computed from __file__: {_REPO_ROOT} "
+        f"-- no runtime/path_store.py beneath it; has cost_counter.py moved?"
+    )
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

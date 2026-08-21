@@ -124,6 +124,47 @@ class PathStoreTest(unittest.TestCase):
         with self.assertRaises(PathOutsideStore):
             self.store.resolve(link)
 
+    def test_case_folding_follows_platform_normcase(self):
+        # A differently-cased request is accepted only where os.path.normcase
+        # actually folds case -- Windows (ntpath). On POSIX (macOS, Linux)
+        # normcase is a no-op, so the fold branch matches nothing the exact
+        # check did not and a wrong-case request is refused. Pin both directions
+        # so the fallback cannot silently change meaning.
+        os.makedirs(os.path.join(self.base, "data"))
+        wanted = os.path.join(self.base, "DATA")
+        if os.path.normcase("A") != "A":  # case-folding platform (Windows)
+            self.assertEqual(
+                _key(self.store.resolve(wanted)),
+                _key(os.path.join(self.base, "data")),
+            )
+        else:  # POSIX: no fold, the wrong-case request has no matching entry
+            with self.assertRaises(PathNotInStore):
+                self.store.resolve(wanted)
+
+    def test_a_path_named_via_the_real_base_spelling_resolves(self):
+        # When the base is itself reached through a symlink, a caller may name a
+        # path under it via the real (link-target) spelling. The second prefix
+        # candidate in _names_under_base (self._real_base) is what lets that
+        # resolve; the exact-spelling tests never exercise it.
+        real_root = tempfile.mkdtemp(prefix="path-store-realbase-")
+        self.addCleanup(shutil.rmtree, real_root, True)
+        os.makedirs(os.path.join(real_root, "exports", "run-1"))
+        link = os.path.join(self.base, "linked-base")
+        try:
+            os.symlink(real_root, link, target_is_directory=True)
+        except (OSError, AttributeError, NotImplementedError) as exc:
+            self.skipTest(f"cannot create a directory symlink here: {exc}")
+        store = PathStore(link)  # base named via the symlink spelling
+        # Name the target via its REAL path: only the _real_base branch matches.
+        wanted = os.path.join(os.path.realpath(link), "exports", "run-1")
+        resolved = store.resolve(wanted)
+        # Compare by identity, not spelling: on Windows realpath can hand back an
+        # 8.3 short name for the profile dir, so a string compare would spuriously
+        # differ even when both name the same directory.
+        self.assertTrue(
+            os.path.samefile(resolved, os.path.join(real_root, "exports", "run-1"))
+        )
+
     def test_home_store_is_rooted_at_the_home_directory(self):
         self.assertEqual(_key(home_store().base), _key(os.path.expanduser("~")))
 
