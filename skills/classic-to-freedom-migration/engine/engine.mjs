@@ -993,21 +993,30 @@ function allCalls(fnNode, state) {
 }
 // The locals this method builds its menu in: assigned from `this.callParent(…)`, used with `<id>.addItem(`, or
 // handed back by `return`. Several are possible, and helper matching runs over all of them.
-function menuCollections(fnNode, calls) {
-  const names = new Set();
+// A local assigned from `this.callParent(…)`, or handed back by `return`.
+function collectionsFromStatements(fnNode) {
+  const out = [];
   for (const st of fnNode.body?.body || []) {
-    if (st.type === "VariableDeclaration") {
-      for (const d of st.declarations) {
-        if (d.id?.type === "Identifier" && d.init?.type === "CallExpression"
-          && /(?:^|\.)callParent$/.test(calleePath(d.init.callee) || "")) names.add(d.id.name);
-      }
+    if (st.type === "ReturnStatement" && st.argument?.type === "Identifier") out.push(st.argument.name);
+    if (st.type !== "VariableDeclaration") continue;
+    for (const d of st.declarations) {
+      const fromParent = d.init?.type === "CallExpression" && /(?:^|\.)callParent$/.test(calleePath(d.init.callee) || "");
+      if (d.id?.type === "Identifier" && fromParent) out.push(d.id.name);
     }
-    if (st.type === "ReturnStatement" && st.argument?.type === "Identifier") names.add(st.argument.name);
   }
+  return out;
+}
+// A local used as `<id>.addItem(…)`.
+function collectionsFromAddItem(calls) {
+  const out = [];
   for (const call of calls) {
     const c = call.callee;
-    if (c?.type === "MemberExpression" && c.property?.name === "addItem" && c.object?.type === "Identifier") names.add(c.object.name);
+    if (c?.type === "MemberExpression" && c.property?.name === "addItem" && c.object?.type === "Identifier") out.push(c.object.name);
   }
+  return out;
+}
+function menuCollections(fnNode, calls) {
+  const names = new Set([...collectionsFromStatements(fnNode), ...collectionsFromAddItem(calls)]);
   if (!names.size) names.add("actionMenuItems");
   return names;
 }
