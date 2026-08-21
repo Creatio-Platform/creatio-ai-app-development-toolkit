@@ -720,6 +720,71 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertTrue(result.stdout.strip(),
                         "an unresolvable command must still earn the first-write reminder")
 
+    def test_an_unrelated_session_is_never_touched_on_the_always_firing_events(self):
+        # `UserPromptSubmit` and `Stop` have no matcher support in the host — they fire on every
+        # prompt and every response, including in sessions that never go near Creatio. So the cost on
+        # those turns has to be a guard, not work: nothing created, nothing written, nothing swept,
+        # no process spawned. Asserted against a FRESH temp directory, because a state directory left
+        # by another test would make this pass for the wrong reason.
+        fresh = Path(tempfile.mkdtemp(prefix="caadt-fresh-state-", dir=_TMP))
+        session = str(uuid.uuid4())
+
+        for payload in (
+            {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": "unrelated"},
+            {"session_id": session, "hook_event_name": "Stop"},
+        ):
+            with self.subTest(event=payload["hook_event_name"]):
+                result = subprocess.run(
+                    [NODE, str(HOOK)],
+                    input=json.dumps(payload),
+                    capture_output=True, text=True, timeout=60,
+                    env={**_base_env(), "TMPDIR": str(fresh), "TMP": str(fresh), "TEMP": str(fresh),
+                         "CLIO_TELEMETRY_HOME": telemetry_home("granted"),
+                         "CAADT_TELEMETRY_CLIO": "caadt-no-such-clio"},
+                )
+
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "", "an unrelated turn must produce no output")
+                self.assertEqual(
+                    sorted(p.name for p in fresh.iterdir()), [],
+                    "a session that never called clio must leave nothing behind")
+
+    def test_exits_cleanly_on_input_it_cannot_use(self):
+        # The guarantee this hook makes is that it never fails the turn it is attached to and never
+        # prints anything the host could read as output. Since the always-firing events reach it on
+        # every turn, that has to hold for input it was not designed for, not only for the happy path.
+        for payload in ("not json at all", "", "[]", '{"hook_event_name": "UserPromptSubmit"}'):
+            with self.subTest(payload=payload[:20]):
+                result = subprocess.run(
+                    [NODE, str(HOOK)],
+                    input=payload,
+                    capture_output=True, text=True, timeout=60,
+                    env={**_base_env(), "TMPDIR": _TMP, "TMP": _TMP, "TEMP": _TMP,
+                         "CLIO_TELEMETRY_HOME": telemetry_home("granted"),
+                         "CAADT_TELEMETRY_CLIO": "caadt-no-such-clio"},
+                )
+
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "", "a stack trace on stderr is output too")
+
+    def test_a_missing_clio_binary_does_not_surface_an_error(self):
+        # The detached spawn emits an 'error' event for a binary that cannot be run, and an 'error'
+        # event with no listener throws. The synchronous exit normally wins that race, which is
+        # exactly why the listener exists — a guarantee that depends on exit timing is not one.
+        session = str(uuid.uuid4())
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"),
+            clio=str(Path(_TMP, "definitely-not-an-executable")),
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "")
+        # The routing still reached the agent: a broken clio costs the floor, not the reminder.
+        self.assertIn("workflow_started", result.stdout)
+
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns
         # to skip, and the floor is one event per session because it is the denominator.

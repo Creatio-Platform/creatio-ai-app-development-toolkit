@@ -277,8 +277,15 @@ function consentGranted() {
 
 let sweptThisProcess = false;
 
+// The path alone, created by nobody. `UserPromptSubmit` and `Stop` have no matcher support in the
+// host — they fire on EVERY prompt and every response, including in sessions that never touch
+// Creatio — so the read paths those events take must not create a directory or sweep one.
+function stateDirPath() {
+	return path.join(os.tmpdir(), 'caadt-telemetry-routing');
+}
+
 function stateDir() {
-	const dir = path.join(os.tmpdir(), 'caadt-telemetry-routing');
+	const dir = stateDirPath();
 	// 0o700: these files carry session ids and the usage payload, and they live in a shared temp
 	// directory whose paths are predictable. On a multi-user host the default mode would let another
 	// local user read them, or pre-plant a symlink where a marker is about to be written. The mode is
@@ -348,11 +355,31 @@ function sweepStaleMarkers(dir) {
 
 function markerPath(sessionId, suffix) {
 	const safeId = String(sessionId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 128) || 'unknown';
-	return path.join(stateDir(), `${safeId}.${suffix}`);
+	return path.join(stateDirPath(), `${safeId}.${suffix}`);
+}
+
+// Called only where something is about to be WRITTEN, so a read of a marker that does not exist
+// costs one failed stat instead of a directory creation plus a sweep.
+function ensureStateDir() {
+	try {
+		stateDir();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// Whether this session has ever called clio. One stat, no writes: it is the guard that keeps the
+// always-firing events out of the filesystem in sessions that have nothing to do with Creatio.
+function hasTouchedClio(sessionId) {
+	return fs.existsSync(markerPath(sessionId, 'touched'));
 }
 
 // Claimed with 'wx' so two hook processes racing on parallel tool calls cannot both act.
 function claimOnce(sessionId, suffix) {
+	if (!ensureStateDir()) {
+		return false;
+	}
 	try {
 		fs.writeFileSync(markerPath(sessionId, suffix), '', { flag: 'wx' });
 		return true;
@@ -400,6 +427,7 @@ function countUnconfirmedUsage(sessionId) {
 }
 
 function noteUsageAttempt(sessionId, confirmed) {
+	ensureStateDir();
 	try {
 		if (confirmed) {
 			fs.rmSync(markerPath(sessionId, 'usage-attempts'), { force: true });
@@ -427,6 +455,7 @@ function inFlightReading(sessionId) {
 }
 
 function writeUsageMarker(sessionId, reported, pending) {
+	ensureStateDir();
 	try {
 		fs.writeFileSync(markerPath(sessionId, 'usage'), JSON.stringify({
 			output: reported.output, size: reported.size, ...(pending ? { pending } : {})
@@ -487,6 +516,7 @@ function releaseClaim(sessionId, suffix) {
 // separate from the claim itself: the claim keeps its exclusive-create semantics, so two racing hook
 // processes still cannot both emit, while the counter only bounds how many times a retry is allowed.
 function releaseFloorClaimForRetry(sessionId) {
+	ensureStateDir();
 	const file = markerPath(sessionId, 'attempts');
 	let attempts = 0;
 	try {
@@ -629,7 +659,7 @@ function emitEvent(sessionId, usage, eventName) {
 // invocation can act on it — that is what keeps the retry and the usage gating working without
 // waiting here for either.
 function dispatch(sessionId, kind, request) {
-	if (!CLIO_IS_SAFE) {
+	if (!CLIO_IS_SAFE || !ensureStateDir()) {
 		return false;
 	}
 	let stdin;
@@ -645,6 +675,10 @@ function dispatch(sessionId, kind, request) {
 			stdio: [stdin, stdout, 'ignore'],
 			windowsHide: true
 		});
+		// An 'error' event with no listener THROWS. A missing or unrunnable binary emits one, and
+		// while the synchronous `process.exit(0)` below normally wins the race, a guarantee that
+		// depends on exit timing is not a guarantee. One no-op listener removes the dependency.
+		child.on('error', () => {});
 		child.unref();
 		return true;
 	} catch {
@@ -731,6 +765,13 @@ function main() {
 		return;
 	}
 	if (event === 'UserPromptSubmit') {
+		// This event has no matcher support in the host, so it fires on every prompt in every session,
+		// most of which have nothing to do with Creatio. A session that has never called clio holds no
+		// claim to clear, so the work here is one stat and a return — nothing is created, written, or
+		// swept, and no process is spawned on this path at all.
+		if (!hasTouchedClio(sessionId)) {
+			return;
+		}
 		// A new user request is plausibly a new run, so the next clio call is allowed to route again.
 		// Nothing is emitted or said here: at prompt time there is no way to know the turn will touch
 		// Creatio at all, and telemetry routing injected into unrelated work is noise the model learns
@@ -873,6 +914,13 @@ function routingOutput(sessionId) {
 	}
 	return null;
 }
+
+// Belt and braces around the same promise the header makes: this hook never fails the turn it is
+// attached to, and never prints anything the host could mistake for output. The catch covers a
+// synchronous throw; the two handlers cover anything that could still be in flight, which matters
+// because `UserPromptSubmit` and `Stop` fire on every turn whether or not Creatio is involved.
+process.on('uncaughtException', () => process.exit(0));
+process.on('unhandledRejection', () => process.exit(0));
 
 try {
 	main();
