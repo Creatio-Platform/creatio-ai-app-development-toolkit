@@ -229,7 +229,8 @@ function printActionNote(result, opts, sigList) {
   return { type: "Action", note: `Printable${namePart} → wire as the Freedom **print** action.` };
 }
 function cardActionNote(name, result, opts) {
-  const sigList = (s) => (s?.cases || s?.items || s?.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
+  // Same `Array.isArray` guard as `sigLine`: a bare-string answer must degrade to "no list", not throw mid-render.
+  const sigList = (s) => { const raw = s?.cases || s?.items || s?.names; return (Array.isArray(raw) ? raw : []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", "); };
   if (/process/i.test(name)) return processActionNote(result, opts, sigList);
   if (/print/i.test(name)) return printActionNote(result, opts, sigList);
   if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
@@ -1255,7 +1256,7 @@ function renderPlanBanners(result, opts) {
   const placementBlockers = opts.placementBlockers || [];
   if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (\`targetPackageEditable\` · \`application\` · \`primaryPackage\` · \`targetPackageInApplication\` · \`sectionHost\`), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable.`, "");
   const signalsMissing = opts.signalsMissing || [];
-  if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
+  if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
   // real chain has 150+). Surface it so a partial fetch isn't silently folded onto — the agent confirms the full chain.
   const sq = result.effective?.seedQuality || result.seedQuality;
@@ -1513,16 +1514,36 @@ export function renderPlan(result, opts = {}) {
     const s = signals[k];
     if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
-    const items = (s.cases || s.items || s.names || []);
+    // `Array.isArray` guard: a hand-authored single answer is plausibly written as a bare string
+    // (`"names": "Contact duplicates. Contact name"`), and `.map` on a string threw — aborting the whole
+    // `--plan` run over a typo in one signal. Degrade to "no list" instead. (`cases` first is correct here: a
+    // DCM answer is a case list. `names` is the canonical key for `deduplication`.)
+    const raw = s.cases || s.items || s.names;
+    const items = Array.isArray(raw) ? raw : [];
     const list = items.map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
     const presentNote = list ? ` — ${list}` : "";
     // A DCM object often has SEVERAL case versions (active + previous, e.g. Recruiting_v11 / Recruiting_v1). Only the
     // ACTIVE/published one drives the progress bar + Next steps at runtime, and both widgets auto-populate from it —
     // don't hand-author stages/steps or wire a specific version.
     const multiDcm = k === "dcm" && items.length > 1 ? " (multiple case versions — use the ACTIVE/published one; the progress bar + Next steps auto-populate from it, do not hand-author stages)" : "";
+    // `deduplication` is the one signal whose "present" is NOT an instruction to build something: the rules live on
+    // the ENTITY and the handler is the platform's, so nothing here is authored. What present means is that this
+    // entity HAS an on-save check today — and whether it survives depends on the second fact, the target stand's
+    // deduplication service. Say which of the two states applies instead of the generic "→ build it".
+    if (k === "deduplication") {
+      let verdict;
+      if (s.serviceConfigured === true) verdict = "deduplication service configured → the platform's Freedom handler should run; verify on the built page";
+      // SELF-CONTAINED on purpose: this used to say "(see the ⚠ Confirm row)", but for a TYPED entity the plan
+      // renders the base page with `listPageOnly` (which returns before `renderConfirmWorklist`), so the row the
+      // cross-reference pointed at appeared nowhere in the document the operator approves — the alarm arrived with
+      // no remedy. The four decisions are stated inline here, so this line stands alone at any typed-ness.
+      else if (s.serviceConfigured === false) verdict = "⚠ deduplication service NOT configured (`DeduplicationWebApiUrl` empty and/or `ESDeduplication`/`BulkESDeduplication` off) → after the migration the check STOPS HAPPENING, silently, with duplicates saved as if clean. Decide one **now**: configure the deduplication service on the target stand · keep the Classic page for this entity · install the `Deduplication Freedom UI enhancements` marketplace app · accept the loss and say so";
+      else verdict = "⚠ `serviceConfigured` not recorded → cannot say whether the check survives migration";
+      return `- **${label}:** active${presentNote} — ${verdict}`;
+    }
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
