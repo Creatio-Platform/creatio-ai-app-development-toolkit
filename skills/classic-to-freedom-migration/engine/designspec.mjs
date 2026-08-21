@@ -228,7 +228,8 @@ function printActionNote(result, opts, sigList) {
   return { type: "Action", note: `Printable${namePart} → wire as the Freedom **print** action.` };
 }
 function cardActionNote(name, result, opts) {
-  const sigList = (s) => (s?.cases || s?.items || s?.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
+  // Same `Array.isArray` guard as `sigLine`: a bare-string answer must degrade to "no list", not throw mid-render.
+  const sigList = (s) => { const raw = s?.cases || s?.items || s?.names; return (Array.isArray(raw) ? raw : []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", "); };
   if (/process/i.test(name)) return processActionNote(result, opts, sigList);
   if (/print/i.test(name)) return printActionNote(result, opts, sigList);
   if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
@@ -1483,7 +1484,12 @@ export function renderPlan(result, opts = {}) {
     const s = signals[k];
     if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
-    const items = (s.cases || s.items || s.names || []);
+    // `Array.isArray` guard: a hand-authored single answer is plausibly written as a bare string
+    // (`"names": "Contact duplicates. Contact name"`), and `.map` on a string threw — aborting the whole
+    // `--plan` run over a typo in one signal. Degrade to "no list" instead. (`cases` first is correct here: a
+    // DCM answer is a case list. `names` is the canonical key for `deduplication`.)
+    const raw = s.cases || s.items || s.names;
+    const items = Array.isArray(raw) ? raw : [];
     const list = items.map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
     const presentNote = list ? ` — ${list}` : "";
     // A DCM object often has SEVERAL case versions (active + previous, e.g. Recruiting_v11 / Recruiting_v1). Only the
@@ -1497,7 +1503,11 @@ export function renderPlan(result, opts = {}) {
     if (k === "deduplication") {
       let verdict;
       if (s.serviceConfigured === true) verdict = "deduplication service configured → the platform's Freedom handler should run; verify on the built page";
-      else if (s.serviceConfigured === false) verdict = "⚠ deduplication service NOT configured → the check will STOP after migration (see the ⚠ Confirm row)";
+      // SELF-CONTAINED on purpose: this used to say "(see the ⚠ Confirm row)", but for a TYPED entity the plan
+      // renders the base page with `listPageOnly` (which returns before `renderConfirmWorklist`), so the row the
+      // cross-reference pointed at appeared nowhere in the document the operator approves — the alarm arrived with
+      // no remedy. The four decisions are stated inline here, so this line stands alone at any typed-ness.
+      else if (s.serviceConfigured === false) verdict = "⚠ deduplication service NOT configured (`DeduplicationWebApiUrl` empty and/or `ESDeduplication`/`BulkESDeduplication` off) → after the migration the check STOPS HAPPENING, silently, with duplicates saved as if clean. Decide one **now**: configure the deduplication service on the target stand · keep the Classic page for this entity · install the `Deduplication Freedom UI enhancements` marketplace app · accept the loss and say so";
       else verdict = "⚠ `serviceConfigured` not recorded → cannot say whether the check survives migration";
       return `- **${label}:** active${presentNote} — ${verdict}`;
     }

@@ -4215,14 +4215,101 @@ check("ENG-94274 dedup signal: rule present + service CONFIGURED → still a row
   && !/cannot/i.test(dedupRows(dedupSvc)[0].reason)
   && /Potential duplicates found/.test(dedupRows(dedupSvc)[0].reason),
   () => dedupRows(dedupSvc));
+// review finding 6 — `renderConfirmWorklist` escapes the whole `reason` with `esc`, which maps every backtick to
+// U+02CB. So an engine-authored reason must be plain prose: a backticked identifier renders as ˋlike thisˋ in the
+// plan the operator reads. This asserts the RENDERED plan (not the pre-render mapper row), so re-introducing a
+// backtick into any of the three tails fails here instead of shipping a mangled token.
+check("ENG-94274 dedup signal: the reason's identifiers survive `esc` in the RENDERED plan — engine-authored reason text carries no backticks",
+  dedupSvc.plan.includes("Potential duplicates found") && dedupNoSvc.plan.includes("DeduplicationWebApiUrl empty")
+  && ![dedupSvc, dedupNoSvc].some((r) => r.plan.split("\n").some((l) => /\[dedup-on-save\]/.test(l) && /\u02cb/.test(l))),
+  () => [dedupSvc, dedupNoSvc].flatMap((r) => r.plan.split("\n").filter((l) => /\[dedup-on-save\]/.test(l))));
 check("ENG-94274 dedup signal: the On-stand signals section states which of the two service states applies — never the generic '→ build it' (nothing here is authored)",
   /\*\*On-save duplicate check:\*\* active/.test(dedupNoSvc.plan)
   && !/\*\*On-save duplicate check:\*\* present.*build it/.test(dedupNoSvc.plan),
   () => dedupNoSvc.plan.split("\n").filter((l) => /On-save duplicate check/.test(l)));
-check("ENG-94274 dedup signal: a CHILD page emits no row — the signal answers for THIS page's entity, and a child migrates a different one",
-  mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [] })]), {
-    signals: { deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } }, isChildPage: true,
-  }).needsDecision.filter((d) => d.kind === "dedup-on-save").length === 0);
+// review finding 1 (child half) — a child edit page migrates a DIFFERENT entity, so the parent's verdict would
+// state a fact about the wrong entity; but silence is the exact silent loss this row exists to prevent. So the
+// child branch carries a child-scoped INSTRUCTION (the `processActionNote`/`printActionNote` convention), gated
+// on `resolved` ALONE: the parent's `present:false` says nothing about the child's entity.
+const dedupChildRows = (dedup) => mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [] })]), {
+  signals: { deduplication: dedup }, isChildPage: true,
+}).needsDecision.filter((d) => d.kind === "dedup-on-save");
+check("ENG-94274 dedup signal: a CHILD page gets a CHILD-SCOPED row (run DuplicatesRule for THIS child's entity), never the parent's verdict",
+  dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false }).length === 1
+  && /THIS child's entity/.test(dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false })[0].reason)
+  && !/STOPS HAPPENING/.test(dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false })[0].reason)
+  && !/R1/.test(dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false })[0].reason),
+  () => dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false }));
+check("ENG-94274 dedup signal: the child row is gated on `resolved` alone — the parent's present:false says nothing about the child's entity, and an UNRESOLVED parent answer still emits nothing",
+  dedupChildRows({ resolved: true, present: false }).length === 1
+  && dedupChildRows({ present: true, serviceConfigured: false }).length === 0,
+  () => ({ parentNone: dedupChildRows({ resolved: true, present: false }).length, unresolved: dedupChildRows({ present: true, serviceConfigured: false }).length }));
+
+/* ---- review findings 1-3 (m-dymytrova, PR #113): the guard was unreachable through the CLI, the gate accepted a
+   half-answered key, and the typed-entity plan cross-referenced a row it never rendered. All three are asserted
+   through `runMigration` (the shipped path), not through a direct `mapToFreedom` call. */
+// finding 2 — `{resolved:true, present:true}` with NO `serviceConfigured` used to clear the gate and exit 0, while
+// the plan it produced said "cannot say whether the check survives migration". Half-answered is NOT resolved.
+const dedupHalf = dedupSig({ resolved: true, present: true, names: ["R1"] });
+check("ENG-94274 dedup gate: present:true with `serviceConfigured` UNRECORDED is INCOMPLETE — a gate that passes while the plan says the key question is unanswered defeats the field",
+  (dedupHalf.signalsMissing || []).includes("deduplication")
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dedupHalf.plan),
+  () => dedupHalf.signalsMissing);
+check("ENG-94274 dedup gate: `serviceConfigured` is required only when a rule EXISTS — the nine present:false answers stay valid (nothing to lose ⇒ no service question)",
+  (dedupSig({ resolved: true, present: false }).signalsMissing || []).length === 0
+  && (dedupSvc.signalsMissing || []).length === 0 && (dedupNoSvc.signalsMissing || []).length === 0);
+const dedupHalfCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
+  input: JSON.stringify({ ...sigBase, signals: {
+    dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false }, deduplication: { resolved: true, present: true, names: ["R1"] },
+  } }), encoding: "utf8" });
+check("ENG-94274 dedup gate CLI: the half-answered key exits 2 — the enforcement the row alone could not give (confirm rows are checked at --verify, i.e. AFTER the build)",
+  dedupHalfCli.status === 2 && /on-stand signals not resolved/i.test(dedupHalfCli.stderr || ""),
+  () => ({ status: dedupHalfCli.status, stderr: (dedupHalfCli.stderr || "").slice(0, 160) }));
+check("ENG-94274 dedup gate: the `serviceConfigured`-unrecorded wording renders when the key is deliberately deferred (the third mapper branch, previously untested)",
+  /Record whether the target stand's deduplication service is configured/.test(
+    dedupRows(dedupSig({ resolved: true, present: true, names: ["R1"], serviceConfigured: "later" }))[0]?.reason || ""),
+  () => dedupRows(dedupSig({ resolved: true, present: true, names: ["R1"], serviceConfigured: "later" })));
+// finding 4 — a hand-authored single rule written as a bare string must not abort the whole --plan run
+check("ENG-94274 dedup signal: a non-array `names` (a plausible hand-authored single-rule typo) degrades to no rule list instead of throwing",
+  dedupRows(dedupSig({ resolved: true, present: true, names: "Contact duplicates", serviceConfigured: false })).length === 1
+  && !/rule\(s\)/.test(dedupRows(dedupSig({ resolved: true, present: true, names: "Contact duplicates", serviceConfigured: false }))[0].reason));
+// finding 1 — the guard reads `opts.signals`, which a nested run rebuilt from the CHILD bundle (it has none), so
+// every typed / mini / child fold saw `{}` and the row vanished below the root. Driven through `runMigration`, and
+// asserted as the TOTAL row count across the root and every fold — the shipped path, not a direct mapper call.
+const dedupTypedBundle = (nm) => ({ seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F1",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F1"}}]};});` }] });
+const dedupTypedRun = runMigration({ ...sigBase,
+  typedPages: [{ schema: "XICPage", type: "Incoming" }, { schema: "XOCPage", type: "Outgoing" }],
+  typedPageSchemas: { XICPage: dedupTypedBundle("XICPage"), XOCPage: dedupTypedBundle("XOCPage") },
+  addRecordMiniPage: false,
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false },
+    deduplication: { resolved: true, present: true, names: ["Contact duplicates. Contact name"], serviceConfigured: false } },
+});
+const planDedupRows = (r) => (r.plan.match(/\*\*\[dedup-on-save\]\*\*/g) || []).length;
+check("ENG-94274 dedup signal: the run-level answer reaches every FOLD — a typed entity's two per-type forms each carry the row (was 0: foldSubPage threaded no signals, so the guard was unreachable through the CLI)",
+  planDedupRows(dedupTypedRun) === 2,
+  () => ({ rows: planDedupRows(dedupTypedRun), lines: dedupTypedRun.plan.split("\n").filter((l) => /dedup-on-save/.test(l)) }));
+// finding 3 — for a typed entity `renderPlan` renders the base page with `listPageOnly`, which returns before
+// `renderConfirmWorklist`; the signal line therefore may not cross-reference a ⚠ Confirm row. It must carry the
+// four decisions itself, or a typed plan states the alarm and offers no remedy anywhere in the document.
+check("ENG-94274 dedup signal: the On-stand signals line is SELF-CONTAINED — a TYPED plan carries the four decisions inline, with no dangling 'see the ⚠ Confirm row' cross-reference",
+  /\*\*On-save duplicate check:\*\* active/.test(dedupTypedRun.plan)
+  && /configure the deduplication service on the target stand/.test(dedupTypedRun.plan)
+  && /keep the Classic page for this entity/.test(dedupTypedRun.plan)
+  && /Deduplication Freedom UI enhancements/.test(dedupTypedRun.plan)
+  && !/see the ⚠ Confirm row/.test(dedupTypedRun.plan),
+  () => dedupTypedRun.plan.split("\n").filter((l) => /On-save duplicate check/.test(l)));
+const dedupMiniRun = runMigration({ ...sigBase,
+  addRecordMiniPage: { schema: "XMiniPage" },
+  miniPageSchemas: { XMiniPage: dedupTypedBundle("XMiniPage") },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false },
+    deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } },
+});
+check("ENG-94274 dedup signal: the add-record MINI page is the same entity, so it too carries the row through the fold (root + mini = 2)",
+  planDedupRows(dedupMiniRun) === 2,
+  () => ({ rows: planDedupRows(dedupMiniRun), lines: dedupMiniRun.plan.split("\n").filter((l) => /dedup-on-save/.test(l)) }));
 
 /* ---- review batch: colSpan clamp · rowSpan auto-row occupancy · multi-span collision · grandchild embedding ---- */
 // #2 colSpan clamp — a full-width classic field landing in Freedom column 2 must NOT span a phantom column 3.

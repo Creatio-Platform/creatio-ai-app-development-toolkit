@@ -2027,21 +2027,37 @@ function mapWidgets(eff, opts = {}) {
 // where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
 // into a lie the day it does.
 function mapDedupOnSave(opts = {}) {
-  // The signal describes the entity of THIS page. A child page migrates a different entity, whose own rules were
-  // never resolved here, so inheriting the parent's answer would state a fact about the wrong entity.
-  if (opts.isChildPage) return [];
   const s = opts.signals?.deduplication;
-  if (s?.resolved !== true || !s.present) return [];
+  if (s?.resolved !== true) return [];
+  // A CHILD edit page migrates a DIFFERENT entity, so the parent's answer states a fact about the wrong entity —
+  // but silence is the very failure this row exists to prevent (the child's own on-save check would disappear
+  // just as quietly). So the child branch carries a child-scoped INSTRUCTION instead of the parent's verdict,
+  // exactly like processActionNote / printActionNote do for the section-level Process / Print menus. It is gated
+  // on `resolved` only, never on the parent's `present`: "the parent entity has no rule" says nothing at all
+  // about this child's entity.
+  if (opts.isChildPage) {
+    return [{ kind: "dedup-on-save", item: "on-save duplicate check (child entity)",
+      reason: "Child edit page — the answer recorded for the parent describes the PARENT's entity. Run the DuplicatesRule query (IsActive AND UseAtSave, filtered to THIS child's entity) for this page's own entity and record the answer; if a rule exists, the on-save check follows the same service rule as the parent's, so state whether it survives the migration." }];
+  }
+  if (!s.present) return [];
   const named = (x) => (typeof x === "string" ? x : (x?.name || x?.caption) || "");
-  const rules = (s.names || s.items || s.rules || []).map(named).filter(Boolean);
+  // `names` is the CANONICAL key for this signal (SKILL.md + references/manifest-fields.md pin it); `items` is
+  // accepted only because the sibling signals use it. `Array.isArray` because a hand-authored single rule is
+  // plausibly written as a bare string, and `.map` on a string would abort the whole --plan run.
+  const rawRules = s.names || s.items;
+  const rules = (Array.isArray(rawRules) ? rawRules : []).map(named).filter(Boolean);
   const ruleList = rules.length ? ` (rule(s): ${rules.join(", ")})` : "";
+  // WORDING RULE for these tails: plain prose, NO backticks. `renderConfirmWorklist` escapes the whole `reason`
+  // with `esc` (deliberately — it interpolates stand-derived rule names via ${ruleList}), and `esc` maps every
+  // backtick to U+02CB, so a backticked identifier here renders as ˋlike thisˋ in the plan. Code identifiers
+  // belong in `item`, per the convention comment at designspec.mjs:615-640.
   let tail;
   if (s.serviceConfigured === true) {
-    tail = "The stand's deduplication service IS configured, so the platform's Freedom handler is expected to run — VERIFY it on the built page: save a known duplicate and confirm the `Potential duplicates found` dialog appears (Merge / Save anyway / Edit record).";
+    tail = "The stand's deduplication service IS configured, so the platform's Freedom handler is expected to run — VERIFY it on the built page: save a known duplicate and confirm the Potential duplicates found dialog appears (Merge / Save anyway / Edit record).";
   } else if (s.serviceConfigured === false) {
-    tail = "The stand's deduplication service is NOT configured (`DeduplicationWebApiUrl` empty and/or `ESDeduplication`/`BulkESDeduplication` off) and the Freedom flow runs only through it, so after this migration the check STOPS HAPPENING — silently, with duplicates saved as if clean. Classic keeps working because its `asyncValidate` falls back to the rule's SQL procedure. Decide one: configure the deduplication service on the target stand; keep the Classic page for this entity; install the `Deduplication Freedom UI enhancements` marketplace app; or accept the loss and say so.";
+    tail = "The stand's deduplication service is NOT configured (DeduplicationWebApiUrl empty and/or ESDeduplication / BulkESDeduplication off) and the Freedom flow runs only through it, so after this migration the check STOPS HAPPENING — silently, with duplicates saved as if clean. Classic keeps working because its asyncValidate falls back to the rule's SQL procedure. Decide one: configure the deduplication service on the target stand; keep the Classic page for this entity; install the Deduplication Freedom UI enhancements marketplace app; or accept the loss and say so.";
   } else {
-    tail = "Record whether the target stand's deduplication service is configured — `DeduplicationWebApiUrl` populated AND `ESDeduplication`/`BulkESDeduplication` enabled — as `signals.deduplication.serviceConfigured`. The Freedom flow runs only through that service, so without it this check silently stops happening after the migration.";
+    tail = "Record whether the target stand's deduplication service is configured — DeduplicationWebApiUrl populated AND ESDeduplication / BulkESDeduplication enabled — as signals.deduplication.serviceConfigured. The Freedom flow runs only through that service, so without it this check silently stops happening after the migration.";
   }
   return [{ kind: "dedup-on-save", item: "on-save duplicate check", reason: `Classic runs an on-save duplicate check for this entity${ruleList}. ${tail}` }];
 }
