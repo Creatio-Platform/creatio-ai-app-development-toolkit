@@ -8,7 +8,7 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -2858,6 +2858,22 @@ check("ENG-95543: every componentType the moved rows name resolves in the regist
   movedRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f)).length === 0
   && MAPPING_ROWS.filter((r) => /Recommendation|Duplicates/.test(String(r.match.containerName || ""))).every((r) => !r.verify),
   () => movedRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f)));
+
+// ENG-95543 x ENG-95470: the role/analog pairs are the SHARED TABLE's now — the repoint N1's own comment asked for
+// ("sourced by hand … until ENG-95543's registry lands, then repointed there"). `componentAnalogsOf` (asserted
+// separately in the N1 block) still answers the same, so this pins the SOURCE rather than the behaviour.
+check("ENG-95543: the analog pair lives in the shared table — a planned `crt.ContactCommunication` resolves to `crt.CommunicationOptions`, an unrelated type to nothing",
+  analogsOf("crt.ContactCommunication").includes("crt.CommunicationOptions") && analogsOf("crt.Label").length === 0,
+  () => ({ comms: analogsOf("crt.ContactCommunication"), label: analogsOf("crt.Label") }));
+// A legacy name a row claims to satisfy must be a name the registry does NOT carry. If it did, the row would alias
+// one REAL component onto another: the gate would accept component B for a plan that named component A while both
+// exist — a different defect from the false MISSING the analog exists to remove.
+{
+  const legacy = satisfiedLegacyTypes();
+  check("ENG-95543: every legacy type a row claims to satisfy is ABSENT from the registry — an analog must not alias one real component onto another",
+    legacy.length >= 1 && legacy.every((t) => !vendoredIndex().components[t]),
+    () => ({ legacy, alsoReal: legacy.filter((t) => vendoredIndex().components[t]) }));
+}
 
 // The LONGEST-suffix rule, pinned against a fixture table with two OVERLAPPING suffixes. Today's rows do not
 // overlap, so this cannot be checked against the live table — and an unchecked ordering rule is how a generic

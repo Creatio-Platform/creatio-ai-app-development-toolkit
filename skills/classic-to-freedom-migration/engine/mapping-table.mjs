@@ -237,11 +237,11 @@ const profileCardRow = (entity, componentType, pkg, shows) => row({
   match: { by: MATCH.PROFILE_ENTITY, profileEntity: entity }, role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET,
   verify: { componentType }, meta: { profileCard: { type: componentType, pkg, shows } },
 });
-const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null }) =>
+const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null, satisfies = null }) =>
   row({
     match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix, ...(qualifiers ? { qualifiers } : {}) },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape,
-    verify: componentType ? { componentType } : null,
+    verify: componentType ? { componentType, ...(satisfies ? { satisfies } : {}) } : null,
     notes,
     meta: { feature: name, freedom, templateProvided, uiShape },
   });
@@ -274,6 +274,13 @@ const FEATURE_ROWS = [
   // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
   feature("ContactCommunicationDetail", { feature: "Communication options",
     freedom: "Freedom Communication-options component (crt.CommunicationOptions)", componentType: "crt.CommunicationOptions", uiShape: "component",
+    // `satisfies` — the LEGACY expected type this row's real component answers for. ENG-95470 kept this pair in its
+    // own interim table in designspec.mjs and said it would be repointed here; this is that repoint. A plan
+    // produced by an older engine EXPECTED `crt.ContactCommunication` (the entity name with a `crt.` prefix, which
+    // resolves to nothing on a stand), and a correctly built page carrying `crt.CommunicationOptions` must read ✅
+    // rather than ❌ MISSING. A `satisfies` entry is therefore a name the registry must NOT carry — if it does, it
+    // is a real component being aliased away, and the registry check says so.
+    satisfies: ["crt.ContactCommunication"],
     notes: COMMS_NOTE }),
   // Feed. Its classic origin is the ESN feed CONTAINER, not a detail schema, so it is keyed by container name —
   // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry used to hold.
@@ -466,4 +473,16 @@ export function profileCardsByEntity() {
 }
 export function knownCardActions() {
   return new Set(MAPPING_ROWS.filter((r) => r.meta?.cardAction).map((r) => r.meta.cardAction));
+}
+
+// The Freedom types accepted for a PLANNED component type: the type itself, plus any row whose real component
+// `satisfies` that (legacy) name. ENG-95470 held this as its own interim table with the note "repointed [to the
+// shared table] when ENG-95543 lands" — this is that repoint, so the analog knowledge has one home like the rest.
+export function analogsOf(plannedType) {
+  return MAPPING_ROWS.filter((r) => (r.verify?.satisfies || []).includes(plannedType))
+    .map((r) => r.verify.componentType);
+}
+// Every legacy name any row claims to satisfy — so a check can assert they are names the registry does NOT carry.
+export function satisfiedLegacyTypes() {
+  return [...new Set(MAPPING_ROWS.flatMap((r) => r.verify?.satisfies || []))];
 }

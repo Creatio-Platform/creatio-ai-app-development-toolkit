@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
-import { featureVerifyType } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table
+import { featureVerifyType, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -2706,21 +2706,18 @@ function componentNoun(vk) {
   if (vk.type === "feature") return esc(String(vk.ftype || "the standard feature"));
   return COMPONENT_NOUN[vk.type] || "this page's components";
 }
-// The INTERIM role/analog table (ENG-95470). A planned Classic-derived component type is SATISFIED by its curated
-// Freedom analog: a migration builds the NATIVE Freedom component, not a literal of the Classic name, so a row that
-// expected `crt.ContactCommunication` (the ContactCommunication entity with a `crt.` prefix) is Done when the built
-// page carries `crt.CommunicationOptions` (the native Communication-options component). Without this the analog read
-// ❌ MISSING on a correctly built page — the false MISSING this ticket removes. Matched STRICTLY against curated
-// pairs (never a fuzzy family), so a wrong component cannot falsely satisfy a row. Sourced by hand from
-// `classic-to-freedom-mapping.md` until ENG-95543's registry lands, then repointed there (same expected set, one
-// call site). Keys and values are `crt.*` component types.
-const COMPONENT_ANALOGS = {
-  "crt.ContactCommunication": ["crt.CommunicationOptions"],
-};
+// ROLE/ANALOG matching (ENG-95470), now sourced from the SHARED MAPPING TABLE (ENG-95543) — the repoint that
+// ticket's own comment asked for. A planned Classic-derived component type is SATISFIED by the real Freedom
+// component whose row declares it: a plan that expected `crt.ContactCommunication` (the ContactCommunication
+// ENTITY with a `crt.` prefix, a name no stand resolves) is Done when the built page carries
+// `crt.CommunicationOptions`. Without this the analog read ❌ MISSING on a correctly built page. Still matched
+// STRICTLY against declared pairs, never a fuzzy family, so a wrong component cannot falsely satisfy a row — and
+// the pairs now sit beside the mapping they belong to, with the registry check asserting that a legacy name is one
+// the registry does NOT carry.
 // The Freedom analog types accepted for a planned component type — the curated pair, or `[]` when none. Own fn so
 // both `resolveComponentVk` (matching) and `componentTypesOf` (publishing the expected set) read ONE table.
 export function componentAnalogsOf(ftype) {
-  return COMPONENT_ANALOGS[ftype] || [];
+  return analogsOf(ftype);
 }
 // ROLE/ANALOG match (ENG-95470): the expected component type first, then its curated Freedom analog — a migration
 // builds the NATIVE Freedom component, so `crt.CommunicationOptions` satisfies a planned `crt.ContactCommunication`
