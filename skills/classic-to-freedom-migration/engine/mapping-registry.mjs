@@ -130,3 +130,98 @@ export function rankCandidates(terms, { index = vendoredIndex(), version = null,
   }
   return out.sort((a, b) => b.score - a.score || a.componentType.localeCompare(b.componentType)).slice(0, limit);
 }
+
+// ---- THE RUN-TIME REGISTRY: the stand's own answer, when there is one --------------------------------------
+// The vendored index is the offline fallback and the CI check's subject. A real migration can do better: the target
+// stand's registry, exported for ITS platform version. This is the half that makes the feature reachable on a real
+// run instead of waiting on a clio-side change — the failure mode ENG-95412's change 7 shipped with.
+//
+// The channel is the MANIFEST, like `enumVocabulary`: manifests are how stand-derived facts already reach the
+// engine, and `get-classic-page-sources` is what writes them. `manifest.componentRegistry` is either the export
+// itself or `{ "file": "<path>" }` — a path, because the export is 400-650 KB and has no business passing through
+// an agent's context.
+export function indexFromRegistryExport(json, { version = null } = {}) {
+  const v = version || json?.resolvedTargetVersion || json?.version || "stand";
+  const components = {};
+  for (const c of json?.components || []) {
+    components[c.componentType] = {
+      v: 1, compositeOnly: !!c.compositeOnly,
+      inputs: Object.fromEntries(Object.entries(c.inputs || {}).map(([k, m]) => [k, { v: 1, ...pickMeta(m) }])),
+      outputs: Object.fromEntries(Object.keys(c.outputs || {}).map((k) => [k, { v: 1 }])),
+      taxonomy: {},
+    };
+  }
+  return {
+    meta: { versions: [v], sources: [{ version: v, from: "registry-export" }], componentCount: Object.keys(components).length },
+    baseInputs: Object.fromEntries(Object.entries(json?.references?.baseInputs || {}).map(([k, m]) => [k, pickMeta(m)])),
+    components,
+  };
+}
+const pickMeta = (m) => {
+  const out = {};
+  if (!m || typeof m !== "object") return out;
+  for (const k of ["type", "values", "default", "deprecated", "deprecationReason"]) if (m[k] !== undefined) out[k] = m[k];
+  return out;
+};
+
+// Which registry a RUN validates against, and what that choice does NOT prove. Three outcomes, deliberately
+// distinguished — "checked against the stand", "checked against a pinned version", and "checked against a union of
+// versions" are three different strengths of evidence and a reader must be told which one they have.
+export function resolveRunIndex(manifest, { readFile = null } = {}) {
+  const src = manifest?.componentRegistry;
+  if (src && typeof src === "object") {
+    if (Array.isArray(src.components)) {
+      const index = indexFromRegistryExport(src, { version: manifest.platformVersion || null });
+      return { index, version: index.meta.versions[0], source: "stand-export" };
+    }
+    if (typeof src.file === "string" && readFile) {
+      try {
+        const index = indexFromRegistryExport(JSON.parse(readFile(src.file)), { version: manifest.platformVersion || null });
+        return { index, version: index.meta.versions[0], source: "stand-export" };
+      } catch (e) {
+        // A registry the manifest NAMED but the engine could not read is reported, never silently downgraded to the
+        // vendored index: the operator asked for the stand's answer and has to know they did not get it.
+        return { index: vendoredIndex(), version: null, source: "unreadable-export", error: e.message, file: src.file };
+      }
+    }
+  }
+  const idx = vendoredIndex();
+  const pinned = manifest?.platformVersion && idx.meta.versions.includes(manifest.platformVersion) ? manifest.platformVersion : null;
+  return { index: idx, version: pinned, source: pinned ? "vendored-pinned" : "vendored-union" };
+}
+
+// The `crt.*` types THIS RUN actually emits or gates on — not the whole table. Validating every row on every run
+// would report rows the run never touches, and a check that reports things the reader cannot act on is a check they
+// learn to skip.
+export function runTypes(changeSet) {
+  const out = new Map();   // componentType -> what named it
+  const add = (t, why) => { if (typeof t === "string" && t.startsWith("crt.") && !out.has(t)) out.set(t, why); };
+  for (const el of changeSet?.tableElements || []) add(el.componentType, `emitted for classic ${el.classicKind} '${el.classic}'`);
+  for (const op of changeSet?.viewConfigDiff || []) add(op?.values?.type, `emitted as '${op.name}'`);
+  for (const f of changeSet?.standardFeatures || []) add(featureTypeOf(f), `the ${f.feature} feature's gate type`);
+  for (const c of changeSet?.profileCards || []) add(c?.type, `the ${c?.entity || "embedded"} profile card`);
+  return out;
+}
+// A standard feature's gate type, read from the shared table by the feature's own name (the ONE source designspec's
+// gate reads too), never from the ChangeSet entry — a feature row carries prose, not a type.
+function featureTypeOf(f) {
+  const name = f?.feature || f?.caption || "";
+  const r = MAPPING_ROWS.find((x) => x.meta?.feature === name && x.verify?.componentType);
+  return r?.verify.componentType || null;
+}
+
+// Validate what a run emits against the registry it resolved. Returns findings in the same shape `validateRow`
+// uses, so one severity rule covers both the CI check and a real run.
+export function validateRun(changeSet, { index = vendoredIndex(), version = null } = {}) {
+  const findings = [];
+  const bitCount = (index?.meta?.versions || []).length;
+  for (const [ctype, why] of runTypes(changeSet)) {
+    const c = index.components?.[ctype];
+    if (!c) { findings.push({ kind: "unknown-component", componentType: ctype, why }); continue; }
+    const i = version ? (index.meta.versions || []).indexOf(version) : -1;
+    if (i >= 0 && (c.v & (1 << i)) === 0)
+      findings.push({ kind: "component-absent-in-version", componentType: ctype, version, why, presentIn: versionsOf(c.v, index) });
+    if (c.compositeOnly) findings.push({ kind: "composite-only", componentType: ctype, why });
+  }
+  return { findings: findings.filter((f) => !isAdvisory(f)), advisories: findings.filter(isAdvisory), checkedVersions: bitCount };
+}

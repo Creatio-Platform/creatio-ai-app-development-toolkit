@@ -9,7 +9,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -7795,6 +7795,68 @@ try {
   check("ENG-95543: ranking is scoped to the target version — a component that exists only in the newest snapshot is not offered for the oldest",
     !newOnly || !rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }).some((c) => c.componentType === newOnly[0]),
     () => ({ newestOnly: newOnly?.[0], ranked: newOnly ? rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }) : null }));
+
+  // ---- ENG-95543: the RUN-TIME registry (the half that keeps this reachable without the clio change) ----------
+  // Three sources, deliberately distinguished, because "checked against the stand", "checked against a pinned
+  // version" and "checked against a union of seven versions" are three different strengths of evidence.
+  const exportJson = { resolvedTargetVersion: "8.3.5", components: [{ componentType: "crt.Button", inputs: { caption: { type: "string" } }, outputs: { clicked: {} } }],
+    references: { baseInputs: { name: { type: "string" } } } };
+  const strip = ({ index, ...rest }) => rest;
+  check("ENG-95543: the run resolves its registry source and NAMES it — stand export, a pinned vendored version, or the vendored UNION",
+    strip(resolveRunIndex({ componentRegistry: exportJson })).source === "stand-export"
+    && strip(resolveRunIndex({ platformVersion: "8.3.3" })).source === "vendored-pinned"
+    && strip(resolveRunIndex({})).source === "vendored-union"
+    && strip(resolveRunIndex({ platformVersion: "99.9.9" })).source === "vendored-union",
+    () => [resolveRunIndex({ componentRegistry: exportJson }), resolveRunIndex({ platformVersion: "8.3.3" }), resolveRunIndex({})].map(strip));
+  // A registry the manifest NAMED but the engine could not read must be REPORTED, never silently downgraded: the
+  // operator asked for the stand's answer and has to know they did not get it.
+  check("ENG-95543: a named-but-unreadable registry file is reported as `unreadable-export`, not silently replaced by the vendored index",
+    strip(resolveRunIndex({ componentRegistry: { file: "/no/such.json" } }, { readFile: () => { throw new Error("ENOENT"); } })).source === "unreadable-export",
+    () => strip(resolveRunIndex({ componentRegistry: { file: "/no/such.json" } }, { readFile: () => { throw new Error("ENOENT"); } })));
+  // The export shape (what a clio registry export / the CDN registry looks like) converts into the index shape, so
+  // ONE validator serves both the vendored index and a stand's answer.
+  const exportIdx = indexFromRegistryExport(exportJson);
+  check("ENG-95543: a registry EXPORT converts into the index shape — one validator for the vendored index and the stand's own answer",
+    exportIdx.meta.versions[0] === "8.3.5" && exportIdx.components["crt.Button"].inputs.caption.type === "string"
+    && exportIdx.components["crt.Button"].outputs.clicked && exportIdx.baseInputs.name.type === "string",
+    () => exportIdx);
+  // A run is judged on what IT emits, not on the whole table: a check that reports rows the run never touched is a
+  // check a reader learns to skip.
+  const runCs = { tableElements: [{ classic: "B", classicKind: "BUTTON", componentType: "crt.Button" }],
+    viewConfigDiff: [{ name: "F", values: { type: "crt.Input", control: "$F" } }], standardFeatures: [{ feature: "Approvals" }], profileCards: [] };
+  const rt = runTypes(runCs);
+  check("ENG-95543: the run-time check covers exactly the types the run emits or gates on — including a standard feature's gate type, read from the shared table",
+    rt.has("crt.Button") && rt.has("crt.Input") && rt.has("crt.ApprovalList") && rt.size === 3,
+    () => [...rt.entries()]);
+  // And a fabricated emitted type is a finding at RUN time too, with the reason naming WHAT emitted it.
+  const badRun = validateRun({ viewConfigDiff: [{ name: "X", values: { type: "crt.NotAComponent" } }] }, { version: "8.3.0" });
+  check("ENG-95543: a run that emits a non-existent componentType produces a finding that names the element which emitted it",
+    badRun.findings.length === 1 && badRun.findings[0].kind === "unknown-component" && /emitted as 'X'/.test(badRun.findings[0].why),
+    () => badRun);
+  // The same run through the CLI-level pipeline: the finding reaches the ⚠ worklist, and the item SAYS which
+  // registry answered — an operator has to be able to tell "your stand lacks this" from "nobody asked your stand".
+  const unionRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NoteCaption"}}}`,
+    "", { resources: { NoteCaption: "Read this" } });
+  check("ENG-95543: a clean run against the vendored UNION raises NO registry ⚠ — the check must not nag when every emitted type resolves",
+    !unionRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" || d.kind === "registry-source"),
+    () => unionRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+  // A stand whose registry does NOT carry a type this run emits: the ⚠ must reach the worklist, name the element
+  // that emitted it, and say the stand's own registry answered. Without a run-level test the whole reporting loop
+  // in migrate.mjs could be deleted and every other check here would still pass (proven by mutation).
+  const standRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NoteCaption"}}}`,
+    "", { resources: { NoteCaption: "Read this" },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] } });
+  const standWarn = standRun.changeSet.needsDecision.find((d) => d.kind === "registry-target" && d.item === "crt.Label");
+  check("ENG-95543: a run whose STAND registry lacks an emitted type raises a `registry-target` ⚠ naming the element, the missing type and the stand as the source",
+    !!standWarn && /NoteLbl/.test(standWarn.reason) && /carries NO component of that name/.test(standWarn.reason)
+    && /TARGET STAND's own component registry \(version 8\.3\.9\)/.test(standWarn.reason),
+    () => standRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+
+  const badFileRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL}}`,
+    "", { componentRegistry: { file: "/definitely/not/here.json" } });
+  check("ENG-95543: a manifest naming an unreadable registry file raises a `registry-source` ⚠ saying the run fell back and reflects no stand",
+    badFileRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /could not read it/.test(d.reason) && /reflects no stand|nothing here reflects your stand/.test(d.reason)),
+    () => badFileRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket

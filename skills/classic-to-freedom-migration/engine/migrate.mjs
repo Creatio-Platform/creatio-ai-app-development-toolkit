@@ -68,6 +68,7 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
+import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
@@ -1864,6 +1865,31 @@ export function runMigration(manifest, opts = {}) {
   if (driftAdvisory.newMembers.length)
     changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
       reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
+  // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
+  // against the registry it could resolve — the stand's own export when the manifest carries one, else the
+  // vendored index. Same severity rule as the CI check, so a finding cannot mean two things.
+  //
+  // A missing component is a needsDecision item, not a gate block, and the reason is that the source can be
+  // WEAKER than the run: with no `componentRegistry` and no `platformVersion` the check runs against a UNION of
+  // seven versions, and blocking a plan on a union check would stop a migration whose stand is simply newer than
+  // the vendored index. The item states which source answered, so an operator can tell "your stand does not carry
+  // this" from "nobody asked your stand".
+  const reg = resolveRunIndex(manifest, { readFile: (f) => fs.readFileSync(f, "utf8") });
+  const regRun = validateRun(changeSet, { index: reg.index, version: reg.version });
+  const REG_SOURCE_NOTE = {
+    "stand-export": `checked against the TARGET STAND's own component registry (version ${reg.version})`,
+    "vendored-pinned": `checked against the engine's vendored component index, pinned to ${reg.version}`,
+    "vendored-union": `checked against the engine's vendored component index, over the UNION of ${reg.index.meta.versions.length} platform versions — a type present in ANY of them passes, so this does NOT prove the target stand carries it; supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` to make it a real per-version check`,
+    "unreadable-export": `the manifest NAMED a component registry (\`${reg.file || "?"}\`) but the engine could not read it (${reg.error || "unknown error"}) — this run fell back to the vendored index, so nothing here reflects your stand`,
+  };
+  if (reg.source === "unreadable-export")
+    changeSet.needsDecision.push({ kind: "registry-source", item: "componentRegistry", reason: REG_SOURCE_NOTE["unreadable-export"] });
+  for (const f of regRun.findings) {
+    const where = f.presentIn ? ` (the registry carries it in ${f.presentIn.join(", ")})` : "";
+    changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType,
+      reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${f.kind === "unknown-component" ? "the component registry carries NO component of that name" : `it is ABSENT in ${f.version}`}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so settle the target before building.` });
+  }
+
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
   // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,
