@@ -4307,6 +4307,28 @@ const dedupMiniRun = runMigration({ ...sigBase,
     printables: { resolved: true, present: false },
     deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } },
 });
+// The fold now populates `signals` on BOTH sides of a sub-page — the nested run's own `changeSet.needsDecision`
+// and the `checklistOpts` the parent hands down — so the one thing worth pinning is that a page still publishes
+// exactly ONE dedup deliverable. A second source would make the operator file evidence twice per page before
+// `--verify` could go complete, and a plan-text row count cannot see that.
+const dedupUnitsRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--units"], {
+  input: JSON.stringify({ ...sigBase, noParentTemplate: true,
+    typedPages: [{ schema: "XICPage", type: "Incoming" }, { schema: "XOCPage", type: "Outgoing" }],
+    typedPageSchemas: { XICPage: dedupTypedBundle("XICPage"), XOCPage: dedupTypedBundle("XOCPage") },
+    addRecordMiniPage: { schema: "XMiniPage" }, miniPageSchemas: { XMiniPage: dedupTypedBundle("XMiniPage") },
+    signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+      printables: { resolved: true, present: false },
+      deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } },
+  }), encoding: "utf8" });
+check("ENG-94274 dedup signal: every published page carries EXACTLY ONE dedup deliverable in `--units` — the fold feeds `signals` to both the sub-run and the handed-down checklistOpts, and a duplicate row would demand the same evidence twice",
+  (() => {
+    if (dedupUnitsRun.status !== 0) return false;
+    const u = JSON.parse(dedupUnitsRun.stdout);
+    const ids = u.preflight.filter((r) => r.kind === "dedup-on-save").map((r) => r.id);
+    return ids.length === u.pages.length && new Set(ids).size === ids.length
+      && u.evidenceRows.filter((r) => /confirm:dedup-on-save/.test(r.id)).length === u.pages.length;
+  })(),
+  () => ({ status: dedupUnitsRun.status, stderr: (dedupUnitsRun.stderr || "").slice(0, 200) }));
 check("ENG-94274 dedup signal: the add-record MINI page is the same entity, so it too carries the row through the fold (root + mini = 2)",
   planDedupRows(dedupMiniRun) === 2,
   () => ({ rows: planDedupRows(dedupMiniRun), lines: dedupMiniRun.plan.split("\n").filter((l) => /dedup-on-save/.test(l)) }));
