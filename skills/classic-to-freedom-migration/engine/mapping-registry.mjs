@@ -50,29 +50,29 @@ function versionBit(version, index) {
 const namedType = (row) => row?.target?.componentType || row?.verify?.componentType || null;
 const isEmitter = (row) => !!namedType(row) || !!row?.target?.foldInto;
 
-// Validate ONE row against the index. `version` is optional: with it, existence is judged on that version;
-// without it, on the union of every version the index carries — and the caller is told which, because a union
-// check is exactly the "`latest` is a superset" trap that green-lights a target an 8.3 stand cannot render.
-export function validateRow(row, { index = vendoredIndex(), version = null } = {}) {
-  const findings = [];
-  if (!isEmitter(row)) return findings;                       // a tier-C row names no target on purpose
-  const where = `${row.match.by}=${row.match[row.match.by]}`;
-  const bit = version ? versionBit(version, index) : null;
-  const add = (kind, detail) => findings.push({ kind, row: where, ...detail });
-  // A FOLDED row (a menu item) contributes props to the element that owns it; it has no componentType of its own,
-  // so there is nothing here to resolve. Its keys are validated on the owner's component by that owner's row.
-  const ctype = namedType(row);
-  if (!ctype) return findings;
-  const c = index.components?.[ctype];
-  if (!c) { add("unknown-component", { componentType: ctype }); return findings; }
+// The COMPONENT-level half: does the type exist, and does it exist on the version being targeted? Own function so
+// `validateRow` reads as its three subjects (component / inputs / outputs) rather than one long guard chain
+// (Sonar CC 15).
+function checkComponent(ctx) {
+  const { c, ctype, version, bit, index, add } = ctx;
   if (version && bit === null) add("unknown-version", { componentType: ctype, version });
   else if (bit !== null && (c.v & bit) === 0)
     add("component-absent-in-version", { componentType: ctype, version, presentIn: versionsOf(c.v, index) });
+  // `compositeOnly` is NOT a finding. It means the component has no Designer TOOLBAR entry; inserting it into a
+  // page schema directly — which is what this engine emits — is valid. Reported as INFO so a row's note can say so
+  // without a reader mistaking the flag for an error.
+  if (c.compositeOnly) add("composite-only", { componentType: ctype });
+}
+
+// Every `propMap` KEY must be a real input of the component (or a shared base input), present on the target
+// version, not deprecated, and — for a literal — inside the input's declared value domain.
+function checkInputs(propMap, ctx) {
+  const { c, ctype, version, bit, index, add } = ctx;
   // The prop's contract, from the component's OWN inputs or from the shared base inputs. Both carry a version
   // mask, so a base input is version-checked exactly like a component input — resolving it without that test was
   // how a base input introduced in a newer platform validated clean at the oldest indexed version.
   const inputMeta = (k) => c.inputs?.[k] || index.baseInputs?.[k] || null;
-  for (const [prop, spec] of Object.entries(row.target?.propMap || {})) {
+  for (const [prop, spec] of Object.entries(propMap || {})) {
     const meta = inputMeta(prop);
     if (!meta) { add("unknown-input", { componentType: ctype, prop }); continue; }
     // `meta.v == null` = an index generated before base inputs carried masks: it states no version membership, so
@@ -81,20 +81,42 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
       add("input-absent-in-version", { componentType: ctype, prop, version, presentIn: versionsOf(meta.v, index) });
     // Per-INPUT deprecation is the only deprecation signal the registry carries. Advisory, not an error: a
     // deprecated input still works, and the row's author has to decide with the reason in front of them.
-    if (meta?.deprecated) add("deprecated-input", { componentType: ctype, prop, reason: meta.deprecationReason || null });
-    if (spec?.from === SOURCE.LITERAL && meta?.values && !meta.values.includes(spec.value))
+    if (meta.deprecated) add("deprecated-input", { componentType: ctype, prop, reason: meta.deprecationReason || null });
+    if (spec?.from === SOURCE.LITERAL && meta.values && !meta.values.includes(spec.value))
       add("literal-not-in-values", { componentType: ctype, prop, value: spec.value, allowed: meta.values });
   }
-  for (const ev of Object.keys(row.target?.events || {})) {
+}
+
+// Every `events` key must be a real OUTPUT — validated against `outputs`, never `inputs`: an event put in
+// `propMap` would send the check looking for an input no version declares.
+function checkOutputs(events, ctx) {
+  const { c, ctype, version, bit, index, add } = ctx;
+  for (const ev of Object.keys(events || {})) {
     const meta = c.outputs?.[ev];
     if (!meta) { add("unknown-output", { componentType: ctype, event: ev }); continue; }
     if (bit !== null && (meta.v & bit) === 0)
       add("output-absent-in-version", { componentType: ctype, event: ev, version, presentIn: versionsOf(meta.v, index) });
   }
-  // `compositeOnly` is NOT a finding. It means the component has no Designer TOOLBAR entry; inserting it into a
-  // page schema directly — which is what this engine emits — is valid. Reported as INFO so a row's note can say so
-  // without a reader mistaking the flag for an error.
-  if (c.compositeOnly) add("composite-only", { componentType: ctype });
+}
+
+// Validate ONE row against the index. `version` is optional: with it, existence is judged on that version;
+// without it, on the union of every version the index carries — and the caller is told which, because a union
+// check is exactly the "`latest` is a superset" trap that green-lights a target an 8.3 stand cannot render.
+export function validateRow(row, { index = vendoredIndex(), version = null } = {}) {
+  if (!isEmitter(row)) return [];                             // a tier-C row names no target on purpose
+  // A FOLDED row (a menu item) contributes props to the element that owns it; it has no componentType of its own,
+  // so there is nothing here to resolve. Its keys are validated on the owner's component by that owner's row.
+  const ctype = namedType(row);
+  if (!ctype) return [];
+  const findings = [];
+  const c = index.components?.[ctype];
+  const where = `${row.match.by}=${row.match[row.match.by]}`;
+  const add = (kind, detail) => findings.push({ kind, row: where, ...detail });
+  if (!c) { add("unknown-component", { componentType: ctype }); return findings; }
+  const ctx = { c, ctype, version, bit: version ? versionBit(version, index) : null, index, add };
+  checkComponent(ctx);
+  checkInputs(row.target?.propMap, ctx);
+  checkOutputs(row.target?.events, ctx);
   return findings;
 }
 
@@ -133,7 +155,10 @@ export function rankCandidates(terms, { index = vendoredIndex(), version = null,
     }
     if (score > 0) out.push({ componentType: ctype, score, evidence: why, hasTaxonomy: Object.keys(tax).length > 0 });
   }
-  return out.sort((a, b) => b.score - a.score || a.componentType.localeCompare(b.componentType)).slice(0, limit);
+  // Sorted in its own statement (not chained onto the return): highest score first, ties by type name so the
+  // ranking is stable rather than dependent on the index's key order.
+  out.sort((a, b) => b.score - a.score || a.componentType.localeCompare(b.componentType));
+  return out.slice(0, limit);
 }
 
 // ---- THE RUN-TIME REGISTRY: the stand's own answer, when there is one --------------------------------------

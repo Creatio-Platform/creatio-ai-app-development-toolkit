@@ -1969,7 +1969,9 @@ const guidelinesReturnFor = () => ""
   // A widget's label may carry a parenthetical qualifier the prose does not repeat (`Feed (ESN)` is documented as
   // "Feed"), so the comparison is on the label without it. The NAME still has to appear — this trims a suffix, it
   // does not accept a near-match.
-  const bare = (n) => n.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  // No regex: `\s*\(...\)\s*$` backtracks super-linearly (S8786), and the rule is simple enough to state
+  // directly — drop a TRAILING parenthetical and trim.
+  const bare = (n) => { const t = n.trim(); const i = t.lastIndexOf("("); return (i > 0 && t.endsWith(")") ? t.slice(0, i) : t).trim(); };
   const tableNames = [...new Set(MAPPING_ROWS.flatMap((r) => [r.meta?.feature, ...(r.meta?.widgets || []).map((w) => w.widget)]).filter(Boolean))];
   const undocumented = tableNames.filter((n) => !section.includes(n) && !section.includes(bare(n)));
   check("ENG-95543 doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
@@ -2003,7 +2005,7 @@ const guidelinesReturnFor = () => ""
     () => [...codeCounterExamples].filter((t) => index.components[t]));
   check("ENG-95543 code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
     !index.components["crt.Tab"],
-    () => Object.keys(index.components).filter((t) => /^crt\.Tab/.test(t)));
+    () => Object.keys(index.components).filter((t) => t.startsWith("crt.Tab")));
 
   // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
   // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,

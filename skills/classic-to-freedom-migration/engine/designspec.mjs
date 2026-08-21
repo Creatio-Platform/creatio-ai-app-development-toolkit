@@ -250,7 +250,10 @@ function rowsForCardActions(cardActions, result, opts) {
 function rowsForTableElements(elements, regionOf) {
   return (elements || []).map((el) => {
     const src = `classic ${esc(String(el.classicKind || "element"))}`;
-    const foldNote = el.folded?.length ? ` (folds ${el.folded.map((f) => `\`${esc(f)}\``).join(", ")})` : "";
+    // Built in two statements rather than one nested template: the inner backtick-quoting of each folded name is
+    // its own expression, so the note below reads as prose instead of as three levels of interpolation.
+    const foldedNames = (el.folded || []).map((f) => "`" + esc(f) + "`").join(", ");
+    const foldNote = foldedNames ? ` (folds ${foldedNames})` : "";
     const note = el.request
       ? `→ \`${esc(el.componentType)}\`${foldNote} — view built; its classic click is NOT ported: wire the \`${esc(el.request)}\` request handler`
       : `→ \`${esc(el.componentType)}\`${foldNote} — built from the classic element's own config`;
@@ -2201,24 +2204,35 @@ function pageExpect(rows) {
 // derivable here — the fold keeps a child's rendered spec, not its ChangeSet — but they are also not plan-specific:
 // they are the same small set on every migration, so they belong to the executor's own fixed list. Publishing a
 // half-guessed superset would be worse than publishing exactly what is known.
+// The FIXED type each vk kind publishes. A table, not an if/else chain: every arm was "this kind means that one
+// component", and stating it as data keeps the two kinds that need real logic (`feature`, `element`) visible
+// instead of buried in a chain the reader has to scan to the end of (Sonar CC 15).
+//
+// TAB_TYPES carries the LEGACY spelling too, because the gate must accept a page that still reports it. This list
+// is for FETCHING a component's documentation, so it takes only the spelling a current platform actually builds
+// (`TAB_TYPES[0]`, the same choice `resolveCountVk` makes for its message) — asking the stand about `crt.Tab` is a
+// call that cannot succeed.
+const VK_FIXED_TYPE = new Map([
+  ["dcm-bar", "crt.EntityStageProgressBar"],
+  ["dcm-next", "crt.NextSteps"],
+  ["card", "crt.Button"],
+  ["image", "crt.ImageInput"],
+  ["tabs", TAB_TYPES[0]],
+  ["details", "crt.DataGrid"],
+]);
 function componentTypesOf(rows) {
   const out = new Set();
   for (const r of rows || []) {
     const vk = r.vk;
     if (!vk) continue;
+    const fixed = VK_FIXED_TYPE.get(vk.type);
+    if (fixed) { out.add(fixed); continue; }
     // The planned type AND its curated Freedom analog (ENG-95470): a migration builds the native analog, so the
     // executor must fetch ITS documentation and `--verify` accepts it — the typed component intent both sides match on.
-    if (vk.type === "feature" && typeof vk.ftype === "string") { out.add(vk.ftype); for (const a of componentAnalogsOf(vk.ftype)) out.add(a); }
-    else if (vk.type === "dcm-bar") out.add("crt.EntityStageProgressBar");
-    else if (vk.type === "dcm-next") out.add("crt.NextSteps");
-    else if (vk.type === "card") out.add("crt.Button");
-    else if (vk.type === "image") out.add("crt.ImageInput");
-    // TAB_TYPES carries the LEGACY spelling too, because the gate must accept a page that still reports it. This
-    // list is for FETCHING a component's documentation, so it takes only the spelling a current platform actually
-    // builds (`TAB_TYPES[0]`, the same choice `resolveCountVk` makes for its message) — asking the stand about
-    // `crt.Tab` is a call that cannot succeed.
-    else if (vk.type === "tabs") out.add(TAB_TYPES[0]);
-    else if (vk.type === "details") out.add("crt.DataGrid");
+    if (vk.type === "feature" && typeof vk.ftype === "string") {
+      out.add(vk.ftype);
+      for (const a of componentAnalogsOf(vk.ftype)) out.add(a);
+    }
     // A table-emitted element's own type. It belongs here for the same reason the feature types do: this list is
     // what the executor fetches documentation from once per run, and what the gate then judges the build against.
     else if (vk.type === "element" && typeof vk.ctype === "string") out.add(vk.ctype);

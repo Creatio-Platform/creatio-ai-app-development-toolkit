@@ -924,12 +924,18 @@ function mapFields(ctx, containers) {
   const tableElements = [];
   const configGaps = new Map();               // element -> why its row could NOT be emitted (feeds the typed ⚠)
   const allItems = ctx.eff.items || [];
-  const childrenByParent = new Map();
-  for (const it of allItems) {
-    if (!it.parent) continue;
-    const bucket = childrenByParent.get(it.parent);
-    if (bucket) bucket.push(it); else childrenByParent.set(it.parent, [it]);
-  }
+  // parent -> its children, indexed once. Own fn so its branches score against itself, not against mapFields
+  // (Sonar CC 15) — the same reason `routeField` / `computeLayout` below are their own functions.
+  const indexChildren = () => {
+    const byParent = new Map();
+    for (const it of allItems) {
+      if (!it.parent) continue;
+      const bucket = byParent.get(it.parent);
+      if (bucket) bucket.push(it); else byParent.set(it.parent, [it]);
+    }
+    return byParent;
+  };
+  const childrenByParent = indexChildren();
   const orderedChildren = (name) => [...(childrenByParent.get(name) || [])].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
   // Everything one candidate produces WHILE its props are being resolved, held until the element really emits:
   // `claimed` sub-items, `decisions` (caption gaps) and `handlers` (tier-B wiring). Buffered rather than pushed
@@ -995,27 +1001,43 @@ function mapFields(ctx, containers) {
   // is not an image the image builder already emits, and is not one of the standard ACTIONS-menu items:
   // `mapCardActions` claims those by NAME and wires them as Freedom card actions, so emitting one here as well
   // would build the same classic action twice — once as a card action and once as a form button.
-  const tableCandidates = allItems
-    .filter((it) => !it.templateOwned && !it.generator && !isPrimaryDisplayItem(it) && !isImageItem(it)
-      && !KNOWN_ACTION_ITEMS.has(it.name))
-    .map((it, n) => ({ it, n, row: rowForItem(it) }))
-    .filter((x) => x.row?.ownedBy === OWNER.TABLE)
-    .sort((a, b) => ((a.it.order ?? Infinity) - (b.it.order ?? Infinity)) || (a.n - b.n));
-  for (const { it, row } of tableCandidates) {
-    const sink = newSink();                   // sub-items absorbed + decisions/handlers held until it really emits
+  // Selection + emission in ONE inner fn, so neither the candidate chain nor the loop scores against `mapFields`
+  // (Sonar CC 15) — the same reason the placement helpers above are their own functions.
+  const emitFromTable = () => {
+    const candidates = allItems
+      .filter((it) => !it.templateOwned && !it.generator && !isPrimaryDisplayItem(it) && !isImageItem(it)
+        && !KNOWN_ACTION_ITEMS.has(it.name))
+      .map((it, n) => ({ it, n, row: rowForItem(it) }))
+      .filter((x) => x.row?.ownedBy === OWNER.TABLE)
+      .sort((a, b) => ((a.it.order ?? Infinity) - (b.it.order ?? Infinity)) || (a.n - b.n));
+    for (const { it, row } of candidates) emitTableElement(it, row);
+  };
+  // ONE candidate's emission. Own fn for the same Sonar CC reason as the placement helpers above: inside the loop
+  // every guard here also carried the loop's nesting weight, which is what pushed `mapFields` over the budget.
+  // The row's `propMap` resolved against ONE element: the emitted `values`, plus the REQUIRED sources this element
+  // could not supply. Own fn for Sonar CC 15, like the placement helpers above.
+  const resolveProps = (it, row, sink) => {
     const values = { type: row.target.componentType };
     const missing = [];
     for (const [prop, spec] of Object.entries(row.target.propMap || {})) {
       const v = resolveSource(spec, it, sink);
-      if (v === null || v === undefined) { if (spec.required) missing.push(`${prop} (from classic ${spec.from})`); continue; }
+      if (v === null || v === undefined) {
+        if (spec.required) missing.push(`${prop} (from classic ${spec.from})`);
+        continue;
+      }
       values[prop] = v;
     }
+    return { values, missing };
+  };
+  const emitTableElement = (it, row) => {
+    const sink = newSink();                   // sub-items absorbed + decisions/handlers held until it really emits
+    const { values, missing } = resolveProps(it, row, sink);
     // A row is tier A/B for the KIND; a single ELEMENT can still fall short of it — a radio group with no option
     // children, a button with no caption. Emitting a half-configured element would be the silent-drop failure in a
     // new costume, so the instance degrades to the typed ⚠ instead, carrying the exact reason.
     if (missing.length) {
       configGaps.set(it.name, `its Freedom target (${row.target.componentType}) needs ${missing.join(" and ")}, which this classic element does not carry`);
-      continue;
+      return;
     }
     const own = resolveOwner(it.parent, index, profileAnchors);
     const parent = routeField(it, own);
@@ -1057,7 +1079,8 @@ function mapFields(ctx, containers) {
       attributes[it.valueBindTo] = { modelConfig: { path: "PDS." + it.valueBindTo } };
       pdsColumns[it.valueBindTo] = { path: it.valueBindTo };
     }
-  }
+  };
+  emitFromTable();
 
   // ---- FOLD the accumulated per-field noise into summaries (declarations near the loop top) ----
   const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
@@ -1586,6 +1609,51 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   return { handlerStubs, standardMethodsFiltered, needsDecision };
 }
 
+// The ⚠ TEXT for one dropped element. Lifted out of `mapUnmappedDrop`'s loop (Sonar CC 15): the five arms are a
+// flat dispatch on what the engine knows about the element, and inside the loop each of them also carried the
+// loop's own nesting weight.
+//
+// Only CUSTOM (non-template) items reach here — template-owned buttons are skipped by the caller. The ⚠ states the
+// kind and that no Freedom element was produced for it; it does NOT name a target component, because choosing one
+// is the mapping task and a target asserted here would pre-empt that decision.
+function dropReason(i, kind, configGaps) {
+  // A BUTTON is recognised by its stated kind; the name suffix is the fallback for an untyped item only.
+  // `itemTypeUnresolved` gates the name fallback: the schema DID state a kind, the engine's pinned table just
+  // could not resolve it, so this is not the untyped case Change 4 reserves the suffix for. Without the gate an
+  // element named `FancyButton` stating an unknown member produced output byte-identical to a genuinely untyped
+  // `FancyButton`, and the ⚠ sent the operator to read the page instead of to extend the table.
+  const isBtn = i.itemType === VIEW_ITEM_TYPE.BUTTON
+    || (itemRole(i) === null && !i.itemTypeUnresolved && i.name.endsWith("Button"));
+  const captionNote = i.caption ? ` (caption ${i.caption})` : "";
+  const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
+  if (isBtn)
+    return `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
+  // PROGRESS_BAR is the ONE member of the 29 that `generateStandardItem` has no `case` for — the name does not
+  // appear in ViewGeneratorV2 at all — so Classic sends it to `default -> generateModelItem` (L626-628) and it
+  // renders by its COLUMN's type, not as an indicator. The real Classic indicator arrives from the other
+  // direction entirely: `DataValueType.STAGE_INDICATOR` (37) -> `generateStageIndicator` ->
+  // `Terrasoft.BaseProgressBar` (L2520-2521, L2347-2358). So "no Freedom counterpart for PROGRESS_BAR" would
+  // send the operator hunting for an analog of something Classic never drew. Keeping the role UNMAPPED rather
+  // than mirroring the field path is a DELIBERATE divergence (engine-internals.md): mirroring would emit a
+  // silent `crt.Input`, and hiding the element is the one thing this engine must not do.
+  if (i.itemType === VIEW_ITEM_TYPE.PROGRESS_BAR)
+    return `classic PROGRESS_BAR '${i.name}'${captionNote}${generatorNote} produced no Freedom element, and Classic has NO dispatch branch for this kind either — \`generateStandardItem\` falls through to the field path, so on the classic page this element rendered by its COLUMN's type, not as an indicator. Check what that column is before porting: a real classic progress bar comes from a \`STAGE_INDICATOR\` column, not from this itemType. If the column is ordinary, this element was very likely already inert on the classic page — confirm drop`;
+  // The kind HAS a mapping in the shared table; THIS element could not fill its target's required config. Saying
+  // "map this kind to its Freedom counterpart" would send the reader to add a row that already exists.
+  if (configGaps.has(i.name))
+    return `classic ${kind} '${i.name}'${captionNote} has a Freedom mapping, but ${configGaps.get(i.name)} — read the classic body for the missing part (or confirm the element was already inert) rather than adding a mapping`;
+  if (kind)
+    return `classic ${kind} '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — the element's KIND is known, so this is a missing MAPPING rather than unknown UI: map ${kind} to its Freedom counterpart, or confirm drop`;
+  // The body DID state a kind (handover item 3). Saying "states NO itemType" here points the operator at the page,
+  // when the thing to fix is this engine's table. Note the runtime does not distinguish these two either —
+  // `generateStandardItem`'s `default` sends both to `generateModelItem` (CrtNUI 7.8.0 L626-628) — so the engine is
+  // deliberately LOUDER than Classic here, which is the point of a migration analyser: what the runtime silently
+  // swallows is exactly what a reader must be told.
+  if (i.itemTypeUnresolved)
+    return `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema STATES a kind this engine could not resolve — the gap is the engine's pinned \`AST_VIEW_ITEM_TYPE\` table (engine.mjs), NOT the page: add the member for this platform version and re-run, then map the kind it turns out to be. Do not port this by hand until the kind is known`;
+  return `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema states NO itemType — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
+}
+
 // Fix 2: LOUD unmapped-component drop — any alive CLIENT-authored item the mapper produced nothing for is
 // surfaced (one decision per dropped subtree root), instead of silently vanishing. Reads the final accountedFor.
 function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
@@ -1683,51 +1751,11 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
   // block, not one per leaf: the SLA timer surfaces as a single "port this block" item, not six.
   for (const i of (eff.items || [])) {
     if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
-    // A BUTTON is recognised by its stated kind; the name suffix is the fallback for an untyped item only.
-    // `itemTypeUnresolved` gates the name fallback: the schema DID state a kind, the engine's pinned table just
-    // could not resolve it, so this is not the untyped case Change 4 reserves the suffix for. Without the gate an
-    // element named `FancyButton` stating an unknown member produced output byte-identical to a genuinely untyped
-    // `FancyButton`, and the ⚠ sent the operator to read the page instead of to extend the table.
-    const isBtn = i.itemType === VIEW_ITEM_TYPE.BUTTON
-      || (itemRole(i) === null && !i.itemTypeUnresolved && i.name.endsWith("Button"));
-    const captionNote = i.caption ? ` (caption ${i.caption})` : "";
-    const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
     // Lead with the element's real classic kind, so the reader can tell a known kind without a mapping (a
     // `RADIO_GROUP`) from a genuinely bespoke block.
     const kind = itemKindName(i);
-    // Only CUSTOM (non-template) items reach here now — template-owned buttons are skipped above. The ⚠ states the
-    // kind and that no Freedom element was produced for it; it does NOT name a target component, because choosing
-    // one is the mapping task and a target asserted here would pre-empt that decision.
-    let reason;
-    if (isBtn) {
-      reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
-    } else if (i.itemType === VIEW_ITEM_TYPE.PROGRESS_BAR) {
-      // PROGRESS_BAR is the ONE member of the 29 that `generateStandardItem` has no `case` for — the name does not
-      // appear in ViewGeneratorV2 at all — so Classic sends it to `default -> generateModelItem` (L626-628) and it
-      // renders by its COLUMN's type, not as an indicator. The real Classic indicator arrives from the other
-      // direction entirely: `DataValueType.STAGE_INDICATOR` (37) -> `generateStageIndicator` ->
-      // `Terrasoft.BaseProgressBar` (L2520-2521, L2347-2358). So "no Freedom counterpart for PROGRESS_BAR" would
-      // send the operator hunting for an analog of something Classic never drew. Keeping the role UNMAPPED rather
-      // than mirroring the field path is a DELIBERATE divergence (engine-internals.md): mirroring would emit a
-      // silent `crt.Input`, and hiding the element is the one thing this engine must not do.
-      reason = `classic PROGRESS_BAR '${i.name}'${captionNote}${generatorNote} produced no Freedom element, and Classic has NO dispatch branch for this kind either — \`generateStandardItem\` falls through to the field path, so on the classic page this element rendered by its COLUMN's type, not as an indicator. Check what that column is before porting: a real classic progress bar comes from a \`STAGE_INDICATOR\` column, not from this itemType. If the column is ordinary, this element was very likely already inert on the classic page — confirm drop`;
-    } else if (configGaps.has(i.name)) {
-      // The kind HAS a mapping in the shared table; THIS element could not fill its target's required config. Saying
-      // "map this kind to its Freedom counterpart" would send the reader to add a row that already exists.
-      reason = `classic ${kind} '${i.name}'${captionNote} has a Freedom mapping, but ${configGaps.get(i.name)} — read the classic body for the missing part (or confirm the element was already inert) rather than adding a mapping`;
-    } else if (kind) {
-      reason = `classic ${kind} '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — the element's KIND is known, so this is a missing MAPPING rather than unknown UI: map ${kind} to its Freedom counterpart, or confirm drop`;
-    } else if (i.itemTypeUnresolved) {
-      // Third arm, and the one handover item 3 is about: the body DID state a kind. Saying "states NO itemType"
-      // here points the operator at the page, when the thing to fix is this engine's table. Note the runtime does
-      // not distinguish these two either — `generateStandardItem`'s `default` sends both to `generateModelItem`
-      // (CrtNUI 7.8.0 L626-628) — so the engine is deliberately LOUDER than Classic here, which is the point of a
-      // migration analyser: what the runtime silently swallows is exactly what a reader must be told.
-      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema STATES a kind this engine could not resolve — the gap is the engine's pinned \`AST_VIEW_ITEM_TYPE\` table (engine.mjs), NOT the page: add the member for this platform version and re-run, then map the kind it turns out to be. Do not port this by hand until the kind is known`;
-    } else {
-      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element, and its schema states NO itemType — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
-    }
-    needsDecision.push({ kind: "unmapped-component", item: i.name, itemKind: kind, reason });
+    needsDecision.push({ kind: "unmapped-component", item: i.name, itemKind: kind,
+      reason: dropReason(i, kind, configGaps) });
   }
   return { needsDecision, structural: [...structural] };
 }

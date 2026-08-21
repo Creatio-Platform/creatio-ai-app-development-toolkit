@@ -2845,7 +2845,7 @@ const pcards = profileCardsByEntity();
 check("ENG-95543: the profile-card rows keep their hand-curated `pkg` (the registry has NO package field — this is not something the check can replace)",
   () => pcards.Contact.pkg === "CrtCustomer360App" && pcards.Account.pkg === "CrtCustomer360App"
   && pcards.SysAdminUnit.pkg === null && pcards.VwSysAdminUnit.pkg === null
-  && Object.values(pcards).every((c) => /^crt\./.test(c.type)),
+  && Object.values(pcards).every((c) => c.type.startsWith("crt.")),
   () => pcards);
 check("ENG-95543: the card-action view is exactly the five standard ACTIONS-menu items",
   [...knownCardActions()].sort((a, b) => a.localeCompare(b)).join(",") === "PrintButton,ProcessButton,ReloadDataButton,TagButton,ViewOptionsButton",
@@ -7855,7 +7855,7 @@ try {
     "", { resources: { NoteCaption: "Read this" } });
   check("ENG-95543: a clean run against the vendored UNION raises NO registry ⚠ — the check must not nag when every emitted type resolves",
     !unionRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" || d.kind === "registry-source"),
-    () => unionRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+    () => unionRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
   // A stand whose registry does NOT carry a type this run emits: the ⚠ must reach the worklist, name the element
   // that emitted it, and say the stand's own registry answered. Without a run-level test the whole reporting loop
   // in migrate.mjs could be deleted and every other check here would still pass (proven by mutation).
@@ -7866,13 +7866,13 @@ try {
   check("ENG-95543: a run whose STAND registry lacks an emitted type raises a `registry-target` ⚠ naming the element, the missing type and the stand as the source",
     !!standWarn && /NoteLbl/.test(standWarn.reason) && /carries NO component of that name/.test(standWarn.reason)
     && /TARGET STAND's own component registry \(version 8\.3\.9\)/.test(standWarn.reason),
-    () => standRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+    () => standRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
 
   const badFileRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL}}`,
     "", { componentRegistry: { file: "/definitely/not/here.json" } });
   check("ENG-95543: a manifest naming an unreadable registry file raises a `registry-source` ⚠ saying the run fell back and reflects no stand",
     badFileRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /could not read it/.test(d.reason) && /reflects no stand|nothing here reflects your stand/.test(d.reason)),
-    () => badFileRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+    () => badFileRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
 
   // A RELATIVE registry path is contained to the manifest's base dir, like a schema entry's `file`. An escape is
   // refused and lands on the `registry-source` ⚠ (the run continues on the vendored index and SAYS so) — never a
@@ -7881,7 +7881,7 @@ try {
     "", { componentRegistry: { file: "../../../etc/hosts" } });
   check("ENG-95543: a RELATIVE componentRegistry path that escapes the manifest base dir is refused, and the refusal is reported (not a silent read, not a silent fallback)",
     escRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /escapes the manifest base directory/.test(d.reason)),
-    () => escRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+    () => escRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
 
   // NO FALSE ⚠ from the run-time check. `runTypes` scans every emitted `values.type`, which includes types the
   // MAPPING TABLE never chose — the container builder's `crt.TabContainer` / `crt.GridContainer`, the image
@@ -7898,8 +7898,8 @@ try {
     entityColumns: { Name: { type: "ShortText" }, Amount: { type: "Currency2" }, Owner: { type: "Lookup", ref: "Contact" }, PhotoId: { type: "ImageLookup" } } });
   const richTypes = [...new Set(richRun.changeSet.viewConfigDiff.map((o) => o.values?.type).filter(Boolean))];
   check("ENG-95543: a tabbed page with fields and an image raises ZERO registry ⚠ at 8.3.0 — the check must not blame the operator for the container/field/image types the ENGINE picked",
-    richTypes.length >= 5 && !richRun.changeSet.needsDecision.some((d) => /^registry-/.test(d.kind)),
-    () => ({ types: richTypes, warnings: richRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)) }));
+    richTypes.length >= 5 && !richRun.changeSet.needsDecision.some((d) => d.kind.startsWith("registry-")),
+    () => ({ types: richTypes, warnings: richRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")) }));
 
   // The PLAN VERSION covers the registry the run was planned against. Recorded as a decision reversed on
   // inspection: hashing only the version identity would have kept approvals alive across a CDN refresh, but the
