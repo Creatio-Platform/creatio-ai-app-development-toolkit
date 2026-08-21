@@ -4186,7 +4186,7 @@ const dedupSig = (dedup) => runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
   printables: { resolved: true, present: false }, ...(dedup ? { deduplication: dedup } : {}),
 } });
-const dedupRows = (r) => ((r.changeSet && r.changeSet.needsDecision) || []).filter((d) => d.kind === "dedup-on-save");
+const dedupRows = (r) => (r.changeSet?.needsDecision || []).filter((d) => d.kind === "dedup-on-save");
 const dedupUnresolved = dedupSig(null);
 check("ENG-94274 dedup signal: UNRESOLVED blocks the plan — the whole point is that 'never checked' cannot pass",
   (dedupUnresolved.signalsMissing || []).includes("deduplication")
