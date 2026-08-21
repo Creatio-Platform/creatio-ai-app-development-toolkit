@@ -2041,7 +2041,7 @@ function mapDedupOnSave(opts = {}) {
   }
   if (!s.present) return [];
   const named = (x) => (typeof x === "string" ? x : (x?.name || x?.caption) || "");
-  // `names` is the CANONICAL key for this signal (SKILL.md + references/manifest-fields.md pin it); `items` is
+  // `names` is the CANONICAL key for this signal (SKILL.md + references/classic-to-freedom-mapping.md pin it); `items` is
   // accepted only because the sibling signals use it. `Array.isArray` because a hand-authored single rule is
   // plausibly written as a bare string, and `.map` on a string would abort the whole --plan run.
   const rawRules = s.names || s.items;
