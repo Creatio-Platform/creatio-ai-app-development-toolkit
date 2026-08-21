@@ -2,7 +2,7 @@
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
-import { ROLE as ITEM_ROLE_VALUES, rowForItem, rowForItemType } from "./mapping-table.mjs";
+import { ROLE as ITEM_ROLE_VALUES, OWNER, SOURCE, rowForItem, rowForItemType } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -26,6 +26,12 @@ export const isDecorationItem = (i) => itemRole(i) === ROLE.DECOR;
 // leaving it to a reader's tally.
 export const itemRoleOf = (itemType) => rowForItemType(itemType)?.role;
 export const ITEM_ROLES = ROLE;
+
+// A classic primary-display label (caption `getPrimaryDisplayColumnValue`) shows the record's primary display value
+// as a header title, which the Freedom form/mini page provides NATIVELY (its page title is bound to the entity's
+// primary display column). Module scope because TWO passes need the SAME rule: the drop sweep treats it as
+// accounted-for, and the table emitter must not build a `crt.Label` that duplicates the native page title.
+const isPrimaryDisplayItem = (i) => /getPrimaryDisplayColumnValue/i.test(i.caption || "");
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -551,7 +557,7 @@ export function mapToFreedom(eff, opts = {}) {
   mapImperativeMembers(eff, cols).needsDecision.forEach(d => needsDecision.push(d));
 
   // ---- Fix 2: LOUD unmapped-component drop ----
-  const _drop = mapUnmappedDrop(eff, accountedFor);
+  const _drop = mapUnmappedDrop(eff, accountedFor, F.configGaps);
   _drop.needsDecision.forEach(d => needsDecision.push(d));
   // structure another builder owns (tabs / groups / details / scaffolding) — accounted for, not dropped
   _drop.structural.forEach(a => accountedFor.add(a));
@@ -587,6 +593,9 @@ export function mapToFreedom(eff, opts = {}) {
     headerLayout: F.headerLayout,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
+    // ENG-95543 tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
+    // IS built; this is the wiring a build agent still has to author, published rather than left implicit.
+    requestHandlers: F.requestHandlers,
     // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
     referencedModules: eff.referencedModules || [],
     // F9: how many effective elements were platform-template context excluded from the payload.
@@ -705,6 +714,11 @@ function createContainers(ctx) {
 // container by climbing the classic ancestry, converting the classic 24-col grid into the target grid.
 // Returns viewConfigDiff/attributes/pdsColumns + its needsDecision[]/accountedFor[] + the profileRegion
 // resolver the details phase reuses.
+// The Freedom request name for a classic control's click. `usr.` prefixed and derived from the ELEMENT name, so
+// two controls bound to the same classic method still get their own request (the classic method is a shared
+// handler; the request is the element's own entry point).
+const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
+
 function mapFields(ctx, containers) {
   const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
   const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
@@ -962,6 +976,114 @@ function mapFields(ctx, containers) {
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
   }
+  // ---- ENG-95543: the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
+  // Placement deliberately goes through the SAME `routeField` / `computeLayout` closures the fields above use:
+  // a second placement path would compute its own rows and overlap the fields already claiming those grid cells.
+  // Emission order is the classic layout order (`order`), like the field pass, so a radio group between two
+  // fields keeps its position instead of landing after them.
+  const requestHandlers = [];                 // tier B: the element is built, its imperative wiring is a stub
+  const configGaps = new Map();               // element -> why its row could NOT be emitted (feeds the typed ⚠)
+  const allItems = ctx.eff.items || [];
+  const childrenByParent = new Map();
+  for (const it of allItems) {
+    if (!it.parent) continue;
+    const bucket = childrenByParent.get(it.parent);
+    if (bucket) bucket.push(it); else childrenByParent.set(it.parent, [it]);
+  }
+  const orderedChildren = (name) => [...(childrenByParent.get(name) || [])].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+  // A caption for a table-emitted element: the localizable BINDING for the page body, plus the same unresolved-key
+  // decision the tab/group builders raise (an unresolved key is a real gap — the built page would show nothing).
+  const elementCaption = (it) => {
+    const c = ctx.caption(it.caption, it.name);
+    if (!c.resolved) needsDecision.push({ kind: "element-caption", item: it.name,
+      reason: c.synthesized
+        ? `element '${it.name}' has no classic caption in the model — a caption key '${c.key}' was synthesized; author the localized string for it or confirm the element needs no visible text`
+        : `caption '${c.key}' on '${it.name}' is an unresolved resource key — pass the schema's localizable strings as manifest.resources to resolve it, or confirm the real text` });
+    return c.binding;
+  };
+  // MENU / MENU_ITEM descendants of a button, folded into ONE `menuItems` array. Recursive because classic nests
+  // the items under an intermediate MENU element as often as directly under the button.
+  const menuEntriesOf = (owner, claimed) => {
+    const out = [];
+    for (const child of orderedChildren(owner.name)) {
+      if (child.itemType === VIEW_ITEM_TYPE.MENU) { claimed.push(child.name); out.push(...menuEntriesOf(child, claimed)); continue; }
+      if (child.itemType !== VIEW_ITEM_TYPE.MENU_ITEM) continue;
+      claimed.push(child.name);
+      const entry = { caption: elementCaption(child) };
+      // The classic per-item click, kept per item: `clicked` is an OUTPUT on `crt.MenuItem` in every checked
+      // platform version, so the wiring does not have to collapse onto the owning button.
+      if (child.handlers?.click) entry.clicked = { request: freedomRequest(child.name), classicHandler: child.handlers.click };
+      out.push(entry);
+    }
+    return out;
+  };
+  // The radio group's options: the CHILD items carrying a literal `value`. Their captions are the option captions —
+  // the pair the ticket names, captured at parse time precisely so this row can consume both at once.
+  const optionEntriesOf = (owner, claimed) => {
+    const out = [];
+    for (const child of orderedChildren(owner.name)) {
+      if (child.optionValue === null || child.optionValue === undefined) continue;
+      claimed.push(child.name);
+      out.push({ value: child.optionValue, caption: elementCaption(child) });
+    }
+    return out;
+  };
+  // One propMap entry -> the value to emit, or null when this element cannot source it.
+  const resolveSource = (spec, it, claimed) => {
+    if (spec.from === SOURCE.LITERAL) return spec.value;
+    if (spec.from === SOURCE.CAPTION) return elementCaption(it);
+    if (spec.from === SOURCE.VALUE_ATTR) return it.valueBindTo ? "$" + it.valueBindTo : null;
+    if (spec.from === SOURCE.OPTION_CHILDREN) { const o = optionEntriesOf(it, claimed); return o.length ? o : null; }
+    if (spec.from === SOURCE.MENU_CHILDREN) { const m = menuEntriesOf(it, claimed); return m.length ? m : null; }
+    return null;
+  };
+  // A candidate is CLIENT-authored, has no `generator` (in Classic a generator override wins over the itemType
+  // switch — the element is whatever it draws, so the table must not answer for it), is not the native page title,
+  // and is not an image the image builder already emits.
+  const tableCandidates = allItems
+    .filter((it) => !it.templateOwned && !it.generator && !isPrimaryDisplayItem(it) && !isImageItem(it))
+    .map((it, n) => ({ it, n, row: rowForItem(it) }))
+    .filter((x) => x.row?.ownedBy === OWNER.TABLE)
+    .sort((a, b) => ((a.it.order ?? Infinity) - (b.it.order ?? Infinity)) || (a.n - b.n));
+  for (const { it, row } of tableCandidates) {
+    const claimed = [];                       // sub-items this element absorbed (menu items, radio options)
+    const values = { type: row.target.componentType };
+    const missing = [];
+    for (const [prop, spec] of Object.entries(row.target.propMap || {})) {
+      const v = resolveSource(spec, it, claimed);
+      if (v === null || v === undefined) { if (spec.required) missing.push(`${prop} (from classic ${spec.from})`); continue; }
+      values[prop] = v;
+    }
+    // A row is tier A/B for the KIND; a single ELEMENT can still fall short of it — a radio group with no option
+    // children, a button with no caption. Emitting a half-configured element would be the silent-drop failure in a
+    // new costume, so the instance degrades to the typed ⚠ instead, carrying the exact reason.
+    if (missing.length) {
+      configGaps.set(it.name, `its Freedom target (${row.target.componentType}) needs ${missing.join(" and ")}, which this classic element does not carry`);
+      continue;
+    }
+    const own = resolveOwner(it.parent, index, profileAnchors);
+    const parent = routeField(it, own);
+    values.layoutConfig = computeLayout(it, own, parent, it.name);
+    if (!fieldVisibility(it, own, it.name)) values.visible = false;
+    // Tier B: the view is automatic, the behaviour is not. The element gets its `clicked` request and the request
+    // goes on the worklist — the classic method it came from is already a stub row of its own (the engine resolves
+    // a control's click binding as that method's trigger), so this adds the WIRING, not a second copy of the method.
+    if (row.target.events?.clicked && it.handlers?.click) {
+      const request = freedomRequest(it.name);
+      values.clicked = { request };
+      requestHandlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
+    }
+    viewConfigDiff.push({ operation: "insert", name: it.name, values, parentName: parent, propertyName: row.target.slot });
+    accountedFor.add(it.name);
+    claimed.forEach((c) => accountedFor.add(c));
+    // A radio group's selection IS an entity column, so it needs the same attribute + PDS column a field gets —
+    // without them the `control` binding points at an attribute nothing defines and the control never loads.
+    if (row.target.propMap?.control && it.valueBindTo) {
+      attributes[it.valueBindTo] = { modelConfig: { path: "PDS." + it.valueBindTo } };
+      pdsColumns[it.valueBindTo] = { path: it.valueBindTo };
+    }
+  }
+
   // ---- FOLD the accumulated per-field noise into summaries (declarations near the loop top) ----
   const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
   // The DESIGN-PREREQUISITE — the ONLY layout signal surfaced (not per field, and NOT a second per-page
@@ -988,7 +1110,11 @@ function mapFields(ctx, containers) {
   // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
   // header elements land in TopAreaProfileContainer rather than being crammed into the narrow left profile.
-  return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion, headerLayout: headerIsWide ? "wide" : null };
+  return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion,
+    // ENG-95543 — tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
+    // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
+    requestHandlers, configGaps,
+    headerLayout: headerIsWide ? "wide" : null };
 }
 
 // details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
@@ -1487,7 +1613,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 
 // Fix 2: LOUD unmapped-component drop — any alive CLIENT-authored item the mapper produced nothing for is
 // surfaced (one decision per dropped subtree root), instead of silently vanishing. Reads the final accountedFor.
-function mapUnmappedDrop(eff, accountedFor) {
+function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
   const needsDecision = [];
   // Candidate = alive, CLIENT-authored (non-template) item the mapper produced NOTHING for. The element's KIND
   // decides (ITEM_ROLE): structural layout is skipped because another builder owns it, decoration is recorded as
@@ -1503,7 +1629,7 @@ function mapUnmappedDrop(eff, accountedFor) {
   // entity's primary display column). So it maps to the native page title: nothing to build, and NOT an unmapped
   // micro-widget. Treat it (and therefore its container, e.g. HeaderColumnContainer) as accounted-for — silently,
   // with no ⚠ message.
-  const isPrimaryDisplay = (i) => /getPrimaryDisplayColumnValue/i.test(i.caption || "");
+  const isPrimaryDisplay = isPrimaryDisplayItem;
   const byName = new Map((eff.items || []).map(i => [i.name, i]));
   // A CONTAINER whose subtree DID produce Freedom elements is a real layout container (a profile island, a
   // photo wrapper, a header column block), NOT an unmapped micro-widget — whatever its name says. Flagging those
@@ -1610,6 +1736,10 @@ function mapUnmappedDrop(eff, accountedFor) {
       // than mirroring the field path is a DELIBERATE divergence (engine-internals.md): mirroring would emit a
       // silent `crt.Input`, and hiding the element is the one thing this engine must not do.
       reason = `classic PROGRESS_BAR '${i.name}'${captionNote}${generatorNote} produced no Freedom element, and Classic has NO dispatch branch for this kind either — \`generateStandardItem\` falls through to the field path, so on the classic page this element rendered by its COLUMN's type, not as an indicator. Check what that column is before porting: a real classic progress bar comes from a \`STAGE_INDICATOR\` column, not from this itemType. If the column is ordinary, this element was very likely already inert on the classic page — confirm drop`;
+    } else if (configGaps.has(i.name)) {
+      // The kind HAS a mapping in the shared table; THIS element could not fill its target's required config. Saying
+      // "map this kind to its Freedom counterpart" would send the reader to add a row that already exists.
+      reason = `classic ${kind} '${i.name}'${captionNote} has a Freedom mapping, but ${configGaps.get(i.name)} — read the classic body for the missing part (or confirm the element was already inert) rather than adding a mapping`;
     } else if (kind) {
       reason = `classic ${kind} '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — the element's KIND is known, so this is a missing MAPPING rather than unknown UI: map ${kind} to its Freedom counterpart, or confirm drop`;
     } else if (i.itemTypeUnresolved) {

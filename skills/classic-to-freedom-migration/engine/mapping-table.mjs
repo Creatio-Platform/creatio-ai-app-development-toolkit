@@ -12,11 +12,15 @@
 //     role:    ROLE.*               — engine-coverage disposition, the `ITEM_ROLE` semantics unchanged
 //     tier:    TIER.*               — what happens to a recognised kind (the one test, see TIER)
 //     ownedBy: OWNER.*              — which builder emits it (or that nobody does)
-//     target:  { componentType, propMap, slot } | null
+//     target:  { componentType, propMap, slot, events? } | null
 //     verify:  { componentType } | null  — what a BUILT page must carry for this row to read ✅ in `--verify`
 //     uiShape: "component" | "list" | null — how it RENDERS, for the design-spec Layout table
 //     notes:   string | null
 //   }
+//
+// `target.events` names the component OUTPUTS the emission wires (a button's `clicked`), kept apart from
+// `propMap` because an output is validated against the registry's `outputs`, not its `inputs` — putting
+// `clicked` in `propMap` would make the CI check look for an input that does not exist on any version.
 //
 // `target` is null on every row whose Freedom element is not a fixed component type: a FIELD's control follows
 // its entity column's data type, a CONTAINER's target follows its structural role, and a TIER.DECISION row
@@ -49,6 +53,7 @@ export const TIER = { AUTO: "A", VIEW_ONLY: "B", DECISION: "C" };
 // builder, and the table records which one rather than duplicating its logic.
 export const OWNER = {
   FIELD: "field-builder",
+  FOLDED: "folded-into-owner", // nothing of its own is emitted; it contributes props to the element that owns it
   CONTAINER: "container-builder",
   DETAIL: "detail-builder",
   WIDGET: "widget-builder",
@@ -65,7 +70,25 @@ export const OWNER = {
 //                   whose whole subtree mapped to nothing is real UI and must still surface.
 //  • `decoration` — UI furniture that carries no migration answer. Recorded in the member ledger as `chrome`.
 //  • `unmapped`   — no Freedom element is emitted for the kind; the element gets a TYPED ⚠ naming its kind.
-export const ROLE = { FIELD: "field", STRUCT: "structural", CONTAINER: "container", DECOR: "decoration", UNMAPPED: "unmapped" };
+//  • `mapped`     — the shared table emits a Freedom element (or a slot of one) for the kind itself. This is the
+//                   role `unmapped` becomes the moment a kind gains a target: leaving it `unmapped` would keep
+//                   claiming "no Freedom element for this kind" about an element the engine now builds.
+export const ROLE = { FIELD: "field", STRUCT: "structural", CONTAINER: "container", DECOR: "decoration", UNMAPPED: "unmapped", MAPPED: "mapped" };
+
+// WHERE a target prop's value comes from. A `propMap` entry is `{ from: SOURCE.* }` (plus `value` for a literal),
+// never a function: the entries have to be READ by the CI check that asserts every propMap KEY exists among the
+// component's registry `inputs`, and by the reference-doc generator. A closure would make both impossible.
+// A `required` source is one an element can genuinely LACK, which makes the instance fall short of its row's tier
+// (a radio group with no options). `CAPTION` is never required: the caption resolver always yields a localizable
+// binding — a synthesized key plus a decision to author the string — so the element still emits with its text
+// pending instead of vanishing into a ⚠.
+export const SOURCE = {
+  CAPTION: "caption",                 // the item's caption resource key -> a `$Resources.Strings.<key>` binding
+  VALUE_ATTR: "valueAttr",            // the NESTED `value.bindTo` -> a `$<Attr>` FormControl reference
+  OPTION_CHILDREN: "optionChildren",  // child items carrying a literal `value` -> the option array
+  MENU_CHILDREN: "menuChildren",      // MENU / MENU_ITEM descendants -> the owning button's menuItems
+  LITERAL: "literal",                 // a constant stated on the row itself (`value`)
+};
 
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
@@ -105,12 +128,67 @@ const ITEM_TYPE_ROWS = [
   // whose caption differs from its control is author-written copy, and `chrome` deleted it with no ⚠ and no trace.
   byItemType(VIEW_ITEM_TYPE.TIP_LABEL, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
   byItemType(VIEW_ITEM_TYPE.MODULE, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }), // widget / profile-card builders claim the ones they know first
-  byItemType(VIEW_ITEM_TYPE.BUTTON, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
-  byItemType(VIEW_ITEM_TYPE.LABEL, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
-  byItemType(VIEW_ITEM_TYPE.MENU, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
-  byItemType(VIEW_ITEM_TYPE.MENU_ITEM, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
-  byItemType(VIEW_ITEM_TYPE.RADIO_GROUP, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
-  byItemType(VIEW_ITEM_TYPE.HYPERLINK, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
+  // ---- FIRST-WAVE TARGETS. Every componentType and every propMap key below was read off the component registry
+  // and checked in 8.3.0 / 8.3.3 / latest, not asserted from memory: a target that exists only in `latest` would
+  // green-light a page that cannot render on an 8.3 stand (the registry carries 152 components at 8.3.0 against
+  // 200 at latest).
+  //
+  // A BUTTON's caption is derivable; what it DOES is not — the click is an imperative method. So it emits with its
+  // caption and its click becomes a stub on the imperative worklist: tier B, the definition of it.
+  byItemType(VIEW_ITEM_TYPE.BUTTON, {
+    role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: OWNER.TABLE, uiShape: "component",
+    target: { componentType: "crt.Button", slot: "items",
+      events: { clicked: true },
+      propMap: { caption: { from: SOURCE.CAPTION }, menuItems: { from: SOURCE.MENU_CHILDREN } } },
+    verify: { componentType: "crt.Button" },
+    notes: "The classic click handler is NOT ported by the emission — it becomes a `clicked` request + a handler stub on the imperative-logic worklist. `menuItems` folds the button's own MENU / MENU_ITEM descendants; a button with no menu emits none.",
+  }),
+  // A standalone LABEL carries author-written copy and nothing else, so its whole config is derivable: tier A.
+  // `crt.Label` is NOT compositeOnly and exists in every checked version.
+  byItemType(VIEW_ITEM_TYPE.LABEL, {
+    role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: OWNER.TABLE, uiShape: "component",
+    target: { componentType: "crt.Label", slot: "items", propMap: { caption: { from: SOURCE.CAPTION } } },
+    verify: { componentType: "crt.Label" },
+    notes: "A label that is a FIELD's own label is not this row's business — the Freedom field labels itself. This row is for a standalone LABEL element.",
+  }),
+  // A MENU is a pure wrapper: it contributes its items to the owning button and emits nothing of its own.
+  byItemType(VIEW_ITEM_TYPE.MENU, {
+    role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: OWNER.FOLDED,
+    target: { foldInto: "menuItems", propMap: { caption: { from: SOURCE.CAPTION } } },
+    notes: "Freedom has no separate menu element on a form: a button's dropdown IS its `menuItems` array (`crt.Menu` exists but is compositeOnly and is the overlay primitive, not the form-button idiom).",
+  }),
+  // A MENU_ITEM folds into the same array, and like a button its click is imperative — tier B.
+  byItemType(VIEW_ITEM_TYPE.MENU_ITEM, {
+    role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: OWNER.FOLDED,
+    target: { foldInto: "menuItems", events: { clicked: true }, propMap: { caption: { from: SOURCE.CAPTION } } },
+    notes: "Each folded entry keeps its own `clicked` wiring (the `clicked` OUTPUT is on `crt.MenuItem` in every checked version; the `handleItemClick` INPUT is not — it exists at 8.3.0 and is gone by 8.3.3, so it must not be emitted).",
+  }),
+  // RADIO_GROUP -> crt.IconRadioButton. `control` / `items` / `label` are all present in 8.3.0 onwards, so the
+  // whole required config is derivable from the classic config: tier A. `compositeOnly: true` means the component
+  // has no Designer-TOOLBAR entry — it does NOT mean the type is unusable: inserting it directly into the page
+  // schema is valid, which is exactly what this engine emits.
+  byItemType(VIEW_ITEM_TYPE.RADIO_GROUP, {
+    role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: OWNER.TABLE, uiShape: "component",
+    target: { componentType: "crt.IconRadioButton", slot: "items",
+      propMap: { control: { from: SOURCE.VALUE_ATTR, required: true }, label: { from: SOURCE.CAPTION },
+        // Required for a reason: a radio group emitted WITHOUT its options renders as an empty control, which is
+        // the silent drop this row exists to prevent. No options ⇒ the instance degrades to a typed decision.
+        items: { from: SOURCE.OPTION_CHILDREN, required: true } } },
+    verify: { componentType: "crt.IconRadioButton" },
+    uiShape: "component",
+    notes: "The selection binds through the classic NESTED `value.bindTo`, not the top-level `bindTo` a field uses; the option sub-items (`value: true` / `value: false` children) become `items[]` and their captions the option captions. Emitting the binding WITHOUT the options would build a plain input and drop the captions with no warning.",
+  }),
+  // HYPERLINK -> crt.Link. The caption is derivable; the destination is not — a classic hyperlink navigates from
+  // its click METHOD, so `href` cannot be read off the schema. `mode: "preventDefault"` is the registry's own
+  // contract for exactly that case ("`href` is ignored and `clicked` fires instead"), so the emitted element is
+  // honest about where the behaviour still has to come from: tier B.
+  byItemType(VIEW_ITEM_TYPE.HYPERLINK, {
+    role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: OWNER.TABLE, uiShape: "component",
+    target: { componentType: "crt.Link", slot: "items", events: { clicked: true },
+      propMap: { caption: { from: SOURCE.CAPTION }, mode: { from: SOURCE.LITERAL, value: "preventDefault" } } },
+    verify: { componentType: "crt.Link" },
+    notes: "`crt.Label` has NO href/link input in any checked version, so a \"link-styled label\" is not a hyperlink target — `crt.Link` is (compositeOnly, present from 8.3.0). The classic click method becomes the `clicked` handler stub.",
+  }),
   byItemType(VIEW_ITEM_TYPE.INFORMATION_BUTTON, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
   byItemType(VIEW_ITEM_TYPE.COLOR_BUTTON, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),
   byItemType(VIEW_ITEM_TYPE.COMPONENT, { role: ROLE.UNMAPPED, tier: TIER.DECISION, ownedBy: OWNER.DECISION }),

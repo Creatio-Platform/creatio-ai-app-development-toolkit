@@ -7448,9 +7448,12 @@ try {
   // against `ViewGeneratorV2` and each carries content the reader would lose — TIP_LABEL an author caption
   // (Classic logs an ERROR when it is empty), TIP a recursively generated `tools`/`items` subtree,
   // GRID_LAYOUT_EDIT a raw `items` array on a live control. MENU_SEPARATOR is the only information-free kind.
-  check("ENG-95412: the role distribution over the pinned table is exactly 5 structural / 1 decoration / 1 field / 3 container / 19 unmapped",
+  // The `unmapped` count DROPPED from 19 to 13 in ENG-95543: six kinds (BUTTON, LABEL, MENU, MENU_ITEM,
+  // RADIO_GROUP, HYPERLINK) gained a Freedom target, so they carry `mapped`. Keeping them `unmapped` would have
+  // kept claiming "no Freedom element for this kind" about elements the engine now builds.
+  check("ENG-95412/ENG-95543: the role distribution is exactly 5 structural / 1 decoration / 1 field / 3 container / 13 unmapped / 6 mapped",
     roleTally[ITEM_ROLES.STRUCT] === 5 && roleTally[ITEM_ROLES.DECOR] === 1 && roleTally[ITEM_ROLES.FIELD] === 1
-    && roleTally[ITEM_ROLES.CONTAINER] === 3 && roleTally[ITEM_ROLES.UNMAPPED] === 19
+    && roleTally[ITEM_ROLES.CONTAINER] === 3 && roleTally[ITEM_ROLES.UNMAPPED] === 13 && roleTally[ITEM_ROLES.MAPPED] === 6
     && Object.values(roleTally).reduce((a, b) => a + b, 0) === 29,
     () => roleTally);
   // MENU_SEPARATOR is named explicitly, so a future reclassification cannot quietly restore a second decoration
@@ -7493,8 +7496,8 @@ try {
   // The tier DISTRIBUTION, pinned like the role distribution above and for the same reason: a kind quietly moved
   // from C to A is a kind the engine started building without anyone deciding what it should build.
   const tierTally = itRows.reduce((a, r) => ({ ...a, [r.tier]: (a[r.tier] || 0) + 1 }), {});
-  check("ENG-95543: the itemType tier distribution is exactly 10 tier-A (a builder owns them) / 19 tier-C (typed decision)",
-    tierTally[TIER.AUTO] === 10 && tierTally[TIER.DECISION] === 19 && (tierTally[TIER.VIEW_ONLY] || 0) === 0,
+  check("ENG-95543: the itemType tier distribution is exactly 13 tier-A / 3 tier-B (view built, behaviour stubbed) / 13 tier-C (typed decision)",
+    tierTally[TIER.AUTO] === 13 && tierTally[TIER.VIEW_ONLY] === 3 && tierTally[TIER.DECISION] === 13,
     () => tierTally);
   // Absence of an itemType is NOT a kind: Classic reads a missing itemType as the field path, so the table must
   // return nothing rather than a row that would answer for an element the schema never classified.
@@ -7539,14 +7542,22 @@ try {
     Object.isFrozen(MAPPING_ROWS) && itRows.every((r) => Object.isFrozen(r) && Object.isFrozen(r.match)),
     () => itRows.filter((r) => !Object.isFrozen(r)).length);
 
-  // A RADIO_GROUP: recognised, and reported BY KIND. The old text ("classic component 'X' produced no Freedom
-  // element — non-standard UI") told the reader nothing they could act on although the schema stated the kind.
+  // A RADIO_GROUP with a binding but NO option children. REWRITTEN for ENG-95543, which is the point of the
+  // rewrite: the KIND now has a mapping, so "map this kind to its Freedom counterpart" would send the reader to
+  // add a row that already exists. What this ELEMENT lacks is the option sub-items its target needs, and that is
+  // what the ⚠ must say. It still reports BY KIND, which was the original invariant.
   const rg = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"}}}`);
   const rgRow = rg.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "IsPrimary");
-  check("ENG-95412: a RADIO_GROUP is reported BY KIND — `itemKind` carries it and the reason calls it a missing MAPPING, not 'non-standard UI'",
+  check("ENG-95543: a RADIO_GROUP whose options are missing is reported BY KIND, naming the target and the MISSING PART — not as a missing mapping",
     rgRow?.itemKind === "RADIO_GROUP" && /classic RADIO_GROUP 'IsPrimary'/.test(rgRow.reason)
-    && /missing MAPPING rather than unknown UI/.test(rgRow.reason) && !/non-standard UI/.test(rgRow.reason),
+    && /crt\.IconRadioButton/.test(rgRow.reason) && /optionChildren/.test(rgRow.reason)
+    && /rather than adding a mapping/.test(rgRow.reason) && !/non-standard UI/.test(rgRow.reason),
     () => rgRow);
+  // ...and it is NOT emitted half-configured. An empty `crt.IconRadioButton` on the page would be the silent-drop
+  // failure wearing the new mapping as a costume.
+  check("ENG-95543: the half-configured radio group emits NO element — a control with no options is not a migration",
+    !rg.changeSet.viewConfigDiff.some((o) => o.values?.type === "crt.IconRadioButton"),
+    () => rg.changeSet.viewConfigDiff.filter((o) => o.values?.type === "crt.IconRadioButton"));
 
   // A recognised kind with no mapping names the KIND and asks for a mapping — it does not assert which Freedom
   // component that should be (choosing one is the mapping task, and a target asserted here would pre-empt it).
@@ -7559,9 +7570,107 @@ try {
     gapOf("Planner")?.itemKind === "SCHEDULE_EDIT" && /missing MAPPING rather than unknown UI/.test(gapOf("Planner").reason)
     && !/crt\./.test(gapOf("Planner").reason),
     () => gapOf("Planner"));
-  check("ENG-95412: a BUTTON keeps its card-action guidance (its click handler is the part that needs porting)",
-    /card action/.test(gapOf("Btn")?.reason || ""),
-    () => gapOf("Btn"));
+  // REWRITTEN for ENG-95543. A custom BUTTON used to produce nothing at all, so the ⚠ advised wiring it as a card
+  // action — advice born of the gap, not of the classic body (a button in the page's own layout is not the ACTIONS
+  // menu). It is now BUILT as a `crt.Button` at its classic place, and the part that genuinely does not migrate —
+  // the imperative click — is what remains on the worklist.
+  check("ENG-95543: a custom BUTTON is BUILT (crt.Button) instead of being reported as unmapped",
+    !gapOf("Btn") && gaps.changeSet.viewConfigDiff.some((o) => o.name === "Btn" && o.values?.type === "crt.Button"),
+    () => ({ decision: gapOf("Btn"), emitted: gaps.changeSet.viewConfigDiff.filter((o) => o.name === "Btn") }));
+
+  // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
+  // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
+  // names. Both halves are asserted together on purpose — emitting the binding without the options is exactly the
+  // failure ("builds a plain input and silently drops the option captions") the row exists to prevent.
+  const rgFull = gmRun([
+    `{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"},caption:{bindTo:"Resources.Strings.IsPrimaryCaption"}}}`,
+    `{operation:"insert",name:"OptYes",parentName:"IsPrimary",propertyName:"items",values:{value:true,caption:{bindTo:"Resources.Strings.YesCaption"}}}`,
+    `{operation:"insert",name:"OptNo",parentName:"IsPrimary",propertyName:"items",values:{value:false,caption:{bindTo:"Resources.Strings.NoCaption"}}}`,
+  ].join(","), "", { entityColumns: { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" } },
+    resources: { IsPrimaryCaption: "Is primary", YesCaption: "Yes", NoCaption: "No" } });
+  const rgEl = rgFull.changeSet.viewConfigDiff.find((o) => o.name === "IsPrimary");
+  check("ENG-95543: a complete RADIO_GROUP is BUILT as crt.IconRadioButton — control from the NESTED value.bindTo, label from the caption",
+    rgEl?.values?.type === "crt.IconRadioButton" && rgEl.values.control === "$IsPrimary"
+    && rgEl.values.label === "$Resources.Strings.IsPrimaryCaption",
+    () => rgEl);
+  // `false` is a legal option value and must survive: a truthiness test anywhere on this path drops the "No"
+  // option and leaves a one-option radio group that always answers yes.
+  check("ENG-95543: the option sub-items become items[] with their own captions, and the `false` option SURVIVES (never a truthiness test)",
+    Array.isArray(rgEl?.values?.items) && rgEl.values.items.length === 2
+    && rgEl.values.items[0].value === true && rgEl.values.items[1].value === false
+    && rgEl.values.items[1].caption === "$Resources.Strings.NoCaption",
+    () => rgEl?.values?.items);
+  // The selection IS an entity column, so it needs the field 3-part binding. Without the attribute the `control`
+  // binding points at nothing and the built control never loads a value.
+  const rgAttrs = rgFull.changeSet.viewModelConfigDiff?.[0]?.values || {};
+  const rgPds = rgFull.changeSet.modelConfigDiff?.[0]?.values || {};
+  check("ENG-95543: the radio group registers its attribute + PDS column like a field — the `control` binding is not left dangling",
+    rgAttrs.IsPrimary?.modelConfig?.path === "PDS.IsPrimary" && rgPds.IsPrimary?.path === "IsPrimary",
+    () => ({ rgAttrs, rgPds }));
+  // The absorbed sub-items must be ACCOUNTED FOR: they are part of the emitted control, so the drop sweep must not
+  // report each option as an element that produced nothing.
+  check("ENG-95543: the absorbed option sub-items are accounted for and raise NO unmapped-component ⚠ of their own",
+    rgFull.changeSet.accountedFor.includes("OptYes") && rgFull.changeSet.accountedFor.includes("OptNo")
+    && !rgFull.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && ["OptYes", "OptNo", "IsPrimary"].includes(d.item)),
+    () => rgFull.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component"));
+
+  // A BUTTON with a click handler and a MENU: tier B. The view is built (caption + menuItems), and the imperative
+  // part is published as a `clicked` request on the worklist rather than left implicit.
+  const btnRun = gmRun([
+    `{operation:"insert",name:"SendBtn",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.BUTTON,caption:{bindTo:"Resources.Strings.SendCaption"},click:{bindTo:"onSendClick"}}}`,
+    `{operation:"insert",name:"SendMenu",parentName:"SendBtn",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU}}`,
+    `{operation:"insert",name:"SendNow",parentName:"SendMenu",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MENU_ITEM,caption:{bindTo:"Resources.Strings.NowCaption"},click:{bindTo:"onSendNow"}}}`,
+  ].join(","), "", { resources: { SendCaption: "Send", NowCaption: "Send now" } });
+  const btnEl = btnRun.changeSet.viewConfigDiff.find((o) => o.name === "SendBtn");
+  check("ENG-95543: a BUTTON is built as crt.Button with its caption, and its MENU/MENU_ITEM descendants fold into menuItems (through the intermediate MENU)",
+    btnEl?.values?.type === "crt.Button" && btnEl.values.caption === "$Resources.Strings.SendCaption"
+    && btnEl.values.menuItems?.length === 1 && btnEl.values.menuItems[0].caption === "$Resources.Strings.NowCaption",
+    () => btnEl);
+  const rh = (btnRun.changeSet.requestHandlers || []).find((r) => r.element === "SendBtn");
+  check("ENG-95543 tier B: the button's `clicked` request is wired on the element AND published with the classic handler it came from",
+    btnEl?.values?.clicked?.request === "usr.SendBtnClicked"
+    && rh?.request === "usr.SendBtnClicked" && rh.classicHandler === "onSendClick" && rh.tier === "B",
+    () => ({ clicked: btnEl?.values?.clicked, published: btnRun.changeSet.requestHandlers }));
+  check("ENG-95543: the folded MENU and MENU_ITEM are accounted for — they are part of the button, not elements that produced nothing",
+    ["SendMenu", "SendNow"].every((n) => btnRun.changeSet.accountedFor.includes(n))
+    && !btnRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component"),
+    () => btnRun.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component"));
+
+  // A standalone LABEL carries author copy: tier A, nothing left to decide.
+  const lblRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"Resources.Strings.NoteCaption"}}}`,
+    "", { resources: { NoteCaption: "Read this first" } });
+  check("ENG-95543: a standalone LABEL is built as crt.Label with a localizable caption BINDING (never the literal text)",
+    lblRun.changeSet.viewConfigDiff.some((o) => o.name === "NoteLbl" && o.values?.type === "crt.Label"
+      && o.values.caption === "$Resources.Strings.NoteCaption")
+    && lblRun.changeSet.resources?.NoteCaption === "Read this first"
+    && !lblRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && d.item === "NoteLbl"),
+    () => lblRun.changeSet.viewConfigDiff.filter((o) => o.name === "NoteLbl"));
+  // ...but the record TITLE label is not one: the Freedom page titles itself from the primary display column, so
+  // building a crt.Label for it would put the record name on the page twice.
+  const titleRun = gmRun(`{operation:"insert",name:"TitleLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,caption:{bindTo:"getPrimaryDisplayColumnValue"}}}`);
+  check("ENG-95543: a primary-display LABEL is NOT built — the Freedom page title already shows it, and a crt.Label would duplicate it",
+    !titleRun.changeSet.viewConfigDiff.some((o) => o.name === "TitleLbl")
+    && !titleRun.changeSet.needsDecision.some((d) => d.item === "TitleLbl"),
+    () => ({ emitted: titleRun.changeSet.viewConfigDiff.filter((o) => o.name === "TitleLbl"), decisions: titleRun.changeSet.needsDecision.filter((d) => d.item === "TitleLbl") }));
+
+  // HYPERLINK -> crt.Link. `mode: "preventDefault"` is the registry's contract for a link whose destination comes
+  // from a click handler rather than an href — which is every classic hyperlink, since the schema has no URL.
+  const linkRun = gmRun(`{operation:"insert",name:"OpenLink",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.HYPERLINK,caption:{bindTo:"Resources.Strings.OpenCaption"},click:{bindTo:"onOpenClick"}}}`,
+    "", { resources: { OpenCaption: "Open" } });
+  const linkEl = linkRun.changeSet.viewConfigDiff.find((o) => o.name === "OpenLink");
+  check("ENG-95543: a HYPERLINK is built as crt.Link (NOT a link-styled crt.Label, which has no href input in any version) with mode preventDefault + a clicked request",
+    linkEl?.values?.type === "crt.Link" && linkEl.values.mode === "preventDefault"
+    && linkEl.values.clicked?.request === "usr.OpenLinkClicked",
+    () => linkEl);
+
+  // A `generator` OVERRIDES the itemType in Classic (`generateItem` checks it first), so the element is whatever
+  // the generator draws — the table must not answer for it. Without this the engine would emit a crt.Label over a
+  // generator-drawn widget and call the page migrated.
+  const genRun = gmRun(`{operation:"insert",name:"GenLbl",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.LABEL,generator:"CustomWidgetGenerator",caption:{bindTo:"Resources.Strings.NoteCaption"}}}`);
+  check("ENG-95543: a `generator` override beats the table — a generator-drawn LABEL is NOT built as crt.Label (mirroring generateItem's own precedence)",
+    !genRun.changeSet.viewConfigDiff.some((o) => o.name === "GenLbl")
+    && genRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component" && d.item === "GenLbl"),
+    () => genRun.changeSet.viewConfigDiff.filter((o) => o.name === "GenLbl"));
 
   // Decoration: a recorded disposition, NOT a suppression and NOT a ⚠. Both halves matter — a filter would leave
   // the reader unable to audit what the engine decided to ignore.
@@ -7738,13 +7847,15 @@ try {
     () => ({ itemKind: pbDec?.itemKind, reason: pbDec?.reason }));
   // Negative control: the generic typed text must survive for every OTHER known kind, or the branch above would
   // just have replaced the message for all of them.
-  const rgRun = gmRun(`{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP}}`);
-  const rgDec = rgRun.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "IsPrimary");
-  check("ENG-95412: a RADIO_GROUP still gets the GENERIC typed text — the PROGRESS_BAR branch is one kind, not a rewrite of every kind's message",
-    !!rgDec && rgDec.itemKind === "RADIO_GROUP"
-    && /missing MAPPING rather than unknown UI/.test(rgDec.reason)
-    && !/NO dispatch branch/.test(rgDec.reason),
-    () => ({ itemKind: rgDec?.itemKind, reason: rgDec?.reason }));
+  // The control kind is SCHEDULE_EDIT, not RADIO_GROUP: RADIO_GROUP has a mapping since ENG-95543, so it no longer
+  // takes the generic text and would make this control vacuous. SCHEDULE_EDIT is still tier C.
+  const seRun = gmRun(`{operation:"insert",name:"Planner",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.SCHEDULE_EDIT}}`);
+  const seDec = seRun.changeSet.needsDecision.find((d) => d.kind === "unmapped-component" && d.item === "Planner");
+  check("ENG-95412: a still-unmapped kind gets the GENERIC typed text — the PROGRESS_BAR branch is one kind, not a rewrite of every kind's message",
+    !!seDec && seDec.itemKind === "SCHEDULE_EDIT"
+    && /missing MAPPING rather than unknown UI/.test(seDec.reason)
+    && !/NO dispatch branch/.test(seDec.reason),
+    () => ({ itemKind: seDec?.itemKind, reason: seDec?.reason }));
 
   // ---- ENG-95412: the reclassified decoration kinds, BOTH arms ----
   // Arm A: a TIP_LABEL whose subtree produced nothing now SURFACES. As `chrome` it was auto-accounted by
