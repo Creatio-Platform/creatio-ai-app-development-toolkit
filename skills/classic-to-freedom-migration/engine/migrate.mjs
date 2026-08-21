@@ -640,7 +640,16 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
 // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
 // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-const SIGNAL_KEYS = ["dcm", "processes", "printables"];
+// `deduplication` (ENG-94274) joins them for exactly the same reason: the on-save duplicate check is an
+// `asyncValidate` override on `CrtDeduplication.BaseEntityPage`, so it arrives via the base seed chain, counts as
+// `fromTemplate`, and is classified as ledger `context` — the page body NEVER shows it, and a migration therefore
+// dropped it in total silence. Its answer carries one extra field beyond present/absent:
+//   "deduplication": { "resolved": true, "present": true, "names": ["Contact duplicates. Contact name"],
+//                      "serviceConfigured": false }
+// `present` = this entity HAS an active rule marked use-on-save; `serviceConfigured` = the target stand can
+// actually run the Freedom flow. Both are needed because they fail differently: no rule means nothing to lose,
+// while a rule + no service means the check silently stops at migration (measured — see mapDedupOnSave).
+const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication"];
 // PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
 // built five pages, and only then discovered that `create-app-section` cannot run at all: the owning app was an
 // install-time wrapper with NO primary package, its one package was locked, and the editable target package was

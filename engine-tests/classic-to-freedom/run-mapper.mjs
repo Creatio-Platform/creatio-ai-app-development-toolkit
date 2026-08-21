@@ -2274,7 +2274,7 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
 // resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
 // (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
-const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } };
 // settled PLACEMENT — the app-hosting facts a `--plan` run must carry: the target package is writable, and the
 // app that will host the section is decided. This shape is the `existing-app` happy path: the app's primary
 // package IS the target package and is editable, so `create-app-section` (which takes no package parameter)
@@ -4143,17 +4143,18 @@ check("typed bindOnly: the SHARED base form IS rendered (its fields present), no
   && typedBindBase.structure.complete === true,
   () => typedBindBase.plan.split("\n").filter((l) => /Shared form|Bind-only|Amount|Typed page/.test(l)));
 
-/* ---- on-stand signals gate: DCM / connected processes / printables must be RESOLVED before the plan, not
-   deferred to build (the recurring "faithful to the classic body, check later" miss — Documents session). No
-   new tool: the agent runs the existing ESQ/odata queries and records manifest.signals; unresolved blocks. */
+/* ---- on-stand signals gate: DCM / connected processes / printables / on-save deduplication must be RESOLVED
+   before the plan, not deferred to build (the recurring "faithful to the classic body, check later" miss —
+   Documents session). No new tool: the agent runs the existing ESQ/odata queries and records manifest.signals;
+   unresolved blocks. */
 const sigBase = {
   entity: "X",
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
   planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "L", formTemplate: "F" },
 };
 const sigUnresolved = runMigration({ ...sigBase });
-check("signals gate: absent manifest.signals → all three unresolved",
-  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,printables,processes",
+check("signals gate: absent manifest.signals → all four unresolved",
+  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,deduplication,printables,processes",
   () => sigUnresolved.signalsMissing);
 check("signals gate: --plan carries the ⛔ signals-incomplete banner when unresolved",
   /PLAN INCOMPLETE — on-stand signals not resolved/.test(sigUnresolved.plan));
@@ -4161,6 +4162,7 @@ const sigResolved = runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: true, cases: ["CaseA"] },
   processes: { resolved: true, present: false },
   printables: { resolved: true, present: true, items: ["Template"] },
+  deduplication: { resolved: true, present: false },
 } });
 check("signals gate: all resolved → signalsMissing empty + resolved summary (present/none) rendered",
   (sigResolved.signalsMissing || []).length === 0
@@ -4169,11 +4171,58 @@ check("signals gate: all resolved → signalsMissing empty + resolved summary (p
   && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template"),
   () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables/i.test(l)));
 check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
-  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
+  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
 const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
+
+/* ---- ENG-94274: the on-save DUPLICATE CHECK signal. The behaviour is an `asyncValidate` override on the seed
+   chain (CrtDeduplication.BaseEntityPage), so it is `fromTemplate`, never a mappable member, and a migration used
+   to drop it in total silence. MEASURED on a stand newer than 8.3.4: Classic posts FindDuplicatesOnSave and shows
+   its duplicates screen; the Freedom form page issues only InsertQuery and saves the duplicate without a word.
+   Three states must behave differently, and the third one is the whole point of the signal. */
+const dedupSig = (dedup) => runMigration({ ...sigBase, signals: {
+  dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+  printables: { resolved: true, present: false }, ...(dedup ? { deduplication: dedup } : {}),
+} });
+const dedupRows = (r) => ((r.changeSet && r.changeSet.needsDecision) || []).filter((d) => d.kind === "dedup-on-save");
+const dedupUnresolved = dedupSig(null);
+check("ENG-94274 dedup signal: UNRESOLVED blocks the plan — the whole point is that 'never checked' cannot pass",
+  (dedupUnresolved.signalsMissing || []).includes("deduplication")
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dedupUnresolved.plan),
+  () => dedupUnresolved.signalsMissing);
+check("ENG-94274 dedup signal: the gate text tells the operator BOTH queries — the rule (DuplicatesRule/UseAtSave) and the service (DeduplicationWebApiUrl)",
+  /DuplicatesRule/.test(dedupUnresolved.plan) && /UseAtSave/.test(dedupUnresolved.plan)
+  && /DeduplicationWebApiUrl/.test(dedupUnresolved.plan) && /ESDeduplication/.test(dedupUnresolved.plan));
+const dedupNone = dedupSig({ resolved: true, present: false });
+check("ENG-94274 dedup signal: resolved + present:false emits NO row — no rule means nothing to lose, and a verified zero must not manufacture a worklist item",
+  (dedupNone.signalsMissing || []).length === 0 && dedupRows(dedupNone).length === 0,
+  () => dedupRows(dedupNone));
+const dedupNoSvc = dedupSig({ resolved: true, present: true, names: ["Contact duplicates. Contact name"], serviceConfigured: false });
+check("ENG-94274 dedup signal: rule present + service NOT configured → a ⚠ Confirm row that names the rule and says the check STOPS after migration",
+  dedupRows(dedupNoSvc).length === 1
+  && dedupRows(dedupNoSvc)[0].reason.includes("Contact duplicates. Contact name")
+  && /STOPS HAPPENING/.test(dedupRows(dedupNoSvc)[0].reason),
+  () => dedupRows(dedupNoSvc));
+check("ENG-94274 dedup signal: that row reaches the RENDERED plan (a decision nobody reads is not a decision)",
+  /on-save duplicate check/i.test(dedupNoSvc.plan) && /deduplication service is NOT configured/.test(dedupNoSvc.plan),
+  () => dedupNoSvc.plan.split("\n").filter((l) => /duplicate/i.test(l)));
+const dedupSvc = dedupSig({ resolved: true, present: true, names: ["R1"], serviceConfigured: true });
+check("ENG-94274 dedup signal: rule present + service CONFIGURED → still a row, but worded as VERIFY, never as 'Freedom cannot do this' (the platform ships crt.ValidateDuplicatesOnSaveHandler)",
+  dedupRows(dedupSvc).length === 1
+  && /VERIFY/.test(dedupRows(dedupSvc)[0].reason)
+  && !/cannot/i.test(dedupRows(dedupSvc)[0].reason)
+  && /Potential duplicates found/.test(dedupRows(dedupSvc)[0].reason),
+  () => dedupRows(dedupSvc));
+check("ENG-94274 dedup signal: the On-stand signals section states which of the two service states applies — never the generic '→ build it' (nothing here is authored)",
+  /\*\*On-save duplicate check:\*\* active/.test(dedupNoSvc.plan)
+  && !/\*\*On-save duplicate check:\*\* present.*build it/.test(dedupNoSvc.plan),
+  () => dedupNoSvc.plan.split("\n").filter((l) => /On-save duplicate check/.test(l)));
+check("ENG-94274 dedup signal: a CHILD page emits no row — the signal answers for THIS page's entity, and a child migrates a different one",
+  mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [] })]), {
+    signals: { deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } }, isChildPage: true,
+  }).needsDecision.filter((d) => d.kind === "dedup-on-save").length === 0);
 
 /* ---- review batch: colSpan clamp · rowSpan auto-row occupancy · multi-span collision · grandchild embedding ---- */
 // #2 colSpan clamp — a full-width classic field landing in Freedom column 2 must NOT span a phantom column 3.
@@ -4974,7 +5023,7 @@ const cmb = runMigration({
   typedPages: [{ schema: "XICPage", type: "Incoming" }],
   typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: cmbTyped }] } },
   planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsFreedomTemplate" },
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
 check("typed template: Main-scope typed row names the form template (not a generic 'per-type Freedom form')",
   /XICPage[^\n|]*\| PageWithTabsFreedomTemplate \| Rebuild \(per-type\) \|/.test(cmb.plan),
@@ -5264,7 +5313,7 @@ const ntDcm = runMigration({
   entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
   planMeta: { ...docPlanMeta, formTemplate: "FormPageTemplate" }, // a plain, non-progress-bar template
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
 check("non-typed DCM: the plan recommends PageWithTabsAndProgressBarTemplate AND flags the non-progress-bar template chosen",
   /\*\*Template — DCM case present:\*\*/.test(ntDcm.plan)
@@ -5275,7 +5324,7 @@ const ntDcmOk = runMigration({
   entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
   planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsAndProgressBarTemplate" },
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
 check("non-typed DCM: no template-mismatch ⚠ when a progress-bar template is already chosen",
   /\*\*Template — DCM case present:\*\*/.test(ntDcmOk.plan) && !/has no progress bar/.test(ntDcmOk.plan));
@@ -6168,7 +6217,7 @@ const PG_MANIFEST = {
     },
   },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
 const pgOpts = checklistOpts(PG_MANIFEST);
@@ -6511,7 +6560,7 @@ const KC_MANIFEST = {
       childPageSchemas: { XAltPage: { entity: "X", seed: KC_SEED, schemas: [{ pkg: "P", body: kcX("XAltPage") }] } } },
   },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const kcRun = runMigration(KC_MANIFEST, { baseDir: FIX });
 const kcOpts = checklistOpts(KC_MANIFEST);
@@ -6687,7 +6736,7 @@ const emptyChildManifest = {
     miniPageSchemas: { E1Mini: { entity: "E1", seed: KC_SEED, schemas: [{ pkg: "P", body: `define("E1Mini",[],function(){return{entitySchemaName:"E1",diff:[{operation:"insert",name:"MiniF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MiniF"}}]};});` }] } },
     schemas: [{ pkg: "P", body: `define("E1Page",[],function(){return{entitySchemaName:"E1",diff:[]};});` }] } },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const ecRun = runMigration(emptyChildManifest, { baseDir: FIX });
 const ecOpts = checklistOpts(emptyChildManifest);
@@ -6926,7 +6975,7 @@ const TAB_CHILD_MANIFEST = {
     TCPage: { entity: "TC", seed: PG_SEED, schemas: [{ pkg: "P", body: `define("TCPage",[],function(){return{entitySchemaName:"TC",diff:[{operation:"insert",name:"CT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:{bindTo:"Resources.Strings.CTCaption"}}},{operation:"insert",name:"CF1",parentName:"CT",propertyName:"items",values:{bindTo:"CF1"}},{operation:"insert",name:"CF2",parentName:"CT",propertyName:"items",values:{bindTo:"CF2"}}]};});` }] },
   },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const tabChildRun = runMigration(TAB_CHILD_MANIFEST, { baseDir: FIX });
 const tabChildOpts = checklistOpts(TAB_CHILD_MANIFEST);
@@ -6966,7 +7015,7 @@ const M12_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[]
 const M12_MANIFEST = {
   entity: "X", seed: M12_SEED, targetPackage: "UsrX",
   planMeta: { formTemplate: "FormPageTemplate", sectionSchema: "XSection", listTemplate: "ListPageV3", scope: "s", environment: "e", package: "p", approach: "a", whatItDoes: "w" },
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",details:{V:{schemaName:"VisaDetailV2",entitySchemaName:"XVisa",filter:{detailColumn:"c",masterColumn:"Id"}}},diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"VT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"V",parentName:"VT",values:{itemType:2}}]};});` }],
 };
 const m12Run = runMigration(M12_MANIFEST, { baseDir: FIX });
@@ -7157,7 +7206,7 @@ const E1_MANIFEST = {
   addRecordMiniPage: { schema: "MMini" },
   miniPageSchemas: { MMini: { entity: "M", seed: KC_SEED, schemas: [{ pkg: "P", body: E1_MINI_BODY }] } },
   planMeta: { sectionSchema: "MSection", listTemplate: "ListPageTemplate", formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const e1Run = runMigration(E1_MANIFEST, { baseDir: FIX });
 const e1Opts = checklistOpts(E1_MANIFEST);
@@ -7234,7 +7283,7 @@ const E2_MANIFEST = {
   childPageSchemas: Object.fromEntries(Array.from({ length: E2_N }, (_, i) => [`E${i}Page`, { entity: `E${i}`, seed: KC_SEED,
     schemas: [{ pkg: "P", body: `define("E${i}Page",[],function(){return{entitySchemaName:"E${i}",diff:[{operation:"insert",name:"F${i}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F${i}"}}]};});` }] }])),
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const e2Dir = fs.mkdtempSync(path.join(os.tmpdir(), `c2f_e2_${process.pid}_`));
 try {

@@ -579,6 +579,9 @@ export function mapToFreedom(eff, opts = {}) {
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
+  // ---- Moment 4b: the on-save duplicate check — invisible in the page body, so driven by the on-stand signal ----
+  mapDedupOnSave({ signals: opts.signals, isChildPage }).forEach(d => needsDecision.push(d));
+
   // ---- image / photo components → a REAL crt.ImageInput element (view+viewModel+model diffs) ----
   const _img = mapImages(eff, ctx, F);
   const images = _img.images;
@@ -2004,6 +2007,43 @@ function mapWidgets(eff, opts = {}) {
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
   return { widgets, chromeWidgets, needsDecision, accountedFor };
+}
+
+// Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
+// Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
+// `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
+// `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
+// classifies it as `context`. There is no member to map and no element to gate on — so a plan can only know about
+// it from a resolved on-stand fact. The RULES themselves live on the ENTITY (`DuplicatesRule`, columns `IsActive` /
+// `UseAtSave`), not on the page, so they survive a page migration untouched; what does not survive is the check.
+// MEASURED 2026-08-21 on a stand newer than 8.3.4 (core 10.1.496): Classic posts
+// `DeduplicationService/FindDuplicatesOnSave` and shows its duplicates screen, while the Freedom form page issues
+// only `InsertQuery` and saves the duplicate silently. The platform DOES ship a Freedom implementation —
+// `crt.ValidateDuplicatesOnSaveHandler` registered on `crt.SaveDataRequest`, scoped to `BasePageTemplate` /
+// `BaseMiniPageTemplate` (entity-generic), plus the `DuplicateNotificationPage` dialog — but it fired nothing,
+// and that stand had `DeduplicationWebApiUrl` empty with `ESDeduplication`/`BulkESDeduplication` off. Classic needs
+// no service because its `asyncValidate` falls back to the rule's SQL procedure.
+// Hence the wording rule this row must keep: it is a CHECK, never the claim "Freedom cannot do this". On a stand
+// where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
+// into a lie the day it does.
+function mapDedupOnSave(opts = {}) {
+  // The signal describes the entity of THIS page. A child page migrates a different entity, whose own rules were
+  // never resolved here, so inheriting the parent's answer would state a fact about the wrong entity.
+  if (opts.isChildPage) return [];
+  const s = opts.signals?.deduplication;
+  if (s?.resolved !== true || !s.present) return [];
+  const named = (x) => (typeof x === "string" ? x : (x?.name || x?.caption) || "");
+  const rules = (s.names || s.items || s.rules || []).map(named).filter(Boolean);
+  const ruleList = rules.length ? ` (rule(s): ${rules.join(", ")})` : "";
+  let tail;
+  if (s.serviceConfigured === true) {
+    tail = "The stand's deduplication service IS configured, so the platform's Freedom handler is expected to run — VERIFY it on the built page: save a known duplicate and confirm the `Potential duplicates found` dialog appears (Merge / Save anyway / Edit record).";
+  } else if (s.serviceConfigured === false) {
+    tail = "The stand's deduplication service is NOT configured (`DeduplicationWebApiUrl` empty and/or `ESDeduplication`/`BulkESDeduplication` off) and the Freedom flow runs only through it, so after this migration the check STOPS HAPPENING — silently, with duplicates saved as if clean. Classic keeps working because its `asyncValidate` falls back to the rule's SQL procedure. Decide one: configure the deduplication service on the target stand; keep the Classic page for this entity; install the `Deduplication Freedom UI enhancements` marketplace app; or accept the loss and say so.";
+  } else {
+    tail = "Record whether the target stand's deduplication service is configured — `DeduplicationWebApiUrl` populated AND `ESDeduplication`/`BulkESDeduplication` enabled — as `signals.deduplication.serviceConfigured`. The Freedom flow runs only through that service, so without it this check silently stops happening after the migration.";
+  }
+  return [{ kind: "dedup-on-save", item: "on-save duplicate check", reason: `Classic runs an on-save duplicate check for this entity${ruleList}. ${tail}` }];
 }
 
 // kind → category, ORDERED: the first match wins, so the more specific behaviour sits ahead of the more general
