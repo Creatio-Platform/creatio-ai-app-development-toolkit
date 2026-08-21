@@ -497,8 +497,8 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 // the bottom, so a window that reaches only one of them passes on half the mechanism.
 const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("async function buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("async function buildRound(open)") && /if \(pausedAfter\) \{ deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
-    && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
+  wfSrc.includes("async function buildRound(open)") && /if \(pausedAfter \|\| continuationAfter\) \{ deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+    && /!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
 check("workflow: the checkpoint return is `stopped: 'paused-at-checkpoint'` — a pause is NEVER reported as complete",
   /stopped: 'paused-at-checkpoint'/.test(wfSrc) && !/complete: true[\s\S]{0,80}paused-at-checkpoint/.test(wfSrc));
@@ -656,8 +656,23 @@ check("workflow: the Reconcile prompt tells the agent to RESOLVE each component 
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
 check("workflow: the REFS step is its OWN phase and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
   /phase\('Refs'\)/.test(wfSrc) && /await refsStep\(\)/.test(wfSrc)
-    && /Read \\`\$\{REFS_INDEX\}\\`\. It is REUSABLE only if/.test(wfSrc)
+    && /FIRST, DECIDE WHICH CACHE TIERS ARE STILL VALID/.test(wfSrc)
     && wfSrc.indexOf("await refsStep()") < wfSrc.indexOf("while (true) {"));
+check("ENG-95474 REFS: cache invalidation is tiered — a plan-version change rebuilds plan slices, not stable docs, CLI usage or component docs",
+  /STABLE DOCS tier:[\s\S]*guidance-\*\.md[\s\S]*contracts\.md/.test(wfSrc)
+    && /HOST tier:[\s\S]*cli-usage\.md/.test(wfSrc)
+    && /ENVIRONMENT tier:[\s\S]*components\.md/.test(wfSrc)
+    && wfSrc.includes("EXTEND \\`components.md\\`")
+    && /PLAN tier:[\s\S]*spec-\*\.md[\s\S]*Adjustments/.test(wfSrc)
+    && /Delete only stale plan slice files/.test(wfSrc)
+    && /do not delete reusable guidance\/contracts\/cli\/component files just because another tier is stale/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("FIRST, DECIDE WHICH CACHE TIERS"), wfSrc.indexOf("For stale or missing tiers")).slice(0, 1200));
+check("ENG-95474 REFS: the index records tier keys plus the full current inventory, so a later run can validate each tier independently",
+  /rewrite it LAST as the complete current cache inventory/.test(wfSrc)
+    && wfSrc.includes("\\`components: ${components.join(', ')}\\`")
+    && wfSrc.includes("\\`planVersion: ${state.planVersion || '(none published)'}\\`")
+    && wfSrc.includes("\\`environment: ${input.environment}\\`")
+    && wfSrc.includes("\\`cliHost: <the same \\`hostname\\` value"));
 // --- the seven findings from the branch review. Each one is a FALSE SUCCESS or a nontermination path: the run
 // reports done, or never stops, while the thing it exists to guarantee did not happen.
 const bhSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
@@ -693,17 +708,16 @@ check("behaviour analysis: completion requires a Merge that actually produced th
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
 
-check("workflow: the refs cache is invalidated on a DIFFERENT plan version, environment OR CLI HOST, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch, and a slice built through another machine's clio describes that machine's stand",
-  // Pins the SHIPPED wording, and the escaping is load-bearing: the phrase lives inside a template
-  // literal, so the backticks around each key are backslash-escaped in the source and the pattern has
-  // to match that. A pattern without the escape silently never matches, which is a pin that passes
-  // nothing while looking like it passes something.
-  /records ALL THREE of \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
-    && /\\`cliHost:\\` line whose value equals THIS machine's/.test(wfSrc)
-    && /REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc)
-    && /planVersion: \$\{state\.planVersion/.test(wfSrc));
+check("workflow: the refs cache invalidates by tier, not all-or-nothing — stale plan slices, stand component docs and host CLI facts do not force unrelated tiers to rebuild",
+  /The cache is TIERED/.test(wfSrc)
+    && /A different host is silent-wrong/.test(wfSrc)
+    && /A different environment is silent-wrong/.test(wfSrc)
+    && /A new plan version means the per-page slices/.test(wfSrc)
+    && /If only SOME tiers are stale, rebuild only those tiers/.test(wfSrc)
+    && !/REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc));
 check("workflow: the index is written LAST, so a half-built cache cannot read as a finished one",
-  /Write this file LAST/.test(wfSrc));
+  /rewrite it LAST as the complete current cache inventory/.test(wfSrc)
+    && /An index written before the files it lists would let a half-built cache read as a finished one/.test(wfSrc));
 check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
   /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
     && /Do not treat the missing file as a defect/.test(wfSrc));
@@ -722,17 +736,22 @@ check("workflow: Reconcile transcribes the DIGEST, not the full verdict, and the
   /--verify-digest \$\{q\(VERIFY_DIGEST\)\}/.test(wfSrc) && /the DIGEST, not \$\{VERIFY_JSON\}/.test(wfSrc));
 check("workflow: the parent edge is COPIED from `--units`, and reconstructing it from the plan's prose is forbidden",
   /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
-check("workflow: each unit writes its OWN worklog file and is told not to read the shared log; Close assembles worklog.md by APPENDING",
-  /worklogFile\(unit\.key\)/.test(wfSrc) && /Do NOT read or append to the shared/.test(wfSrc)
-    && /APPEND\. Never rewrite or reorder/.test(wfSrc) && /close:worklog/.test(wfSrc));
+check("ENG-95474 C4: each sequential Build unit writes its own audit file AND appends the same entry to worklog.md, so no Close worklog agent is needed",
+  /worklogFile\(unit\.key\)/.test(wfSrc)
+    && /sharedWorklogPath: `\$\{input\.outDir\}\/worklog\.md`/.test(wfSrc)
+    && /Build units run sequentially, so this append has no writer race and removes the old Close agent/.test(wfSrc)
+    && !/close:worklog/.test(wfSrc));
 check("workflow: the app unit's package answer is checked as an EQUALITY against the plan's target — a near-match is a blocker, not an acceptance, because every placement row gates on the plan's package",
   /got === unit\.package/.test(wfSrc) && /package MISMATCH/.test(wfSrc) && /packageState = 'exists'/.test(wfSrc));
 check("workflow: the starter page `create-app` minted is recorded as `main`'s schema, so `main` EDITS it instead of trying to create the page again",
   /pageSchemas\.main = res\.starterFormPage/.test(wfSrc));
 check("workflow: Reconcile is asked for the package state as THREE values and told not to resolve doubt into either answer",
   /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
-check("workflow: the builders' answer is persisted BEFORE Verify runs — a stop in that window used to drop every blocker the round produced",
-  /await persistPending\(`recording what round \$\{round\}'s builders reported`\)[\s\S]{0,400}lastVerifier = await verifyRound/.test(wfSrc));
+check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fallback persistence only if Verify cannot confirm that write",
+  /lastVerifier = await verifyRound\(builtThisRound, claims, carryNow\(\)\)/.test(wfSrc)
+    && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
+    && /Verify did not confirm the queue carry write/.test(wfSrc)
+    && /await persistPending\(`recording what round \$\{round\}'s builders reported after verify`\)/.test(wfSrc));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -839,7 +858,7 @@ check("ENG-95503: the batch gate treats a blank answer as no answer, and empty/m
 const CBP_ANSWER = "Full name, Stage, Request, Responsible, Source, Modified on";
 const cbpBlock = wf.resolutionsBlockText(
   wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
-const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md",
+const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md", sharedWorklogPath: "worklog.md",
   kindBlock: "KIND-BLOCK", repair: "", resolutions: cbpBlock, findings: "", checkFirst: "",
   guidelinesReturn: "GUIDELINES-BLOCK" };
 // EVERY composed prompt, every args shape: the literal "undefined" must not appear. A bare-interpolated parameter
@@ -1407,21 +1426,51 @@ check("engine: `memberDispositions` accepts only the four dispositions the gate'
 // --- round 4 of the branch review. All three are things a run does WRONG while reporting fine.
 check("workflow: the round budget is charged per DISPATCH, not per open unit — Reconcile charged every unit a checkpoint deferred and every unit on a run that hard-stopped and built nothing, so three such invocations parked a tree nobody had touched",
   /const dispatched = new Set\(\)/.test(wfSrc)
-    && /dispatched\.add\(unit\.key\)/.test(wfSrc)
+    && /chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
     && /ROUND COUNTERS — INCREMENT/.test(wfSrc)
     && /PRESERVE the \\`rounds\\` counter each unit already has/.test(wfSrc)
     && !/INCREMENT \\`rounds\\` by 1 for every unit whose/.test(wfSrc));
+check("ENG-95474 BUILD continuation: the builder has a prompt-level budget and a structured continuation result",
+  /const BUILD_TURN_BUDGET = Number\(input\.buildTurnBudget\)/.test(wfSrc)
+    && /BUILD CONTINUATION BUDGET:/.test(wfSrc)
+    && /continuationRequested: true/.test(wfSrc)
+    && /safeContinuationPoint/.test(wfSrc)
+    && /continuationReason/.test(wfSrc)
+    && /will not charge this as a repair round/.test(wfSrc));
+check("ENG-95474 BUILD continuation: continuation handoff is verified but does NOT spend the repair-round counter",
+  /const chargeBuildAttempt = \(key\) => \{[\s\S]{0,180}?localRounds\[key\][\s\S]{0,180}?dispatched\.add\(key\)/.test(wfSrc)
+    && /const continuation = res\.continuationRequested === true/.test(wfSrc)
+    && /if \(!continuation\) chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
+    && /build continuation \$\{continuations\[unit\.key\]\} requested[\s\S]*does not consume a repair round/.test(wfSrc)
+    && /CONTINUATION after/.test(wfSrc));
+check("ENG-95474 BUILD continuation: continuation counts are tracked and persisted separately from repair rounds",
+  /continuationOf: \{ type: 'object', additionalProperties: \{ type: 'integer' \} \}/.test(wfSrc)
+    && /const continuations = \{\}/.test(wfSrc)
+    && /continuations\[unit\.key\] = \(continuations\[unit\.key\] \?\? 0\) \+ 1/.test(wfSrc)
+    && /BUILD CONTINUATIONS — set each unit's \\`continuations\\` counter/.test(wfSrc)
+    && /never fold it into \\`rounds\\`/.test(wfSrc)
+    && /continuationOf\\` = the continuations counter now on file/.test(wfSrc));
+check("ENG-95474 BUILD continuation: an unfinished continuation result cannot also trigger a human checkpoint pause",
+  /if \(!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)\)/.test(wfSrc));
 check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistPending` runs more than once per round, and re-sending the same set charged one build attempt two or three times, parking a unit before it spent its real repair rounds",
   /dispatched\.clear\(\)/.test(wfSrc)
     && /dispatched\.clear\(\)[\s\S]{0,200}carryPersisted = carryFingerprint\(\)/.test(wfSrc)
     && !/if \(persisted\?\.written\) \{ markParksPersisted\(\); carryPersisted = carryNowFp \}/.test(wfSrc));
-check("workflow: the dispatched set rides in the carry, so it is written by the persistence step that runs right after the build — a kill still cannot come back with the budget reset",
+check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by Verify/Reconcile on the normal path and by fallback persistence only when needed — a kill still cannot come back with the budget reset",
   /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\]\]\)/.test(wfSrc));
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence\]\)/.test(wfSrc)
+    && /markCarryPersisted\(\)/.test(wfSrc)
+    && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",
   /reconcile:after-preflight/.test(wfSrc)
     && wfSrc.indexOf("reconcile:after-preflight") < wfSrc.indexOf("const DRY_RUN = input.dryRun === true")
     && wfSrc.indexOf("reconcile:after-preflight") < wfSrc.indexOf("while (true) {"));
+check("ENG-95474 C4: preflight evidence is returned structurally and filed by Judge, so the dedicated preflight merge agent is gone without adding an extra Reconcile",
+  /structured evidence returned to the next Reconcile/.test(wfSrc)
+    && /function preflightEvidenceJudgeBlock/.test(wfSrc)
+    && /judgeRound\(preIds, preflightEvidence\)/.test(wfSrc)
+    && !/PREFLIGHT_MERGE_SCHEMA/.test(wfSrc)
+    && !/preflight:merge/.test(wfSrc));
 check("workflow: every path in a generated engine command is SHELL-QUOTED — a migration folder with a space split into two arguments and every phase then read or wrote the wrong path, with no error",
   /const q = \(v\) =>/.test(wfSrc)
     && /const cli = \(flags\) => `node \$\{q\(ENGINE\)\} \$\{q\(input\.manifest\)\}/.test(wfSrc)
@@ -1854,6 +1903,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     // above takes, and for the same reason.
     const STUBS = String.raw`
 const MAX_ROUNDS = 3
+const BUILD_TURN_BUDGET = 80
 const REFS_DIR = "/m/refs"
 const REFS_INDEX = "/m/refs/index.md"
 const BUILT_FILE = "/m/built.json"
