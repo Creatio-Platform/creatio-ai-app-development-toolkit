@@ -72,7 +72,7 @@ import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
-  pageUnitsSlice, builtSlice, IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
+  pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2467,7 +2467,27 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The PER-PAGE slices, written BEFORE the verdict files below so a bad `--slices` exits 1 with nothing
     // written at all. They are written on exit 2 as well: a run with open rows is when a builder needs its row.
     if (slicesDir) writePageSlices(slicesDir, "built", builtUnits, (k) => builtSlice(builtUnits, built, k), fail);
-    if (pageArg) {
+    if (pageArg && verifyJsonFile) {
+      // THE IN-CONTEXT SINGLE-UNIT GATE (ENG-95469, A3). `--verify --page <key> --verify-json <file>` is no longer a
+      // pure read: it runs the SAME detector the full sweep does, SCOPED to one page, so a build agent can gate its
+      // own unit in its own context BEFORE reporting complete. `verifyUnit` supplies the machine verdict (the page's
+      // slice of the reconciliation — `{ complete, missing, unverified, openRows, planGaps }`), and the human table
+      // is the SCOPED `renderVerify` (this page's rows only). The exit gates on THIS page: incomplete ⇒ exit 2, the
+      // same hard done-gate the full `--verify` applies, so the builder's bounded self-check fails loudly rather than
+      // closing a short unit. Without `--verify-json` the `--page` path stays the pure built-slice read (below).
+      const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
+      // `--page` is already guarded by `requirePublishedKey` above, so this normally cannot fire — but a `verifyUnit`
+      // that returns an explicit `error` (an unknown/mismatched page key, PR review T4) must fail LOUDLY and
+      // distinctly here rather than be written to the verdict file as a false green, in case the two key notions ever
+      // diverge. A broken gate is an exit-1 diagnosis, never a complete verdict.
+      if (unitVerdict.error) fail(`--verify --page '${pageArg}': ${unitVerdict.error} — this key is not a page this plan reconciles. Run \`--units\` on this manifest for the exact page keys.`);
+      try { fs.writeFileSync(verifyJsonFile, JSON.stringify(unitVerdict, null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
+      verifyRes = renderVerify(result, { ...checklistOpts(manifest), scopePageKey: pageArg }, built);
+      output = verifyRes.markdown + "\n";
+      verifyIncomplete = !unitVerdict.complete;
+    }
+    else if (pageArg) {
       output = JSON.stringify(builtSlice(builtUnits, built, pageArg), null, 2) + "\n";
     }
     else {
