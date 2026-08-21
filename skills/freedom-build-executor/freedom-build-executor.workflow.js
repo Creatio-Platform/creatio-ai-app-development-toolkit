@@ -934,8 +934,14 @@ const isUnitOpen = (unit, verify, reachState, packageState) => {
 // blocked set, so `main` stops being schedulable and the loop can break with `main` never built; `complete`
 // becomes false on a green gate; and `parkWhy` composes a question with no answerable content ("0 MISSING + 0
 // unconfirmed row(s)"). A closed unit is not a stuck unit.
-const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState) =>
+// `alreadyParked` is EXCLUDED (PR review T2b): the in-context park (`applyInContextParks`) runs FIRST this round and
+// adds its keys to `parkedSet`, so a unit eligible for BOTH the in-context path and this round-budget path is parked
+// exactly ONCE — here the dedup is a PURE input (same shape and role as `inContextParkableKeys`'s `alreadyParked`),
+// so the "parked once, one reason" interaction of the two paths is unit-testable rather than resting on the impure
+// `parkedSet.has` guard in `applyParks` alone.
+const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState, alreadyParked = null) =>
   parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key))
+    .filter((k) => !(alreadyParked && alreadyParked.has(k)))
 
 // ENG-95469 — the ONE self-check outcome that PARKS a page IN-CONTEXT, as a predicate `buildRound` can test (PR
 // review T3): the builder ran its scoped gate (`ran: true`), the engine's single-unit verdict is still NOT complete
@@ -1825,8 +1831,10 @@ function applyParks() {
     if (p?.key && !parkedSet.has(p.key)) fresh.push(parkRecord(p.key, p.parkedWhy, p.rounds))
   }
   // Budget-spent AND STILL OPEN — see `parkableKeys`. Never `schedule` wholesale: that parks a unit whose last
-  // budgeted round actually closed it, and a park blocks its ancestors.
-  for (const k of parkableKeys(state.roundOf, localRounds, schedule, state.verify, state.reachabilityState, packageState)) {
+  // budgeted round actually closed it, and a park blocks its ancestors. `parkedSet` is handed in so a unit the
+  // in-context park already claimed THIS round (it ran first) is excluded by the pure predicate, not only by the
+  // `!parkedSet.has(k)` guard below — the two park paths cannot double-park the same unit.
+  for (const k of parkableKeys(state.roundOf, localRounds, schedule, state.verify, state.reachabilityState, packageState, parkedSet)) {
     if (!parkedSet.has(k) && !fresh.some((f) => f.key === k)) fresh.push(parkRecord(k))
   }
   if (!fresh.length) return []

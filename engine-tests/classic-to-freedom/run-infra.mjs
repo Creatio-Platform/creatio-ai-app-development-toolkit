@@ -330,6 +330,30 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
     () => wf.inContextParkableKeys(scShort, unitForA, { pages: {} }, {}, undefined, new Set()).join(",") === "child:A");
 }
 
+// --- ENG-95469 (PR review T2b): the TWO park paths cannot DOUBLE-PARK one unit, EXECUTED (not only source-pinned).
+// A unit that is BOTH self-check-short-and-open (the in-context path) AND budget-spent-and-open (the round-budget
+// path) in the SAME round must park exactly ONCE, with one reason and no duplicate entry. `applyInContextParks` runs
+// first and adds its keys to `parkedSet`; `parkableKeys` now takes that set as `alreadyParked` and excludes it — so
+// the "parked once" property is a PURE composition of the two predicates, provable here rather than resting on the
+// impure `!parkedSet.has` guard inside `applyParks` alone.
+{
+  const K = "child:A";
+  const unitK = [{ key: K, kind: "page" }];
+  const openVerify = { pages: {} };                    // absent verdict entry ⇒ OPEN, for BOTH predicates
+  const budgetSpent = { [K]: 3 };                      // localRounds ⇒ roundsRun === MAX_ROUNDS ⇒ budget spent
+  const scShortK = [{ key: K, shortRows: [] }];
+  const inContext = wf.inContextParkableKeys(scShortK, (k) => ({ key: k, kind: "page" }), openVerify, {}, undefined, new Set());
+  check("ENG-95469 T2b: a unit eligible for BOTH park paths is selected by each in isolation — in-context (short AND independently open) and round-budget (budget spent AND still open)",
+    () => inContext.join(",") === K
+      && wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set()).join(",") === K,
+    () => ({ inContext, budget: wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set()) }));
+  check("ENG-95469 T2b: once the in-context park has CLAIMED the unit (its key added to the parked set), the round-budget `parkableKeys` EXCLUDES it — the two paths park the unit exactly once, no duplicate record",
+    () => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set(inContext)).length === 0,
+    () => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set(inContext)));
+  check("ENG-95469 T2b: `applyParks` HANDS `parkedSet` to `parkableKeys` as the alreadyParked filter — the pure dedup is actually wired, so a refactor cannot drop it and leave only the local guard",
+    /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, parkedSet\)/.test(wfSrc));
+}
+
 // --- ENG-95469 (PR review T5): the INDEPENDENT-SIGNAL cross-check, EXECUTED. A builder's `selfCheck` is its own word
 // that the scoped gate ran and passed; `selfCheckMismatches` reconciles each page unit's self-report against the
 // independent post-hoc verifier and names the two ways they can disagree, for a unit the verifier finds still OPEN.
@@ -475,6 +499,35 @@ check("ENG-95471 review fix: a quote inside a builder value cannot reshape the f
 
 check("ENG-95471 / ENG-95469: `guidelines` AND `selfCheck` are REQUIRED on the page build schema — optional `guidelines` let a builder close on silence, and A3's in-context gate (`selfCheck`) must run before a page reports complete",
   /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'\]/.test(wfSrc));
+// ENG-95469 (PR review T7/T8): the required `selfCheck` field is an intentionally-BREAKING contract change; pin the
+// boundary as an EXECUTED object-level check driven by the SHIPPED `required` lists (parsed from source, so it cannot
+// drift from a copy). `reqOf` lifts a `required: [...]` array out of `wfSrc`; `missingReq` is the top-level
+// required-presence check the boundary turns on (types/nesting are not what changed here — the field count did).
+const reqOf = (re) => { const m = re.exec(wfSrc); return m ? m[1].split(",").map((s) => s.trim().replace(/^'|'$/g, "")).filter(Boolean) : null; };
+const missingReq = (obj, req) => (req || []).filter((k) => !(k in obj));
+const PAGE_REQ = reqOf(/const BUILD_SCHEMA_PAGE = \{[^}]*?required:\s*\[([^\]]*)\]/);
+const SC_REQ = reqOf(/selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\[([^\]]*)\]/);
+// The pre-PR 4-field page-unit shape (no `selfCheck`), and the current 5-field shape whose `selfCheck` uses the
+// documented `ran:false` + `notRunWhy` escape hatch the breaking-change argument leans on.
+const prePrPageResult = { unit: "main", claimedBuilt: ["crt.Input"], schemaName: "UsrMainPage",
+  guidelines: { evidenceId: "main#quality-gates", ran: true, referencePage: "UsrRef", componentsDiffed: ["crt.Input"] } };
+const scRanFalse = { ran: false, notRunWhy: "could not get-page this unit's page on this template" };
+const currentPageResult = { ...prePrPageResult, selfCheck: scRanFalse };
+check("ENG-95469 T7: the SHIPPED page build contract now requires `selfCheck` — the pre-PR 4-field result (no `selfCheck`) FAILS the required set and the 5-field result PASSES, pinning the intentionally-breaking boundary against the shipped `required` list itself",
+  () => Array.isArray(PAGE_REQ) && PAGE_REQ.includes("selfCheck")
+    && missingReq(prePrPageResult, PAGE_REQ).includes("selfCheck")
+    && missingReq(currentPageResult, PAGE_REQ).length === 0,
+  () => ({ PAGE_REQ, oldMissing: missingReq(prePrPageResult, PAGE_REQ), newMissing: missingReq(currentPageResult, PAGE_REQ) }));
+check("ENG-95469 T8: the `ran:false` + `notRunWhy` escape hatch is a VALID page unit — `selfCheck` requires only `ran`, so `{ran:false, notRunWhy}` satisfies both the nested `selfCheck` required set and the full page required set (a build agent that legitimately cannot run the scoped gate stays valid without the version bump)",
+  () => Array.isArray(SC_REQ) && SC_REQ.length === 1 && SC_REQ[0] === "ran"
+    && missingReq(scRanFalse, SC_REQ).length === 0
+    && missingReq(currentPageResult, PAGE_REQ).length === 0,
+  () => ({ SC_REQ, scMissing: missingReq(scRanFalse, SC_REQ) }));
+check("ENG-95469 T8: a `ran:false` self-check takes the correct park-decision paths — EXCLUDED from `selfCheckStillShort` (no in-context park), and treated as OPEN/`gate-not-run` (never a false complete) by `selfCheckMismatches` when the independent verifier finds the unit open",
+  () => wf.selfCheckStillShort(scRanFalse) === false
+    && wf.selfCheckMismatches([{ key: "main", sc: scRanFalse }], () => ({ key: "main", kind: "page" }), { pages: {} }, {}, undefined)
+         .some((m) => m.key === "main" && m.kind === "gate-not-run"),
+  () => wf.selfCheckMismatches([{ key: "main", sc: scRanFalse }], () => ({ key: "main", kind: "page" }), { pages: {} }, {}, undefined));
 // EXECUTED, not matched: the schema decision is a pure helper now, so the four outcomes are run rather than
 // regexed, and the dispatch site is pinned separately as a seam.
 check("ENG-95471 review fix: the schema is selected by whether the unit OWES the record, not by kind alone",

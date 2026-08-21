@@ -88,7 +88,20 @@ verifier finds open (a fabricated green the in-context park would miss, since it
 `complete: false`), or one that returned `ran: false` on a still-open unit (the gate bypassed). The
 cross-check changes no verdict — the `--verify` sweep remains the authoritative evidence — it only
 removes the "nothing independently checks the scoped gate ran" gap by naming where the self-report
-and the independent detector part ways. The in-context gate only moves the *discovery* of a shortfall
+and the independent detector part ways.
+
+Read the "never a self-graded claim" guarantee no wider than it holds: it covers exactly
+`complete` / `missing` / `unverified`, the engine's arithmetic transcribed. The two fields the
+in-context park path actually gates on — `selfCheck.ran` and `selfCheck.fixAttempted` — are **not**
+in the engine's verdict file; they are the builder's own self-report, so a builder can keep its own
+unit out of the in-context park by reporting `ran: false` or `fixAttempted: false`. Their only
+backstop is the guard-3 cross-check above, which is **non-blocking** — it records the discrepancy in
+the run's audit trail, it does not force a park — and the round-budget post-hoc park, which still
+catches a genuinely-open unit within its round budget no matter what the self-report claimed. So the
+in-context gate is an *earlier-discovery* optimisation resting partly on builder honesty for `ran` /
+`fixAttempted`; the correctness floor is the independent post-hoc verifier, never the self-report.
+
+The in-context gate only moves the *discovery* of a shortfall
 earlier and caps the fix at one attempt. Never weaken the build to make the gate pass — a fabricated
 green is unrecoverable (see "Never weaken a gate to reach green" below).
 
