@@ -1,0 +1,464 @@
+// build-executor/schemas.mjs — the response contracts of the build run.
+//
+// Structured output everywhere a later phase or the core COMPUTES on the answer; prose only in fields a human
+// reads. A host without structured output cannot run this workflow at all, which is why `structuredOutput` is a
+// REQUIRED capability rather than a degradable one.
+
+// Mirrors the `--verify-json` FILE, field for field, plus the CLI's exit code and the PLAN-level
+// stderr lines. Nothing else is allowed to reach the verdict — the reconcile agent copies that file,
+// so this schema is a transport check, not a place where an agent's reading of a table gets in.
+export const VERIFY_RESULT = {
+  type: 'object',
+  required: ['complete', 'missing', 'unverified', 'pages'],
+  properties: {
+    complete: { type: 'boolean' },
+    missing: { type: 'integer' },
+    unverified: { type: 'integer' },
+    planGaps: { type: 'array', items: { type: 'string' } }, // D12: non-empty ⇒ the PLAN is short, not the build
+    pages: {
+      type: 'object',
+      additionalProperties: {
+        type: 'object',
+        required: ['complete'],
+        properties: {
+          complete: { type: 'boolean' },
+          missing: { type: 'integer' },
+          unverified: { type: 'integer' },
+          // Every row that is not ✅, as the engine emitted it: the same Deliverable / Status /
+          // Evidence text the table shows. These are what the next build round is handed.
+          openRows: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['deliverable', 'status', 'evidence'],
+              properties: {
+                n: { type: 'integer' },
+                deliverable: { type: 'string' },
+                status: { type: 'string' },
+                evidence: { type: 'string' },
+                outcome: { type: 'string' },
+                id: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
+export const PREFLIGHT_ITEM = {
+  type: 'object',
+  required: ['id', 'pageKey'],
+  properties: {
+    id: { type: 'string' },        // EXACTLY as `--units` published it
+    pageKey: { type: 'string' },
+    kind: { type: 'string' },
+    item: { type: 'string' },
+    requires: { type: 'array', items: { type: 'string' } },
+    // THE OPERATOR'S ANSWER, as `--units.preflight[].resolution` published it. `null` is LEGAL and EXPECTED — the
+    // engine publishes it on every unanswered item, and an object-only schema would force the agent to omit the
+    // field instead, which cannot be told apart from an engine that publishes no answers at all.
+    // An INPUT: Preflight files the record FROM it and the judge still rules on that record; it closes no row.
+    resolution: {
+      type: ['object', 'null'],
+      required: ['answer'],
+      properties: { answer: { type: 'string' }, decidedBy: { type: 'string' }, date: { type: 'string' } },
+    },
+  },
+}
+
+export const RECONCILE_SCHEMA = {
+  type: 'object',
+  required: ['approval', 'planVersion', 'unitKeys', 'buildOrder', 'reachabilityState', 'verify', 'planGaps', 'roundOf',
+    // Both package facts are REQUIRED. A schema-valid result that simply omitted `packageState` left it `undefined`,
+    // which was neither 'unknown' (so nothing stopped) nor 'exists' (so an app unit was scheduled) — i.e. `create-app`
+    // against what may be a live application, on a run that never established whether the package was there.
+    // `evidenceIds` is REQUIRED for the same reason: the UI-guidelines close row keys off it, and a result that
+    // omitted it left the row inert — the gate silently off on the run that needs it. `evidenceFiled` and
+    // `evidenceRejected` are required because the close row's overwrite guard reads them: absent, it cannot tell
+    // an unfiled id from an earned one, and it then fails closed on every honest `ran: false`.
+    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected'],
+  properties: {
+    // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
+    // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
+    // does not authorise building v3.
+    approval: {
+      type: 'object',
+      required: ['found'],
+      properties: {
+        found: { type: 'boolean' },
+        version: { type: 'string' },
+        date: { type: 'string' },
+        who: { type: 'string' },
+        recordedIn: { type: 'string' },
+        quote: { type: 'string' },   // the entry verbatim, so the caller can check the script's arithmetic
+      },
+    },
+    // VERBATIM from `--units.planVersion` — the engine's own deterministic hash over the manifest inputs that
+    // define the plan. NOT read out of `plan.md`, and never composed: `plan.md` is ENGINE-WRITTEN and presented
+    // verbatim, so it carries whatever `--plan` printed and nothing an agent could add would survive a re-run.
+    planVersion: { type: 'string' },
+    unitKeys: { type: 'array', items: { type: 'string' } },        // `--units.pages[].key`, verbatim
+    buildOrder: { type: 'array', items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
+    // THE TARGET PACKAGE, and whether it EXISTS. Nothing in the run used to ask, and the omission cost a whole
+    // run: on a migration into a NEW application every page unit is unbuildable until the package exists, and
+    // `create-app` — the only way to obtain it — also mints the starter pages that are `main`'s deliverable, which
+    // a child-page builder must not create. Leaf-first puts every child BEFORE `main`, so each one correctly
+    // refused and reported blocked, three rounds each, and the run wrote nothing at all. Measured: 12 agents,
+    // 1.9M tokens, `built.json.pages` empty. So the state is now DATA the script schedules on.
+    targetPackage: { type: ['string', 'null'] },   // `--units.pages[].targetPackage` for `main`, VERBATIM
+    // 'exists' — confirmed present on the stand · 'absent' — confirmed not there · 'unknown' — could not tell.
+    // Three states, not a boolean: 'unknown' must not read as "go ahead and create it" (a second `create-app`
+    // over an existing app is not a no-op) nor as "it is there" (which puts every unit back in the loop that
+    // wasted the run). It stops the run and says which check was inconclusive.
+    packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
+    // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
+    // section it creates to THIS, and the gate compares every built page against the same string.
+    mainEntity: { type: ['string', 'null'] },
+    // WHERE THE SECTION IS REGISTERED, as the approved plan decided it — `--units.sectionHost`, verbatim.
+    // NOT required: a plan written before placement was gated publishes none, and `null` must keep this run
+    // behaving exactly as it did then. What it changes when present: `new-app` over an EXISTING package is a
+    // stop (create-app cannot mint a package that is already there), and `pages-only-no-menu` means no section
+    // is registered at all — an executor that "helpfully" registers one has built what the plan dropped.
+    sectionHost: { type: ['string', 'null'], enum: ['existing-app', 'new-app', 'pages-only-no-menu', null] },
+    // The application the section belongs in — `--units.applicationCode`, verbatim. `null` under `new-app`
+    // (it does not exist yet) and `pages-only-no-menu` (nothing is registered). It exists so the unit doing the
+    // registration READS the approved app: in the run this field comes from, the agent had none in front of it,
+    // resolved one off the stand by name, and registered against an app that could not host a section at all.
+    applicationCode: { type: ['string', 'null'] },
+    // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
+    // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
+    componentTypes: { type: 'array', items: { type: 'string' } },
+    // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
+    // resolved against the TARGET stand: `{ type, resolved, note }`. This is what the pre-build component gate
+    // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
+    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
+    // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
+    // run that predates this field behaves exactly as it did before.
+    // DEFERRED (ENG-95468 Scope, tracked as a follow-up — see the PR body): resolution is NOT yet checked BY KIND
+    // (`component` / `composite` / `compositeOnly`) and the mapper's `FEATURE_CATALOG` does not yet carry a typed
+    // `{ kind, id }` intent. Until it does, the stop cannot branch its guidance by cause (a type that is not a
+    // component type at all vs a real component whose package/feature is un-installed), and the correct-target
+    // half of the message depends on the free-text `note` the agent put here — its quality is agent-dependent by
+    // design for now, not an engine-published fact.
+    componentResolution: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['type', 'resolved'],
+        properties: {
+          type: { type: 'string' },
+          resolved: { type: 'boolean' },
+          note: { type: 'string' },
+        },
+      },
+    },
+    // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
+    // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
+    // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
+    // answer is kept: this is read from `units[<key>].schemaName` there, and it is what makes a build
+    // started in an earlier session verifiable in this one.
+    pageSchemas: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
+    // The parent edge `--units` does NOT publish. Supplied when the plan's nested Child page
+    // mappings make it derivable; `null` per key when it is not. Without it the park arithmetic
+    // below degrades to an APPROXIMATION and says so in the return.
+    parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
+    reachability: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['key', 'appliesWhen'],
+        properties: {
+          key: { type: 'string' },
+          appliesWhen: { type: 'boolean' },
+          pages: { type: 'array', items: { type: 'string' } },
+          what: { type: 'string' },
+          miss: { type: 'string' },
+        },
+      },
+    },
+    // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
+    // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
+    reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
+    preflightItems: { type: 'array', items: PREFLIGHT_ITEM },
+    // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
+    // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
+    // the operator believes is applied.
+    // IDENTIFIERS ONLY — no `answer` text. An agent retypes every field of this into a tool call each round, and the
+    // text is already in the operator's own file; naming which answer missed is the whole job.
+    resolutionsUnmatched: {
+      type: 'array',
+      items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, item: { type: 'string' } } },
+    },
+    resolutionsConflicts: {
+      type: 'array',
+      items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, item: { type: 'string' } } },
+    },
+    evidenceIds: { type: 'array', items: { type: 'string' } },
+    // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
+    // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
+    // judge is only ever handed ids, so a record nobody names is a page that can never close.
+    unjudgedEvidenceIds: { type: 'array', items: { type: 'string' } },
+    // WHAT IS ALREADY ANSWERED, so Preflight does not re-derive it. `--units.preflight` is the plan's list of open
+    // questions and says nothing about which have been resolved; without these two a resumed run re-ran the whole
+    // fan-out over records that were already on file, and the merge would overwrite each one with the second
+    // answer. Both are read off the built file, and both may be empty on a first run.
+    evidenceFiled: { type: 'array', items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
+    evidenceRejected: { type: 'array', items: { type: 'string' } },  // ids the judge ruled `convincing: false`
+    // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
+    // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
+    // round for a unit its predecessor already gave up on and asked the user about.
+    parkedUnits: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['key'],
+        properties: { key: { type: 'string' }, parkedWhy: { type: 'string' }, rounds: { type: 'integer' } },
+      },
+    },
+    // Plan deviations, blockers and builder-vs-stand disagreements already in the queue file from an
+    // earlier session. They seed this run's lists so a kill does not erase what a previous one recorded.
+    proposals: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['deviation', 'why'],
+        properties: { unit: { type: 'string' }, deviation: { type: 'string' }, why: { type: 'string' }, applied: { type: 'boolean' } },
+      },
+    },
+    blocked: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['what', 'why'],
+        properties: { unit: { type: 'string' }, what: { type: 'string' }, why: { type: 'string' } },
+      },
+    },
+    discrepancies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['unit', 'claim', 'found'],
+        properties: { unit: { type: 'string' }, claim: { type: 'string' }, found: { type: 'string' }, round: { type: 'integer' } },
+      },
+    },
+    // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
+    // the run; trusting it silently builds a page nothing gates.
+    staleQueueKeys: { type: 'array', items: { type: 'string' } },
+    newKeys: { type: 'array', items: { type: 'string' } },
+    verify: VERIFY_RESULT,
+    exitCode: { type: 'integer' },
+    // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
+    // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
+    planGaps: { type: 'array', items: { type: 'string' } },
+    roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
+    verifyTablePath: { type: 'string' },
+    notes: { type: 'string' },
+  },
+}
+
+export const PREFLIGHT_SCHEMA = {
+  type: 'object',
+  required: ['resolved'],
+  properties: {
+    resolved: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'answer'],
+        properties: {
+          id: { type: 'string' },
+          answer: { type: 'string' },
+          referencePage: { type: 'string' },
+          components: { type: 'array', items: { type: 'string' } },
+          filedAsFalse: { type: 'boolean' },   // checked, and the deliverable is genuinely not applicable
+        },
+      },
+    },
+    unresolved: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'why'],
+        properties: { id: { type: 'string' }, why: { type: 'string' }, settlingQuery: { type: 'string' } },
+      },
+    },
+  },
+}
+
+// The one sequential writer that folds the parallel preflight files into `built.json`. It exists because the
+// fan-out must not share a write target, and this script has no filesystem of its own to do the fold with.
+export const PREFLIGHT_MERGE_SCHEMA = {
+  type: 'object',
+  required: ['written'],
+  properties: {
+    written: { type: 'boolean' },
+    builtFile: { type: 'string' },
+    evidenceWritten: { type: 'array', items: { type: 'string' } },  // ids actually merged into `evidence`
+    filesMissing: { type: 'array', items: { type: 'string' } },     // per-agent files that were absent/unreadable
+    notes: { type: 'string' },
+  },
+}
+
+export const BUILD_PROPERTIES = {
+  unit: { type: 'string' },
+  // The FREEDOM schema this unit's page now resolves to — what a later `get-page` must be given.
+  // MANDATORY for a PAGE unit, and `BUILD_SCHEMA_PAGE` below enforces it: nothing else in the run knows
+  // it, `--units` cannot publish it, and without it the verifier has no page to fetch and the unit can
+  // never close. Every document called it mandatory while the one schema left it optional, so a builder
+  // could return a structurally VALID answer that made its own unit permanently unverifiable.
+  schemaName: { type: 'string' },
+  packageName: { type: 'string' },
+  template: { type: 'string' },
+  // A CLAIM, not evidence — the read-only verifier files what the stand actually returns, and
+  // the script logs any disagreement rather than smoothing it over.
+  claimedBuilt: { type: 'array', items: { type: 'string' } },
+  reboundFrom: { type: 'string' },
+  // The UI-guidelines pass, as the record the verifier files from. REQUIRED on a page unit: an absent answer
+  // is not a valid outcome, `ran: false` with `notRunWhy` is. `evidenceId` is COPIED from this unit's published
+  // ids, never composed — an invented id matches no row. `componentsDiffed` is the prop-diffed set, which is
+  // NOT `claimedBuilt`.
+  guidelines: {
+    type: 'object',
+    required: ['evidenceId', 'ran'],
+    properties: {
+      evidenceId: { type: 'string' },
+      ran: { type: 'boolean' },
+      referencePage: { type: 'string' },
+      componentsDiffed: { type: 'array', items: { type: 'string' } },
+      notRunWhy: { type: 'string' },
+    },
+  },
+  blocked: {
+    type: 'array',
+    items: {
+      type: 'object',
+      required: ['what', 'why'],
+      properties: { what: { type: 'string' }, why: { type: 'string' } },
+    },
+  },
+  // A plan deviation is RETURNED, never applied. The plan is still built as written.
+  proposals: {
+    type: 'array',
+    items: {
+      type: 'object',
+      required: ['deviation', 'why'],
+      properties: { deviation: { type: 'string' }, why: { type: 'string' } },
+    },
+  },
+  // WHAT A HUMAN SHOULD EXERCISE on this page, asked for only at a checkpoint. Sourced from the behaviour
+  // card's ACCEPTANCE CRITERIA for each imperative row the builder ported — including the negative ones, which
+  // are the half a quick look never covers. This is what turns "open it and see if it works" into a scripted
+  // check, and it is the only check the `Form — Logic` rows get at all, since they carry no verification key.
+  checkFirst: {
+    type: 'array',
+    items: {
+      type: 'object',
+      required: ['what', 'how'],
+      properties: {
+        what: { type: 'string' },   // the behaviour, in the card's terms
+        how: { type: 'string' },    // the steps on the page that exercise it, expected result included
+        row: { type: 'string' },    // the plan row / Classic member it came from
+      },
+    },
+  },
+}
+// TWO build schemas over the same properties, because the two unit kinds have different obligations. A PAGE unit
+// must come back with `schemaName` — that is the one fact only the builder holds, and the whole rest of the run
+// (verify, judge, resume in a later session) is unreachable without it. A REACHABILITY unit is a configuration
+// record with no page body, so demanding a schema name there would reject a correct answer.
+export const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines'], properties: BUILD_PROPERTIES }
+// The same page obligations MINUS `guidelines`, for a published page key that carries no quality-gates row (an
+// unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable.
+export const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
+export const BUILD_SCHEMA_REACH = { type: 'object', required: ['unit', 'claimedBuilt'], properties: BUILD_PROPERTIES }
+// The APP unit must come back with the package it actually produced — the one fact the rest of the run schedules
+// on. `packageName` is REQUIRED and is compared against the plan's target by the script, not by the agent: clio
+// derives the package from `code` via the environment's `SchemaNamePrefix`, so "I created the app" is not the same
+// claim as "the package the plan targets now exists".
+export const BUILD_SCHEMA_APP = {
+  type: 'object',
+  required: ['unit', 'packageName'],
+  properties: {
+    ...BUILD_PROPERTIES,
+    packageName: { type: 'string' },       // what the stand actually has now, read back — never the code that was passed
+    appName: { type: 'string' },
+    starterFormPage: { type: 'string' },   // `main`'s deliverable, created as a side effect of `create-app`
+    starterListPage: { type: 'string' },
+  },
+}
+// Keyed by what `buildSchemaKind` returns, so the dispatch site holds a lookup rather than a chain of ternaries.
+export const BUILD_SCHEMAS = { app: BUILD_SCHEMA_APP, page: BUILD_SCHEMA_PAGE, 'page-no-guidelines': BUILD_SCHEMA_PAGE_NO_GUIDELINES, reach: BUILD_SCHEMA_REACH }
+
+export const REFS_SCHEMA = {
+  type: 'object',
+  required: ['written'],
+  properties: {
+    written: { type: 'boolean' },
+    files: { type: 'array', items: { type: 'string' } },
+    // The page keys that ACTUALLY have a slice file. Not every published key does: a reused or unresolved child was
+    // never folded, so it has no design spec of its own and the engine refuses to render one. The build prompt only
+    // claims a slice for the keys in here — telling a unit its slice is ready when the file does not exist, while
+    // forbidding the fallback, would leave it with no spec at all.
+    slices: { type: 'array', items: { type: 'string' } },
+    notes: { type: 'string' },
+  },
+}
+export const VERIFIER_SCHEMA = {
+  type: 'object',
+  required: ['pagesWritten', 'builtFile'],
+  properties: {
+    builtFile: { type: 'string' },
+    pagesWritten: { type: 'array', items: { type: 'string' } },      // keys given a `pages` entry this round
+    pagesRecordedFalse: { type: 'array', items: { type: 'string' } },// keys deliberately recorded absent
+    // Keys this phase could NOT fetch because no Freedom schema is known for them. An explicit
+    // "cannot verify, unknown schema" — never an omission that reads like "nobody got round to it".
+    unknownSchema: { type: 'array', items: { type: 'string' } },
+    // Schemas this phase CONFIRMED on the stand, key → schema name. They are persisted to the queue
+    // file, so a schema learned here survives the session that learned it.
+    schemasConfirmed: { type: 'object', additionalProperties: { type: 'string' } },
+    reachabilityWritten: { type: 'object', additionalProperties: { type: 'string' } },
+    evidenceWritten: { type: 'array', items: { type: 'string' } },   // evidence ids filed
+    // Where the builder's claim and the stand disagree. Kept, not reconciled.
+    discrepancies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['unit', 'claim', 'found'],
+        properties: { unit: { type: 'string' }, claim: { type: 'string' }, found: { type: 'string' } },
+      },
+    },
+    notes: { type: 'string' },
+  },
+}
+
+export const JUDGE_SCHEMA = {
+  type: 'object',
+  required: ['verdicts'],
+  properties: {
+    verdicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'convincing', 'why'],
+        properties: { id: { type: 'string' }, convincing: { type: 'boolean' }, why: { type: 'string' } },
+      },
+    },
+    notes: { type: 'string' },
+  },
+}
+
+// The Close-time persistence pass. It exists because a park is DECIDED after the round's reconcile has
+// already written the queue file, so the last round's parks would otherwise live only in this process —
+// and contract rule 7 is that everything that matters is in a file.
+export const PERSIST_SCHEMA = {
+  type: 'object',
+  required: ['written'],
+  properties: {
+    written: { type: 'boolean' },
+    queueFile: { type: 'string' },
+    parkedKeys: { type: 'array', items: { type: 'string' } },
+    notes: { type: 'string' },
+  },
+}

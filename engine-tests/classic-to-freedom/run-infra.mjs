@@ -495,9 +495,9 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 // places it does are all outside the pure block (they close over run state).
 // The slice must span the WHOLE function: the defer guard is at the top of the loop and the pause decision is at
 // the bottom, so a window that reaches only one of them passes on half the mechanism.
-const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("async function buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
+const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function* buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("async function buildRound(open)") && /if \(pausedAfter\) \{ deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+  wfSrc.includes("function* buildRound(open)") && /if \(pausedAfter\) \{ deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
     && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
 check("workflow: the checkpoint return is `stopped: 'paused-at-checkpoint'` — a pause is NEVER reported as complete",
@@ -655,9 +655,9 @@ check("workflow: the Reconcile prompt tells the agent to RESOLVE each component 
 // tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
 check("workflow: the REFS step is its OWN phase and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
-  /phase\('Refs'\)/.test(wfSrc) && /await refsStep\(\)/.test(wfSrc)
+  /phase\('Refs'\)/.test(wfSrc) && /yield\* refsStep\(\)/.test(wfSrc)
     && /Read \\`\$\{REFS_INDEX\}\\`\. It is REUSABLE only if/.test(wfSrc)
-    && wfSrc.indexOf("await refsStep()") < wfSrc.indexOf("while (true) {"));
+    && wfSrc.indexOf("yield* refsStep()") < wfSrc.indexOf("while (true) {"));
 // --- the seven findings from the branch review. Each one is a FALSE SUCCESS or a nontermination path: the run
 // reports done, or never stops, while the thing it exists to guarantee did not happen.
 const bhSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
@@ -732,7 +732,7 @@ check("workflow: the starter page `create-app` minted is recorded as `main`'s sc
 check("workflow: Reconcile is asked for the package state as THREE values and told not to resolve doubt into either answer",
   /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
 check("workflow: the builders' answer is persisted BEFORE Verify runs — a stop in that window used to drop every blocker the round produced",
-  /await persistPending\(`recording what round \$\{round\}'s builders reported`\)[\s\S]{0,400}lastVerifier = await verifyRound/.test(wfSrc));
+  /yield\* persistPending\(`recording what round \$\{round\}'s builders reported`\)[\s\S]{0,400}lastVerifier = yield\* verifyRound/.test(wfSrc));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -879,7 +879,7 @@ check("ENG-95471 review fix: the return obligation SURVIVES into the composed pr
 // wrapper reads run state and this host's fencer, neither of which the harness can supply.
 // The end marker is ORDINARY source text, so it lives in one constant that both slice sites read.
 const BP_END_MARKER = "// OPERATOR FINDINGS from an earlier checkpoint";
-const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER));
+const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER, wfSrc.indexOf("function buildPrompt(unit, st, roundNo)")));
 check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
   buildPromptSrc.length > 200
     && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
@@ -1349,6 +1349,8 @@ const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
   cbaFrom >= 0 && cbaTo > cbaFrom, () => `BEGIN at ${cbaFrom}, END at ${cbaTo}`);
+// The generated workflow inlines the whole host-neutral core between the sentinels, so the slice still
+// carries every decision helper — that is what keeps this offline suite reading the artifact that SHIPS.
 const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete", "digestKeyOf", "retryOnDeath", "critiqueDeathLine", "isCritiqueShape"];
 let cba = {};
 let tmpCba;
@@ -1432,7 +1434,7 @@ check("workflow: every path in a generated engine command is SHELL-QUOTED — a 
 // which is the point: the cases above check that the mechanisms do what they were built to do, not that the intent
 // survives an edit. All three P1s are false-success paths — the run finishes and reports fine.
 check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short-circuiting on a green gate made the operator findings channel dead in exactly the case it exists for (a ported handler the gate cannot see)",
-  /\n\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)
+  /\n\s*\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)   // indented: the body is nested inside `run()` now
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
@@ -1532,9 +1534,9 @@ check("cba workflow: the repair set is built by `repairKeys` off all three lists
 // The retry BEHAVIOUR is asserted executably against `retryOnDeath` further down — this pin only keeps the call
 // site WIRED to that helper. Source-matching alone was the whole defect: it proved the loop's shape was in the
 // file and nothing about whether a second attempt ever fires (PR#88 review, Major).
-check("cba workflow: the Critique call site goes through the executable `retryOnDeath` helper, handing it the `agent()` attempt as a thunk AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
-  /const \{ result: critique, ran: critiqueReturned \} = await retryOnDeath\(/.test(cbaSrc)
-    && /agent\(critiquePrompt/.test(cbaSrc)
+check("cba workflow: the Critique call site DELEGATES to the executable `retryOnDeath` helper, handing it the work STEP per attempt AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
+  /const \{ result: critique, ran: critiqueReturned \} = yield\* retryOnDeath\(/.test(cbaSrc)
+    && /critiqueStep,/.test(cbaSrc)
     && /log\(critiqueDeathLine\(attempt, error, willRetry\)\)/.test(cbaSrc));
 // Both legs must read the helper's `ran`, never `critique`'s truthiness: a falsy-but-present Critique result would
 // otherwise be reported as a phase that never ran, marking a real answer UNCHECKED (PR#88 review, Major).
@@ -1554,141 +1556,15 @@ check("cba workflow: the REPORTED `critiqueRan` narrows the helper's `ran` throu
 check("cba workflow: a return that is present but NOT a critique gets its own log line — 'returned something unusable' and 'the host never answered' need different repairs, and one line for both made the first read as a clean pass",
   /if \(critiqueReturned && !critiqueRan\) \{/.test(cbaSrc)
     && /treating the pass as dead/.test(cbaSrc));
-/* ---- the Critique retry, EXECUTED ------------------------------------------------------------------------
-   This is new error-handling control flow on a path that was previously a silent failure, and control flow that
-   is only regex-matched can be a no-op in production while every test stays green. These run the loop for real
-   against a stubbed attempt: the counted calls are the evidence that a second attempt actually fires.
-
-   AWAITED EAGERLY, NOT PASSED TO `check` AS A THUNK. `check` evaluates a function condition synchronously and
-   tests it for truthiness — an `async` thunk returns a Promise, which is ALWAYS truthy, so the house idiom used
-   everywhere else in this file would make every assertion below pass unconditionally. Await first, then assert
-   the value. The whole block is wrapped because eager awaits give up check's throw-capture: without this, a
-   helper that vanished from the markers would throw at module top level and kill the runner BEFORE the
-   `INFRA GOLDEN: N passed` summary printed, turning a one-line red into a silent abort. */
-try {
-  const calls = [];
-  const fails = [];
-  const note = (attempt, error, willRetry) => fails.push({ attempt, msg: error ? (error.message || String(error)) : null, willRetry });
-  const reset = () => { calls.length = 0; fails.length = 0; };
-
-  reset();
-  const rSecond = await cba.retryOnDeath((n) => { calls.push(n); return n === 1 ? null : { ok: true }; }, note);
-  check("retryOnDeath: an attempt that dies FIRES a real second attempt, and the second attempt's success is the result — the retry the source regex could never prove",
-    calls.length === 2 && calls[0] === 1 && calls[1] === 2 && rSecond.result?.ok === true && rSecond.ran === true
-      && fails.length === 1 && fails[0].attempt === 1 && fails[0].willRetry === true,
-    () => JSON.stringify({ calls, rSecond, fails }));
-
-  reset();
-  const rDead = await cba.retryOnDeath((n) => { calls.push(n); return null; }, note);
-  check("retryOnDeath: both attempts dead ⇒ `{result:null, ran:false}` (which is what makes the caller's `critiqueRan:false` and its loud log fire), exactly TWO attempts, and the last failure does not advertise a retry that will not happen",
-    rDead.result === null && rDead.ran === false && calls.length === 2 && fails.length === 2 && fails[1].willRetry === false,
-    () => JSON.stringify({ calls, rDead, fails }));
-
-  reset();
-  let threw = false, rReject = "unset";
-  try { rReject = await cba.retryOnDeath((n) => { calls.push(n); throw new Error(`529 overloaded #${n}`); }, note); } catch { threw = true; }
-  check("retryOnDeath: a REJECTING host collapses into the SAME dead outcome and never throws past the caller — the motivating 529 failure, which used to end the run with no contradiction check at all",
-    !threw && rReject.result === null && rReject.ran === false && calls.length === 2,
-    () => JSON.stringify({ threw, rReject, calls }));
-  check("retryOnDeath: the caught error's message reaches the notifier per attempt, so a dead pass reports the CAUSE and not merely the fact",
-    fails.length === 2 && /529 overloaded #1/.test(fails[0].msg || "") && /529 overloaded #2/.test(fails[1].msg || ""),
-    () => JSON.stringify(fails));
-
-  reset();
-  // Rejects on a LATER TICK (after the await), which is the shape a real `agent()` failure has — and distinct from
-  // the synchronous throw above. `throw` inside an `async` function rejects the returned promise; it does not
-  // propagate synchronously, so this stays the async case without a `Promise.reject` (sonar S7746).
-  const rAsync = await cba.retryOnDeath(async (n) => { calls.push(n); await Promise.resolve(); throw new Error("host refused"); }, note);
-  check("retryOnDeath: an ASYNC rejection is caught too — `agent()` hands back a promise, so a guard that only caught synchronous throws would miss the real failure shape entirely",
-    rAsync.result === null && rAsync.ran === false && calls.length === 2 && /host refused/.test(fails[0].msg || ""),
-    () => JSON.stringify({ calls, fails }));
-
-  reset();
-  const rFirst = await cba.retryOnDeath((n) => { calls.push(n); return { ok: true }; }, note);
-  check("retryOnDeath: a first-attempt success spends exactly ONE agent and reports no failure — the retry must not cost a second agent on the happy path",
-    calls.length === 1 && rFirst.result?.ok === true && rFirst.ran === true && fails.length === 0,
-    () => JSON.stringify({ calls, fails }));
-
-  reset();
-  const rNoNotifier = await cba.retryOnDeath((n) => { calls.push(n); return null; }, undefined);
-  check("retryOnDeath: a missing notifier does not throw — the helper degrades to a plain retry rather than turning a dead phase into a crashed run",
-    rNoNotifier.result === null && rNoNotifier.ran === false && calls.length === 2,
-    () => JSON.stringify({ calls }));
-
-  /* `ran` is the helper's OWN answer, not the caller's `!!result`. Death is a NULLISH return per the `agent()`
-     contract, so a falsy-but-PRESENT value is a result: under the old truthiness inference each of these spent a
-     second agent re-running a phase that had already answered, then reported `critiqueRan:false` and marked a real
-     answer UNCHECKED downstream. The current CRITIQUE_SCHEMA (`type:'object'`) makes that unreachable at the one
-     call site — this pins the helper so the next caller, or a schema that admits a scalar, cannot reintroduce it
-     (PR#88 review, Major). */
-  // Labels are spelled out, never derived: `JSON.stringify(NaN)` is the STRING "null" and `String("")` is empty,
-  // so a derived label would print this NaN case as "(null) counts as RAN" directly above the check asserting that
-  // null IS death — two green lines reading as contradictions, with the wrong one the more believable.
-  for (const [falsy, label] of [[0, "0"], ["", '""'], [false, "false"], [Number.NaN, "NaN"]]) {
-    reset();
-    const rFalsy = await cba.retryOnDeath((n) => { calls.push(n); return falsy; }, note);
-    check(`retryOnDeath: a falsy-but-PRESENT result (${label}) counts as RAN — exactly one attempt, no failure reported, and the value is handed back intact`,
-      rFalsy.ran === true && Object.is(rFalsy.result, falsy) && calls.length === 1 && fails.length === 0,
-      () => JSON.stringify({ falsy: String(falsy), rFalsy: { ran: rFalsy.ran, result: String(rFalsy.result) }, calls, fails }));
-  }
-
-  reset();
-  const rUndef = await cba.retryOnDeath((n) => { calls.push(n); return undefined; }, note);
-  check("retryOnDeath: `undefined` is DEATH, not a result — a thunk that falls off its end returned nothing, which is the same terminal shape as an explicit null",
-    rUndef.ran === false && rUndef.result === null && calls.length === 2,
-    () => JSON.stringify({ calls, rUndef }));
-
-  /* The MESSAGE a dead attempt logs — the actual deliverable of the cause-reporting fix, and the thing that had
-     no test of any kind while it was an inline lambda. Asserted on the produced string, not on its source. */
-  const lineRejected = cba.critiqueDeathLine(1, new TypeError("529 overloaded"), true);
-  check("critiqueDeathLine: a REJECTION names the attempt, the error TYPE and its message, and announces the retry — a `critiqueRan:false` run must carry the reason, not only the fact",
-    /attempt 1/.test(lineRejected) && /TypeError/.test(lineRejected) && /529 overloaded/.test(lineRejected)
-      && lineRejected.endsWith(" — retrying once"),
-    () => lineRejected);
-
-  const lineNull = cba.critiqueDeathLine(2, null, false);
-  check("critiqueDeathLine: a NULL return says so explicitly and cites the contract — 'returned nothing' must not read as an unknown error",
-    /attempt 2/.test(lineNull) && /returned nothing \(terminal death/.test(lineNull) && !/Error/.test(lineNull),
-    () => lineNull);
-
-  check("critiqueDeathLine: only a NON-FINAL attempt advertises the retry — the last failure promising a retry that never comes is exactly the misreport this log exists to prevent",
-    cba.critiqueDeathLine(1, null, true).endsWith(" — retrying once") && !/retrying/.test(lineNull),
-    () => JSON.stringify({ willRetry: cba.critiqueDeathLine(1, null, true), final: lineNull }));
-
-  // Deliberately degenerate input: an Error whose message is EMPTY, which is what exercises the fallback half of
-  // `error.message || String(error)`. Blanked after construction rather than written as `new Error("")` or
-  // `new Error()` — sonar S7722 ("built-in error objects should have meaningful messages") flags BOTH of those
-  // constructor forms, and it is right about production code; this is test input that must not carry a message.
-  const blankMessage = new Error("blanked on the next line");
-  blankMessage.message = "";
-  check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a message-less Error must not render as `undefined`",
-    !/undefined/.test(cba.critiqueDeathLine(1, blankMessage, false))
-      && !/undefined/.test(cba.critiqueDeathLine(1, "boom", false)),
-    () => JSON.stringify([cba.critiqueDeathLine(1, blankMessage, false), cba.critiqueDeathLine(1, "boom", false)]));
-
-  /* `isCritiqueShape` — the narrowing between the retry loop's `ran` and the `critiqueRan` the caller reads. Every
-     falsy-but-present value that `retryOnDeath` correctly treats as RAN is a value the CALLER must NOT report as a
-     completed adversarial pass: `critique?.conflicts || []` renders it as "checked, none found". Asserted on both
-     sides of that line so the two questions cannot silently merge back into one (PR#88 review). */
-  const fullCritique = { uncovered: [], conflicts: [], settledElsewhere: [] };
-  check("isCritiqueShape: the schema-valid shape (all three arrays) is the ONLY thing that counts as a completed pass — this is the reachable case today, and it must stay true",
-    cba.isCritiqueShape(fullCritique) === true
-      && cba.isCritiqueShape({ ...fullCritique, uncovered: [{ key: "m" }] }) === true,
-    () => JSON.stringify(fullCritique));
-  for (const notCritique of [0, "", false, Number.NaN, 7, "done", true, [], [1, 2], null, undefined]) {
-    const shown = Array.isArray(notCritique) ? `[${notCritique}]` : String(notCritique);
-    check(`isCritiqueShape: \`${shown}\` is NOT a completed pass — it stops the retry loop legitimately, but reporting it as one claims conflicts/settledElsewhere were verified empty when nothing was checked`,
-      cba.isCritiqueShape(notCritique) === false,
-      () => `${typeof notCritique}: ${String(notCritique)}`);
-  }
-  check("isCritiqueShape: a PARTIAL critique is dead too — the repair round still reads `uncovered` either way, so the only thing refused is a claim that the MISSING field was verified",
-    cba.isCritiqueShape({ uncovered: [], conflicts: [] }) === false
-      && cba.isCritiqueShape({ uncovered: [], conflicts: [], settledElsewhere: "none" }) === false,
-    () => JSON.stringify([cba.isCritiqueShape({ uncovered: [], conflicts: [] }), cba.isCritiqueShape({ uncovered: [], conflicts: [], settledElsewhere: "none" })]));
-} catch (e) {
-  check("cba workflow: the executable retry/message block ran to completion — a helper missing from the PURE DECISION HELPERS markers must be ONE red check, not an aborted runner with no summary",
-    false, () => `${e?.name || "Error"}: ${e?.message || String(e)}`);
-}
+/* ---- the Critique retry, EXECUTED — MOVED --------------------------------------------------------------
+   `retryOnDeath`, `critiqueDeathLine` and `isCritiqueShape` now live in the host-neutral core
+   (skills/_workflow-core/behaviour-analysis/helpers.mjs), and the retry is a DELEGATING GENERATOR: it asks the
+   driver for one more attempt instead of calling `agent()` itself. Their executable goldens moved with them, to
+   `engine-tests/classic-to-freedom/run-workflow-core.mjs` — driven there against the real generator, plus the
+   same checks through the real core (a rejecting Critique retried once, `critiqueRan:false`, the CAUSE in the
+   log) and through the SHIPPED generated file. Both runners run in CI.
+   What stays HERE is the call-site pin above: the source-level guarantee that the shipped workflow still routes
+   the Critique through that helper with its notifier, which is the half a unit test cannot see. */
 
 check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
   /MIXIN ROWS NAMING ONLY A WIRING CARD/.test(cbaSrc) && /MIXIN ROWS STILL NAMING ONLY A WIRING CARD/.test(cbaSrc)
@@ -1719,22 +1595,26 @@ check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
 check("ENG-95472: NO per-unit file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name",
-  /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(state\.unitKeys, key\)/.test(wfSrc)
+  /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(unitKeys, key\)/.test(wfSrc)
     && /queue-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc)
     && /spec-\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
     && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
     && !/sliceFileName/.test(dsSrc),
   () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
 check("ENG-95472: and there is ONE numbering rule, not one per file family — every file helper reads the same bound `unitNoOf`",
-  (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length === 1
+  // Matched WITH `return `: the helper's own signature (`function unitNo(unitKeys, key)`) is now inlined into the
+  // same file, so the bare call shape appears twice and only one of them is a CALL.
+  (wfSrc.match(/return unitNo\(unitKeys, key\)/g) || []).length === 1
     && (wfSrc.match(/indexOf\(key\)/g) || []).length === 1,
-  () => ({ bound: (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length,
+  () => ({ bound: (wfSrc.match(/return unitNo\(unitKeys, key\)/g) || []).length,
     indexOf: (wfSrc.match(/indexOf\(key\)/g) || []).length }));
 // RC-4/RC-14: the two failures must read differently. A missing key list is not a schedule mismatch, and a
 // caller told the wrong one goes hunting an inconsistency that does not exist.
 check("ENG-95472: an ABSENT key list gets its own message, distinct from the key-not-in-list one — `unitNo`'s own error would misdiagnose it as a schedule mismatch",
   () => { const m = /no published key list in run state yet/.test(wfSrc);
-    const guard = /if \(!state\?\.unitKeys\?\.length\)/.test(wfSrc);
+    // The key list arrives as an argument now (`makePaths(ctx, () => state?.unitKeys)`), read at CALL time —
+    // the guard is the same refusal, on the resolved value.
+    const guard = /if \(!unitKeys\?\.length\)/.test(wfSrc) && /makePaths\(ctx, \(\) => state\?\.unitKeys\)/.test(wfSrc);
     return m && guard; },
   () => wfSrc.slice(wfSrc.indexOf("const unitNoOf"), wfSrc.indexOf("const unitNoOf") + 420));
 
@@ -1841,7 +1721,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
 {
   const BP_HEAD = "function buildPrompt(unit, st, roundNo)";
   const bpStart = wfSrc.indexOf(BP_HEAD);
-  const bpEnd = wfSrc.indexOf("\n" + BP_END_MARKER);
+  const bpEnd = wfSrc.indexOf(BP_END_MARKER, bpStart);   // no leading newline: the body is indented inside `run()`
   // The markers are ordinary source text, so a rename moves them. Own check, and the render is SKIPPED when it
   // fails: a truncated body throws before any tally is printed.
   const markersOk = bpStart >= 0 && bpEnd > bpStart;
