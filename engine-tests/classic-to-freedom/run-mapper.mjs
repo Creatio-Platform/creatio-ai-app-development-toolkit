@@ -4307,6 +4307,41 @@ const dedupMiniRun = runMigration({ ...sigBase,
     printables: { resolved: true, present: false },
     deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } },
 });
+/* ---- second-pass review (m-dymytrova, PR #113): the child row must be CLOSEABLE, `present` must be read by
+   truthiness, and the child path needs a golden through `runMigration` rather than a direct mapToFreedom call. */
+const dedupChildBundle = (own) => ({ entity: "CE", noParentTemplate: true,
+  schemas: [{ pkg: "CP", body: `define("CPage",[],function(){return{entitySchemaName:"CE",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});` }],
+  ...(own ? { signals: { deduplication: own } } : {}) });
+const dedupChildRun = (own, parent) => runMigration({ ...sigBase, noParentTemplate: true,
+  // the root body must DECLARE the detail for its edit page to be discovered and folded as a child
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{CDetail:{schemaName:"CDetail",entitySchemaName:"CE"}}};});` }],
+  detailSchemas: { CDetail: { entity: "CE", editPage: "CPage" } },
+  childPageSchemas: { CPage: dedupChildBundle(own) },
+  addRecordMiniPage: false,
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false }, deduplication: parent },
+});
+const childPlanRows = (r, re) => r.plan.split("\n").filter((l) => /\*\*\[dedup-on-save\]\*\*/.test(l) && re.test(l));
+const dedupChildNoOwn = dedupChildRun(null, { resolved: true, present: true, names: ["R1"], serviceConfigured: false });
+check("ENG-94274 dedup signal: through `runMigration`, a folded CHILD page with no answer of its own renders the child-scoped instruction — not the parent's verdict, and not silence",
+  childPlanRows(dedupChildNoOwn, /child entity/).length === 1
+  && /THIS child's entity/.test(childPlanRows(dedupChildNoOwn, /child entity/)[0])
+  && !/R1|STOPS HAPPENING/.test(childPlanRows(dedupChildNoOwn, /child entity/)[0])
+  && childPlanRows(dedupChildNoOwn, /rule\(s\): R1/).length === 1,   // …while the root still carries the parent's verdict
+  () => dedupChildNoOwn.plan.split("\n").filter((l) => /dedup-on-save/.test(l)));
+const dedupChildOwn = dedupChildRun({ resolved: true, present: true, names: ["ChildRule"], serviceConfigured: false },
+  { resolved: true, present: false });
+check("ENG-94274 dedup signal: a CHILD bundle's OWN `signals.deduplication` REPLACES the instruction with the real verdict — an operator who runs the query for the child's entity must have a way to close the row",
+  childPlanRows(dedupChildOwn, /ChildRule/).length === 1
+  && /STOPS HAPPENING/.test(childPlanRows(dedupChildOwn, /ChildRule/)[0])
+  && childPlanRows(dedupChildOwn, /child entity/).length === 0,
+  () => dedupChildOwn.plan.split("\n").filter((l) => /dedup-on-save/.test(l)));
+check("ENG-94274 dedup signal: a child that answered `present:false` for its OWN entity emits no row at all — a verified zero closes it, exactly as at the root",
+  childPlanRows(dedupChildRun({ resolved: true, present: false }, { resolved: true, present: false }), /dedup-on-save/).length === 0);
+check("ENG-94274 dedup gate: `present` is read by TRUTHINESS — a hand-authored `\"present\": \"yes\"` still requires `serviceConfigured` instead of slipping into the unrecorded-wording branch",
+  (dedupSig({ resolved: true, present: "yes", names: ["R1"] }).signalsMissing || []).includes("deduplication"),
+  () => dedupSig({ resolved: true, present: "yes", names: ["R1"] }).signalsMissing);
+
 // The fold now populates `signals` on BOTH sides of a sub-page — the nested run's own `changeSet.needsDecision`
 // and the `checklistOpts` the parent hands down — so the one thing worth pinning is that a page still publishes
 // exactly ONE dedup deliverable. A second source would make the operator file evidence twice per page before

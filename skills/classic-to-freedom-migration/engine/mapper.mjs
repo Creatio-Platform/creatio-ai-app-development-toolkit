@@ -580,7 +580,7 @@ export function mapToFreedom(eff, opts = {}) {
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
   // ---- Moment 4b: the on-save duplicate check — invisible in the page body, so driven by the on-stand signal ----
-  mapDedupOnSave({ signals: opts.signals, isChildPage }).forEach(d => needsDecision.push(d));
+  mapDedupOnSave({ signals: opts.signals, ownSignals: opts.ownSignals, isChildPage }).forEach(d => needsDecision.push(d));
 
   // ---- image / photo components → a REAL crt.ImageInput element (view+viewModel+model diffs) ----
   const _img = mapImages(eff, ctx, F);
@@ -2027,17 +2027,21 @@ function mapWidgets(eff, opts = {}) {
 // where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
 // into a lie the day it does.
 function mapDedupOnSave(opts = {}) {
+  // `opts.signals` is the RUN-level answer set, in which a bundle's OWN `manifest.signals` key already won the
+  // merge (see runMigration/checklistOpts). `opts.ownSignals` is that bundle's own keys alone — the only way to
+  // tell "this page's operator answered for THIS entity" from "inherited from the parent".
   const s = opts.signals?.deduplication;
   if (s?.resolved !== true) return [];
-  // A CHILD edit page migrates a DIFFERENT entity, so the parent's answer states a fact about the wrong entity —
+  // A CHILD edit page migrates a DIFFERENT entity, so the PARENT's answer states a fact about the wrong entity —
   // but silence is the very failure this row exists to prevent (the child's own on-save check would disappear
-  // just as quietly). So the child branch carries a child-scoped INSTRUCTION instead of the parent's verdict,
-  // exactly like processActionNote / printActionNote do for the section-level Process / Print menus. It is gated
-  // on `resolved` only, never on the parent's `present`: "the parent entity has no rule" says nothing at all
-  // about this child's entity.
-  if (opts.isChildPage) {
+  // just as quietly). So without an answer of its own the child carries a child-scoped INSTRUCTION instead of a
+  // verdict, exactly like processActionNote / printActionNote do for the section-level Process / Print menus. It
+  // is gated on `resolved` only, never on the parent's `present`: "the parent entity has no rule" says nothing at
+  // all about this child's entity. Record `signals.deduplication` on the CHILD bundle and the instruction is
+  // replaced by the real verdict below — an operator who runs the query must have a way to close this row.
+  if (opts.isChildPage && opts.ownSignals?.deduplication?.resolved !== true) {
     return [{ kind: "dedup-on-save", item: "on-save duplicate check (child entity)",
-      reason: "Child edit page — the answer recorded for the parent describes the PARENT's entity. Run the DuplicatesRule query (IsActive AND UseAtSave, filtered to THIS child's entity) for this page's own entity and record the answer; if a rule exists, the on-save check follows the same service rule as the parent's, so state whether it survives the migration." }];
+      reason: "Child edit page — the answer recorded for the parent describes the PARENT's entity. Run the DuplicatesRule query (IsActive AND UseAtSave, filtered to THIS child's entity) for this page's own entity and record it as signals.deduplication on this child's own bundle; if a rule exists, the on-save check follows the same service rule as the parent's, so state whether it survives the migration." }];
   }
   if (!s.present) return [];
   const named = (x) => (typeof x === "string" ? x : (x?.name || x?.caption) || "");

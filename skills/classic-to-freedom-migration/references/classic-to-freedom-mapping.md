@@ -203,7 +203,9 @@ the page migration untouched — only the check is at risk.
 so the engine carries it to every fold of the SAME entity — each per-type form of a typed entity and the
 add-record mini page each get their own row. A **child edit page** is a different entity: it gets a
 child-scoped row telling you to run step 1 for THAT entity, never the parent's verdict (the same convention as
-the section-level Print / Run-process notes).
+the section-level Print / Run-process notes). Record the child's own answer as `signals.deduplication` **on that
+child's bundle** and the instruction is replaced by the real verdict for its entity — an operator who runs the
+query must have a way to close the row, and `present: false` there closes it with no row at all.
 
 **DCM case → does the object have one?** `SysSchema` WHERE `ManagerName = 'DcmSchemaManager'` (the case-schema
 manager). Match the case to the entity by its caption + the object's own stage column (`Stage`); active +

@@ -664,7 +664,10 @@ const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication"];
 function signalUnresolved(k, signals) {
   const s = signals[k];
   if (!s || typeof s !== "object" || s.resolved !== true) return true;
-  if (k === "deduplication" && s.present === true && typeof s.serviceConfigured !== "boolean") return true;
+  // `s.present` by TRUTHINESS, not `=== true`: a hand-authored `"present": "yes"` must not slip past the
+  // service requirement into the mapper's "serviceConfigured unrecorded" branch — that is the same half-answered
+  // plan this clause exists to block. The mapper reads `present` the same way.
+  if (k === "deduplication" && s.present && typeof s.serviceConfigured !== "boolean") return true;
   return false;
 }
 // PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
@@ -1820,8 +1823,8 @@ export function runMigration(manifest, opts = {}) {
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // ENG-93928 — the embedded profile schemas a profile card renders (profiled entity + displayed columns).
   const profileSchemas = parseProfileSchemas(manifest, bodyOf);
-  // RUN-level on-stand signals (see checklistOpts): the answers live on the ROOT manifest, so a fold inherits them
-  // and a sub-bundle's own key still wins. Computed here so the mapper and `checklistOpts` read the SAME object.
+  // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
+  // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
   const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
@@ -1832,6 +1835,7 @@ export function runMigration(manifest, opts = {}) {
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
+    ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
   });
   attachDetailAddModes(changeSet, detailSchemas);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
