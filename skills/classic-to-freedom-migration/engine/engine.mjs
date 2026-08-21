@@ -1004,6 +1004,10 @@ function normalizeDiff(diff) {
   return diff.map((op, i) => normalizeDiffOp(op, i)).filter(op => op && op.name !== "?");
 }
 
+// A LITERAL option value (`value: true` / `0` / `"high"`), or null when the key carries something else (an
+// object — e.g. a `{bindTo}` binding — or an array). `false`/`0`/`""` are legal values and must survive.
+const primitiveOrNull = (x) => (typeof x === "boolean" || typeof x === "number" || typeof x === "string" ? x : null);
+
 // caption resource key: `caption.bindTo`, else a bare string, else null.
 const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
 
@@ -1069,6 +1073,14 @@ function normalizeDiffOp(op, i) {
     // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
     handlers: handlerBindings(v),
+    // ENG-95543 item 3 — PER-KIND CONFIG CAPTURE. A RADIO_GROUP binds its selection through a NESTED
+    // `value: { bindTo: "<col>" }`, not through the top-level `bindTo` a field uses, and each of its options is a
+    // CHILD item carrying a literal `value` plus its own caption. Both are captured here together with the mapping
+    // row that consumes them: capturing the binding alone builds a plain input and silently drops the option
+    // captions, which is the exact failure the ticket names. `optionValue` keeps `false` and `0` — they are legal
+    // option values, so the test is key presence + primitiveness, never truthiness.
+    valueBindTo: strOrNull(plainObj(v.value).bindTo),
+    optionValue: Object.hasOwn(v, "value") ? primitiveOrNull(v.value) : null,
     astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
     // Which keys this op's `values` actually CARRIES. Required because `numOrNull` collapses "key absent" and
     // "key present but not statically a number" into the same `null`, and the runtime treats those two as
@@ -1209,6 +1221,7 @@ function makeItem(op, seed, pkg) {
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
     handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
+    valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
@@ -1309,6 +1322,13 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
     if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
   }
+  // Both `valueBindTo` and `optionValue` are derived from ONE diff key (`value`), so the presence test is on that
+  // key and both fields move together: a layer that restates `value` as a binding must also clear a literal an
+  // earlier layer set, and the reverse. Testing the derived fields separately would leave the loser behind.
+  if (op.valuesKeys?.has("value") && !op.aliasExcluded?.includes("value")) {
+    cur.valueBindTo = op.valueBindTo;
+    cur.optionValue = op.optionValue;
+  }
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
   if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
@@ -1354,11 +1374,16 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
 // keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
 // alternative is telling the reader a property was cleared when nothing happened.
 const REMOVABLE_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
-  "layout", "tip", "hint", "generator", "visible", "caption"]);
+  "layout", "tip", "hint", "generator", "visible", "caption", "value"]);
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = [];
   for (const k of op.properties) {
     if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
+    // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
+    // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
+    // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
+    // here as well listed the same package twice on an element whose `value` a layer cleared.)
+    if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
     // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
     // "absent vs unreadable" ambiguity this ticket removed elsewhere.
     cur[k] = null;
@@ -1729,7 +1754,11 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       engineOnlyStub: !!i.engineOnlyStub,
       contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
-      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
+      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
+      // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
+      // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
+      // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.
+      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
