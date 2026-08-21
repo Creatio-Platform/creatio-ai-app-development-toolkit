@@ -1611,9 +1611,11 @@ check("ENG-95474 review round 2: `reconcilePrompt` no longer promises a PREFLIGH
   !/If the PREFLIGHT EVIDENCE block below is present/.test(wfSrc)
     && /function reconcilePrompt\(round\)/.test(wfSrc),
   () => wfSrc.split("\n").filter((l) => /PREFLIGHT EVIDENCE block below/.test(l)).join("\n") || "(clean)");
-check("ENG-95474 review round 2: `VERIFIER_SCHEMA` carries no dead `queueFile` field — nothing read it and no prompt asked for it",
-  !schemaSrc("VERIFIER_SCHEMA").includes("queueFile") && !wfSrc.includes("lastVerifier.queueFile"),
-  () => schemaSrc("VERIFIER_SCHEMA").split("\n").filter((l) => /queue/.test(l)).join("\n"));
+// Neither writer schema carries a `queueFile` the script never reads. `runReturn` has its own, unrelated, and read.
+check("ENG-95474 review round 2: no agent schema carries a dead `queueFile` field — nothing read it and no prompt asked for it",
+  ["VERIFIER_SCHEMA", "PERSIST_SCHEMA"].every((s) => !schemaSrc(s).includes("queueFile"))
+    && !wfSrc.includes("lastVerifier.queueFile") && !wfSrc.includes("persisted.queueFile"),
+  () => Object.fromEntries(["VERIFIER_SCHEMA", "PERSIST_SCHEMA"].map((s) => [s, schemaSrc(s).includes("queueFile")])));
 
 // THE PURE CEILING, executed directly: the predicate the loop above depends on.
 check("ENG-95474 review: `continuationAllowed` refuses at and past the cap, and treats a 0 or non-finite cap as 'no continuations'",

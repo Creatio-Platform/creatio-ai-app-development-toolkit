@@ -772,7 +772,6 @@ const PERSIST_SCHEMA = {
   required: ['written'],
   properties: {
     written: { type: 'boolean' },
-    queueFile: { type: 'string' },
     parkedKeys: { type: 'array', items: { type: 'string' } },
     evidenceWritten: { type: 'array', items: { type: 'string' } },   // preflight evidence ids merged into the built file
     notes: { type: 'string' },
