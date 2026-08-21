@@ -39,6 +39,8 @@ export const MATCH = {
   ENTITY: "entity",                 // the entity behind the element (a *File detail, ContactCommunication)
   MODULE_KEY: "moduleKey",          // a classic module by key / moduleName / schemaName
   CONTAINER_NAME: "containerName",  // a classic container by name
+  PROFILE_ENTITY: "profileEntity",  // the PROFILED entity of an embedded profile card (distinct from ENTITY)
+  ELEMENT_NAME: "elementName",      // a classic element by its own name (the standard card actions)
 };
 
 // THE ONE TEST, exactly as the proposal states it: is the Freedom target's required config fully derivable
@@ -225,6 +227,16 @@ const ITEM_TYPE_ROWS = [
 // own UI (Approvals, Attachments). This drives whether the spec marks it "Related list" or the component name —
 // the two are NOT visually interchangeable. `meta.templateProvided` = most Freedom FORM templates already ship
 // the component, so account for it / merge onto the existing one instead of creating a second.
+
+// Row builders for the moved catalogs, so every row is complete and the shapes stay uniform.
+const widgetRow = (by, key, widgets, verify = null) => row({
+  match: { by, [by]: key }, role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET,
+  verify, meta: { widgets },
+});
+const profileCardRow = (entity, componentType, pkg, shows) => row({
+  match: { by: MATCH.PROFILE_ENTITY, profileEntity: entity }, role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET,
+  verify: { componentType }, meta: { profileCard: { type: componentType, pkg, shows } },
+});
 const feature = (suffix, { feature: name, freedom, componentType = null, uiShape, templateProvided = false, notes = null, qualifiers = null }) =>
   row({
     match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: suffix, ...(qualifiers ? { qualifiers } : {}) },
@@ -269,7 +281,11 @@ const FEATURE_ROWS = [
   row({ match: { by: MATCH.CONTAINER_NAME, containerName: "ESNFeedContainer" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET, uiShape: "component",
     verify: { componentType: "crt.Feed" },
-    meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component", widget: "Feed (ESN)" } }),
+    // ONE row, two consumers: `meta.feature` is what the standard-feature gate reads, `meta.widgets` is what the
+    // widget builder reads. Feed was in BOTH catalogs before (a FEATURE_TYPE entry and a WIDGET_BY_CONTAINER entry)
+    // — the clearest case of the duplication this table exists to end.
+    meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
+      widgets: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }] } }),
 ];
 
 // The ENTITY fallbacks (`mapper.mjs` L1185-1186 before this): a detail whose SCHEMA name matches nothing but whose
@@ -288,7 +304,71 @@ const FEATURE_ENTITY_ROWS = [
     meta: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.CommunicationOptions)", templateProvided: false, uiShape: "component", byEntity: true } }),
 ];
 
-export const MAPPING_ROWS = Object.freeze([...ITEM_TYPE_ROWS, ...FEATURE_ROWS, ...FEATURE_ENTITY_ROWS]);
+// header/analytical widgets — recognised by MODULE key and by CONTAINER name. Catalog values are ARRAYS of
+// Freedom component-defs, because one classic module can map to MORE THAN ONE Freedom component.
+// Action Dashboard in Freedom is TWO components — a case-stage PROGRESS BAR and a NEXT STEPS panel — and the
+// default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
+// progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
+// auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
+const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add. A case can exist even if the classic page tracked stage only via a Stage lookup + history detail.";
+const DCM_PROGRESS_NOTE = "Case-stage progress bar (crt.EntityStageProgressBar) — NOT in the default Freedom form template. When the object has a DCM case, PREFER building the form page from `PageWithTabsAndProgressBarTemplate` (it ships the bar placed) and RE-BIND the new page to your entity, rather than hand-adding the widget. FALLBACK (already on a no-bar template / page exists): PLACE IT in `MainContainer` (the content container below the header), at the TOP of the content — NOT in `MainHeader`, and not as a bare child of `Main`. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
+const DCM_NEXTSTEPS_NOTE = "Next steps (crt.NextSteps) — NOT in the default Freedom form template; ADD it as a TAB in the card toggle panel BESIDE the Feed and Attachments tabs when the object has a configured DCM case. Build the tab like Feed/Attachments: caption via `#ResourceString(Key)#` (NOT $Resources.Strings.*), set the tab icon to `flag-icon` (do not guess — an invented name renders empty), put the header (Label + '+' menu button) in the tab's `tools` slot and the widget in `items`. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
+// `signal: "dcm"` — DCM is NOT evidenced by the classic page BODY (the DcmActionsDashboard containers are
+// Freedom base-template chrome, never touched by the page's own layers); its presence is an ON-STAND fact
+// (a configured DCM case, `manifest.signals.dcm`). So these two widgets emit ONLY when the resolved dcm
+// signal is present — NOT from the inherited base container (which would leak DCM onto every record/detail
+// page). The signals-completeness gate blocks the plan until `signals.dcm` is resolved, so a non-blocked
+// plan always has a definite answer here.
+const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
+const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
+// ENG-95543 — the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
+// `mapWidgets` consumes them directly, and rewriting that builder was not part of giving the data one home.
+// `verify.componentType` is stated wherever the Freedom component type is KNOWN and registry-resolvable — the DCM
+// pair and the Feed. It was prose-only before, so a fabricated type there could never have been caught.
+const WIDGET_ROWS = [
+  widgetRow(MATCH.MODULE_KEY, "DcmActionsDashboardModule", [DCM_PROGRESS, DCM_NEXTSTEPS], { componentType: "crt.EntityStageProgressBar" }),
+  widgetRow(MATCH.MODULE_KEY, "ActionsDashboardModule", [DCM_NEXTSTEPS], { componentType: "crt.NextSteps" }),
+  widgetRow(MATCH.MODULE_KEY, "Timeline", [{ widget: "Timeline", freedom: "Freedom Timeline" }], { componentType: "crt.Timeline" }),
+  widgetRow(MATCH.CONTAINER_NAME, "DcmActionsDashboardContainer", [DCM_PROGRESS, DCM_NEXTSTEPS], { componentType: "crt.EntityStageProgressBar" }),
+  widgetRow(MATCH.CONTAINER_NAME, "ActionDashboardContainer", [DCM_NEXTSTEPS], { componentType: "crt.NextSteps" }),
+  // No `verify.componentType`: the registry carries no recommendations component under any name, so naming one
+  // would be the fabricated-type defect. The row says what to CHECK on-stand instead.
+  widgetRow(MATCH.CONTAINER_NAME, "RecommendationModuleContainer", [{ widget: "Recommendations", chrome: true, freedom: "Freedom product-selection / NBO recommendations component",
+    note: "Inherited base-template container (from BasePageV2) — inserted EMPTY (items:[], no `visible` binding) and filled at RUNTIME by the RecommendationModuleUtilities mixin. It shows the Next-Best-Offer (NBO) / product recommendations (RecommendedProduct) only if recommendation rules are configured for the entity; the page schema can't say whether it's used. Check on-stand: does the LIVE Classic page actually render recommendations (are NBO/recommendation rules configured for this entity)? If yes → wire the Freedom product-selection / recommendations component; if it renders empty → inherited chrome, drop it." }]),
+  // Duplicates likewise has no component in the registry under a duplicates-shaped name — prose, deliberately.
+  widgetRow(MATCH.CONTAINER_NAME, "DuplicatesWidgetContainer", [{ widget: "Duplicates", freedom: "Freedom duplicates widget" }]),
+];
+// EMBEDDED PROFILE CARDS — a classic page can embed a compact card of a LINKED record (a "requester" block
+// on a request page, the account card on ContactPageV2). It is a page-within-a-page: the `modules` config
+// names a small declarative profile schema plus the master/profile wiring — nothing bespoke. Freedom's home
+// for the pattern is a native compact-profile component in the SIDE PROFILE, keyed by the PROFILED entity.
+// PROVENANCE (be precise — E1 lesson): the component types and their `referenceColumn`/`readonly` contract are
+// READ FROM the Freedom component catalog (`get-component-info`), not invented here — but that catalog answered
+// from the `latest` superset (`requiresVersionConfirmation`), so presence on a TARGET stand is NOT established
+// by this table. That is why the emitted decision always carries the `list-packages` package check.
+// `pkg` = the package the component needs as a page-package dependency.
+// PROFILE_ENTITY is its OWN match kind, not `ENTITY`: the entity rows are the standard-feature fallbacks, and a
+// profile-card row keyed the same way would be returned by `resolveFeatureRow` as if a Contact-bound detail were a
+// standard feature. The match kind is the discriminator.
+//
+// `meta.pkg` stays HAND-CURATED. The registry has no package field at all — `appliesToCustomEntities` exists on 8
+// of 205 components and says nothing about packages — so the ticket's "package metadata replaces the hardcoded
+// package knowledge" is not available. What the registry DOES give is the check that the component type is real,
+// which is now applied to all four rows.
+const PROFILE_CARD_ROWS = [
+  profileCardRow("Contact", "crt.ContactCompactProfile", "CrtCustomer360App", "photo, name parts, birth date, country, city, time zone"),
+  profileCardRow("Account", "crt.AccountCompactProfile", "CrtCustomer360App", "photo, name, alternative name, country, city, time zone"),
+  profileCardRow("SysAdminUnit", "crt.UserCompactProfile", null, "photo and first/middle/last name"),
+  profileCardRow("VwSysAdminUnit", "crt.UserCompactProfile", null, "photo and first/middle/last name"),
+];
+
+// The standard card actions (the classic ACTIONS menu / toolbar items) -> Freedom card actions (B7). Element NAMES,
+// so they get their own match kind; they are recognised by name because that is what the classic body carries.
+const CARD_ACTION_ROWS = ["PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton"]
+  .map((name) => row({ match: { by: MATCH.ELEMENT_NAME, elementName: name }, role: ROLE.MAPPED, tier: TIER.VIEW_ONLY,
+    ownedBy: OWNER.WIDGET, verify: { componentType: "crt.Button" }, meta: { cardAction: name } }));
+export const MAPPING_ROWS = Object.freeze([...ITEM_TYPE_ROWS, ...FEATURE_ROWS, ...FEATURE_ENTITY_ROWS,
+  ...WIDGET_ROWS, ...PROFILE_CARD_ROWS, ...CARD_ACTION_ROWS]);
 
 // ---- resolution ---------------------------------------------------------------------------------------------
 // `qualifiers` is a plain object of predicates over the CANDIDATE (`{ entity: "ApplicantVisa" }`, or a function).
@@ -371,4 +451,19 @@ export function featureVerifyType(featureName) {
 // tally: every convenience accessor above returns something truthy for a member nobody listed.
 export function rowForItemType(itemType) {
   return MAPPING_ROWS.find(r => r.match.by === MATCH.ITEM_TYPE && r.match.itemType === itemType);
+}
+
+// ---- DERIVED VIEWS of the moved catalogs -------------------------------------------------------------------
+// The mapper's widget / profile-card / card-action builders consume these shapes. They are BUILT FROM the rows, so
+// the data has one home and the builders did not have to be rewritten around a new shape.
+export function widgetsByMatch(by) {
+  return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === by && r.meta?.widgets)
+    .map((r) => [r.match[by], r.meta.widgets]));
+}
+export function profileCardsByEntity() {
+  return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === MATCH.PROFILE_ENTITY)
+    .map((r) => [r.match.profileEntity, r.meta.profileCard]));
+}
+export function knownCardActions() {
+  return new Set(MAPPING_ROWS.filter((r) => r.meta?.cardAction).map((r) => r.meta.cardAction));
 }

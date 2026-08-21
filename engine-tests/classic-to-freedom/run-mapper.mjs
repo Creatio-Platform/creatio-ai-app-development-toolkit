@@ -7,7 +7,8 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
+  widgetsByMatch, profileCardsByEntity, knownCardActions } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -2812,6 +2813,52 @@ check("ENG-95543: feature resolution is exact-name first, then longest suffix, t
   && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
   () => ({ exact: resolveFeatureRow("VisaDetailV2")?.meta, suffix: resolveFeatureRow("ApplicantEmailDetailV2")?.meta,
     none: resolveFeatureRow("ApplicantVisaDetail"), entity: resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta }));
+// ---- ENG-95543: the widget / profile-card / card-action catalogs, moved into the same table -------------------
+// The DERIVED VIEWS are what the mapper's builders read, so a row that lost a `meta` key would leave a builder
+// with an empty catalog and no test would otherwise notice. This pin exists because it HAPPENED mid-move: merging
+// Feed's two catalog entries into one row dropped `meta.widgets`, so the ESN feed container silently stopped
+// resolving to a widget while every suite stayed green.
+const wByModule = widgetsByMatch(MATCH.MODULE_KEY), wByContainer = widgetsByMatch(MATCH.CONTAINER_NAME);
+check("ENG-95543: the widget views carry every classic module and container the catalogs had — including ESNFeedContainer, whose row also serves the Feed feature gate",
+  ["DcmActionsDashboardModule", "ActionsDashboardModule", "Timeline"].every((k) => wByModule[k]?.length)
+  && ["DcmActionsDashboardContainer", "ActionDashboardContainer", "RecommendationModuleContainer", "DuplicatesWidgetContainer", "ESNFeedContainer"].every((k) => wByContainer[k]?.length)
+  && featureVerifyType("Feed") === "crt.Feed",
+  () => ({ modules: Object.keys(wByModule), containers: Object.keys(wByContainer), feedGate: featureVerifyType("Feed") }));
+// The DCM pair still resolves to BOTH components from one classic module — the "Action Dashboard is TWO Freedom
+// components" rule the catalog comment carries.
+check("ENG-95543: one classic module still maps to MORE THAN ONE Freedom component (the DCM dashboard emits both the progress bar and Next steps)",
+  () => wByModule.DcmActionsDashboardModule.length === 2
+  && wByModule.DcmActionsDashboardModule.every((w) => w.signal === "dcm")
+  && wByContainer.RecommendationModuleContainer[0].chrome === true,
+  () => wByModule.DcmActionsDashboardModule);
+// PROFILE_ENTITY is a match kind of its own. Keyed as `ENTITY` these rows would be returned by `resolveFeatureRow`,
+// so a Contact-bound detail would resolve as a "standard feature" whose meta describes a profile card.
+check("ENG-95543: a profile-card row is NOT reachable as a standard-feature entity fallback — the match kind is the discriminator",
+  resolveFeatureRow("SomeDetail", "Contact") === null && !!profileCardsByEntity().Contact,
+  () => ({ asFeature: resolveFeatureRow("SomeDetail", "Contact"), asProfileCard: profileCardsByEntity().Contact }));
+// `pkg` is HAND-CURATED and must stay: the registry has no package field, so this is knowledge the registry check
+// cannot supply — and the emitted decision's `list-packages` step depends on it.
+const pcards = profileCardsByEntity();
+// A THUNK, not a value: read as an expression, a row whose key moved makes `pcards.Contact` undefined and the
+// `.pkg` access aborts the whole runner instead of failing this one check (the runner's own reason for accepting
+// thunks). Proven by a mutation that did exactly that.
+check("ENG-95543: the profile-card rows keep their hand-curated `pkg` (the registry has NO package field — this is not something the check can replace)",
+  () => pcards.Contact.pkg === "CrtCustomer360App" && pcards.Account.pkg === "CrtCustomer360App"
+  && pcards.SysAdminUnit.pkg === null && pcards.VwSysAdminUnit.pkg === null
+  && Object.values(pcards).every((c) => /^crt\./.test(c.type)),
+  () => pcards);
+check("ENG-95543: the card-action view is exactly the five standard ACTIONS-menu items",
+  [...knownCardActions()].sort((a, b) => a.localeCompare(b)).join(",") === "PrintButton,ProcessButton,ReloadDataButton,TagButton,ViewOptionsButton",
+  () => [...knownCardActions()]);
+// And every type these rows name is registry-real. Two rows deliberately name NO type (Recommendations,
+// Duplicates): the registry carries no component under either name, so naming one would be the fabricated-type
+// defect this check exists to catch.
+const movedRows = MAPPING_ROWS.filter((r) => r.meta?.widgets || r.meta?.profileCard || r.meta?.cardAction);
+check("ENG-95543: every componentType the moved rows name resolves in the registry at the oldest indexed version, and the two rows with no real component name none",
+  movedRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f)).length === 0
+  && MAPPING_ROWS.filter((r) => /Recommendation|Duplicates/.test(String(r.match.containerName || ""))).every((r) => !r.verify),
+  () => movedRows.flatMap((r) => validateRow(r, { version: vendoredIndex().meta.versions[0] })).filter((f) => !isAdvisory(f)));
+
 // The LONGEST-suffix rule, pinned against a fixture table with two OVERLAPPING suffixes. Today's rows do not
 // overlap, so this cannot be checked against the live table — and an unchecked ordering rule is how a generic
 // `DetailV2` row would come to shadow a row written for `VisaDetailV2`, with the winner decided by declaration

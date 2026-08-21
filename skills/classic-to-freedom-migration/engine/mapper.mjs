@@ -2,7 +2,8 @@
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
-import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow } from "./mapping-table.mjs";
+import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
+  widgetsByMatch, profileCardsByEntity, knownCardActions } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -293,51 +294,14 @@ const GRID_1 = ["minmax(32px, 1fr)"];
 // a genuinely WIDE multi-column classic Header block (>1 col, flagged as a layout-type decision) keeps the
 // full 24-col grid so its multi-column arrangement survives 1:1.
 const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
-// header/analytical widgets — recognised by MODULE key and by CONTAINER name. Catalog values are ARRAYS of
-// Freedom component-defs, because one classic module can map to MORE THAN ONE Freedom component.
-// Action Dashboard in Freedom is TWO components — a case-stage PROGRESS BAR and a NEXT STEPS panel — and the
-// default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
-// progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
-// auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add. A case can exist even if the classic page tracked stage only via a Stage lookup + history detail.";
-const DCM_PROGRESS_NOTE = "Case-stage progress bar (crt.EntityStageProgressBar) — NOT in the default Freedom form template. When the object has a DCM case, PREFER building the form page from `PageWithTabsAndProgressBarTemplate` (it ships the bar placed) and RE-BIND the new page to your entity, rather than hand-adding the widget. FALLBACK (already on a no-bar template / page exists): PLACE IT in `MainContainer` (the content container below the header), at the TOP of the content — NOT in `MainHeader`, and not as a bare child of `Main`. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
-const DCM_NEXTSTEPS_NOTE = "Next steps (crt.NextSteps) — NOT in the default Freedom form template; ADD it as a TAB in the card toggle panel BESIDE the Feed and Attachments tabs when the object has a configured DCM case. Build the tab like Feed/Attachments: caption via `#ResourceString(Key)#` (NOT $Resources.Strings.*), set the tab icon to `flag-icon` (do not guess — an invented name renders empty), put the header (Label + '+' menu button) in the tab's `tools` slot and the widget in `items`. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
-// `signal: "dcm"` — DCM is NOT evidenced by the classic page BODY (the DcmActionsDashboard containers are
-// Freedom base-template chrome, never touched by the page's own layers); its presence is an ON-STAND fact
-// (a configured DCM case, `manifest.signals.dcm`). So these two widgets emit ONLY when the resolved dcm
-// signal is present — NOT from the inherited base container (which would leak DCM onto every record/detail
-// page). The signals-completeness gate blocks the plan until `signals.dcm` is resolved, so a non-blocked
-// plan always has a definite answer here.
-const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
-const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
-const WIDGET_BY_MODULE = {
-  DcmActionsDashboardModule: [DCM_PROGRESS, DCM_NEXTSTEPS], // DCM case dashboard → BOTH Freedom components
-  ActionsDashboardModule: [DCM_NEXTSTEPS],
-  Timeline: [{ widget: "Timeline", freedom: "Freedom Timeline" }],
-};
-const WIDGET_BY_CONTAINER = {
-  DcmActionsDashboardContainer: [DCM_PROGRESS, DCM_NEXTSTEPS],
-  ActionDashboardContainer: [DCM_NEXTSTEPS],
-  RecommendationModuleContainer: [{ widget: "Recommendations", chrome: true, freedom: "Freedom product-selection / NBO recommendations component",
-    note: "Inherited base-template container (from BasePageV2) — inserted EMPTY (items:[], no `visible` binding) and filled at RUNTIME by the RecommendationModuleUtilities mixin. It shows the Next-Best-Offer (NBO) / product recommendations (RecommendedProduct) only if recommendation rules are configured for the entity; the page schema can't say whether it's used. Check on-stand: does the LIVE Classic page actually render recommendations (are NBO/recommendation rules configured for this entity)? If yes → wire the Freedom product-selection / recommendations component; if it renders empty → inherited chrome, drop it." }],
-  DuplicatesWidgetContainer: [{ widget: "Duplicates", freedom: "Freedom duplicates widget" }],
-  ESNFeedContainer: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }],
-};
-// EMBEDDED PROFILE CARDS — a classic page can embed a compact card of a LINKED record (a "requester" block
-// on a request page, the account card on ContactPageV2). It is a page-within-a-page: the `modules` config
-// names a small declarative profile schema plus the master/profile wiring — nothing bespoke. Freedom's home
-// for the pattern is a native compact-profile component in the SIDE PROFILE, keyed by the PROFILED entity.
-// PROVENANCE (be precise — E1 lesson): the component types and their `referenceColumn`/`readonly` contract are
-// READ FROM the Freedom component catalog (`get-component-info`), not invented here — but that catalog answered
-// from the `latest` superset (`requiresVersionConfirmation`), so presence on a TARGET stand is NOT established
-// by this table. That is why the emitted decision always carries the `list-packages` package check.
-// `pkg` = the package the component needs as a page-package dependency.
-const PROFILE_CARD_BY_ENTITY = {
-  Contact: { type: "crt.ContactCompactProfile", pkg: "CrtCustomer360App", shows: "photo, name parts, birth date, country, city, time zone" },
-  Account: { type: "crt.AccountCompactProfile", pkg: "CrtCustomer360App", shows: "photo, name, alternative name, country, city, time zone" },
-  SysAdminUnit: { type: "crt.UserCompactProfile", pkg: null, shows: "photo and first/middle/last name" },
-  VwSysAdminUnit: { type: "crt.UserCompactProfile", pkg: null, shows: "photo and first/middle/last name" },
-};
+// The header/analytical widget catalog, the embedded-profile-card catalog and the standard card-action list now
+// live in the SHARED MAPPING TABLE (`mapping-table.mjs`), where their `crt.*` types are checked against the
+// component registry like every other row. What stays here are DERIVED VIEWS in the shapes this mapper's builders
+// already consume, so the data has one home without rewriting the builders around it.
+const WIDGET_BY_MODULE = widgetsByMatch(MATCH.MODULE_KEY);
+const WIDGET_BY_CONTAINER = widgetsByMatch(MATCH.CONTAINER_NAME);
+const PROFILE_CARD_BY_ENTITY = profileCardsByEntity();
+const KNOWN_ACTION_ITEMS = knownCardActions();
 // The profiled entity from the profile SCHEMA NAME — last-resort only, and deliberately narrow: `Account` and
 // `Contact` are the two unambiguous OOTB families (AccountProfileSchema / ClientContactProfileSchema). A name
 // like `RequesterProfilePage` or `UserProfilePage` says nothing reliable about the entity, so it stays
@@ -354,10 +318,6 @@ function isProfileCardModule(c) {
   if (!c.masterColumnName || c.hasDashboardConfig) return false;
   return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
 }
-// standard card actions (from the classic ACTIONS menu / toolbar) -> Freedom card actions (B7).
-const KNOWN_ACTION_ITEMS = new Set([
-  "PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton",
-]);
 
 // A base (template-owned) field a CLIENT schema RECONFIGURED (hid / moved / re-laid-out) is excluded from the payload
 // as template context — but the delta is KNOWN, so emit it as a CONCRETE applied override (what to change on the base
