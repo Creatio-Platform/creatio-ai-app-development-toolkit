@@ -326,8 +326,12 @@ FIRST, before any build:
 | Role | Writes | Never |
 |---|---|---|
 | **Builder** — one per unit, fresh context | the Freedom pages on the stand; the worklog/roadmap entry that closes its unit | writes the queue file; files its own evidence; runs `--verify` |
-| **Verifier** — read-only, separate agent | `pages`, `reachability`, `evidence` in the built file, from `get-page` | changes anything on the stand |
-| **Judge** — a THIRD agent | only `judge` — one `{ convincing, why }` per evidence id | *writes* anything but `judge`; it READS every record it rules on, and rules on nothing else |
+| **Verifier** — read-only against the STAND, separate agent | `pages`, `reachability`, `evidence` in the built file, from `get-page`; and the run carry into the queue file (`queueWritten`) | changes anything on the stand |
+| **Judge** — a THIRD agent | `judge` — one `{ convincing, why }` per evidence id; plus any preflight `evidence` records handed to it to transcribe | *composes* anything but `judge`; it READS every record it rules on, and rules on nothing else |
+
+Read-only means **against the stand**. Both later agents write run artifacts: bookkeeping folded into the sequential
+agent that was already running, never a second opinion on the stand. Each one reports the ids it filed
+(`evidenceWritten`), because a record dropped from memory on an unconfirmed write is a ⚠ Confirm row that stays open.
 
 Every page key gets an entry, the mini page included: its `Mini page` row is closed by
 `pages["mini:<Schema>"]`, never by a boolean — so a mini page you built is one you must fetch.

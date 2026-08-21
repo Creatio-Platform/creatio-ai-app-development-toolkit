@@ -1214,30 +1214,44 @@ const buildAnswer = (continuationRequested) => ({
 // Drives the round loop. `builderContinues(n)` decides, per build call, whether that builder asks to continue.
 // The ACCOUNTING is read off the run's OWN return — `builds` counts real dispatches and the park record carries the
 // rounds actually charged — so the assertions do not depend on a stubbed Reconcile transcribing counters back.
-const runToRound = (builderContinues, extra = {}) => {
+// `units` overrides the single-unit schedule for the sibling tests; `builderContinues` is called with (nth, unitKey).
+const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
   let builds = 0;
   const continuationBlocks = [];
+  // The DISPATCH TRACE: every build keyed by unit, and a marker each time Verify runs. Round 1 is everything before
+  // the first Verify — which is what makes "the sibling was built in the SAME round" observable rather than inferred.
+  const trace = [];
+  const baseline = { ...roundBaseline, unitKeys: units, buildOrder: units };
+  const openVerdict = {
+    complete: false, missing: units.length, unverified: 0,
+    pages: Object.fromEntries(units.map((u) => [u, { openRows: [{ deliverable: "Fields — 7 expected" }] }])),
+  };
   const agentStub = async (prompt, opts = {}) => {
     const label = opts.label || "";
-    if (label === "reconcile:baseline") return { ...roundBaseline };
+    if (label === "reconcile:baseline") return { ...baseline };
     if (label.startsWith("build:")) {
       builds += 1;
-      return buildAnswer(builderContinues(builds));
+      const key = label.slice("build:".length);
+      trace.push({ build: key });
+      return buildAnswer(builderContinues(builds, key));
     }
     // VERIFY is the phase that receives the carry — it is the queue writer. The BUILD CONTINUATIONS block must reach
     // IT, not Reconcile. Matched on the carry block's own opening: the bare phrase also appears in Verify's static
     // instructions, so a looser probe would pass on a round that carried nothing.
     if (label.startsWith("verify:")) {
+      trace.push({ verify: true });
       const at = prompt.indexOf("BUILD CONTINUATIONS — set each unit's");
       if (at >= 0) continuationBlocks.push(prompt.slice(at, at + 260));
       return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
     }
-    // The unit stays OPEN, so the loop keeps going until the round budget parks it.
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    // The units stay OPEN, so the loop keeps going until the round budget parks them.
+    if (label.startsWith("reconcile:")) return { ...baseline, verify: openVerdict };
     return null;
   };
   return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
-    .then((res) => ({ res, builds, continuationBlocks }))
+    .then((res) => ({ res, builds, continuationBlocks, trace,
+      // The units built BEFORE the first Verify — i.e. in round 1.
+      firstRoundBuilds: trace.slice(0, trace.findIndex((t) => t.verify)).map((t) => t.build) }))
     .catch((e) => ({ threw: e.message }));
 };
 // A builder that NEVER stops asking. Without a ceiling the unit is never charged a round, so `roundsRun` never
@@ -1282,6 +1296,95 @@ check("ENG-95474 review: `maxContinuations: 0` refuses every continuation — th
     && noContinuations.continuationBlocks.length === 0,
   () => (noContinuations.threw ? `threw: ${noContinuations.threw}`
     : { builds: noContinuations.builds, parkRounds: parkOf(noContinuations)?.rounds, blocks: noContinuations.continuationBlocks.length }));
+// --- SIBLING NON-DEFERRAL, EXECUTED with TWO units (review round 2). The single-unit scenarios above cannot catch a
+// regression that reintroduces `r.deferred.push(...)` for other units on a continuation: with one unit there is no
+// sibling to defer. Two independent page units, only `main` continuing, and the assertion is that `list` got its BUILD
+// CALL in the SAME round — not merely that `deferred` came back empty, which would also hold if the sibling were
+// silently dropped.
+const siblingRun = await runToRound((_n, key) => key === "main", {}, ["main", "list"]);
+check("ENG-95474 review round 2 EXECUTES sibling non-deferral: with two open units and only `main` continuing, `list` is still DISPATCHED in the same round — the guarantee the source-regex pin cannot prove",
+  !siblingRun.threw && siblingRun.firstRoundBuilds?.length === 2
+    && siblingRun.firstRoundBuilds.includes("main") && siblingRun.firstRoundBuilds.includes("list"),
+  () => (siblingRun.threw ? `threw: ${siblingRun.threw}` : { firstRound: siblingRun.firstRoundBuilds, trace: siblingRun.trace?.slice(0, 6) }));
+// And not just in round 1: the sibling is dispatched in EVERY round it is open, so a continuation never costs it a
+// turn. `main` continues twice then spends one charged round; `list` is charged all three. Both get one build per round.
+const buildsPerUnit = (r) => (r.trace || []).filter((t) => t.build).reduce((n, t) => ({ ...n, [t.build]: (n[t.build] ?? 0) + 1 }), {});
+check("ENG-95474 review round 2: the sibling is dispatched in every round it is open — `main`'s two continuations never cost `list` a build",
+  !siblingRun.threw && buildsPerUnit(siblingRun).list === 3 && buildsPerUnit(siblingRun).main === 3,
+  () => ({ perUnit: buildsPerUnit(siblingRun), rounds: siblingRun.res?.rounds }));
+
+// --- PREFLIGHT EVIDENCE is settled only by a REPORTED filing (review round 2). `judged`/`queueWritten` being truthy
+// says the agent answered, not that it transcribed the records — and the records live only in memory until it does.
+const runPreflight = (judgeReports, verifyReports) => {
+  const evidence = [];
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    // One ⚠ Confirm item, so Preflight files a record and the post-preflight Judge runs before any build.
+    if (label === "reconcile:baseline") return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }] };
+    if (label.startsWith("preflight:")) return { resolved: [{ id: "pf1", referencePage: "RefPage", components: ["crt.Input"] }], unresolved: [] };
+    if (label.startsWith("judge:")) {
+      evidence.push({ judge: /PREFLIGHT EVIDENCE TO FILE/.test(prompt) });
+      return { verdicts: [{ id: "pf1", convincing: true, why: "ok" }], evidenceWritten: judgeReports };
+    }
+    if (label.startsWith("verify:")) {
+      evidence.push({ verify: /PREFLIGHT EVIDENCE —/.test(prompt) });
+      return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: verifyReports };
+    }
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: true, missing: 0, unverified: 0, pages: {} } };
+    return null;
+  };
+  return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, evidence })).catch((e) => ({ threw: e.message }));
+};
+// A Judge that answers but reports NO filed id must leave the record pending, so a later writer still receives it.
+const judgeSilent = await runPreflight([], []);
+check("ENG-95474 review round 2: a Judge that returns verdicts but reports NO `evidenceWritten` does NOT settle the record — a verdict list is not a filing receipt, and the record must reach a later writer",
+  !judgeSilent.threw && judgeSilent.evidence?.some((e) => e.judge === true)
+    && judgeSilent.evidence?.some((e) => e.verify === true),
+  () => (judgeSilent.threw ? `threw: ${judgeSilent.threw}`
+    : { sawJudgeBlock: judgeSilent.evidence?.some((e) => e.judge), sawVerifyBlock: judgeSilent.evidence?.some((e) => e.verify), trace: judgeSilent.evidence }));
+// A Judge that DOES report the id settles it, so no later prompt carries it again.
+const judgeFiles = await runPreflight(["pf1"], []);
+check("ENG-95474 review round 2: a Judge that reports the id in `evidenceWritten` settles it — no later prompt carries that record again",
+  !judgeFiles.threw && judgeFiles.evidence?.some((e) => e.judge === true)
+    && !judgeFiles.evidence?.some((e) => e.verify === true),
+  () => (judgeFiles.threw ? `threw: ${judgeFiles.threw}` : { trace: judgeFiles.evidence }));
+// The id-scoped clear, executed on the shipped helper's contract: only reported ids go, everything else stays pending.
+check("ENG-95474 review round 2: the evidence clear is ID-SCOPED — an unreported id survives while a reported one is dropped",
+  /function markEvidenceFiled\(ids\) \{[\s\S]{0,400}?Object\.hasOwn\(preflightEvidence, id\)[\s\S]{0,200}?delete preflightEvidence\[id\]/.test(wfSrc)
+    && !/preflightEvidence = \{\}\s*\n\s*carryPersisted/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("function markEvidenceFiled"), wfSrc.indexOf("function markEvidenceFiled") + 420));
+// ORDERING is the whole fix on the Verify path: `markCarryPersisted` recomputes the fingerprint, so settling the carry
+// while unfiled records are still in it records them as durable. Evidence must be dropped FIRST.
+check("ENG-95474 review round 2: on the `queueWritten` path the evidence is settled BEFORE the carry — otherwise the fingerprint records unfiled records as durable",
+  /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,400}?markEvidenceFiled\(lastVerifier\.evidenceWritten\)[\s\S]{0,40}?markCarryPersisted\(\)/.test(wfSrc)
+    && /markEvidenceFiled\(persisted\.evidenceWritten\)[\s\S]{0,200}?markCarryPersisted\(\)/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("if (lastVerifier.queueWritten)"), wfSrc.indexOf("if (lastVerifier.queueWritten)") + 460));
+check("ENG-95474 review round 2: `queueWritten` is not read as evidence confirmation — the evidence carry block asks for its own `evidenceWritten` answer and says the two are different files",
+  /A DIFFERENT FILE from the queue merge above/.test(wfSrc)
+    && /\\`queueWritten\\` says nothing about this write/.test(wfSrc)
+    && /evidenceWritten: \{ type: 'array', items: \{ type: 'string' \} \},\s*\n\s*notes/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /A DIFFERENT FILE|says nothing about this write/.test(l)).join("\n").slice(0, 300));
+
+// --- THE CONTINUATION COUNTER IS MONOTONIC (review round 2). It is the ceiling's only input, so a stale lower report
+// from the queue file must not walk it backwards and hand a unit budget it already spent.
+check("ENG-95474 review round 2: `continuationOf` merges with `Math.max`, like the round counter — a stale queue report cannot roll spent continuation budget back and defeat `MAX_CONTINUATIONS`",
+  /function mergeContinuationCounters\(continuationOf\) \{[\s\S]{0,320}?continuations\[key\] = Math\.max\(continuations\[key\] \?\? 0, count\)/.test(wfSrc)
+    // ONE helper, both call sites — two copies of a monotonicity invariant drift.
+    && (wfSrc.match(/mergeContinuationCounters\(state\.continuationOf\)/g) || []).length === 2
+    && !/continuations\[key\] = count/.test(wfSrc),
+  () => ({ callSites: (wfSrc.match(/mergeContinuationCounters\(state\.continuationOf\)/g) || []).length,
+    rawAssign: /continuations\[key\] = count/.test(wfSrc) }));
+
+// --- the two dead-code findings from review round 2.
+check("ENG-95474 review round 2: `reconcilePrompt` no longer promises a PREFLIGHT EVIDENCE block — it takes no carry and never emits one, so the instruction was dead text",
+  !/If the PREFLIGHT EVIDENCE block below is present/.test(wfSrc)
+    && /function reconcilePrompt\(round\)/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /PREFLIGHT EVIDENCE block below/.test(l)).join("\n") || "(clean)");
+check("ENG-95474 review round 2: `VERIFIER_SCHEMA` carries no dead `queueFile` field — nothing read it and no prompt asked for it",
+  !/queueWritten: \{ type: 'boolean' \},\s*\n\s*queueFile:/.test(wfSrc) && !/lastVerifier\.queueFile/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /queueFile/.test(l)).join("\n"));
+
 // THE PURE CEILING, executed directly: the predicate the loop above depends on.
 check("ENG-95474 review: `continuationAllowed` refuses at and past the cap, and treats a 0 or non-finite cap as 'no continuations'",
   () => wf.continuationAllowed(0, 2) === true && wf.continuationAllowed(1, 2) === true
