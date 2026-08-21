@@ -89,7 +89,7 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // path and the reference docs (`REF_BLOCK`: "a relative path resolves against nothing and the agent either
       // goes hunting or quietly builds without the recipe"). The shipped script interpolates the real folder.
       baseline: "Write these cards to `<outDir>/customizations-shared-core.md`",
-      shipped: "Write these cards to `",
+      shipped: "Write these cards to `out/customizations-shared-core.md`",
       why: "a literal `<outDir>` placeholder in a prompt is unexpandable; the run's actual migration folder is interpolated instead",
     },
   ],
@@ -267,6 +267,57 @@ function buildScenarios() {
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },
     { name: "missing required args — fails loudly before any agent", args: { manifest: "/mig/manifest.json" }, answer: host({ reconciles: [RECONCILE()] }) },
+    // --- three branches whose PROMPT TEXT no scenario above reaches -----------------------------------------
+    // `pages-only-no-menu`: the app unit is told NOT to create a section, which is the OTHER arm of the step-4
+    // text. Every scenario above carries `existing-app`, so that arm had never been compared against the baseline.
+    {
+      name: "the app unit under `pages-only-no-menu` — the step-4 text that says create NO section",
+      args: ARGS,
+      answer: host({
+        // `app` is in `unitKeys` here ONLY so the prompt can be compared at all: `unitNoOf` refuses a scheduled
+        // unit the key list does not carry, and `--units` never publishes the synthetic `app` unit — so in real
+        // life this prompt throws before it is dispatched, in the baseline and in the generated script alike (a
+        // PRE-EXISTING defect, reported separately). This fixture steps around it to compare the TEXT.
+        reconciles: [RECONCILE({ packageState: "absent", sectionHost: "pages-only-no-menu", applicationCode: null, unitKeys: ["child:Documents", "list", "main", "app"] }), GREEN],
+        build: (unit) => (unit === "app"
+          ? { unit: "app", packageName: "DealPkg", appName: "Deals", claimedBuilt: [], blocked: [], proposals: [] }
+          : BUILT(unit)),
+      }),
+    },
+    // A PARTIAL app unit: the planned package exists, and nothing else finished. That composes the `shortfall`
+    // clause, which is a text no other scenario produces.
+    {
+      name: "the app unit produced the package and NOTHING else — the partial-deliverable blocker text",
+      args: ARGS,
+      answer: host({
+        // Same fixture shape, same reason as above: `app` in `unitKeys` so the unit is dispatchable at all.
+        reconciles: [RECONCILE({ packageState: "absent", unitKeys: ["child:Documents", "list", "main", "app"] }),
+                     RECONCILE({ packageState: "absent", unitKeys: ["child:Documents", "list", "main", "app"] })],
+        build: (unit) => (unit === "app"
+          ? { unit: "app", packageName: "DealPkg", starterFormPage: "", claimedBuilt: [], proposals: [],
+              blocked: [{ what: "create-app-section failed", why: "the entity was not bindable" }] }
+          : BUILT(unit)),
+      }),
+    },
+    // The REACH unit's whole prompt, including the app-menu note in both its arms. `sectionRegistered` is normally
+    // absent from `unitKeys`, so no per-unit file can be named for it and the prompt throws before it is dispatched
+    // — pre-existing behaviour, reproduced identically, and asserted by the scenario above it. This fixture puts
+    // the key in `unitKeys` (giving it a unit number) but NOT in `buildOrder` (so it is still scheduled as a reach
+    // unit, not a page), which is the smallest shape that lets the reach prompt be COMPARED at all.
+    {
+      name: "the reachability unit's prompt, with the approved application code",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE({ unitKeys: ["child:Documents", "list", "main", "sectionRegistered"] }), GREEN],
+      }),
+    },
+    {
+      name: "the reachability unit's prompt when NO applicationCode is published",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE({ unitKeys: ["child:Documents", "list", "main", "sectionRegistered"], applicationCode: null }), GREEN],
+      }),
+    },
   ];
 }
 
