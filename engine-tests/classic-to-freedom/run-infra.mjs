@@ -12,6 +12,8 @@ import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -1924,6 +1926,61 @@ const guidelinesReturnFor = () => ""
       () => !/\/m\/slices\//.test(rendered.app) && !/\/m\/slices\//.test(rendered.appNoMenu) && !/\/m\/slices\//.test(rendered.reach),
       () => ({ app: /\/m\/slices\//.test(rendered.app || ""), reach: /\/m\/slices\//.test(rendered.reach || "") }));
   }
+}
+
+
+/* ---- ENG-95543: the reference doc is LINT-CHECKED against the shared mapping table -------------------------
+ * The ticket asks for the doc's classification rows to be generated from, or lint-checked against, the table.
+ * Lint-checked, not generated: the rows carry build recipes, on-stand checks and a "Do NOT" column that no table
+ * holds, and generating the file would delete exactly the part a human wrote. What the lint covers is the part
+ * that CAN silently drift — a `crt.*` type that does not exist, and a table row nobody documented.
+ */
+{
+  const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
+  const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
+  const index = vendoredIndex();
+  // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect (ENG-95555) in its
+  // DOC form: `crt.ContactCommunication` was written in prose long before anyone checked it against a stand, and
+  // prose is what an agent reads when Node is unavailable.
+  const allDocTypes = [...new Set((doc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || []))];
+  // A `crt.*Request` / `crt.*Service` is NOT a component: requests live in the CDN's separate RequestRegistry
+  // (published for `latest` only, and it does not carry all of them — `crt.HandlerChainService` is an Angular
+  // service, `crt.EntityStageProgressBarLoadDataRequest` a component-specific request). The component index cannot
+  // judge them, so they are excluded here and remain UNCHECKED — stated rather than silently folded in.
+  const isComponentName = (t) => !/(?:Request|Service)$/.test(t);
+  // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
+  // it is the warning that it does not. Those are checked the other way round below.
+  const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
+  const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t));
+  const unknownDocTypes = docTypes.filter((t) => !index.components[t]);
+  check(`ENG-95543 doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index`,
+    docTypes.length >= 5 && unknownDocTypes.length === 0,
+    () => ({ checked: docTypes.length, unknown: unknownDocTypes, excludedAsRequests: allDocTypes.filter((t) => !isComponentName(t)) }));
+  // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
+  // registry really carries is telling the reader to avoid something valid.
+  const wrongCounterExamples = [...counterExamples].filter((t) => index.components[t]);
+  check("ENG-95543 doc lint: a type the doc names as a counter-example (\"NOT `crt.X`\") really is absent from the registry — otherwise the doc warns against a real component",
+    counterExamples.size >= 1 && wrongCounterExamples.length === 0,
+    () => ({ counterExamples: [...counterExamples], alsoRealComponents: wrongCounterExamples }));
+  // Every feature / widget the TABLE carries must be NAMED in the doc's standard-features section. Direction
+  // matters: table → doc catches a row added without documenting it, while doc → table would flag the many rows
+  // that are deliberately doc-only (Print, Run process, section actions — no table row emits those).
+  const section = doc.slice(doc.indexOf("## Standard features, widgets & actions"));
+  // A widget's label may carry a parenthetical qualifier the prose does not repeat (`Feed (ESN)` is documented as
+  // "Feed"), so the comparison is on the label without it. The NAME still has to appear — this trims a suffix, it
+  // does not accept a near-match.
+  const bare = (n) => n.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const tableNames = [...new Set(MAPPING_ROWS.flatMap((r) => [r.meta?.feature, ...(r.meta?.widgets || []).map((w) => w.widget)]).filter(Boolean))];
+  const undocumented = tableNames.filter((n) => !section.includes(n) && !section.includes(bare(n)));
+  check("ENG-95543 doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
+    tableNames.length >= 8 && undocumented.length === 0,
+    () => ({ names: tableNames, undocumented }));
+  // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
+  // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,
+  // which is how the "change both in the same commit" rule quietly stops being followed.
+  check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
+    /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
+    () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
