@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS, SOURCE } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -47,7 +47,9 @@ function versionBit(version, index) {
 // the thing the `--verify` gate looks for on the built page (`verify`). The second half matters as much as the
 // first: a standard-feature row emits nothing itself, but a wrong gate type there is how a page gets judged
 // against a component that does not exist (`crt.ContactCommunication` — the defect ENG-95555 catalogues by hand).
-const namedType = (row) => row?.target?.componentType || row?.verify?.componentType || null;
+// Reuses the table's own `rowComponentType` resolver (ENG-95683 RC-7) so the emit-over-verify precedence is
+// single-sourced with the gate lookup — a local copy here was free to drift from the one the gate resolves through.
+const namedType = rowComponentType;
 const isEmitter = (row) => !!namedType(row) || !!row?.target?.foldInto;
 
 // The COMPONENT-level half: does the type exist, and does it exist on the version being targeted? Own function so
@@ -127,9 +129,15 @@ export const isAdvisory = (f) => ADVISORY.has(f.kind);
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
 export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), version = null } = {}) {
   const findings = rows.flatMap((r) => validateRow(r, { index, version }));
+  // Table-wide invariant (ENG-95683): no component type may carry two divergent gates. This is a whole-table check,
+  // not a per-row one, so it is folded in here after the per-row findings. `gate-conflict` is a hard error.
+  // ...and the sibling invariant: a gate must have the SHAPE the guidance reads. A malformed gate is silent-wrong
+  // the same way a divergent one is (it degrades to the re-plan dead end), so `gate-shape` is a hard error too.
+  const conflicts = gateConflicts(rows);
+  const shapes = gateShapeIssues(rows);
   return {
     version, indexVersions: index?.meta?.versions || [],
-    errors: findings.filter((f) => !isAdvisory(f)),
+    errors: [...findings.filter((f) => !isAdvisory(f)), ...conflicts, ...shapes],
     advisories: findings.filter(isAdvisory),
   };
 }
@@ -246,11 +254,17 @@ export function validateRun(changeSet, { index = vendoredIndex(), version = null
   const findings = [];
   const bitCount = (index?.meta?.versions || []).length;
   for (const [ctype, why] of runTypes(changeSet)) {
+    // The structured gate intent for this type, resolved BY KIND from the shared rows (ENG-95683). Carried on the
+    // finding so the run-time guidance can branch by CAUSE — a gated composite (install/enable + re-run the build)
+    // vs. a type no row gates (fix the mapping/plan and re-run `--plan --out`) — instead of one blanket "settle the
+    // target" for both. It is attached to the resolution findings (absent / unknown), not to the compositeOnly
+    // advisory, because only an absent type raises the question the gate answers.
+    const gate = gateForComponentType(ctype);
     const c = index.components?.[ctype];
-    if (!c) { findings.push({ kind: "unknown-component", componentType: ctype, why }); continue; }
+    if (!c) { findings.push({ kind: "unknown-component", componentType: ctype, why, gate }); continue; }
     const i = version ? (index.meta.versions || []).indexOf(version) : -1;
     if (i >= 0 && (c.v & (1 << i)) === 0)
-      findings.push({ kind: "component-absent-in-version", componentType: ctype, version, why, presentIn: versionsOf(c.v, index) });
+      findings.push({ kind: "component-absent-in-version", componentType: ctype, version, why, presentIn: versionsOf(c.v, index), gate });
     if (c.compositeOnly) findings.push({ kind: "composite-only", componentType: ctype, why });
   }
   return { findings: findings.filter((f) => !isAdvisory(f)), advisories: findings.filter(isAdvisory), checkedVersions: bitCount };

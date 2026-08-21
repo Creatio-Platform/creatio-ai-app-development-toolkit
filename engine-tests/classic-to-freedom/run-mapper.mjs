@@ -7,10 +7,10 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -8131,6 +8131,177 @@ try {
     && verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) !== vPlain,
     () => ({ plain: vPlain, pinned830: verOf({ platformVersion: "8.3.0" }), pinned833: verOf({ platformVersion: "8.3.3" }),
       withExport: verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) }));
+
+  // ---- ENG-95683: resolve component targets BY KIND -------------------------------------------------------
+  // The registry gate used to give ONE blanket "settle the target" for every missing type. A real component gated
+  // behind an absent package is recoverable by an install + rebuild; a fabricated name is not, and needs a re-plan.
+  // The row now carries a structured {kind,id} gate, the run-time finding carries it, and the guidance branches on
+  // it. T1/T2 are the two branches; T3 (with T3b/T3c/T3d) is the typed intent surfaced through FEATURE_CATALOG and
+  // resolved by kind, including the version-scoped branch and the one-gate-per-type invariant.
+
+  // T1 — a real component gated behind an absent package (Customer360 comms). The run emits crt.CommunicationOptions
+  // (the "Communication options" standard feature's gate type); a stand export that lacks it yields an
+  // unknown-component finding whose gate marks it a COMPOSITE, and whose guidance says install/enable and re-run the
+  // BUILD — explicitly NOT a re-plan.
+  const commsStandIdx = indexFromRegistryExport({ resolvedTargetVersion: "8.3.9",
+    components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] });
+  const commsRun = validateRun({ standardFeatures: [{ feature: "Communication options" }] },
+    { index: commsStandIdx, version: "8.3.9" });
+  const commsFinding = commsRun.findings.find((f) => f.componentType === "crt.CommunicationOptions");
+  check("ENG-95683 (T1/R1): a gated real component (crt.CommunicationOptions) absent on the stand is a finding whose gate marks it a COMPOSITE and names the package/feature",
+    !!commsFinding && commsFinding.kind === "unknown-component"
+    && commsFinding.gate?.kind === GATE_KIND.COMPOSITE && commsFinding.gate?.id === "CrtCustomer360App"
+    && commsFinding.gate?.feature === "CommonCommunicationsBehavior",
+    () => commsRun.findings);
+  const commsGuidance = registrySettleGuidance(commsFinding);
+  check("ENG-95683 (T1/R1): the guidance for a gated component says install `CrtCustomer360App`, enable `CommonCommunicationsBehavior`, re-run the BUILD, and NO re-plan",
+    /install the `CrtCustomer360App` package/.test(commsGuidance) && /enable the `CommonCommunicationsBehavior` feature/.test(commsGuidance)
+    && /re-run the BUILD/.test(commsGuidance) && /no re-plan/.test(commsGuidance) && !/--plan --out/.test(commsGuidance),
+    () => commsGuidance);
+
+  // T2 — a fabricated `crt.*` that is not a component type at all. No row gates it, so the finding carries no gate
+  // and the guidance keeps the "fix the mapping/plan and re-run `--plan --out`" branch (no install can make it real).
+  const fabRun = validateRun({ viewConfigDiff: [{ name: "X", values: { type: "crt.NotAComponent" } }] }, { version: "8.3.0" });
+  const fabFinding = fabRun.findings.find((f) => f.componentType === "crt.NotAComponent");
+  check("ENG-95683 (T2/R2): a fabricated non-component type carries NO gate and keeps the 'fix the mapping/plan, re-run `--plan --out`' guidance",
+    !!fabFinding && fabFinding.kind === "unknown-component" && fabFinding.gate == null
+    && /fix the mapping or the plan/.test(registrySettleGuidance(fabFinding)) && /--plan --out/.test(registrySettleGuidance(fabFinding))
+    && !/re-run the BUILD/.test(registrySettleGuidance(fabFinding)),
+    () => fabFinding);
+
+  // T3 — the typed intent is surfaced through the derived FEATURE_CATALOG view (not parsed out of `note`/`freedom`).
+  check("ENG-95683 (T3/R3): FEATURE_CATALOG exposes the structured {kind,id} gate for a known gated row",
+    FEATURE_CATALOG.ContactCommunicationDetail?.gate?.kind === GATE_KIND.COMPOSITE
+    && FEATURE_CATALOG.ContactCommunicationDetail?.gate?.id === "CrtCustomer360App"
+    && FEATURE_CATALOG.ContactCommunicationDetail?.gate?.feature === "CommonCommunicationsBehavior"
+    // ...and a plain, ungated feature row exposes gate: null rather than a fabricated one.
+    && (FEATURE_CATALOG.ActivityDetailV2?.gate ?? null) === null
+    // ...and the same typed intent resolves BY KIND from the componentType, the API the registry gate uses.
+    && gateForComponentType("crt.CommunicationOptions")?.id === "CrtCustomer360App"
+    && gateForComponentType("crt.NotAComponent") === null,
+    () => ({ comms: FEATURE_CATALOG.ContactCommunicationDetail?.gate, activity: FEATURE_CATALOG.ActivityDetailV2?.gate }));
+
+  // T3b — the profile-card gate resolves BY KIND too. Profile-card rows are keyed by PROFILE_ENTITY, so they are
+  // NOT in FEATURE_CATALOG (a SCHEMA_SUFFIX-only view) — but the gate they derive from `pkg` is still reachable
+  // through `gateForComponentType`, the same API the registry gate uses. A card with a `pkg` gates a COMPOSITE on it;
+  // a card with no `pkg` gates nothing.
+  check("ENG-95683 (T3b/R3): a profile card's `pkg` becomes a BY-KIND composite gate, and a pkg-less card gates nothing",
+    gateForComponentType("crt.ContactCompactProfile")?.kind === GATE_KIND.COMPOSITE
+    && gateForComponentType("crt.ContactCompactProfile")?.id === "CrtCustomer360App"
+    && gateForComponentType("crt.AccountCompactProfile")?.id === "CrtCustomer360App"
+    && gateForComponentType("crt.UserCompactProfile") === null,
+    () => ({ contact: gateForComponentType("crt.ContactCompactProfile"), user: gateForComponentType("crt.UserCompactProfile") }));
+
+  // T3c — a `component-absent-in-version` finding carries the gate too, but the guidance branches by KIND, not by the
+  // presence of a gate: the component IS registered (so it is not "install a package"), it is just absent in the
+  // requested version — the fix is a platform-version change or a re-plan. Built against a synthetic index where a
+  // gated type (crt.CommunicationOptions) is present only in a later version, so the requested 8.3.0 run misses it.
+  const gatedVersionIdx = { meta: { versions: ["8.3.0", "8.3.3"] },
+    components: { "crt.CommunicationOptions": { v: 0b10, compositeOnly: true } } };
+  const absentRun = validateRun({ standardFeatures: [{ feature: "Communication options" }] },
+    { index: gatedVersionIdx, version: "8.3.0" });
+  const absentFinding = absentRun.findings.find((f) => f.componentType === "crt.CommunicationOptions");
+  check("ENG-95683 (T3c/R1): a gated component ABSENT in the requested version is a `component-absent-in-version` finding that carries the gate but gets VERSION guidance — not an install",
+    !!absentFinding && absentFinding.kind === "component-absent-in-version"
+    && absentFinding.gate?.id === "CrtCustomer360App" && absentFinding.presentIn?.includes("8.3.3")
+    && /absent in this platform version/.test(registrySettleGuidance(absentFinding))
+    && /target a version that carries it/.test(registrySettleGuidance(absentFinding))
+    && !/install the `CrtCustomer360App` package/.test(registrySettleGuidance(absentFinding)),
+    () => ({ finding: absentFinding, guidance: registrySettleGuidance(absentFinding) }));
+
+  // T3d — the one-gate-per-type invariant. The real table is clean (repeated types share one gate value), and a
+  // divergent gate for a single type is reported as a `gate-conflict`.
+  check("ENG-95683 (T3d/R3): the shipped MAPPING_ROWS carry no gate conflict, and two divergent gates for one type ARE flagged",
+    gateConflicts(MAPPING_ROWS).length === 0
+    && gateConflicts([{ gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } },
+      { gate: { kind: "composite", id: "B" }, verify: { componentType: "crt.X" } }]).length === 1
+    && gateConflicts([{ gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } },
+      { gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } }]).length === 0,
+    () => gateConflicts(MAPPING_ROWS));
+
+  // T1e — the AC1 payoff END-TO-END, at the level an operator actually sees. T1 asserts the finding and the guidance
+  // function in isolation; this drives a GATED type through the whole run so the ⚠ worklist item ITSELF carries the
+  // structured gate and the branched SETTLE clause. Without it, deleting `gate: f.gate || null` or swapping the
+  // `registrySettleGuidance(f)` call in `reportRegistryFindings` passes the entire suite — the only other run-level
+  // registry test emits an UNGATED `crt.Label`, so it never exercises either.
+  const commsStandRun = gmRun(`{operation:"insert",name:"Comm",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.DETAIL}}`,
+    `details:{Comm:{schemaName:"Schema9Detail",entitySchemaName:"ContactCommunication",detailColumn:"Contact",masterColumn:"Id"}},`,
+    { componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] } });
+  const commsWarn = commsStandRun.changeSet.needsDecision.find((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions");
+  check("ENG-95683 (T1e/R1): a gated type missing from the STAND export reaches the ⚠ worklist carrying the structured {kind,id} gate AND the install/BUILD settle clause — not the re-plan one",
+    !!commsWarn && commsWarn.gate?.kind === GATE_KIND.COMPOSITE && commsWarn.gate?.id === "CrtCustomer360App"
+    && commsWarn.gate?.feature === "CommonCommunicationsBehavior"
+    && /install the `CrtCustomer360App` package/.test(commsWarn.reason)
+    && /enable the `CommonCommunicationsBehavior` feature/.test(commsWarn.reason)
+    && /re-run the BUILD/.test(commsWarn.reason) && !/--plan --out/.test(commsWarn.reason),
+    () => commsStandRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // T3e — the invariant is only load-bearing because `validateTable` FOLDS it into `errors`. The run-time
+  // `gateForComponentType` returns the FIRST matching row's gate and has no conflict detection of its own, so this
+  // table-level check is the only thing between a divergent gate and a build resolving the wrong one. T3d proves
+  // `gateConflicts` in isolation; this proves the wiring — dropping `...conflicts` from the errors array fails HERE.
+  // The rows name a REGISTERED type on purpose, so the only error a clean pair can produce is the conflict itself.
+  const gateRow = (id) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "ZDetail" },
+    verify: { componentType: "crt.CommunicationOptions" }, gate: { kind: GATE_KIND.COMPOSITE, id } });
+  check("ENG-95683 (T3e/R3): `validateTable` surfaces a divergent gate as a `gate-conflict` ERROR, and a repeated SAME gate leaves the table clean",
+    validateTable({ rows: [gateRow("A"), gateRow("B")] }).errors
+      .some((e) => e.kind === "gate-conflict" && e.componentType === "crt.CommunicationOptions")
+    && validateTable({ rows: [gateRow("A"), gateRow("A")] }).errors.length === 0,
+    () => ({ divergent: validateTable({ rows: [gateRow("A"), gateRow("B")] }).errors,
+      same: validateTable({ rows: [gateRow("A"), gateRow("A")] }).errors }));
+
+  // T3f — the guidance branches on the gate's KIND, not on `id` truthiness. Two silent-wrong gates were reachable
+  // before: a mistyped key (`package` instead of `id`) degraded to the "fix the mapping/plan, re-plan" dead end —
+  // verbatim the message the by-kind branch exists to REMOVE for a gated component — and an unrecognized kind with a
+  // valid `id` still produced a confident "install the `P` package". Neither may select the install text now.
+  const settle = (gate) => registrySettleGuidance({ kind: "unknown-component", componentType: "crt.X", gate });
+  check("ENG-95683 (T3f/R1): only a well-formed `composite` gate selects the install/BUILD text — a mistyped `id` key and an unrecognized kind do not",
+    /install the `CrtCustomer360App` package/.test(settle({ kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App" }))
+    && !/install the/.test(settle({ kind: GATE_KIND.COMPOSITE, package: "CrtCustomer360App" }))
+    && !/install the/.test(settle({ kind: "totally-made-up", id: "P" }))
+    && !/install the/.test(settle({ kind: GATE_KIND.COMPOSITE, id: "" })),
+    () => ({ mistyped: settle({ kind: GATE_KIND.COMPOSITE, package: "CrtCustomer360App" }),
+      unknownKind: settle({ kind: "totally-made-up", id: "P" }) }));
+
+  // T3g — ...and a gate the guidance cannot read is a HARD TABLE ERROR, not a run-time surprise. This is the sibling
+  // of `gate-conflict`: both are silent-wrong-gate modes, so both fail the table check. The shipped rows are clean,
+  // and the check permits exactly what the guidance reads — an unproduced `GATE_KIND` value is reserved, not valid.
+  const shaped = (gate) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "ZDetail" },
+    verify: { componentType: "crt.CommunicationOptions" }, gate });
+  const shapeErrs = (gate) => validateTable({ rows: [shaped(gate)] }).errors.filter((e) => e.kind === "gate-shape");
+  check("ENG-95683 (T3g/R3): `validateTable` folds a malformed gate in as a `gate-shape` ERROR — mistyped key, unrecognized kind, empty id, non-string feature — while the shipped rows and a well-formed gate stay clean",
+    gateShapeIssues(MAPPING_ROWS).length === 0
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, id: "P", feature: "F" }).length === 0
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, package: "P" }).some((e) => /unknown gate key/.test(e.why))
+    && shapeErrs({ kind: "totally-made-up", id: "P" }).some((e) => /not read by the guidance/.test(e.why))
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, id: "" }).some((e) => /non-empty string `id`/.test(e.why))
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, id: "P", feature: 7 }).some((e) => /`feature`, when present/.test(e.why))
+    // ...and the two RESERVED kinds are rejected until they gain a guidance branch, so the enum cannot drift ahead
+    // of what `registrySettleGuidance` actually reads.
+    && shapeErrs({ kind: GATE_KIND.COMPONENT, id: "P" }).length === 1
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE_ONLY, id: "P" }).length === 1,
+    () => ({ shipped: gateShapeIssues(MAPPING_ROWS), mistyped: shapeErrs({ kind: GATE_KIND.COMPOSITE, package: "P" }) }));
+
+  // T3h — the ONE resolver, and its emit-over-verify precedence pinned (ENG-95683 RC-7). `rowComponentType` is the
+  // single exported resolver that `gateForComponentType`, `gateConflicts`, `gateShapeIssues` AND the registry-side
+  // `namedType` all use, so there is no second copy free to drift. Every gated row today is verify-only, but a future
+  // row naming a DIFFERENT `target` type would attach its gate to the EMITTED type — so the precedence (target over
+  // verify) is the intended contract and is asserted here rather than left implicit.
+  check("ENG-95683 (T3h/R3): rowComponentType is the single resolver and prefers the EMITTED target type over the verify type (precedence pinned so the gate attaches to the type the run emits)",
+    rowComponentType({ target: { componentType: "crt.Emit" }, verify: { componentType: "crt.Verify" } }) === "crt.Emit"
+    && rowComponentType({ verify: { componentType: "crt.Verify" } }) === "crt.Verify"
+    && rowComponentType({}) === null && rowComponentType(null) === null,
+    () => rowComponentType({ target: { componentType: "crt.Emit" }, verify: { componentType: "crt.Verify" } }));
+
+  // T3i — `gateConflicts` identity is key-ORDER independent (ENG-95683 RC-8). Two rows for one type whose gates are
+  // deep-equal but written with the keys in a DIFFERENT order (`{ kind, id }` vs `{ id, kind }` — both accepted by
+  // `gateShapeIssues`, which keys on a Set) are the SAME gate, so they must NOT read as a divergent `gate-conflict`.
+  // A `JSON.stringify` dedup key regresses this (the two serialize differently); the field-keyed `gateKey` does not.
+  const ck = (gate) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "ZDetail" }, verify: { componentType: "crt.X" }, gate });
+  check("ENG-95683 (T3i/R3): gateConflicts treats deep-equal gates written in a different key ORDER as the same gate (no spurious conflict), and still flags a genuinely divergent one",
+    gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]).length === 0
+    && gateConflicts([ck({ kind: "composite", id: "A" }), ck({ kind: "composite", id: "B" })]).length === 1,
+    () => gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
