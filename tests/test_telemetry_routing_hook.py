@@ -251,6 +251,9 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
             "mcp__plugin_creatio-ai-app-development-toolkit_clio__clio-run",
             "mcp__plugin_creatio-ai-app-development-toolkit_clio__list-apps",
             "mcp__clio__create-app",
+            # Named in review as the representative case, so it is pinned by name rather than
+            # covered by implication.
+            "mcp__clio__execute-query",
         ):
             self.assertTrue(
                 any(matcher.match(tool) for matcher in matchers),
@@ -286,6 +289,15 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
             any("telemetry-routing.mjs" in command for command in stop_commands),
             "the hook must be wired into Stop so the session's consumption is reported",
         )
+
+        # Exactly these three, and no fourth added by accident: a hook type this file does not
+        # handle would spawn the process on events it has nothing to do on.
+        self.assertEqual(set(manifest["hooks"]), {"PostToolUse", "UserPromptSubmit", "Stop"})
+        # Only PostToolUse is scoped by a matcher; the other two carry no tool name to match on, and
+        # a matcher there would silently stop them firing at all.
+        for event in ("UserPromptSubmit", "Stop"):
+            for entry in manifest["hooks"][event]:
+                self.assertNotIn("matcher", entry, f"{event} entries must not be tool-scoped")
 
     def test_hook_directory_ships_with_the_plugin(self):
         # Hooks live in the plugin manifest, so ${CLAUDE_PLUGIN_ROOT}/hooks must be part of

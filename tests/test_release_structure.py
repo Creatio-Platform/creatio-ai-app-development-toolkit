@@ -191,6 +191,29 @@ class ReleaseStructureTests(unittest.TestCase):
         # runtime), not when joined to the repo root.
         self._assert_anchored_paths_resolve(rule_path, "../")
 
+    # The release that first ships the telemetry hooks. The hook stamps the manifest version onto
+    # every event it emits, so hook-era events must not be able to carry a pre-hook version number:
+    # they would be indistinguishable from runs made before the floor existed, in the one dataset
+    # whose purpose is telling "few runs happened" from "runs happened and went unreported".
+    #
+    # This is a GATE, not a record. It is what makes the sequencing enforced rather than coordinated
+    # by hand: while the manifest declares `hooks`, the version cannot fall back below this.
+    HOOKS_CAPABILITY_MIN_VERSION = (1, 8, 0)
+
+    def test_the_hooks_capability_cannot_ship_under_a_pre_hook_version(self):
+        manifest = read_json(".claude-plugin/plugin.json")
+        if "hooks" not in manifest:
+            self.skipTest("the manifest declares no hooks, so nothing stamps a version")
+
+        version = tuple(int(part) for part in manifest["version"].split("."))
+
+        self.assertGreaterEqual(
+            version, self.HOOKS_CAPABILITY_MIN_VERSION,
+            "the hooks block stamps this version onto every telemetry event, so a version below "
+            f"{'.'.join(str(part) for part in self.HOOKS_CAPABILITY_MIN_VERSION)} would report "
+            "hook-era runs as pre-hook ones",
+        )
+
     def test_marketplace_catalogs_point_to_plugin(self):
         claude = read_json(".claude-plugin/marketplace.json")
         codex = read_json(".agents/plugins/marketplace.json")
