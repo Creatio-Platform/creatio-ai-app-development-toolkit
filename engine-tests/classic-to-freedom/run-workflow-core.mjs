@@ -22,7 +22,7 @@
 //
 // Zero dependencies (node built-ins only), same `check` idiom as the sibling
 // runners, exits 1 on any failed check.
-import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";

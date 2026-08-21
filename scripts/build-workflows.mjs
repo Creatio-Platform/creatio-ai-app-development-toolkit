@@ -90,6 +90,10 @@ function inlineOne(rel) {
       if (!/from\s+'[^']+'\s*$/.test(line.trim())) skipping = true
       continue
     }
+    // A RE-EXPORT (`export { a, b }` / `export { a } from '…'`) has nothing to inline: the names are already in
+    // scope here. Stripping `export ` off it left a bare `{ a, b }` — a block of expression statements that does
+    // nothing and reads like a mistake (Sonar S905), which is exactly what it was.
+    if (/^export\s*\{[^}]*\}\s*(from\s+'[^']+')?\s*$/.test(line.trim())) continue
     out.push(line.replace(/^export\s+(default\s+)?/, ''))
   }
   return `// ===== inlined from _workflow-core/${rel} =====\n${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`

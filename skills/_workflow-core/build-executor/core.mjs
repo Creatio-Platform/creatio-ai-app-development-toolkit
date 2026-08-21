@@ -29,29 +29,17 @@
 import { step, ACCESS } from '../work-item.mjs'
 import { makeContext, makePaths, normalizeInput, assertContextInput, resolveEngineCli, resolveSkillsRoot, q } from './context.mjs'
 import {
-  DEFAULT_MAX_ROUNDS, GUIDELINES_RETURN, LIST_UNIT_KEY,
-  MAIN_UNIT_KEY, addAncestors, answeredNoteFor,
-  appUnitFor, approvalStop, blockedByParked,
-  buildMode, buildSchemaKind, claimsBlock,
-  componentMismatchList, componentReplanClause, componentTypeList,
-  componentTypeMismatches, composeBuildPrompt, earnedFrom,
-  findingKeySet, findingsFor, guidelinesCloseMiss,
-  guidelinesLine, guidelinesReturnFor, guidelinesSuffix,
-  isOpenApp, isOpenPage, isOpenReach,
-  isUnitOpen, isUnitOpenWithFindings, nonBlank,
-  notRunMiss, owesGuidelines, packagePreconditionStop,
-  pageStateOf, parkableKeys, parkedKeys,
-  planInvalidNext, preflightToRun, qualityGateId,
-  resolutionAttribution, resolutionOwner, resolutionsBlockText,
-  resolutionsForUnit, roundsRun, scheduleUnits,
-  shouldPauseAfter, unitNo, unknownCheckpointKeys,
+  answeredNoteFor, appUnitFor, approvalStop, blockedByParked,
+  buildSchemaKind, claimsBlock, componentReplanClause, componentTypeList,
+  componentTypeMismatches, composeBuildPrompt, earnedFrom, findingsFor,
+  guidelinesCloseMiss, guidelinesReturnFor, isUnitOpenWithFindings, owesGuidelines,
+  packagePreconditionStop, pageStateOf, parkableKeys, planInvalidNext,
+  preflightToRun, resolutionAttribution, resolutionsBlockText, resolutionsForUnit,
+  roundsRun, scheduleUnits, shouldPauseAfter, unknownCheckpointKeys,
 } from './helpers.mjs'
 import {
-  BUILD_PROPERTIES, BUILD_SCHEMAS, BUILD_SCHEMA_APP,
-  BUILD_SCHEMA_PAGE, BUILD_SCHEMA_PAGE_NO_GUIDELINES, BUILD_SCHEMA_REACH,
-  JUDGE_SCHEMA, PERSIST_SCHEMA, PREFLIGHT_ITEM,
-  PREFLIGHT_MERGE_SCHEMA, PREFLIGHT_SCHEMA, RECONCILE_SCHEMA,
-  REFS_SCHEMA, VERIFIER_SCHEMA, VERIFY_RESULT,
+  BUILD_SCHEMAS, JUDGE_SCHEMA, PERSIST_SCHEMA, PREFLIGHT_MERGE_SCHEMA,
+  PREFLIGHT_SCHEMA, RECONCILE_SCHEMA, REFS_SCHEMA, VERIFIER_SCHEMA,
 } from './schemas.mjs'
 
 export { normalizeInput, resolveEngineCli, resolveSkillsRoot }
@@ -97,12 +85,12 @@ export function* run(rawInput, io = {}, opts = {}) {
   // has, and the engine + reference docs are resolved from it.
   const ctx = makeContext(input, opts.selfPath)
   const {
-    ENGINE, SKILLS_ROOT, REF_RECIPE, REF_MAPPING, REF_POLICY, REF_BLOCK,
+    ENGINE, REF_BLOCK,
     SURFACE, MAX_ROUNDS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET, FINDINGS, FINDING_KEYS,
     QUEUE_FILE, BUILT_FILE, preflightFile, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
-    REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
-    cli, CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
-    dataFence, openRowPrompt, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
+    REFS_DIR, REFS_INDEX, RESOLUTIONS_FILE,
+    CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
+    dataFence, openRowPrompt, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
   } = ctx
   // A finding reopens its unit for ONE repair attempt, and this set is what makes that terminate. It is MUTABLE run
   // state (consumed at dispatch), which is why it lives here and not in the context: reading the constant
@@ -111,7 +99,7 @@ export function* run(rawInput, io = {}, opts = {}) {
   // The per-unit file names need the PUBLISHED key list, so they read it at call time — `state` is assigned by the
   // baseline Reconcile below, and every one of these is only ever called after that.
   const paths = makePaths(ctx, () => state?.unitKeys)
-  const { unitNoOf, readablePart, specFile, worklogFile, queueSliceFile, builtSliceFile, cliSpec } = paths
+  const { specFile, worklogFile, queueSliceFile, builtSliceFile, cliSpec } = paths
 
   // ONE WORK ITEM, DISPATCHED. Everything the old `agent(prompt, opts)` call carried, as protocol data: the phase,
   // the role the item must be performed under, the schema its answer is validated against, the access level it
@@ -339,12 +327,15 @@ Return the schema. Numbers only — this script does the judging.`
   // stops for an unrelated reason, because the operator will otherwise re-run believing it was applied.
   logUnmatchedResolutions('baseline reconcile')
 
-  // THE BASELINE GATES — the five hard stops, in their original order, before a single stand write. Extracted into
-  // its own generator so `run()` stays flat and this stays measurable (Sonar cognitive complexity); it returns the
-  // run's RETURN VALUE when a gate stops the run, and nothing when every gate passed.
+  // THE BASELINE GATES — the five hard stops, in their original order, before a single stand write. Extracted so
+  // `run()` stays flat and this stays measurable (Sonar cognitive complexity); it returns the run's RETURN VALUE
+  // when a gate stops the run, and null when every gate passed.
+  //
+  // A PLAIN function, not a generator: every gate is arithmetic over the baseline Reconcile's answer and dispatches
+  // nothing, so there is no suspension point. A `function*` here would advertise one that cannot happen.
   //
   // `approval` is hoisted to the run's scope because every later return reports it — the gates only ASSIGN it.
-  function* baselineGates() {
+  function baselineGates() {
     // --- HARD STOP 1: the approval precondition (design point 12) ---------------
     approval = state.approval || { found: false }
     const stopOnApproval = approvalStop(approval, state.planVersion, { planFile: input.planFile, unitsCmd: CLI_UNITS })
@@ -496,7 +487,7 @@ Return the schema. Numbers only — this script does the judging.`
     return null
   }
 
-  const gated = yield* baselineGates()
+  const gated = baselineGates()
   if (gated) return gated
 
   // Seed everything a previous session recorded, BEFORE anything is scheduled. A kill must cost the

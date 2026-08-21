@@ -53,7 +53,7 @@ async function runScript(src, args, answer) {
   const body = src.replace(/^export const meta = \{[\s\S]*?\n\}\n/, "");
   const phases = [], calls = [], logs = [];
   const agent = async (prompt, opts = {}) => {
-    const req = opts.schema?.required ? [...opts.schema.required].sort() : null;
+    const req = opts.schema?.required ? [...opts.schema.required].sort((a, b) => a.localeCompare(b)) : null;
     calls.push({ phase: opts.phase || null, label: opts.label || null, agentType: opts.agentType || null, required: req, prompt: String(prompt ?? "") });
     return answer({ phase: opts.phase, label: opts.label, prompt, schema: opts.schema, nth: calls.length });
   };

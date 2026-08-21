@@ -1912,8 +1912,6 @@ return { unitNoOf, readablePart, specFile, worklogFile, queueSliceFile, builtSli
 // in `checkpointAfter` so a human can open that page on the stand and exercise it · `guided` stops after every
 // unit. A stop is always a PAGE BOUNDARY and always returns `stopped: 'paused-at-checkpoint'` — never `complete`.
 
-{ normalizeInput, resolveEngineCli, resolveSkillsRoot }
-
 // The CLI validates an input before it writes a run file, and it calls `assertInput(input)` with ONE argument for
 // every workflow. This run's required set includes the ENGINE, which is RESOLVED rather than passed — so the
 // one-argument form resolves it first, from the caller's own file location.
@@ -1955,12 +1953,12 @@ function* run(rawInput, io = {}, opts = {}) {
   // has, and the engine + reference docs are resolved from it.
   const ctx = makeContext(input, opts.selfPath)
   const {
-    ENGINE, SKILLS_ROOT, REF_RECIPE, REF_MAPPING, REF_POLICY, REF_BLOCK,
+    ENGINE, REF_BLOCK,
     SURFACE, MAX_ROUNDS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET, FINDINGS, FINDING_KEYS,
     QUEUE_FILE, BUILT_FILE, preflightFile, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
-    REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
-    cli, CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
-    dataFence, openRowPrompt, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
+    REFS_DIR, REFS_INDEX, RESOLUTIONS_FILE,
+    CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
+    dataFence, openRowPrompt, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
   } = ctx
   // A finding reopens its unit for ONE repair attempt, and this set is what makes that terminate. It is MUTABLE run
   // state (consumed at dispatch), which is why it lives here and not in the context: reading the constant
@@ -1969,7 +1967,7 @@ function* run(rawInput, io = {}, opts = {}) {
   // The per-unit file names need the PUBLISHED key list, so they read it at call time — `state` is assigned by the
   // baseline Reconcile below, and every one of these is only ever called after that.
   const paths = makePaths(ctx, () => state?.unitKeys)
-  const { unitNoOf, readablePart, specFile, worklogFile, queueSliceFile, builtSliceFile, cliSpec } = paths
+  const { specFile, worklogFile, queueSliceFile, builtSliceFile, cliSpec } = paths
 
   // ONE WORK ITEM, DISPATCHED. Everything the old `agent(prompt, opts)` call carried, as protocol data: the phase,
   // the role the item must be performed under, the schema its answer is validated against, the access level it
@@ -2197,12 +2195,15 @@ Return the schema. Numbers only — this script does the judging.`
   // stops for an unrelated reason, because the operator will otherwise re-run believing it was applied.
   logUnmatchedResolutions('baseline reconcile')
 
-  // THE BASELINE GATES — the five hard stops, in their original order, before a single stand write. Extracted into
-  // its own generator so `run()` stays flat and this stays measurable (Sonar cognitive complexity); it returns the
-  // run's RETURN VALUE when a gate stops the run, and nothing when every gate passed.
+  // THE BASELINE GATES — the five hard stops, in their original order, before a single stand write. Extracted so
+  // `run()` stays flat and this stays measurable (Sonar cognitive complexity); it returns the run's RETURN VALUE
+  // when a gate stops the run, and null when every gate passed.
+  //
+  // A PLAIN function, not a generator: every gate is arithmetic over the baseline Reconcile's answer and dispatches
+  // nothing, so there is no suspension point. A `function*` here would advertise one that cannot happen.
   //
   // `approval` is hoisted to the run's scope because every later return reports it — the gates only ASSIGN it.
-  function* baselineGates() {
+  function baselineGates() {
     // --- HARD STOP 1: the approval precondition (design point 12) ---------------
     approval = state.approval || { found: false }
     const stopOnApproval = approvalStop(approval, state.planVersion, { planFile: input.planFile, unitsCmd: CLI_UNITS })
@@ -2354,7 +2355,7 @@ Return the schema. Numbers only — this script does the judging.`
     return null
   }
 
-  const gated = yield* baselineGates()
+  const gated = baselineGates()
   if (gated) return gated
 
   // Seed everything a previous session recorded, BEFORE anything is scheduled. A kill must cost the
