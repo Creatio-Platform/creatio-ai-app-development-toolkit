@@ -1763,6 +1763,17 @@ function listRow(label, kind, item, n, names, columns) {
     list: { kind, item, n, names },
   };
 }
+// One command-bar action's checklist row. The label carries the metadata; the item stays the bare name because it
+// keys the evidence id.
+function listActionRow(a) {
+  const bits = [a.caption ? `caption \`${esc(a.caption)}\`` : null,
+    a.condition ? `conditional: \`${esc(a.condition)}\`` : null,
+    a.icon ? `icon \`${esc(a.icon)}\`` : null,
+    a.parent ? `under \`${esc(a.parent)}\`` : null,
+    a.package ? `from \`${esc(a.package)}\`` : null].filter(Boolean);
+  const detail = bits.length ? ` (${bits.join(" · ")})` : "";
+  return listRow(`Command-bar action — \`${esc(a.name)}\`${detail}`, "action", a.name, 1, [a.name]);
+}
 function buildListItems(pm, section, result, isMain) {
   if (!(pm.sectionSchema || section || (isMain && result.miniPage))) return [];
   const lcs = result.listChangeSet;
@@ -1776,16 +1787,7 @@ function buildListItems(pm, section, result, isMain) {
         cols.length, cols.map((c) => c.name), cols.map((c) => ({ name: c.name, code: c.code })))]
     : [{ label: "List columns" }];   // unresolved ⇒ nothing to gate; the spec's ⚠ line carries the question
   for (const f of filters) items.push(listRow(`Quick filter — \`${esc(f.name)}\` on ${esc(f.column || "?")}`, "filter", f.name, 1, [f.name]));
-  for (const a of actions) {
-    // The label carries the metadata; the item stays the bare name because it keys the evidence id.
-    const bits = [a.caption ? `caption \`${esc(a.caption)}\`` : null,
-      a.condition ? `conditional: \`${esc(a.condition)}\`` : null,
-      a.icon ? `icon \`${esc(a.icon)}\`` : null,
-      a.parent ? `under \`${esc(a.parent)}\`` : null,
-      a.package ? `from \`${esc(a.package)}\`` : null].filter(Boolean);
-    const detail = bits.length ? ` (${bits.join(" · ")})` : "";
-    items.push(listRow(`Command-bar action — \`${esc(a.name)}\`${detail}`, "action", a.name, 1, [a.name]));
-  }
+  for (const a of actions) items.push(listActionRow(a));
   // A row action is an EVIDENCE row for the same reason a command-bar action is, and more strongly: its Freedom
   // element name is not predictable here, so there is no identity to match against the built page.
   for (const ra of lcs?.rowActions || []) {

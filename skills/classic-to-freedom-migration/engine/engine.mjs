@@ -953,8 +953,7 @@ function menuItemObjects(body, depth, state) {
   while ((m = re.exec(body))) {
     const open = m.index + m[0].length - 1;
     const inner = sliceBracedBody(body, open);
-    out.push({ text: maskNestedItems(inner), depth });
-    out.push(...menuItemObjects(inner, depth + 1, state));
+    out.push({ text: maskNestedItems(inner), depth }, ...menuItemObjects(inner, depth + 1, state));
     re.lastIndex = open + 1 + inner.length + 1;
   }
   return out;

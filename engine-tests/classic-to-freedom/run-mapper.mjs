@@ -4225,12 +4225,12 @@ const secActB = parseSchema(secActMk(`getSectionActions:function(){var a=this.ca
   + `_getActualizeAgeButtonMenuItem:function(){return this.getButtonMenuItem(`
   + `{Caption:{bindTo:"Resources.Strings.ActualizeActionCaption"},Click:{bindTo:"actualizeAge"}});}`), "Exchange");
 check("ENG-95254: items appended by a helper method are extracted — BOTH the collection-handed and the item-returning shape",
-  secActB.sectionActions.map((a) => a.name).sort().join(",") === "actualizeAge,openSyncSettings",
+  secActB.sectionActions.map((a) => a.name).sort((x, y) => x.localeCompare(y)).join(",") === "actualizeAge,openSyncSettings",
   () => secActB.sectionActions);
 check("ENG-95254: helper captions ride along, so a helper-built item is not a bare name either",
   secActB.sectionActions.every((a) => a.caption) , () => secActB.sectionActions);
 check("ENG-95254: the RESOLVED helper names are reported (that is what lets the chain clear another layer's marker)",
-  secActB.sectionActionHelpers.slice().sort().join(",") === "_getActualizeAgeButtonMenuItem,setSyncSectionActions"
+  secActB.sectionActionHelpers.slice().sort((x, y) => x.localeCompare(y)).join(",") === "_getActualizeAgeButtonMenuItem,setSyncSectionActions"
   && secActB.sectionActionUnresolved.length === 0, () => secActB.sectionActionHelpers);
 const secActU = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
   + `this.setSyncSectionActions(a);return a;}`), "Exchange");
