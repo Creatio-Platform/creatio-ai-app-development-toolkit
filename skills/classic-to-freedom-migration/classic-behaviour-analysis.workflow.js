@@ -325,10 +325,21 @@ function pendingIds(run, ids) {
 // ids it yields at a given point stop matching. Detected and REPORTED rather than
 // patched over — replaying a stale entry into a changed core is exactly how a
 // resumed run reports coverage it never computed.
+// Only a CONFLICTING recorded id is drift. A slice that merely RUNS SHORT is not:
+// the journal can only be short at its own tail (`slice` is capped at `ids.length`,
+// so a following phase's entry would land inside the compared window and mismatch
+// there), and a tail-partial batch is the normal shape of the CLI/Codex path — one
+// `cli submit` per item records item 1 and leaves item 2 for the next call. Calling
+// that drift made `next`, `submit` and `status` all throw on any batch bigger than
+// one, and sent the operator hunting a core-version mismatch that does not exist.
+// Returning null hands the case to `entriesFor` → null → the pending path, which is
+// what `entriesFor`'s "null when ANY id is absent" and `pendingIds` were written for.
 function driftAt(run, index, ids) {
   const slice = run.journal.slice(index, index + ids.length).map((e) => e.id)
-  const same = slice.length === ids.length && slice.every((id, i) => id === ids[i])
-  return same ? null : { at: index, expected: ids, found: slice }
+  for (let i = 0; i < slice.length; i++) {
+    if (slice[i] !== ids[i]) return { at: index, expected: ids, found: slice }
+  }
+  return null
 }
 
 function summary(run) {
@@ -374,10 +385,10 @@ function summary(run) {
 // HOW OUTCOMES REACH THE CORE (see work-item.mjs for why all three exist):
 //   VALUE  →  it.next([value])
 //   DEATH  →  it.next([null])            — reads exactly like `agent()` resolving null
-//   ERROR  →  it.throw(err) for a SINGLE-item step, so a `try/catch` in the core
-//             still fires; inside a parallel batch it becomes a null hole,
-//             because `parallel()` never rejects and the core is written against
-//             that contract.
+//   ERROR  →  it.throw(err) for a SEQUENTIAL single-item step, so a `try/catch` in
+//             the core still fires; inside a `parallel: true` step it becomes a null
+//             hole — including a batch of ONE — because `parallel()` never rejects
+//             and the core is written against that contract.
 
 // `execute(item)` must resolve `{ outcome, value?, error? }` — never throw. An
 // adapter that lets an exception escape would abort the whole run on a failure
@@ -503,10 +514,20 @@ async function resolveStep({ step, run, host, io, replayIndex, onPending }) {
 
 function sendFor(step, entries) {
   const err = entries.find((e) => e.outcome === OUTCOME.ERROR)
-  // A rejection on a SINGLE-item step is thrown into the core so a `try/catch`
-  // there fires; in a batch it collapses to a null hole ON PURPOSE — that is the
-  // `parallel()` contract the cores are written against.
-  if (step.items.length === 1 && err) return { type: 'throw', value: reviveError(err.error) }
+  // A rejection on a SEQUENTIAL single-item step is thrown into the core so a
+  // `try/catch` there fires; anything the core marked `parallel: true` collapses to
+  // a null hole ON PURPOSE — that is the `parallel()` contract the cores are written
+  // against, and it holds for a batch OF ONE too. Keying this on `items.length`
+  // instead of `step.parallel` made a parallel batch that happened to carry one item
+  // (Describe on a small surface, the repair round, Preflight with one batch) abort
+  // the whole run on a rejecting agent, where the pre-migration script absorbed it
+  // and still produced its honest `complete: false` verdict.
+  //
+  // The one place the throw path is load-bearing is `critiqueStep`
+  // (behaviour-analysis/core.mjs) — a step with no `parallel` flag, so its
+  // `retryOnDeath` catch still fires. There are no `parallel: false` multi-item
+  // steps in either core, so this is strictly the narrower gate.
+  if (!step.parallel && step.items.length === 1 && err) return { type: 'throw', value: reviveError(err.error) }
   return { type: 'next', value: entries.map((e) => (e.outcome === OUTCOME.VALUE ? e.value : null)) }
 }
 

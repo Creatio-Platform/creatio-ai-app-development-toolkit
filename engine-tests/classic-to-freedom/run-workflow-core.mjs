@@ -550,7 +550,8 @@ console.log("\n===== cross-host parity =====");
     if (opts.phase === "Critique") return CLEAN_CRITIQUE;
     return MERGED;
   };
-  const fakeParallel = async (thunks) => Promise.all(thunks.map((t) => t()));
+  // Same faithful contract as the other fakes here: a throwing thunk resolves to `null`, the call never rejects.
+  const fakeParallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
   const claudeRun = newRun({ workflow: cba.WORKFLOW, input: INPUT, host: CLAUDE_HOST });
   const claudeIo = { log: () => {}, phase: () => {} };
   const claudeResult = await driveOnClaude({
@@ -664,7 +665,11 @@ check("generated: it says it is generated and names the command that rebuilds it
     if (opts.phase === "Critique") return CLEAN_CRITIQUE;
     return MERGED;
   };
-  const parallel = async (thunks) => Promise.all(thunks.map((t) => t()));
+  // FAITHFUL to the documented `parallel()` contract, which is NOT `Promise.all`: a thunk that throws (or whose
+  // agent errors) resolves to `null` in the result array, and the call itself never rejects. A bare `Promise.all`
+  // rejects on the first throw, which made baseline and shipped propagate a rejection identically and left the
+  // rejection axis — the one axis where the three-outcome protocol is observable — structurally untested.
+  const parallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
   // The shipped body becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval,
   // matching the sibling runners' decision to keep these files free of a dynamic-code construct a reviewer then
   // has to reason about. Wrapping it in `export default async function(args, log, phase, agent, parallel)` is the
@@ -762,6 +767,38 @@ console.log("\n===== the migration-workflow CLI =====");
     check("cli: the stop is RECORDED on the run — `stopped` with the missing capability and the phase that needed it, so the reason survives the process",
       stopState.status === "stopped" && stopState.stop.missing.join(",") === "independentRoles" && /Critique/.test(stopState.stop.where),
       () => JSON.stringify(stopState.stop));
+
+    // A TAIL-PARTIAL BATCH, one `cli submit` per item. The only shape the CLI/Codex path can produce for a
+    // multi-item batch, and the one every scenario above missed: the 2-scope INPUT yields ONE describe item, so
+    // no test ever submitted item 2 of a batch. `rowsPerAgent: 1` packs the same two scopes into two batches.
+    // Before the `driftAt` fix, `next`, `submit` and `status` all threw "run journal drifted" the moment item 1
+    // was recorded and item 2 was not — the run could be neither advanced, resumed nor inspected, and the message
+    // named a core-version mismatch that did not exist.
+    const batchRun = path.join(tmp, "batch.json");
+    const batchInput = path.join(tmp, "batch-input.json");
+    writeFileSync(batchInput, JSON.stringify({ ...INPUT, rowsPerAgent: 1 }));
+    cli("start", batchRun, "--workflow", "classic-behaviour-analysis", "--input", batchInput, "--host", "codex");
+    cli("submit", batchRun, "context.census-shared-core", write("ctx3.json", CTX));
+    const batch1 = JSON.parse(cli("next", batchRun).stdout);
+    check("cli: `rowsPerAgent: 1` packs the two scopes into a TWO-item Describe batch — the precondition every earlier scenario lacked",
+      batch1.status === "pending" && batch1.items.length === 2,
+      () => JSON.stringify(batch1).slice(0, 300));
+    const [firstId, secondId] = batch1.items.map((i) => i.id);
+    const afterFirst = cli("submit", batchRun, firstId, write("desc-b1.json", FULL_DESCRIBE));
+    check("cli submit: item 1 of a two-item batch is accepted — a partial batch is a normal state, not a corrupt journal",
+      afterFirst.status === 0, () => afterFirst.stderr);
+    const batch2 = cli("next", batchRun);
+    check("cli next: with item 1 recorded and item 2 not, the run still ADVANCES and names exactly the remaining id — a journal that merely runs short is not drift",
+      batch2.status === 0 && JSON.parse(batch2.stdout).status === "pending"
+        && JSON.parse(batch2.stdout).items.map((i) => i.id).join(",") === secondId,
+      () => batch2.stdout + batch2.stderr);
+    const batchStatus = cli("status", batchRun);
+    check("cli status: a run stopped mid-batch is still INSPECTABLE — the operator can see what was done before deciding what to do next",
+      batchStatus.status === 0 && JSON.parse(batchStatus.stdout).executed === 2, () => batchStatus.stdout + batchStatus.stderr);
+    const afterSecond = cli("submit", batchRun, secondId, write("desc-b2.json", FULL_DESCRIBE));
+    check("cli submit: item 2 completes the batch and the run moves on to Critique — the batch is finishable, so a multi-batch surface is analysable at all",
+      afterSecond.status === 0 && /critique/.test(JSON.parse(cli("next", batchRun).stdout).items.map((i) => i.id).join(",")),
+      () => afterSecond.stderr);
 
     // Resume: a killed process comes back and re-reads the journal.
     const resumed = JSON.parse(cli("status", runFile).stdout);

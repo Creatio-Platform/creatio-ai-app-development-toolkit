@@ -23,10 +23,10 @@
 // HOW OUTCOMES REACH THE CORE (see work-item.mjs for why all three exist):
 //   VALUE  →  it.next([value])
 //   DEATH  →  it.next([null])            — reads exactly like `agent()` resolving null
-//   ERROR  →  it.throw(err) for a SINGLE-item step, so a `try/catch` in the core
-//             still fires; inside a parallel batch it becomes a null hole,
-//             because `parallel()` never rejects and the core is written against
-//             that contract.
+//   ERROR  →  it.throw(err) for a SEQUENTIAL single-item step, so a `try/catch` in
+//             the core still fires; inside a `parallel: true` step it becomes a null
+//             hole — including a batch of ONE — because `parallel()` never rejects
+//             and the core is written against that contract.
 
 import { OUTCOME, record, reviveError } from './work-item.mjs'
 import { negotiateStep, negotiateRun, CapabilityError } from './capabilities.mjs'
@@ -156,10 +156,20 @@ async function resolveStep({ step, run, host, io, replayIndex, onPending }) {
 
 function sendFor(step, entries) {
   const err = entries.find((e) => e.outcome === OUTCOME.ERROR)
-  // A rejection on a SINGLE-item step is thrown into the core so a `try/catch`
-  // there fires; in a batch it collapses to a null hole ON PURPOSE — that is the
-  // `parallel()` contract the cores are written against.
-  if (step.items.length === 1 && err) return { type: 'throw', value: reviveError(err.error) }
+  // A rejection on a SEQUENTIAL single-item step is thrown into the core so a
+  // `try/catch` there fires; anything the core marked `parallel: true` collapses to
+  // a null hole ON PURPOSE — that is the `parallel()` contract the cores are written
+  // against, and it holds for a batch OF ONE too. Keying this on `items.length`
+  // instead of `step.parallel` made a parallel batch that happened to carry one item
+  // (Describe on a small surface, the repair round, Preflight with one batch) abort
+  // the whole run on a rejecting agent, where the pre-migration script absorbed it
+  // and still produced its honest `complete: false` verdict.
+  //
+  // The one place the throw path is load-bearing is `critiqueStep`
+  // (behaviour-analysis/core.mjs) — a step with no `parallel` flag, so its
+  // `retryOnDeath` catch still fires. There are no `parallel: false` multi-item
+  // steps in either core, so this is strictly the narrower gate.
+  if (!step.parallel && step.items.length === 1 && err) return { type: 'throw', value: reviveError(err.error) }
   return { type: 'next', value: entries.map((e) => (e.outcome === OUTCOME.VALUE ? e.value : null)) }
 }
 

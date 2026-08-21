@@ -71,10 +71,21 @@ export function pendingIds(run, ids) {
 // ids it yields at a given point stop matching. Detected and REPORTED rather than
 // patched over — replaying a stale entry into a changed core is exactly how a
 // resumed run reports coverage it never computed.
+// Only a CONFLICTING recorded id is drift. A slice that merely RUNS SHORT is not:
+// the journal can only be short at its own tail (`slice` is capped at `ids.length`,
+// so a following phase's entry would land inside the compared window and mismatch
+// there), and a tail-partial batch is the normal shape of the CLI/Codex path — one
+// `cli submit` per item records item 1 and leaves item 2 for the next call. Calling
+// that drift made `next`, `submit` and `status` all throw on any batch bigger than
+// one, and sent the operator hunting a core-version mismatch that does not exist.
+// Returning null hands the case to `entriesFor` → null → the pending path, which is
+// what `entriesFor`'s "null when ANY id is absent" and `pendingIds` were written for.
 export function driftAt(run, index, ids) {
   const slice = run.journal.slice(index, index + ids.length).map((e) => e.id)
-  const same = slice.length === ids.length && slice.every((id, i) => id === ids[i])
-  return same ? null : { at: index, expected: ids, found: slice }
+  for (let i = 0; i < slice.length; i++) {
+    if (slice[i] !== ids[i]) return { at: index, expected: ids, found: slice }
+  }
+  return null
 }
 
 export function summary(run) {

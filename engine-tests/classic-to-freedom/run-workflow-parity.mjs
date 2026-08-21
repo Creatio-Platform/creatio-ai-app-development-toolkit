@@ -57,7 +57,11 @@ async function runScript(src, args, answer) {
     calls.push({ phase: opts.phase || null, label: opts.label || null, agentType: opts.agentType || null, required: req, prompt: String(prompt ?? "") });
     return answer({ phase: opts.phase, label: opts.label, prompt, schema: opts.schema, nth: calls.length });
   };
-  const parallel = async (thunks) => Promise.all(thunks.map((t) => t()));
+  // FAITHFUL to the documented `parallel()` contract, which is NOT `Promise.all`: a thunk that throws (or whose
+  // agent errors) resolves to `null` in the result array, and the call itself never rejects. A bare `Promise.all`
+  // rejects on the first throw, which made baseline and shipped propagate a rejection identically and left the
+  // rejection axis — the one axis where the three-outcome protocol is observable — structurally untested.
+  const parallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
   const tmp = mkdtempSync(path.join(os.tmpdir(), "wf-parity-"));
   try {
     const modPath = path.join(tmp, "script.mjs");
@@ -155,6 +159,24 @@ function behaviourScenarios() {
         if (phase === "Merge") return MERGED;
         return null;
       } },
+    },
+    // A REJECTING Describe agent, not a nullish one. The existing scenarios all cover death (`Context: null`,
+    // `Critique: null`, `Merge: null`); none covered a rejection, which is a DIFFERENT outcome in the
+    // three-outcome protocol and the only one that can reach the core as a thrown error. Describe is a
+    // `parallel: true` step that carries ONE item on this small surface, so this is the axis on which keying
+    // the throw path on `items.length` instead of `step.parallel` diverged from the baseline: the baseline
+    // absorbed the rejection as a `null` hole and still produced its honest `complete: false` verdict, while
+    // the shipped script threw out of the workflow with no return value at all.
+    {
+      name: "REJECTING Describe agent in a single-item parallel batch — absorbed as a null hole, run still returns a verdict",
+      args: ARGS,
+      answer: () => ({ phase }) => {
+        if (phase === "Context") return CTX;
+        if (phase === "Describe") throw new Error("agent overloaded");
+        if (phase === "Critique") return CRIT;
+        if (phase === "Merge") return MERGED;
+        return null;
+      },
     },
     { name: "dead Critique, retried once — critiqueRan false", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: null, Merge: MERGED }) },
     { name: "unusable Critique return — treated as dead", args: ARGS, answer: () => ({ phase }) => UNUSABLE_CRITIQUE[phase] ?? MERGED },
