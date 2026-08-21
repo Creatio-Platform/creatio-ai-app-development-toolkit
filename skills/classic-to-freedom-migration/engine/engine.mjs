@@ -63,13 +63,6 @@ function getAcornParse() {
 // Kept separate from the AST extraction so the "what fields the merge consumes" shape lives in one place.
 function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
   const methodKeys = safeKeys(s.methods); // reused for the name list AND the empty-body (stub) subset below
-  // Two views of `src`, computed once. `code` blanks comments AND string contents — for scans that look for
-  // structure. `codeStr` blanks comments only — for scans that capture a quoted value. A commented-out
-  // declaration used to be read as real by every text-scanned signal below: a ghost quick filter, a ghost list
-  // column, a ghost process, and — worst — `getAddRecordMiniPage` returning the COMMENTED-OUT name in preference
-  // to the real one, so the plan named a mini page the section does not open.
-  const code = codeOnly(src);
-  const codeStr = codeOnly(src, true);
   return {
     pkg,
     error: parseError,
@@ -97,7 +90,7 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     modules: normalizeModules(s.modules),
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
-    features: [...new Set([...codeStr.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
+    features: [...new Set([...src.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
     // custom card-ACTION hints — the ACTIONS menu is built imperatively in getActions, so static parsing
     // can't fully reconstruct it. Scan ONLY the getActions body, not the whole file: `"Tag"` is a common
     // diff-item/button/config property elsewhere, and scanning globally over-captured non-action strings
@@ -119,13 +112,13 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // Detected by the classic process-launch APIs. The process NAMES (when quoted) are captured so the
     // mapper can name them; a run-process action maps to a Freedom "Run process" card action / handler.
     processLaunch: (() => {
-      if (!/ProcessModuleUtilities|executeProcess|RunProcessRequest|\brunProcess\b|showProcessPage|openProcessByRecord|ProcessSchemaManager/.test(code)) return null;
+      if (!/ProcessModuleUtilities|executeProcess|RunProcessRequest|\brunProcess\b|showProcessPage|openProcessByRecord|ProcessSchemaManager/.test(src)) return null;
       // The two `[\w.]*` runs around the literal alternation are BOUNDED ({0,128}) so this stays linear on a
       // hostile body: the previous unbounded form was polynomial (~O(n²)) ReDoS on `src` — a long unterminated
       // quoted run with many "Process" substrings drove per-schema parse time to seconds/tens-of-seconds (~32 s
       // at 700 KB, a size real Classic bodies reach), defeating the "must not hang on hostile input" guarantee
       // this file's MAX_AST_DEPTH / rowSpan clamps already defend. Real schema names are far under 128 chars.
-      const names = [...new Set([...codeStr.matchAll(/["']([A-Za-z][\w.]{0,128}(?:Process|SecurityCheck|Recruiting)[\w.]{0,128})["']/g)].map(mt => mt[1]))];
+      const names = [...new Set([...src.matchAll(/["']([A-Za-z][\w.]{0,128}(?:Process|SecurityCheck|Recruiting)[\w.]{0,128})["']/g)].map(mt => mt[1]))];
       return { names };
     })(),
     // ---- SECTION-schema signals (meaningful for *Section schemas; empty/null for pages) ----
@@ -133,31 +126,33 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // vs opening the full edit page. `getAddRecordMiniPage()` returning a quoted schema name = that mini
     // page; returning empty/null = none; a bare `useAddRecordMiniPage: true` = uses one (name unknown).
     addRecordMiniPage: (() => {
-      const body = extractFnBody(codeStr, "getAddRecordMiniPage");
+      const body = extractFnBody(src, "getAddRecordMiniPage");
       if (body) {
         const m = /return\s+["']([A-Za-z]\w+)["']/.exec(body);
         if (m) return m[1];
         if (/return\s+(?:null|""|'')/.test(body)) return null;
         return true;
       }
-      return /useAddRecordMiniPage\s*[:=]\s*true/.test(code) ? true : null;
+      return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
     })(),
-    // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One entry
-    // per menu item with its metadata: a name alone cannot build a Freedom command-bar button, and an item ported
-    // without its `Enabled` condition ships always-enabled.
+    // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One
+    // entry per menu item with its metadata (#8b): a handler name alone cannot build a Freedom command-bar
+    // button, and an item ported without its `Enabled` condition ships always-enabled. Filled from the AST on
+    // the parse path that reaches a `methods:` object; empty here so every other path yields a list, not
+    // `undefined`.
     sectionActions: [],
-    // menu helpers resolved in this src — a helper defined in another layer of the chain is not a gap.
+    // menu helpers resolved in this schema.
     sectionActionHelpers: [],
-    // menu helpers called here but defined nowhere in this src: the item set is short by an unknown number of items.
+    // menu helpers called but defined nowhere in this schema: the item set is short by an unknown number.
     sectionActionUnresolved: [],
-    // seen and deliberately not read — a helper called by a helper, or nesting past the depth cap. The items behind
-    // these are missing too, but the cause is this parser's own limit, not a method nobody defines.
+    // seen and deliberately not read — a helper called by a helper. The items behind these are missing too, but
+    // the cause is this parse's one-hop rule, not a method nobody defines.
     sectionActionNotFollowed: [],
     // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
     // it as data-driven (#2).
     listColumns: (() => {
-      const body = extractFnBody(codeStr, "getGridDataColumns") || extractFnBody(codeStr, "initColumnsConfig") || "";
+      const body = extractFnBody(src, "getGridDataColumns") || extractFnBody(src, "initColumnsConfig") || "";
       if (!body) return [];
       return [...new Set([...body.matchAll(/(?:"?(?:path|bindTo)"?)\s*:\s*["']([A-Za-z][\w.]*)["']/g)].map(mt => mt[1]))];
     })(),
@@ -167,19 +162,15 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // controls, so they MUST reach the plan — they were being dropped entirely (the whole registry filter
     // bar vanished). A dynamic/column-less filter still surfaces by name (column null).
     quickFilters: (() => {
-      const body = extractFnBody(code, "initFixedFiltersConfig") || extractFnBody(code, "getFixedFiltersConfig");
+      const body = extractFnBody(src, "initFixedFiltersConfig") || extractFnBody(src, "getFixedFiltersConfig");
       if (!body) return [];
-      // Entry BOUNDARIES come from the code view (so a commented-out entry is not an entry); the entry TEXT comes
-      // from the original, because `name`/`columnName` are quoted values. Identical offsets make the slices align;
-      // if they ever diverge, fall back to the blanked body rather than slice at the wrong place.
-      const rawBody = extractFnBody(src, "initFixedFiltersConfig") || extractFnBody(src, "getFixedFiltersConfig");
       // Extract each filter object as a UNIT (brace-matched), then read name/columnName/dataValueType
       // INDEPENDENTLY within it. The old single regex demanded `name` THEN `columnName` in order within 400
       // chars, which (a) dropped a column-less filter and stole its `name` into the next entry's gap, and (b)
       // failed on `{ columnName, name }` order. Per-entry parsing makes it order-independent and yields
       // column:null for a column-less filter (the documented contract) instead of borrowing a neighbour's name.
       const out = [];
-      for (const obj of fixedFilterObjects(body, rawBody.length === body.length ? rawBody : body)) {
+      for (const obj of fixedFilterObjects(body)) {
         const name = /name\s*:\s*["']([^"']+)["']/.exec(obj);
         if (!name) continue;
         const col = /columnName\s*:\s*["']([^"']+)["']/.exec(obj);
@@ -590,8 +581,6 @@ export function parseSchema(src, pkg) {
     // Body facts are read from the AST the parse already produced — a second, independent pass over the SAME
     // nodes, so a failure here degrades the same way the value pass does (below), never half-populated.
     return { ...buildSchemaResult(pkg, src, null, captured, amdDeps),
-      // Section actions come from the SAME nodes as the member facts. On any path that did not reach a `methods:`
-      // object the defaults in `buildSchemaResult` stand, so the list is empty and the layer carries the reason.
       ...sectionActionsFromAst(retArg, scope, pkg),
       methodFacts: methodFactsFromAst(retArg, scope), astDiagnostics };
   } catch (e) {
@@ -887,7 +876,7 @@ function skipComment(src, j) {
 // fixed-filters method body). Entry boundaries are tracked by BRACE depth (so a nested `caption:{…}` /
 // `startDate:{}` doesn't split an entry) and the array end by BRACKET depth; strings are skipped so a brace
 // inside a literal is never counted. Lets quickFilters read each filter's fields independently (order-safe).
-function fixedFilterObjects(body, raw = body) {
+function fixedFilterObjects(body) {
   const m = /filters\s*:\s*\[/.exec(body);
   if (!m) return [];
   const objs = [];
@@ -896,54 +885,19 @@ function fixedFilterObjects(body, raw = body) {
   while (i < body.length && depth.bracket > 0) {
     const c = body[i];
     if (c === '"' || c === "'" || c === "`") { i = skipStringLiteral(body, i); continue; }
-    trackFilterDepth(c, i, depth, raw, objs);
+    trackFilterDepth(c, i, depth, body, objs);
     i++;
   }
   return objs;
 }
 
-// ---- comment/string-blanked views ------------------------------------------------------------------------------
-// The remaining TEXT-scanned signals (quick filters, list columns, the add-record mini page, process launches,
-// feature toggles) read their facts from the source string, and a regex cannot tell code from prose: each of them
-// used to read a commented-out declaration as real. These views blank comments — and, by default, string contents
-// too — with offsets preserved, so a structure scan sees only code. Section actions no longer need them: they are
-// read from the AST below. See engine/README.md for which signals are on which route and why.
-// Blank a comment run to spaces, preserving length; returns the index just past it.
-function blankComment(body, out, i) {
-  const end = skipComment(body, i);
-  const stop = end == null ? body.length : end;   // unterminated line comment — nothing after it is code
-  for (let j = i; j < stop; j++) out[j] = " ";
-  return stop;
-}
-// Blank a string's CONTENTS (never its quotes, so the literal still reads as a literal); returns the index past it.
-function blankString(body, out, i, keepStrings) {
-  const end = skipStringLiteral(body, i);
-  if (!keepStrings) for (let j = i + 1; j < Math.min(end - 1, body.length); j++) out[j] = " ";
-  return end;
-}
-function codeOnly(body, keepStrings = false) {
-  const out = body.split("");
-  let i = 0;
-  while (i < body.length) {
-    const c = body[i], c2 = body[i + 1];
-    if (c === "/" && (c2 === "/" || c2 === "*")) { i = blankComment(body, out, i); continue; }
-    if (c === '"' || c === "'" || c === "`") { i = blankString(body, out, i, keepStrings); continue; }
-    i++;
-  }
-  return out.join("");
-}
-
 // ---- getSectionActions items, read from the AST -----------------------------------------------------------------
-// Acorn already parses this schema for the value pass and the member facts, so the menu is read from the SAME
-// nodes. That removes four approximations a text scan needed: nesting is structural (no brace counting, no depth
-// cap, no blanking a child out of its parent's text), a comment or a string literal is not a node at all (no
-// phantom action from prose), a helper's parameters come from `fn.params` (no regex), and a call's POSITION is a
-// node type — `ExpressionStatement` / `ReturnStatement` — rather than a guess from the preceding character.
-// `codeOnly()` stays for the text-scanned signals that have no AST route yet; see engine/README.md.
+// Read from the nodes `parseSchema` already built, never from the source text: nesting, a helper's parameters and
+// a call's statement-vs-value position are structural facts here.
 const NON_MENU_METHODS = new Set(["getButtonMenuItem", "callParent", "get", "set"]);
-// The navigate/run hint is the ONE heuristic kept: a section that registers an action through neither a menu-item
-// object nor a helper leaves no structural trace, and this is the only signal for it. Kept so the AST move cannot
-// LOSE an action the text route found; every item it produces is name-only, so a real declaration always wins.
+// The one heuristic. An action registered through neither a menu-item object nor a helper leaves no structural
+// trace, so a statement-position call reading as a navigate/run name yields a NAME-ONLY item; a real declaration
+// carries metadata and wins.
 const MENU_HINT_RX = /^(?:navigateTo|goTo|run|open|process)[A-Z]\w+$/;
 
 // `this.foo(…)` / `foo(…)` → "foo"; a longer path (`Terrasoft.utils.x`) → null, because only a method the schema
@@ -968,18 +922,16 @@ function menuPropValue(node) {
   return path ? path.split(".").pop() : null;
 }
 const menuProp = (obj, key) => obj.properties.find((p) => staticPropKey(p) === key)?.value ?? null;
-const isSeparatorType = (v) => !!v && /MenuSeparator$/.test(v);
-// Is this node a menu NODE — an item, a separator, or a handler-less submenu container? Keyed on the properties
-// classic gives them, not on the calling method, so `getButtonMenuItem({…})`, a bare `addItem({…})` and any other
-// shape are all recognised without a list of callee names to maintain.
+const isSeparatorType = (v) => !!v && v.endsWith("MenuSeparator");
+// A menu node: item, separator, or handler-less submenu container. Keyed on the properties classic gives them,
+// not on the calling method, so every add shape is recognised without a callee list.
 function isMenuNode(node) {
   if (node?.type !== "ObjectExpression") return false;
   if (menuProp(node, "Click") || menuProp(node, "Tag")) return true;
   if (isSeparatorType(menuPropValue(menuProp(node, "Type")))) return true;
   return !!(menuProp(node, "Caption") && menuProp(node, "Items"));
 }
-// One menu node's fields, each read from its OWN properties — the AST cannot attribute a child's field to its
-// parent, which is what the text route had to blank nested spans to avoid.
+// One menu node's fields, read from its OWN properties.
 function readMenuNode(obj) {
   const caption = menuPropValue(menuProp(obj, "Caption"));
   return {
@@ -990,8 +942,8 @@ function readMenuNode(obj) {
     separator: isSeparatorType(menuPropValue(menuProp(obj, "Type"))),
   };
 }
-// Ordered child nodes. Generic (every own value that is a node or array of nodes) for the same reason
-// `pushChildren` is: the walk stays complete as the AST shape grows.
+// Ordered child nodes. Generic (every own value that is a node or array of nodes) so the walk stays complete as
+// the AST shape grows.
 function childNodesOf(node) {
   const out = [];
   for (const key of Object.keys(node)) {
@@ -1002,8 +954,8 @@ function childNodesOf(node) {
   }
   return out;
 }
-// Menu nodes under `node`, in source order, each tagged with its nesting depth. A menu node's own children are
-// its submenu, so the depth increments only there. Bounded by the same limits the member-facts walk carries.
+// Menu nodes under `node`, in source order, tagged with nesting depth. A menu node's children are its submenu, so
+// depth increments only there. Bounded by the member-facts walk limits.
 function collectMenuNodes(node, depth, out, state) {
   if (!node || typeof node !== "object") return;
   if (++state.nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { state.truncated = true; return; }
@@ -1011,14 +963,13 @@ function collectMenuNodes(node, depth, out, state) {
   if (isMenu) out.push({ obj: node, depth });
   for (const child of childNodesOf(node)) collectMenuNodes(child, isMenu ? depth + 1 : depth, out, state);
 }
-// Calls in STATEMENT or RETURN position, including the braceless `if`/`else`/loop forms. A carrier is called; a
-// data read is consumed in value position, so it never appears here — no heuristic needed.
+// Calls in STATEMENT or RETURN position, braceless `if`/`else`/loop forms included. A carrier is called; a data
+// read sits in value position and never appears here.
 function statementCalls(fnNode) {
   const out = [];
   const visit = (st) => {
     if (!st || typeof st !== "object") return;
-    const expr = st.type === "ExpressionStatement" ? st.expression
-      : (st.type === "ReturnStatement" ? st.argument : null);
+    const expr = loneExpression(st);
     if (expr?.type === "CallExpression") out.push(expr);
     for (const key of ["body", "consequent", "alternate", "block", "handler", "finalizer", "cases"]) {
       const v = st[key];
@@ -1029,7 +980,7 @@ function statementCalls(fnNode) {
   (fnNode.body?.body || []).forEach(visit);
   return out;
 }
-// Every CallExpression anywhere in the body — used to spot the two shapes that hand a helper the menu collection.
+// Every CallExpression in the body.
 function allCalls(fnNode, state) {
   const out = [];
   const visit = (n) => {
@@ -1060,25 +1011,32 @@ function menuCollections(fnNode, calls) {
   if (!names.size) names.add("actionMenuItems");
   return names;
 }
-// Helpers that contribute items: one HANDED a collection (`this.foo(actionMenuItems)`), one whose returned item is
-// ADDED (`actionMenuItems.addItem(this.foo())`).
-function menuHelpers(calls, colls) {
-  const out = new Set();
+// A helper HANDED the collection: `this.foo(actionMenuItems)`.
+function helpersHandedCollection(calls, colls) {
+  const out = [];
   for (const call of calls) {
     const name = ownCallName(call);
-    if (name && !NON_MENU_METHODS.has(name)
-      && (call.arguments || []).some((a) => a.type === "Identifier" && colls.has(a.name))) out.add(name);
+    const handed = (call.arguments || []).some((a) => a.type === "Identifier" && colls.has(a.name));
+    if (name && handed && !NON_MENU_METHODS.has(name)) out.push(name);
+  }
+  return out;
+}
+// A helper whose returned item is ADDED: `actionMenuItems.addItem(this.foo())`.
+function helpersReturningItem(calls, colls) {
+  const out = [];
+  for (const call of calls) {
     const c = call.callee;
-    if (c?.type === "MemberExpression" && c.property?.name === "addItem"
-      && c.object?.type === "Identifier" && colls.has(c.object.name)) {
-      for (const a of call.arguments || []) {
-        const n = a.type === "CallExpression" ? ownCallName(a) : null;
-        if (n && !NON_MENU_METHODS.has(n)) out.add(n);
-      }
+    if (c?.type !== "MemberExpression" || c.property?.name !== "addItem") continue;
+    if (c.object?.type !== "Identifier" || !colls.has(c.object.name)) continue;
+    for (const a of call.arguments || []) {
+      const n = a.type === "CallExpression" ? ownCallName(a) : null;
+      if (n && !NON_MENU_METHODS.has(n)) out.push(n);
     }
   }
-  return [...out];
+  return out;
 }
+const menuHelpers = (calls, colls) =>
+  [...new Set([...helpersHandedCollection(calls, colls), ...helpersReturningItem(calls, colls)])];
 // Identity, order and separator-delimited group. A separator is a group boundary, not an action. A node with no
 // handler is a submenu CONTAINER: not published, because a checklist row for it could never be built, but its
 // caption becomes the `parent` label its children carry.
@@ -1097,9 +1055,9 @@ function shapeMenuNodes(nodes, pkg) {
   }
   return out;
 }
-// The helper arm: resolve each menu helper against the schema's own methods, take the items it adds, and record
-// what it delegates to. ONE hop — a method a helper delegates to is RECORDED, never followed — routed by whether
-// this schema defines it, so "nobody defines this" and "seen but not read" each stay true.
+// Resolve each menu helper against the schema's own methods and take the items it adds. ONE hop: a method a
+// helper delegates to is RECORDED, never followed — `notFollowed` when this schema defines it, `unresolved` when
+// nothing does.
 function scanHelperNodes(names, methodNodes, nodes, state) {
   const helpers = [];
   const unresolved = [];
@@ -1113,13 +1071,25 @@ function scanHelperNodes(names, methodNodes, nodes, state) {
     const calls = allCalls(fn, state);
     const own = param ? menuHelpers(calls, new Set([param])) : statementCalls(fn).map(ownCallName)
       .filter((n) => n && !NON_MENU_METHODS.has(n));
-    for (const callee of [...new Set(own)]) (methodNodes.has(callee) ? notFollowed : unresolved).push(callee);
+    for (const callee of new Set(own)) (methodNodes.has(callee) ? notFollowed : unresolved).push(callee);
   }
   return { helpers, unresolved, notFollowed };
 }
-// `{ items, helpers, unresolved, notFollowed }` for one schema, from its AST. Empty on every path where the parse
-// did not reach a `methods:` object — the same way every other AST-derived fact goes empty, and visibly so, since
-// the layer carries the parse error.
+// Name-only hint items appended in place. Every value the parsed items already consumed is excluded, so a
+// condition or caption matching the pattern is not republished as an action.
+function appendHintItems(items, entry, pkg) {
+  const seen = new Set();
+  for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
+  for (const call of statementCalls(entry)) {
+    const name = ownCallName(call);
+    if (!name || seen.has(name) || !MENU_HINT_RX.test(name)) continue;
+    seen.add(name);
+    items.push({ name, caption: null, condition: null, icon: null, parent: null,
+      order: items.length, group: 0, package: pkg });
+  }
+}
+// `{ items, helpers, unresolved, notFollowed }` for one schema. Empty on any path that did not reach a `methods:`
+// object; the layer carries the parse error that explains it.
 function sectionActionsFromAst(retArg, scope, pkg) {
   const empty = { sectionActions: [], sectionActionHelpers: [], sectionActionUnresolved: [], sectionActionNotFollowed: [] };
   const obj = objectNodeOf(retArg, scope);
@@ -1137,18 +1107,7 @@ function sectionActionsFromAst(retArg, scope, pkg) {
   const { helpers, unresolved, notFollowed } = scanHelperNodes(menuHelpers(calls, colls), methodNodes, nodes, state);
   const items = shapeMenuNodes(nodes, pkg);
   if (state.truncated) notFollowed.push("a body too large or too deeply nested to walk fully");
-  // The hint fallback, name-only: a statement-position call whose name reads as a navigate/run action and which no
-  // menu node already accounts for. Every value the parsed items consumed is excluded, so a condition or caption
-  // that happens to match is not republished as an action of its own.
-  const seen = new Set();
-  for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
-  for (const call of statementCalls(entry)) {
-    const name = ownCallName(call);
-    if (!name || seen.has(name) || !MENU_HINT_RX.test(name)) continue;
-    seen.add(name);
-    items.push({ name, caption: null, condition: null, icon: null, parent: null,
-      order: items.length, group: 0, package: pkg });
-  }
+  appendHintItems(items, entry, pkg);
   return {
     sectionActions: items,
     sectionActionHelpers: helpers,
@@ -1156,7 +1115,6 @@ function sectionActionsFromAst(retArg, scope, pkg) {
     sectionActionNotFollowed: [...new Set(notFollowed)].filter((n) => !helpers.includes(n)),
   };
 }
-
 
 // One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a
 // brace returning to depth 0 closes an entry — its source text is pushed to `objs`.

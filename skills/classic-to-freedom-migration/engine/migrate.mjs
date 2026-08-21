@@ -1292,12 +1292,9 @@ function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns
   return notes;
 }
 
-// `sectionActions` folded across the chain, deduped by name. Layers arrive base->top and the TOP declaration wins,
-// matching the precedence `addRecordMiniPage` takes below. First-seen position is kept, so an override that only
-// restyles an action does not move it to the end of the menu. `group` is renumbered across the merged list: every
-// layer numbers its own groups from 0, so the raw ids collide between packages.
-// EXPORTED as the seam its three precedence rules are asserted through — top-layer-wins, first-seen position and
-// the nameless drop are not observable from `analyzeSectionChain`'s output alone.
+// `sectionActions` folded across the chain, deduped by name. Layers arrive base->top; the TOP declaration wins,
+// matching `addRecordMiniPage` below. First-seen position is kept. `group` is renumbered across the merged list,
+// because every layer numbers its own groups from 0. Exported as the seam those three rules are asserted through.
 export function mergeSectionActions(fromLayers = []) {
   const byName = new Map();
   for (const a of fromLayers) {
@@ -1305,11 +1302,8 @@ export function mergeSectionActions(fromLayers = []) {
     const name = typeof a?.name === "string" ? a.name.trim() : "";
     if (!name) continue;
     const prev = byName.get(name);
-    // Merge FIELD BY FIELD, not by replacing the object. A top layer that re-declares an item to restyle its
-    // caption need not repeat every field, and `readMenuItem` emits every key with `null` when absent — so a
-    // whole-object override (and a plain `{ ...prev, ...a }` spread, which is the same thing here) would blank a
-    // `condition` only the base layer declared, shipping a selection-gated button as always-enabled. That is the
-    // defect this ticket exists to fix, so it must not be reintroduced by the fold.
+    // Merge FIELD BY FIELD. A top layer need not repeat every field, and an item carries every key with `null`
+    // when absent, so replacing the object (or a plain spread) blanks a value only the base layer declared.
     byName.set(name, prev
       ? { ...prev, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)), name, order: prev.order }
       : { ...a, name, order: byName.size });

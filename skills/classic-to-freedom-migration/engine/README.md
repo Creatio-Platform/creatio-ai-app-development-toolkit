@@ -209,40 +209,6 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `designspec.mjs` — render the plan / design spec as Markdown.
 - `migrate.mjs` — CLI driver.
 
-## Which signals come from the AST, and which still come from TEXT
-
-`parseSchema` builds an acorn AST for the schema's returned object. Two families of facts are read from those
-nodes: the imperative-member facts (`walkMethodBody`, `ownMethodFact`) and — since ENG-95254 — the
-**`getSectionActions` menu** (`sectionActionsFromAst`). Reading the menu from the AST removed four approximations a
-text scan needed:
-
-| What a text scan needed | What the AST gives |
-| --- | --- |
-| a regex for a helper's first parameter | `fn.params` |
-| statement-vs-value position from the preceding token | `ExpressionStatement` / `ReturnStatement` node types |
-| a nesting depth cap, and blanking a child out of its parent's text | structural nesting — read in full, nothing to mask |
-| comment/string blanking to avoid phantom items | a comment is not a node; a string literal is not a call |
-
-One heuristic is deliberately kept: `MENU_HINT_RX`. A section that registers an action through neither a menu-item
-object nor a helper leaves no structural trace, and a statement-position `this.navigateToX()` is the only signal for
-it. It yields a name-only item, so a real declaration always wins; it exists so moving to the AST could not *lose*
-an action the text route used to find.
-
-**Still read from text:** quick filters, list columns, the add-record mini page, process launches and feature
-toggles. These have no AST route yet, and a regex cannot tell code from prose — every one of them used to read a
-commented-out declaration as real, and `getAddRecordMiniPage` preferred the commented-out name over the real one.
-`codeOnly()` closes that: structure scans run on a view with comments (and, by default, string contents) blanked
-with offsets preserved, while value reads keep the original text because a caption's value lives inside the quotes.
-Its remaining limit is a declaration quoted inside another string. Regression fixtures for each extractor are in
-`engine-tests/classic-to-freedom/run-mapper.mjs`.
-
-**Why the text family still exists.** A layer whose body acorn cannot parse is **advisory, not gating** (see
-`analyzeSectionChain` in `migrate.mjs`: "Keep section parse errors/diagnostics as ADVISORY"). On such a layer every
-AST-derived fact goes empty — including, now, its section actions — while the plan proceeds. The text-scanned
-signals are the only ones that still produce anything there. Whether that fallback is load-bearing depends on how
-often real Classic bodies fail to parse, which nobody has measured; that measurement, and the decision about moving
-the rest, is ENG-95254's follow-up task.
-
 ## Tests & internals
 
 Golden runners, fixtures and the detailed engine-internals notes live **outside** the shipped skill, in

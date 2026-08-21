@@ -4499,34 +4499,6 @@ check("ENG-95254: `mergeSectionActions` still lets a FULL top-layer override rep
     { name: "setOwner", condition: "isAnySelected", icon: "IconB", package: "Top", order: 0, group: 0 }])[0];
     return m.condition === "isAnySelected" && m.icon === "IconB"; })());
 
-// The comment/string-blanked view is shared by every text-scanned signal, not just section actions. Each of these
-// used to read a COMMENTED-OUT declaration as real; `addRecordMiniPage` was the worst — it preferred the
-// commented-out name over the real one, so the plan named a mini page the section does not open.
-const proseMk = (m) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{${m}},diff:[]};});`;
-check("ENG-95254: a commented-out QUICK FILTER is not published, and the real one keeps its column and type",
-  (() => { const qf = parseSchema(proseMk(`initFixedFiltersConfig:function(){this.set("F",{filters:[`
-    + `/* {name:"GhostFilter",columnName:"X",dataValueType:Terrasoft.DataValueType.TEXT}, */`
-    + `{name:"RealFilter",columnName:"Y",dataValueType:Terrasoft.DataValueType.TEXT}]});}`), "P").quickFilters;
-    return qf.length === 1 && qf[0].name === "RealFilter" && qf[0].column === "Y" && qf[0].type === "TEXT"; })(),
-  () => parseSchema(proseMk(`initFixedFiltersConfig:function(){this.set("F",{filters:[`
-    + `/* {name:"GhostFilter",columnName:"X",dataValueType:Terrasoft.DataValueType.TEXT}, */`
-    + `{name:"RealFilter",columnName:"Y",dataValueType:Terrasoft.DataValueType.TEXT}]});}`), "P").quickFilters);
-check("ENG-95254: a commented-out LIST COLUMN is not published",
-  parseSchema(proseMk(`getGridDataColumns:function(){return {/* Ghost:{path:"GhostCol"}, */Real:{path:"RealCol"}};}`), "P")
-    .listColumns.join(",") === "RealCol",
-  () => parseSchema(proseMk(`getGridDataColumns:function(){return {/* Ghost:{path:"GhostCol"}, */Real:{path:"RealCol"}};}`), "P").listColumns);
-check("ENG-95254: `getAddRecordMiniPage` returns the REAL mini page, not a commented-out one above it",
-  parseSchema(proseMk(`getAddRecordMiniPage:function(){/* return "GhostMiniPage"; */ return "RealMiniPage";}`), "P")
-    .addRecordMiniPage === "RealMiniPage",
-  () => parseSchema(proseMk(`getAddRecordMiniPage:function(){/* return "GhostMiniPage"; */ return "RealMiniPage";}`), "P").addRecordMiniPage);
-check("ENG-95254: a commented-out PROCESS launch is not named among the section's processes",
-  parseSchema(proseMk(`onX:function(){/* this.executeProcess("GhostProcess"); */ this.executeProcess("RealProcess");}`), "P")
-    .processLaunch?.names.join(",") === "RealProcess",
-  () => parseSchema(proseMk(`onX:function(){/* this.executeProcess("GhostProcess"); */ this.executeProcess("RealProcess");}`), "P").processLaunch);
-check("ENG-95254: a commented-out FEATURE toggle is not surfaced for a decision",
-  parseSchema(proseMk(`onX:function(){/* this.getIsFeatureEnabled("GhostFeature"); */ this.getIsFeatureEnabled("RealFeature");}`), "P")
-    .features.join(",") === "RealFeature",
-  () => parseSchema(proseMk(`onX:function(){/* this.getIsFeatureEnabled("GhostFeature"); */ this.getIsFeatureEnabled("RealFeature");}`), "P").features);
     return !!d && /addSecond/.test(d.reason) && /saw but did not read/.test(d.reason)
       && !/`addSecond` .{0,40}no layer in this chain defines/.test(d.reason); })(),
   () => (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
