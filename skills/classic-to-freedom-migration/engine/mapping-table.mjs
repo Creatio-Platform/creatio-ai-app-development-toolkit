@@ -552,3 +552,37 @@ export function gateConflicts(rows = MAPPING_ROWS) {
   }
   return out;
 }
+
+// The GATE SHAPE contract (ENG-95683 review). `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
+// gates for a type — and left its sibling unchecked: a MALFORMED gate. Both are silent-wrong in the same way. A gate
+// whose `id` key is mistyped (`{ kind: "composite", package: "X" }`) reaches `registrySettleGuidance` as an id-less
+// gate and gets the "fix the mapping or the plan, re-plan" dead end — the exact message the by-kind branch exists to
+// REMOVE for a gated component. So the shape is a table-level HARD error too, folded into `validateTable().errors`
+// next to `gate-conflict`. It runs on EVERY row carrying a gate (not only emitters), because a malformed gate is a
+// defect wherever it sits.
+//
+// The check permits exactly what the guidance READS, not everything `GATE_KIND` names: `COMPOSITE` is the only kind
+// any row produces and the only one `registrySettleGuidance` branches on, so a row carrying `COMPONENT` /
+// `COMPOSITE_ONLY` would validate while silently falling through to the generic guidance — a new two-truths in place
+// of the one this closes. Those two values are RESERVED: give them a guidance branch first, then widen this check.
+// Keys are closed for the same reason a mistyped `package` must not pass — an unknown key is a typo, not an
+// extension point.
+const GATE_KEYS = new Set(["kind", "id", "feature"]);
+const nonEmptyString = (v) => typeof v === "string" && v.length > 0;
+export function gateShapeIssues(rows = MAPPING_ROWS) {
+  const out = [];
+  for (const r of rows) {
+    const g = r?.gate;
+    if (g == null) continue;                        // no gate is the normal case, not a defect
+    const componentType = rowComponentType(r);
+    const bad = (why) => out.push({ kind: "gate-shape", componentType, gate: g, why });
+    if (typeof g !== "object" || Array.isArray(g)) { bad("a gate must be an object"); continue; }
+    const stray = Object.keys(g).filter((k) => !GATE_KEYS.has(k));
+    if (stray.length) bad(`unknown gate key(s) ${stray.map((k) => `\`${k}\``).join(", ")} — a mistyped key is read as an ABSENT one`);
+    if (g.kind !== GATE_KIND.COMPOSITE)
+      bad(`gate kind \`${String(g.kind)}\` is not read by the guidance — \`${GATE_KIND.COMPOSITE}\` is the only kind a row may carry today`);
+    else if (!nonEmptyString(g.id)) bad(`a \`${GATE_KIND.COMPOSITE}\` gate needs a non-empty string \`id\` (the package to install)`);
+    if ("feature" in g && !nonEmptyString(g.feature)) bad("a gate's `feature`, when present, must be a non-empty string");
+  }
+  return out;
+}

@@ -69,6 +69,7 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
+import { GATE_KIND } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
@@ -1776,7 +1777,11 @@ export function registrySettleGuidance(finding) {
     return "this is not a package-install away — the component is registered but absent in this platform version; target a version that carries it, or re-plan, before building.";
   }
   const g = finding?.gate;
-  if (g?.id) {
+  // Branch on the gate's KIND, not on `id` truthiness: `composite` is what selects the install/enable text, and an
+  // unrecognized kind must NOT (a gate whose taxonomy the guidance does not read cannot be turned into an
+  // instruction). `id` is still required because it IS the instruction — `gateShapeIssues` makes both a hard table
+  // error, so a malformed gate fails the table check instead of silently degrading to the re-plan branch here.
+  if (g?.kind === GATE_KIND.COMPOSITE && typeof g.id === "string" && g.id) {
     const feat = g.feature ? ` and enable the \`${g.feature}\` feature` : "";
     return `install the \`${g.id}\` package${feat} on the stand, then re-run the BUILD — the plan is correct, so no re-plan is needed.`;
   }

@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts, gateShapeIssues } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -129,10 +129,13 @@ export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), ve
   const findings = rows.flatMap((r) => validateRow(r, { index, version }));
   // Table-wide invariant (ENG-95683): no component type may carry two divergent gates. This is a whole-table check,
   // not a per-row one, so it is folded in here after the per-row findings. `gate-conflict` is a hard error.
+  // ...and the sibling invariant: a gate must have the SHAPE the guidance reads. A malformed gate is silent-wrong
+  // the same way a divergent one is (it degrades to the re-plan dead end), so `gate-shape` is a hard error too.
   const conflicts = gateConflicts(rows);
+  const shapes = gateShapeIssues(rows);
   return {
     version, indexVersions: index?.meta?.versions || [],
-    errors: [...findings.filter((f) => !isAdvisory(f)), ...conflicts],
+    errors: [...findings.filter((f) => !isAdvisory(f)), ...conflicts, ...shapes],
     advisories: findings.filter(isAdvisory),
   };
 }

@@ -8,7 +8,7 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -8056,6 +8056,38 @@ try {
     && validateTable({ rows: [gateRow("A"), gateRow("A")] }).errors.length === 0,
     () => ({ divergent: validateTable({ rows: [gateRow("A"), gateRow("B")] }).errors,
       same: validateTable({ rows: [gateRow("A"), gateRow("A")] }).errors }));
+
+  // T3f — the guidance branches on the gate's KIND, not on `id` truthiness. Two silent-wrong gates were reachable
+  // before: a mistyped key (`package` instead of `id`) degraded to the "fix the mapping/plan, re-plan" dead end —
+  // verbatim the message the by-kind branch exists to REMOVE for a gated component — and an unrecognized kind with a
+  // valid `id` still produced a confident "install the `P` package". Neither may select the install text now.
+  const settle = (gate) => registrySettleGuidance({ kind: "unknown-component", componentType: "crt.X", gate });
+  check("ENG-95683 (T3f/R1): only a well-formed `composite` gate selects the install/BUILD text — a mistyped `id` key and an unrecognized kind do not",
+    /install the `CrtCustomer360App` package/.test(settle({ kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App" }))
+    && !/install the/.test(settle({ kind: GATE_KIND.COMPOSITE, package: "CrtCustomer360App" }))
+    && !/install the/.test(settle({ kind: "totally-made-up", id: "P" }))
+    && !/install the/.test(settle({ kind: GATE_KIND.COMPOSITE, id: "" })),
+    () => ({ mistyped: settle({ kind: GATE_KIND.COMPOSITE, package: "CrtCustomer360App" }),
+      unknownKind: settle({ kind: "totally-made-up", id: "P" }) }));
+
+  // T3g — ...and a gate the guidance cannot read is a HARD TABLE ERROR, not a run-time surprise. This is the sibling
+  // of `gate-conflict`: both are silent-wrong-gate modes, so both fail the table check. The shipped rows are clean,
+  // and the check permits exactly what the guidance reads — an unproduced `GATE_KIND` value is reserved, not valid.
+  const shaped = (gate) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "ZDetail" },
+    verify: { componentType: "crt.CommunicationOptions" }, gate });
+  const shapeErrs = (gate) => validateTable({ rows: [shaped(gate)] }).errors.filter((e) => e.kind === "gate-shape");
+  check("ENG-95683 (T3g/R3): `validateTable` folds a malformed gate in as a `gate-shape` ERROR — mistyped key, unrecognized kind, empty id, non-string feature — while the shipped rows and a well-formed gate stay clean",
+    gateShapeIssues(MAPPING_ROWS).length === 0
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, id: "P", feature: "F" }).length === 0
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, package: "P" }).some((e) => /unknown gate key/.test(e.why))
+    && shapeErrs({ kind: "totally-made-up", id: "P" }).some((e) => /not read by the guidance/.test(e.why))
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, id: "" }).some((e) => /non-empty string `id`/.test(e.why))
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE, id: "P", feature: 7 }).some((e) => /`feature`, when present/.test(e.why))
+    // ...and the two RESERVED kinds are rejected until they gain a guidance branch, so the enum cannot drift ahead
+    // of what `registrySettleGuidance` actually reads.
+    && shapeErrs({ kind: GATE_KIND.COMPONENT, id: "P" }).length === 1
+    && shapeErrs({ kind: GATE_KIND.COMPOSITE_ONLY, id: "P" }).length === 1,
+    () => ({ shipped: gateShapeIssues(MAPPING_ROWS), mistyped: shapeErrs({ kind: GATE_KIND.COMPOSITE, package: "P" }) }));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
