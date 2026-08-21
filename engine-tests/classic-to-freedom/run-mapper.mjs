@@ -7,7 +7,8 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS, MATCH, TIER, OWNER, resolveRow, rowForItem, rowForItemType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, resolveRow, rowForItem, rowForItemType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -7630,6 +7631,80 @@ try {
   check("ENG-95543: a custom BUTTON is BUILT (crt.Button) instead of being reported as unmapped",
     !gapOf("Btn") && gaps.changeSet.viewConfigDiff.some((o) => o.name === "Btn" && o.values?.type === "crt.Button"),
     () => ({ decision: gapOf("Btn"), emitted: gaps.changeSet.viewConfigDiff.filter((o) => o.name === "Btn") }));
+
+  // ---- ENG-95543: REGISTRY VALIDATION of the table (the check that replaces "confirm the crt.* on-stand") ----
+  const idx = vendoredIndex();
+  check("ENG-95543: the vendored component index is internally consistent — a version list, a source SHA per version, and a componentCount that matches the map it describes",
+    idx.meta.versions.length >= 2 && idx.meta.sources.length === idx.meta.versions.length
+    && idx.meta.sources.every((s) => /^[0-9a-f]{64}$/.test(s.sha256))
+    && idx.meta.componentCount === Object.keys(idx.components).length,
+    () => ({ versions: idx.meta.versions, sources: idx.meta.sources.length, count: idx.meta.componentCount, actual: Object.keys(idx.components).length }));
+  // THE CI CHECK the ticket asks for, and it is run against the OLDEST version the index carries, not the union:
+  // `latest` is a superset (205 components against 152 at 8.3.0), so a union check green-lights a target that
+  // cannot render on an 8.3 stand — which is precisely the failure this validation exists to catch.
+  const oldest = idx.meta.versions[0];
+  const vOldest = validateTable({ version: oldest });
+  check(`ENG-95543: every row's componentType, propMap key and event resolves in the registry at ${oldest} — zero errors`,
+    vOldest.errors.length === 0, () => vOldest.errors);
+  check("ENG-95543: ...and on the union of every version the index carries (a row must not depend on which snapshot is read)",
+    validateTable({}).errors.length === 0, () => validateTable({}).errors);
+  // `compositeOnly` is NOT an error: it means no Designer TOOLBAR entry, and inserting the component into a page
+  // schema directly — what this engine emits — is valid. Two rows rely on that reading (crt.IconRadioButton,
+  // crt.Link), so a change that made it an error would block the first wave outright.
+  check("ENG-95543: compositeOnly is reported as an ADVISORY, never an error — it means no toolbar entry, not an unusable type",
+    vOldest.advisories.some((a) => a.kind === "composite-only" && a.componentType === "crt.IconRadioButton")
+    && vOldest.advisories.every(isAdvisory) && !vOldest.errors.some((e) => e.kind === "composite-only"),
+    () => vOldest.advisories);
+  // NEGATIVE ARMS. Each is a fabricated row, so the checks bite without touching the real table — and each is a
+  // mistake that has actually been made in this engine's history: `crt.ContactCommunication` was a fabricated type,
+  // and an input that exists only on some versions is exactly the 8.3.0-vs-8.3.3 `handleItemClick` case.
+  const fakeRow = (target) => ({ match: { by: MATCH.ITEM_TYPE, itemType: 999 }, role: "mapped", tier: TIER.AUTO, ownedBy: OWNER.TABLE, target });
+  const kindsOf = (r) => r.map((f) => f.kind).sort((a, b) => a.localeCompare(b));
+  check("ENG-95543(neg): a fabricated componentType is an `unknown-component` error — the fabricated-type defect this check exists to prevent",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} }))).includes("unknown-component"),
+    () => validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} })));
+  check("ENG-95543(neg): a propMap key that is not an input of that component is an `unknown-input` error",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { notAnInput: { from: SOURCE.CAPTION } } }))).includes("unknown-input"),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { notAnInput: { from: SOURCE.CAPTION } } })));
+  check("ENG-95543(neg): an event that is not an OUTPUT of that component is an `unknown-output` error — outputs are validated against `outputs`, not `inputs`",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {}, events: { clicked: true } }))).includes("unknown-output"),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {}, events: { clicked: true } })));
+  // The version arm, on a REAL registry fact: `crt.MenuItem.handleItemClick` exists at 8.3.0/8.3.1 and is gone by
+  // 8.3.3. A row using it must pass on the old versions and FAIL on the new ones — which is the whole argument for
+  // per-version data rather than one snapshot.
+  const hicRow = fakeRow({ componentType: "crt.MenuItem", slot: "items", propMap: { handleItemClick: { from: SOURCE.CAPTION } } });
+  check("ENG-95543(neg): an input present only in older versions passes at 8.3.0 and is `input-absent-in-version` at 8.3.3 (crt.MenuItem.handleItemClick — a measured registry fact)",
+    !kindsOf(validateRow(hicRow, { version: "8.3.0" })).includes("input-absent-in-version")
+    && kindsOf(validateRow(hicRow, { version: "8.3.3" })).includes("input-absent-in-version"),
+    () => ({ at830: validateRow(hicRow, { version: "8.3.0" }), at833: validateRow(hicRow, { version: "8.3.3" }) }));
+  check("ENG-95543(neg): a LITERAL propMap value outside the input's declared `values` is reported — an invented enum member renders as nothing",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Link", slot: "items", propMap: { mode: { from: SOURCE.LITERAL, value: "notAMode" } } }))).includes("literal-not-in-values"),
+    () => validateRow(fakeRow({ componentType: "crt.Link", slot: "items", propMap: { mode: { from: SOURCE.LITERAL, value: "notAMode" } } })));
+  // A framework-level base input (`name`) is known through `references.baseInputs`, not through the component's own
+  // `inputs`. Without that union the check would report base props as unknown on every component that used one.
+  check("ENG-95543: a base input (references.baseInputs) counts as known — `name` on crt.Label is not an unknown input",
+    validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { name: { from: SOURCE.CAPTION } } })).every((f) => isAdvisory(f)),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: { name: { from: SOURCE.CAPTION } } })));
+  // A version the index never saw is UNKNOWN, not ABSENT: answering "your component does not exist there" about a
+  // version nobody has data for would be a fabricated finding.
+  check("ENG-95543: an unseen version yields `unknown-version`, never a false `component-absent-in-version`",
+    kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {} }), { version: "7.1.0" })).includes("unknown-version"),
+    () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {} }), { version: "7.1.0" }));
+  // Candidate ranking: taxonomy evidence OUTRANKS a name match, and every candidate says which one put it there.
+  // The taxonomy covers 8 of 205 components, so a ranking that did not distinguish the two would present a name
+  // coincidence as a documented recommendation.
+  const ranked = rankCandidates(["approval"], { version: oldest });
+  check("ENG-95543: candidate ranking states its EVIDENCE per candidate and scores published taxonomy above a type-name match",
+    ranked.length > 0 && ranked.every((c) => Array.isArray(c.evidence) && c.evidence.length > 0)
+    && ranked.every((c, i) => i === 0 || ranked[i - 1].score >= c.score)
+    && ranked.some((c) => /taxonomy mentions/.test(c.evidence.join(" ")) || /type name contains/.test(c.evidence.join(" "))),
+    () => ranked);
+  // A candidate absent on the target version is not a candidate at all — recommending it would send a build agent
+  // to insert a component the stand cannot resolve.
+  const newOnly = Object.entries(idx.components).find(([, c]) => versionsOf(c.v, idx).length === 1 && versionsOf(c.v, idx)[0] === idx.meta.versions.at(-1));
+  check("ENG-95543: ranking is scoped to the target version — a component that exists only in the newest snapshot is not offered for the oldest",
+    !newOnly || !rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }).some((c) => c.componentType === newOnly[0]),
+    () => ({ newestOnly: newOnly?.[0], ranked: newOnly ? rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }) : null }));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
