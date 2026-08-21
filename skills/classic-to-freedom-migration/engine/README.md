@@ -209,42 +209,39 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `designspec.mjs` — render the plan / design spec as Markdown.
 - `migrate.mjs` — CLI driver.
 
-## Why some signals are read from TEXT, not from the AST
+## Which signals come from the AST, and which still come from TEXT
 
-`parseSchema` builds an acorn AST for the schema's returned object, and the imperative-member facts
-(`walkMethodBody`, `ownMethodFact`) come from that AST. A second family of signals is read by scanning the source
-text instead — section actions, quick filters, list columns, the add-record mini page, process launches and feature
-toggles. That is a deliberate split, and it has a cost worth stating.
+`parseSchema` builds an acorn AST for the schema's returned object. Two families of facts are read from those
+nodes: the imperative-member facts (`walkMethodBody`, `ownMethodFact`) and — since ENG-95254 — the
+**`getSectionActions` menu** (`sectionActionsFromAst`). Reading the menu from the AST removed four approximations a
+text scan needed:
 
-**Why text.** A layer whose body acorn cannot parse is **advisory, not gating** (see `analyzeSectionChain` in
-`migrate.mjs`: "Keep section parse errors/diagnostics as ADVISORY"). On such a layer every AST-derived fact goes
-empty — no `diff`, no methods, no member ledger — while the plan still proceeds. The text-scanned signals are the
-only ones that still produce anything, so deleting the text route would silently drop a section's buttons, filters
-and columns on exactly the bodies that are already hardest to migrate.
-
-**What it costs.** Text scanning cannot tell code from prose on its own. Every one of those extractors used to read
-a commented-out or string-quoted declaration as real: a ghost quick filter, a ghost list column, a ghost process,
-and — worst — `getAddRecordMiniPage` returning the commented-out name in preference to the real one. `codeOnly()`
-closes that: structure scans run on a view with comments and string contents blanked (offsets preserved), while
-field reads still use the original text because a caption's value lives inside the quotes. Regression fixtures for
-each extractor live in `engine-tests/classic-to-freedom/run-mapper.mjs`.
-
-**What is still approximated.** Four things the AST would give exactly, that the text route derives:
-
-| Text route | What the AST has |
+| What a text scan needed | What the AST gives |
 | --- | --- |
-| `helperParamName` — a regex for a helper's first parameter | `ownMethodFact.params` |
-| `delegateCallees` — statement-vs-value position from the preceding token | `ExpressionStatement` / `ReturnStatement` node types |
-| `MAX_MENU_NEST` + `state.truncated` | `MAX_WALK_NODES` / `MAX_WALK_DEPTH` + `truncated` |
-| `maskNestedItems` — blanking a nested item out of its parent's text | structural nesting; nothing to mask |
+| a regex for a helper's first parameter | `fn.params` |
+| statement-vs-value position from the preceding token | `ExpressionStatement` / `ReturnStatement` node types |
+| a nesting depth cap, and blanking a child out of its parent's text | structural nesting — read in full, nothing to mask |
+| comment/string blanking to avoid phantom items | a comment is not a node; a string literal is not a call |
 
-Known limits of the approximations: submenu nesting is capped at `MAX_MENU_NEST`; helper following is one hop;
-carrier-vs-data-read is decided by call position, so a `case "x": this.addOne(c);` carrier is missed (admitting `:`
-would readmit every `Enabled:` / `Visible:` data read); and a declaration quoted inside another string is still
-read as real by the value-capturing scans.
+One heuristic is deliberately kept: `MENU_HINT_RX`. A section that registers an action through neither a menu-item
+object nor a helper leaves no structural trace, and a statement-position `this.navigateToX()` is the only signal for
+it. It yields a name-only item, so a real declaration always wins; it exists so moving to the AST could not *lose*
+an action the text route used to find.
 
-**Open question.** Whether these should move to the AST depends on how often real Classic bodies fail to parse — a
-number nobody has measured yet. See ENG-95254's follow-up task for the measurement and the decision.
+**Still read from text:** quick filters, list columns, the add-record mini page, process launches and feature
+toggles. These have no AST route yet, and a regex cannot tell code from prose — every one of them used to read a
+commented-out declaration as real, and `getAddRecordMiniPage` preferred the commented-out name over the real one.
+`codeOnly()` closes that: structure scans run on a view with comments (and, by default, string contents) blanked
+with offsets preserved, while value reads keep the original text because a caption's value lives inside the quotes.
+Its remaining limit is a declaration quoted inside another string. Regression fixtures for each extractor are in
+`engine-tests/classic-to-freedom/run-mapper.mjs`.
+
+**Why the text family still exists.** A layer whose body acorn cannot parse is **advisory, not gating** (see
+`analyzeSectionChain` in `migrate.mjs`: "Keep section parse errors/diagnostics as ADVISORY"). On such a layer every
+AST-derived fact goes empty — including, now, its section actions — while the plan proceeds. The text-scanned
+signals are the only ones that still produce anything there. Whether that fallback is load-bearing depends on how
+often real Classic bodies fail to parse, which nobody has measured; that measurement, and the decision about moving
+the rest, is ENG-95254's follow-up task.
 
 ## Tests & internals
 

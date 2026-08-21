@@ -4349,9 +4349,11 @@ const secActDeepBody = (() => { let inner = `this.getButtonMenuItem({Click:{bind
   for (let i = 5; i >= 1; i--) inner = `this.getButtonMenuItem({Click:{bindTo:"level${i}"},Items:[${inner}]})`;
   return secActMk(`getSectionActions:function(){var a=this.callParent(arguments);a.addItem(${inner});return a;}`); })();
 const secActDeep = parseSchema(secActDeepBody, "P");
-check("ENG-95254: nesting past the depth cap is reported as not-followed rather than silently truncated",
-  secActDeep.sectionActions.length === 4
-  && secActDeep.sectionActionNotFollowed.some((n) => /nested deeper/.test(n)), () => secActDeep);
+check("ENG-95254: deep submenu nesting is read in FULL — the AST has the structure, so there is no depth cap to truncate at",
+  secActDeep.sectionActions.map((a) => `${a.name}<${a.parent}`).join(",")
+    === "level1<null,level2<level1,level3<level2,level4<level3,level5<level4,level6<level5"
+  && secActDeep.sectionActionNotFollowed.length === 0,
+  () => ({ items: secActDeep.sectionActions.map((a) => [a.name, a.parent]), nf: secActDeep.sectionActionNotFollowed }));
 check("ENG-95254: an ordinary local handed to an undefined non-menu method does not become a false completeness warning",
   parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);var x=[];`
     + `this.doSomethingElse(x);return a;}`), "P").sectionActionUnresolved.length === 0);
