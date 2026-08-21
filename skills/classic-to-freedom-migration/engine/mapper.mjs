@@ -596,6 +596,9 @@ export function mapToFreedom(eff, opts = {}) {
     // ENG-95543 tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
     // IS built; this is the wiring a build agent still has to author, published rather than left implicit.
     requestHandlers: F.requestHandlers,
+    // The elements the shared mapping table emitted, so the design spec, the published `componentTypes` and the
+    // `--verify` gate all speak about the same set the ChangeSet carries.
+    tableElements: F.tableElements,
     // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
     referencedModules: eff.referencedModules || [],
     // F9: how many effective elements were platform-template context excluded from the payload.
@@ -982,6 +985,11 @@ function mapFields(ctx, containers) {
   // Emission order is the classic layout order (`order`), like the field pass, so a radio group between two
   // fields keeps its position instead of landing after them.
   const requestHandlers = [];                 // tier B: the element is built, its imperative wiring is a stub
+  // Every element emitted straight from a table row, published so the plan can SAY what the engine built. Without
+  // this sink a `crt.Label`/`crt.Button`/`crt.Link` lands in the ChangeSet and appears in no table, in no
+  // `componentTypes` list and in no `--verify` row — built, ungated and undocumented. (`crt.IconRadioButton`
+  // reaches the Layout table on its own, because it carries `values.control` and that is what `isField` keys on.)
+  const tableElements = [];
   const configGaps = new Map();               // element -> why its row could NOT be emitted (feeds the typed ⚠)
   const allItems = ctx.eff.items || [];
   const childrenByParent = new Map();
@@ -1074,6 +1082,9 @@ function mapFields(ctx, containers) {
       requestHandlers.push({ request, element: it.name, componentType: row.target.componentType, classicHandler: it.handlers.click, tier: row.tier });
     }
     viewConfigDiff.push({ operation: "insert", name: it.name, values, parentName: parent, propertyName: row.target.slot });
+    tableElements.push({ classic: it.name, componentType: row.target.componentType, classicKind: itemKindName(it),
+      parent, tier: row.tier, caption: values.caption ?? values.label ?? null,
+      request: values.clicked?.request || null, folded: claimed.length ? [...claimed] : null });
     accountedFor.add(it.name);
     claimed.forEach((c) => accountedFor.add(c));
     // A radio group's selection IS an entity column, so it needs the same attribute + PDS column a field gets —
@@ -1113,7 +1124,7 @@ function mapFields(ctx, containers) {
   return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion,
     // ENG-95543 — tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
-    requestHandlers, configGaps,
+    requestHandlers, configGaps, tableElements,
     headerLayout: headerIsWide ? "wide" : null };
 }
 

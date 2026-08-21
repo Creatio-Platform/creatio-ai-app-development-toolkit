@@ -242,6 +242,22 @@ function rowsForCardActions(cardActions, result, opts) {
     return { region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] };
   });
 }
+// ENG-95543 — one Layout row per element the shared mapping table emitted (`crt.Label` / `crt.Button` /
+// `crt.Link`). These carry no `values.control`, so `isField` cannot see them and without this builder they would be
+// built and invisible in every table the reader looks at. A tier-B element says so in its note: the view is built,
+// the classic click still has to be ported into the named request.
+function rowsForTableElements(elements, regionOf) {
+  return (elements || []).map((el) => {
+    const src = `classic ${esc(String(el.classicKind || "element"))}`;
+    const foldNote = el.folded?.length ? ` (folds ${el.folded.map((f) => `\`${esc(f)}\``).join(", ")})` : "";
+    const note = el.request
+      ? `→ \`${esc(el.componentType)}\`${foldNote} — view built; its classic click is NOT ported: wire the \`${esc(el.request)}\` request handler`
+      : `→ \`${esc(el.componentType)}\`${foldNote} — built from the classic element's own config`;
+    return { region: el.parent ? regionOf(el.parent) : "⚠ unplaced", sort: 0,
+      cells: [esc(el.classic), esc(el.componentType), src, el.tier === "B" ? "behaviour stub" : DASH, note] };
+  });
+}
+
 function rowsForImages(images, regionOf) {
   return (images || []).map((im) => {
     // Source = the resolved IMAGELOOKUP column when known; a related-object photo shows its lookup path; a FILL
@@ -676,6 +692,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForWidgets(cs.widgets),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
+    ...rowsForTableElements(cs.tableElements, regionOf),
     ...rowsForProfileCards(cs.profileCards, regionOf),
   ];
   // group by region (first-seen order), then reading order: side profile FIRST, tabs, widgets, actions, flagged.
@@ -1594,6 +1611,18 @@ function buildCoverageRows(cs, pm, result) {
     .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
   const expImages = (cs.images || []).length + fieldImageCount;
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
+  // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
+  // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
+  // page that dropped every one of them, and the executor would never fetch their documentation.
+  const byType = new Map();
+  for (const el of cs.tableElements || []) {
+    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
+    e.n++; e.kinds.add(String(el.classicKind || "element"));
+    byType.set(el.componentType, e);
+  }
+  for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
+    cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
+      vk: { type: "element", ctype, n: e.n } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -2190,6 +2219,9 @@ function componentTypesOf(rows) {
     // `crt.Tab` is a call that cannot succeed.
     else if (vk.type === "tabs") out.add(TAB_TYPES[0]);
     else if (vk.type === "details") out.add("crt.DataGrid");
+    // A table-emitted element's own type. It belongs here for the same reason the feature types do: this list is
+    // what the executor fetches documentation from once per run, and what the gate then judges the build against.
+    else if (vk.type === "element" && typeof vk.ctype === "string") out.add(vk.ctype);
   }
   for (const t of listComponentTypes(rows)) out.add(t);
   return [...out].sort((a, b) => a.localeCompare(b));
@@ -2644,9 +2676,21 @@ const BUILT_TYPES = {
   tabs: TAB_TYPES,
   details: ["crt.DataGrid"],
 };
+// ENG-95543 — a table-emitted componentType, with the SAME tri-state every other count row applies: an absent
+// `--built.pages` entry means nobody looked (⚠), a partial count is ⚠, zero built is ❌. Reusing the tri-state
+// rather than a bare `hasType` check is what keeps "the verifier never fetched this page" from reading as
+// "you failed to build it".
+function resolveElementVk(vk, ctx) {
+  const b = ctx.typeCount(vk.ctype);
+  if (b >= vk.n) return ["✅ Done", `${b} ${vk.ctype} built`, "ok"];
+  if (b > 0) return ["⚠ verify", `${b}/${vk.n} ${vk.ctype} built`, "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.ctype} element(s)`);
+  return ["❌ MISSING", `no ${vk.ctype} built (${vk.n} expected)`, "missing"];
+}
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") return resolveFieldsVk(vk, ctx);
   if (vk.type === "image") return resolveImageVk(vk, ctx);
+  if (vk.type === "element") return resolveElementVk(vk, ctx);
   const accepted = BUILT_TYPES[vk.type === "tabs" ? "tabs" : "details"];
   const noun = accepted[0]; // what the message names: the spelling a current platform actually builds
   const b = accepted.reduce((n, t) => n + ctx.typeCount(t), 0);
@@ -2742,7 +2786,7 @@ export function resolveRuleVk(vk, ctx) {
   return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
-const VK_COUNT = new Set(["fields", "tabs", "details", "image"]);
+const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
 const VK_RULE = new Set(["rule"]);
 // A REACHABILITY / wiring deliverable (per-type routing, mini-page "+ New" binding, section registration, typed-form

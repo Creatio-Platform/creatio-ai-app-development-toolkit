@@ -2690,6 +2690,59 @@ check("#verify image: 2 expected / 1 built → ⚠ verify (unverified), NOT Done
   imgVerifyPartial.unverified >= 1 && imgVerifyPartial.complete === false
   && /1\/2 crt\.ImageInput built/.test(imgVerifyPartial.markdown) && /⚠ verify/.test(imgVerifyPartial.markdown),
   () => imgVerifyPartial.markdown.split("\n").filter((l) => /Image field/.test(l)).join(" | "));
+// ---- ENG-95543: a table-emitted element is REPORTED, GATED and PUBLISHED ---------------------------------------
+// The three surfaces that make an emitted element real to a reader and to the executor: the Layout table (it exists
+// and where it sits), the `--verify` gate (it was actually built), and `--units.pages[].componentTypes` (its
+// documentation is fetched once per run). Before this the elements landed only in the ChangeSet — built, ungated and
+// mentioned nowhere.
+const tblElRes = { entity: "X", changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+  tableElements: [
+    { classic: "SendBtn", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.SendBtnClicked", folded: ["SendNow"] },
+    { classic: "NoteLbl", componentType: "crt.Label", classicKind: "LABEL", parent: "Header", tier: "A", request: null, folded: null },
+  ] }, signals: {} };
+const tblElSpec = renderDesignSpec(tblElRes, {});
+check("ENG-95543: a table-emitted element gets a LAYOUT row naming its component and its classic kind — a tier-B row also names the request its click still needs",
+  /crt\.Button/.test(tblElSpec) && /classic BUTTON/.test(tblElSpec) && /usr\.SendBtnClicked/.test(tblElSpec)
+  && /crt\.Label/.test(tblElSpec) && /classic LABEL/.test(tblElSpec),
+  () => tblElSpec.split("\n").filter((l) => /SendBtn|NoteLbl/.test(l)).join(" | "));
+const tblElMissing = renderVerify(tblElRes, {}, { ops: [{ name: "F", type: "crt.Input" }] });
+check("ENG-95543 verify: an expected crt.Button/crt.Label that was NOT built is ❌ MISSING and blocks completion — the gate is not a soft ⚠",
+  tblElMissing.complete === false && tblElMissing.missing >= 2
+  && /no crt\.Button built \(1 expected\)/.test(tblElMissing.markdown) && /no crt\.Label built \(1 expected\)/.test(tblElMissing.markdown),
+  () => tblElMissing.markdown.split("\n").filter((l) => /crt\.(Button|Label)/.test(l)).join(" | "));
+const tblElOk = renderVerify(tblElRes, {}, { ops: [{ name: "SendBtn", type: "crt.Button" }, { name: "NoteLbl", type: "crt.Label" }] });
+check("ENG-95543 verify: both built → both rows ✅ Done",
+  /crt\.Button built/.test(tblElOk.markdown) && /crt\.Label built/.test(tblElOk.markdown)
+  && !/no crt\.(Button|Label) built/.test(tblElOk.markdown),
+  () => tblElOk.markdown.split("\n").filter((l) => /crt\.(Button|Label)/.test(l)).join(" | "));
+// The PARTIAL branch, and the reason it must exist: two buttons expected and one built is not a build to accept and
+// not a build to accuse — it is a build to look at again.
+const tblElPartialRes = { ...tblElRes, changeSet: { ...tblElRes.changeSet, tableElements: [
+  { classic: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.AClicked" },
+  { classic: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.BClicked" },
+] } };
+const tblElPartial = renderVerify(tblElPartialRes, {}, { ops: [{ name: "A", type: "crt.Button" }] });
+check("ENG-95543 verify: 2 crt.Button expected / 1 built → ⚠ verify (unverified), neither Done nor MISSING",
+  tblElPartial.unverified >= 1 && tblElPartial.complete === false && /1\/2 crt\.Button built/.test(tblElPartial.markdown),
+  () => tblElPartial.markdown.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | "));
+// One coverage row per TYPE, not per element: three buttons are one row that expects three, so the plan does not
+// grow a row per control while the count still gates.
+const tblElGroupRes = { ...tblElRes, changeSet: { ...tblElRes.changeSet, tableElements: [
+  { classic: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  { classic: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  { classic: "C", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+] } };
+const tblElGroup = renderVerify(tblElGroupRes, {}, { ops: [] });
+check("ENG-95543: the coverage rows group BY componentType — 3 buttons are ONE row expecting 3, not three rows",
+  (tblElGroup.markdown.match(/no crt\.Button built \(3 expected\)/g) || []).length === 1,
+  () => tblElGroup.markdown.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | "));
+// And the type reaches the published queue, which is what a build agent reads to fetch component documentation.
+const tblElUnits = pageUnits(tblElRes, {});
+check("ENG-95543: every table-emitted componentType is published in `--units.pages[].componentTypes` (the executor's fetch-once list)",
+  (tblElUnits.pages?.[0]?.componentTypes || []).includes("crt.Button")
+  && (tblElUnits.pages?.[0]?.componentTypes || []).includes("crt.Label"),
+  () => tblElUnits.pages?.[0]?.componentTypes);
+
 // review (PR#58 Minor) — renderVerify must NOT undercount a control-bound field whose built component type is OUTSIDE
 // FIELD_RE (rich-text / lookup or color variant / future type). Expected is control-based (type-agnostic); the built
 // count now matches by field NAME too, so an odd-typed field counts and does not spuriously set verifyIncomplete.
