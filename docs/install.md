@@ -236,6 +236,11 @@ cohort that never existed, and one installation was measured reporting five vers
 | --- | --- | --- | --- |
 | Claude Code | the plugin manifest — nothing to do | yes | `hookSpecificOutput.additionalContext` |
 | Cursor | `installer/install.py` writes `~/.cursor/hooks.json` | yes | **not possible** — `afterMCPExecution` is informational and reaches neither the user nor the agent, so the always-applied `creatio-telemetry` rule carries the routing instead |
+
+Cursor's `afterMCPExecution` payload names the session `conversation_id` and passes `tool_input` as a
+JSON string rather than an object ([Cursor hooks](https://cursor.com/docs/agent/hooks)), so the hook
+normalizes both before anything reads them — without that the Cursor floor never fired at all. Cursor
+also states the `model` in the payload, which is where it is read from on that host.
 | Codex | manual, see below | yes | `systemMessage` |
 | Copilot CLI | manual, see below | yes | not verified — the hook stays silent rather than emit a guessed shape |
 

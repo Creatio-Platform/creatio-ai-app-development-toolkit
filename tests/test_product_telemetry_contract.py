@@ -240,6 +240,43 @@ class ProductTelemetryContractTests(unittest.TestCase):
                 # Delegated runs must not have their events emitted twice.
                 self.assertIn("do not emit on its behalf", text)
 
+    def test_both_orchestrator_surfaces_forbid_the_legacy_names_identically(self):
+        # The two surfaces are the same instruction shipped to different hosts: SKILL.md to Claude
+        # Code and Codex, the .mdc to Cursor through the installer's rule files. They drifted once —
+        # SKILL.md was hardened to forbid the legacy names while the .mdc still said they "still work
+        # but are deprecated", so a Cursor session was told the exact behaviour that had already made
+        # a real run report its whole funnel in a vocabulary no stage-based funnel can see.
+        #
+        # Asserted as a NEGATIVE plus an agreement check, because the positive assertions in the
+        # test above all passed while the surfaces disagreed.
+        surfaces = {
+            "SKILL.md": read("skills", "creatio-app-orchestrator", "SKILL.md"),
+            "cursor-rule": read("rules", "creatio-app-orchestrator.mdc"),
+        }
+
+        for name, text in surfaces.items():
+            with self.subTest(surface=name):
+                self.assertIn(
+                    "Do NOT send the legacy", text,
+                    "every surface must forbid the legacy names, not merely discourage them")
+                for softening in ("still work but", "prefer the stages"):
+                    self.assertNotIn(
+                        softening, text,
+                        f"'{softening}' leaves a run free to report in the legacy vocabulary")
+                # The reason travels with the rule: a prohibition an agent cannot justify is one it
+                # reasons its way around.
+                self.assertIn("invisible to every funnel built on the stages", text)
+
+        # And they must not drift again: the sentence is compared across surfaces, so hardening one
+        # while leaving the other cannot pass.
+        policies = {
+            name: text[text.index("Do NOT send the legacy"):][:260]
+            for name, text in surfaces.items()
+        }
+        self.assertEqual(
+            len(set(policies.values())), 1,
+            f"the surfaces state different legacy-name policies: {policies}")
+
     def test_every_stage_is_documented_at_a_point_of_use(self):
         # A stage that exists in the vocabulary but is named in no skill is a stage
         # no agent will ever emit — it looks like "that never happens" in the data

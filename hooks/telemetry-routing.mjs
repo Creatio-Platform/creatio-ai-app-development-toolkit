@@ -14,7 +14,9 @@
 // is the denominator that makes the funnel's own reliability measurable.
 //
 // EMIT MECHANISM: clio exposes telemetry only as an MCP tool, so this drives clio's stdio MCP
-// server for one call (~1.2s, once per session). That deliberately costs a process spawn instead of
+// server for one call (~1.2s). The floor is once per session; `session_usage` is a series, so it can
+// fire once per response — which is why the call is handed off rather than waited for, and why the
+// usage path is bounded the same way the floor is. That deliberately costs a process spawn instead of
 // writing clio's local event spool directly: the spool shape is clio's private storage format, and a
 // copy of it here would ship inside an installed plugin and outlive the release that changed it.
 // Going through the tool reuses clio's consent check, field validation and duration inference.
@@ -41,6 +43,22 @@ import path from 'node:path';
 //             ignored and at worst read as a hook failure.
 const HOST = (process.env.CAADT_TELEMETRY_HOOK_HOST || 'claude').toLowerCase();
 const CLIO = process.env.CAADT_TELEMETRY_CLIO || 'clio';
+// This hook runs automatically on every matching tool call, so the variable naming the executable is
+// a repeated code-execution primitive for anything that can set it before the host launches. It is
+// an install-time knob, and validating it costs nothing: a value that LOOKS like a path must resolve
+// to a real file, mirroring the `is_file()` guard `runtime/scripts/mcp_client.py` applies to
+// `CLIO_CMD`. A bare command name is left to PATH resolution, which is the documented default.
+const CLIO_IS_SAFE = (() => {
+	const looksLikePath = /[\\/]/.test(CLIO);
+	if (!looksLikePath) {
+		return true;
+	}
+	try {
+		return fs.statSync(CLIO).isFile();
+	} catch {
+		return false;
+	}
+})();
 // The host this hook is wired into IS the coding agent, so defaulting to one host's name would
 // report every Codex or Cursor run as Claude Code — a cohort that never ran.
 const HOST_AGENT_NAMES = {
@@ -101,6 +119,12 @@ const FLOOR_ATTEMPT_LIMIT = 3;
 // than clio's measured start-up (~1.2s for the whole exchange), short enough that a session with a
 // broken clio still retries within itself.
 const OUTCOME_GRACE_MS = 10_000;
+// The floor is one event, so FLOOR_ATTEMPT_LIMIT bounds it. `session_usage` is a series and its
+// guard is "the transcript grew", which is true on nearly every response — so a clio that never
+// confirms a reading (an older clio rejecting the event, a broken binary) would re-read and re-parse
+// the whole transcript AND spawn a process on every remaining response of the session. The reading
+// itself stays retryable; what is bounded is how many unconfirmed ones a session pays for.
+const USAGE_ATTEMPT_LIMIT = 5;
 
 // clio's telemetry surface: reminding a session that is already sending telemetry is circular, and
 // emitting a floor event in reaction to a floor event would recurse.
@@ -174,6 +198,12 @@ function readSessionUsage(payload) {
 	const transcript = payload?.transcript_path
 		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
 	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false };
+	// Some hosts state the model in the payload itself (Cursor does), which is the only place it is
+	// available when the transcript is in a shape this reader does not parse. Validated like any other
+	// model value, and still overridden by a real value read from a transcript below.
+	if (typeof payload?.model === 'string' && MODEL_TOKEN.test(payload.model.toLowerCase())) {
+		usage.model = payload.model.toLowerCase();
+	}
 	let raw;
 	try {
 		raw = fs.readFileSync(transcript, 'utf8');
@@ -249,7 +279,11 @@ let sweptThisProcess = false;
 
 function stateDir() {
 	const dir = path.join(os.tmpdir(), 'caadt-telemetry-routing');
-	fs.mkdirSync(dir, { recursive: true });
+	// 0o700: these files carry session ids and the usage payload, and they live in a shared temp
+	// directory whose paths are predictable. On a multi-user host the default mode would let another
+	// local user read them, or pre-plant a symlink where a marker is about to be written. The mode is
+	// advisory on Windows, where the ACL of the per-user temp directory is what actually applies.
+	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 	// Every claim, read and release resolves a path through here, so an unconditional sweep ran a
 	// full directory listing plus a stat per file SEVERAL times per hook invocation, and the cost
 	// grew with every stale marker any session on the machine had ever left. Housekeeping does not
@@ -346,12 +380,50 @@ function lastReported(sessionId) {
 		const outcome = readOutcome(sessionId, 'usage');
 		if (outcome === 'recorded') {
 			reported = { output: stored.pending.output || 0, size: stored.pending.size || 0 };
+			noteUsageAttempt(sessionId, true);
 		}
 		if (outcome !== 'pending') {
 			writeUsageMarker(sessionId, reported, null);
 		}
 	}
 	return reported;
+}
+
+// How many readings this session has dispatched without clio confirming any of them. Reset on the
+// first confirmation, so a session that reports normally is never bounded — only one that is failing.
+function countUnconfirmedUsage(sessionId) {
+	try {
+		return Number.parseInt(fs.readFileSync(markerPath(sessionId, 'usage-attempts'), 'utf8'), 10) || 0;
+	} catch {
+		return 0;
+	}
+}
+
+function noteUsageAttempt(sessionId, confirmed) {
+	try {
+		if (confirmed) {
+			fs.rmSync(markerPath(sessionId, 'usage-attempts'), { force: true });
+			return;
+		}
+		fs.writeFileSync(markerPath(sessionId, 'usage-attempts'),
+			String(countUnconfirmedUsage(sessionId) + 1));
+	} catch {
+		// Cannot count: leave the bound to the transcript-size guard rather than stopping the series.
+	}
+}
+
+// The reading already dispatched and not yet answered, if any. `null` once clio has answered either
+// way, so a refusal reopens the reading rather than suppressing it forever.
+function inFlightReading(sessionId) {
+	try {
+		const stored = JSON.parse(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'));
+		if (stored.pending && readOutcome(sessionId, 'usage') === 'pending') {
+			return { output: stored.pending.output || 0, size: stored.pending.size || 0 };
+		}
+	} catch {
+		// No marker yet: nothing is in flight.
+	}
+	return null;
 }
 
 function writeUsageMarker(sessionId, reported, pending) {
@@ -443,6 +515,10 @@ function releaseFloorClaimForRetry(sessionId) {
 // not really a write costs one extra reminder per session, while a missing write costs a whole run's
 // telemetry. That is not hypothetical — `modify-` was absent from the first version of this list, so
 // `modify-entity-schema-column`, the most ordinary write in Creatio, did not count as one.
+// Stands in for an executor call whose command could not be read. Not a verb, so it can never be
+// confused with one, and handled explicitly by isWriteCall.
+const UNRESOLVED_COMMAND = 'clio-run:command-unreadable';
+
 const WRITE_VERBS = [
 	'create-', 'update-', 'modify-', 'delete-', 'remove-', 'add-', 'set-', 'install-', 'uninstall-',
 	'deploy-', 'push-', 'sync-', 'link-', 'unlink-', 'upload-', 'generate-', 'compile-', 'build-',
@@ -467,15 +543,21 @@ function writeVerbSubject(payload) {
 		// The nested form is accepted too, because the tool's schema wraps parameters in `args` and both
 		// shapes appear in practice; reading only the nested one classified every real write as a read.
 		const command = payload?.tool_input?.command ?? payload?.tool_input?.args?.command;
-		// A destructive executor with no readable command is still a write: that is what its name says.
-		return typeof command === 'string' && command ? command : bare;
+		if (typeof command === 'string' && command) {
+			return command;
+		}
+		// An executor whose command cannot be read is treated as a WRITE. `clio-run` alone is
+		// read/write-ambiguous, and the two ways of being wrong are not equal: guessing read loses the
+		// reminder on a real mutation, which is the case this mechanism exists for, while guessing
+		// write costs at most one extra reminder in a turn that is already bounded to one.
+		return UNRESOLVED_COMMAND;
 	}
 	return bare;
 }
 
 function isWriteCall(payload) {
 	const subject = writeVerbSubject(payload);
-	return WRITE_VERBS.some(verb => subject.startsWith(verb));
+	return subject === UNRESOLVED_COMMAND || WRITE_VERBS.some(verb => subject.startsWith(verb));
 }
 
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
@@ -547,11 +629,14 @@ function emitEvent(sessionId, usage, eventName) {
 // invocation can act on it — that is what keeps the retry and the usage gating working without
 // waiting here for either.
 function dispatch(sessionId, kind, request) {
+	if (!CLIO_IS_SAFE) {
+		return false;
+	}
 	let stdin;
 	let stdout;
 	try {
 		const requestFile = markerPath(sessionId, `${kind}-request`);
-		fs.writeFileSync(requestFile, `${request}\n`);
+		fs.writeFileSync(requestFile, `${request}\n`, { mode: 0o600 });
 		stdin = fs.openSync(requestFile, 'r');
 		// Truncated on open, so a stale answer from an earlier dispatch is never read as this one's.
 		stdout = fs.openSync(markerPath(sessionId, `${kind}-outcome`), 'w');
@@ -609,8 +694,33 @@ function readOutcome(sessionId, kind) {
 	return Date.now() - stat.mtimeMs < OUTCOME_GRACE_MS ? 'pending' : 'rejected';
 }
 
+// Hosts do not agree on the payload shape, and the differences are not cosmetic. Cursor's
+// `afterMCPExecution` names the session `conversation_id`, and hands `tool_input` over as a STRING
+// rather than an object (documented at https://cursor.com/docs/agent/hooks). Read raw, there is no
+// `session_id`, so main() returned at its first guard and the Cursor floor — advertised as
+// deterministic on every host — never fired at all.
+//
+// Normalising here rather than at each use keeps every reader below written against one shape.
+function normalizePayload(payload) {
+	if (!payload || typeof payload !== 'object') {
+		return payload;
+	}
+	const normalized = { ...payload };
+	if (!normalized.session_id && normalized.conversation_id) {
+		normalized.session_id = normalized.conversation_id;
+	}
+	if (typeof normalized.tool_input === 'string') {
+		try {
+			normalized.tool_input = JSON.parse(normalized.tool_input);
+		} catch {
+			// Not JSON after all: leave the string in place, `writeVerbSubject` handles both.
+		}
+	}
+	return normalized;
+}
+
 function main() {
-	const payload = readStdin();
+	const payload = normalizePayload(readStdin());
 	const sessionId = payload?.session_id;
 	if (!sessionId) {
 		return;
@@ -665,6 +775,19 @@ function reportSessionUsage(payload, sessionId) {
 	if (size !== 0 && size === previous.size) {
 		return;
 	}
+	// A reading for this exact transcript may already be in flight: the emit is handed off, so a Stop
+	// arriving before clio answers would otherwise send the same row again. Only while the answer is
+	// genuinely outstanding — once it comes back refused the reading is no longer in flight and is
+	// re-sent, which is what keeps a refused reading retryable.
+	const outstanding = inFlightReading(sessionId);
+	if (outstanding && outstanding.size === size) {
+		return;
+	}
+	if (countUnconfirmedUsage(sessionId) >= USAGE_ATTEMPT_LIMIT) {
+		// Every reading so far has gone unconfirmed. Reading the transcript again would cost a full
+		// parse and a process spawn to learn the same thing, so the series stops for this session.
+		return;
+	}
 	const usage = readSessionUsage(payload);
 	// An unchanged or unreadable total is not worth a reading: a row of zeroes is indistinguishable from
 	// a session that genuinely spent nothing, and a repeat says nothing in a series that means growth.
@@ -677,6 +800,7 @@ function reportSessionUsage(payload, sessionId) {
 	// refused field would end the series in silence.
 	if (emitEvent(sessionId, usage, 'session_usage')) {
 		rememberPending(sessionId, usage.output_tokens, size);
+		noteUsageAttempt(sessionId, false);
 	}
 }
 

@@ -624,6 +624,90 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
                  telemetry_home=telemetry_home("granted"))
         self.assertTrue(second.exists(), "the sweep must be rate-limited, not run on every call")
 
+    def test_fires_on_a_genuine_cursor_after_mcp_execution_payload(self):
+        # Not the Claude payload with the host flag flipped, which is what the other cursor tests do:
+        # the field names documented for Cursor's afterMCPExecution
+        # (https://cursor.com/docs/agent/hooks). Two of them diverge in ways that mattered — the
+        # session is `conversation_id`, and `tool_input` arrives as a STRING — so read raw there was no
+        # session id at all, main() returned at its first guard, and the Cursor floor never fired.
+        stub, capture = stub_clio()
+
+        result = run_hook(
+            {
+                "conversation_id": "cursor-conv-01",
+                "generation_id": "gen-01",
+                "hook_event_name": "afterMCPExecution",
+                "model": "claude-4.5-sonnet",
+                "cursor_version": "1.7.0",
+                "workspace_roots": [_TMP],
+                "tool_name": "mcp__creatio-ai-app-development-toolkit_clio__clio-run",
+                "tool_input": json.dumps({"command": "create-app", "args": {"name": "Usr"}}),
+                "result_json": "{}",
+                "duration": 812,
+            },
+            telemetry_home=telemetry_home("granted"),
+            clio=NODE, capture=capture, capture_dir=stub, host="cursor",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        floor = await_payloads(capture, 1, event_name="workflow_started")
+        self.assertEqual(len(floor), 1, "the Cursor floor must fire on Cursor's own payload shape")
+        self.assertEqual(floor[0]["session_id"], "cursor-conv-01")
+        self.assertEqual(floor[0]["coding_agent"], "Cursor")
+        # Cursor states the model in the payload, which is the only place it can be read there.
+        self.assertEqual(floor[0]["model"], "claude-4.5-sonnet")
+
+    def test_a_clio_that_never_confirms_a_reading_stops_the_series(self):
+        # `session_usage` fires per response and its only guard is "the transcript grew", which is
+        # true nearly every time. Without a bound, a clio that never confirms would cost a full
+        # transcript re-parse AND a process spawn on every remaining response of the session.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        failing, capture = stub_clio(answers="rejected")
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": failing}
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        for turn in range(9):
+            transcript = Path(tempfile.mkdtemp(prefix=f"caadt-turn-{turn}-", dir=_TMP), "session.jsonl")
+            transcript.write_text(
+                chr(10).join(
+                    json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                        "input_tokens": 10, "output_tokens": 3}}})
+                    for _ in range(turn + 1)),
+                encoding="utf-8",
+            )
+            run_hook({"session_id": session, "hook_event_name": "Stop",
+                      "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+            await_outcome(session, "usage")
+
+        readings = [p for p in sent_payloads(capture) if p["event_name"] == "session_usage"]
+        self.assertLessEqual(len(readings), 5, "bounded by USAGE_ATTEMPT_LIMIT")
+        self.assertGreater(len(readings), 1, "a few retries are the point; stopping at one is not")
+
+    def test_an_executor_call_with_no_readable_command_counts_as_a_write(self):
+        # `clio-run` alone is read/write-ambiguous, so an unreadable command used to be classified as
+        # a read — losing the first-write reminder on what may well have been a mutation. The two
+        # ways of being wrong are not equal: guessing write costs at most one extra reminder in a turn
+        # already bounded to one.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        # The turn's own reminder is spent first, so what this asserts is the WRITE reminder.
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "tool_input": {"arguments": {"unexpected": "shape"}},
+            },
+            telemetry_home=home,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(result.stdout.strip(),
+                        "an unresolvable command must still earn the first-write reminder")
+
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns
         # to skip, and the floor is one event per session because it is the denominator.
