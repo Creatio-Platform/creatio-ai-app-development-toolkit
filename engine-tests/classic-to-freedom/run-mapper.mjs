@@ -7858,6 +7858,33 @@ try {
     badFileRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /could not read it/.test(d.reason) && /reflects no stand|nothing here reflects your stand/.test(d.reason)),
     () => badFileRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
 
+  // A RELATIVE registry path is contained to the manifest's base dir, like a schema entry's `file`. An escape is
+  // refused and lands on the `registry-source` ⚠ (the run continues on the vendored index and SAYS so) — never a
+  // silent read of a file outside the manifest's directory.
+  const escRun = gmRun(`{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:6}}`,
+    "", { componentRegistry: { file: "../../../etc/hosts" } });
+  check("ENG-95543: a RELATIVE componentRegistry path that escapes the manifest base dir is refused, and the refusal is reported (not a silent read, not a silent fallback)",
+    escRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /escapes the manifest base directory/.test(d.reason)),
+    () => escRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
+
+  // NO FALSE ⚠ from the run-time check. `runTypes` scans every emitted `values.type`, which includes types the
+  // MAPPING TABLE never chose — the container builder's `crt.TabContainer` / `crt.GridContainer`, the image
+  // builder's `crt.ImageInput`, and the field control table's `crt.Input` / `crt.ComboBox` / `crt.NumberInput`.
+  // Those were never registry-checked before, so a rich page is the case that decides whether this check helps or
+  // blames the operator for a type the engine itself picked.
+  const richRun = gmRun([
+    `{operation:"insert",name:"Tabs",values:{itemType:0}}`,
+    `{operation:"insert",name:"T1",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,caption:{bindTo:"Resources.Strings.T1"}}}`,
+    `{operation:"insert",name:"Amount",parentName:"T1",propertyName:"items",values:{bindTo:"Amount"}}`,
+    `{operation:"insert",name:"Owner",parentName:"T1",propertyName:"items",values:{bindTo:"Owner"}}`,
+    `{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"PhotoId"}}`,
+  ].join(","), "", { platformVersion: "8.3.0", resources: { T1: "Tab one" },
+    entityColumns: { Name: { type: "ShortText" }, Amount: { type: "Currency2" }, Owner: { type: "Lookup", ref: "Contact" }, PhotoId: { type: "ImageLookup" } } });
+  const richTypes = [...new Set(richRun.changeSet.viewConfigDiff.map((o) => o.values?.type).filter(Boolean))];
+  check("ENG-95543: a tabbed page with fields and an image raises ZERO registry ⚠ at 8.3.0 — the check must not blame the operator for the container/field/image types the ENGINE picked",
+    richTypes.length >= 5 && !richRun.changeSet.needsDecision.some((d) => /^registry-/.test(d.kind)),
+    () => ({ types: richTypes, warnings: richRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)) }));
+
   // The PLAN VERSION covers the registry the run was planned against. Recorded as a decision reversed on
   // inspection: hashing only the version identity would have kept approvals alive across a CDN refresh, but the
   // registry changes which `registry-target` ⚠ items a plan carries, so an approval must not survive it.

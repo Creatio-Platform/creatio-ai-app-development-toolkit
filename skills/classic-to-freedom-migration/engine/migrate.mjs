@@ -1874,7 +1874,22 @@ export function runMigration(manifest, opts = {}) {
   // seven versions, and blocking a plan on a union check would stop a migration whose stand is simply newer than
   // the vendored index. The item states which source answered, so an operator can tell "your stand does not carry
   // this" from "nobody asked your stand".
-  const reg = resolveRunIndex(manifest, { readFile: (f) => fs.readFileSync(f, "utf8") });
+  // The reader is CONTAINED the same way `bodyOf` contains a schema entry's `file`: a RELATIVE path must resolve
+  // under the manifest's base dir, an ABSOLUTE one is an explicit caller choice (the harvested manifests live in a
+  // temp dir outside the repo, so absolute paths are the normal case). A manifest is operator-supplied, not the
+  // untrusted stand input the parser pin guards — but the repo already treats manifest paths this way and one
+  // surface behaving differently is how the next reader learns the wrong rule.
+  const readRegistryFile = (f) => {
+    if (!path.isAbsolute(f)) {
+      const base = path.resolve(baseDir);
+      const resolved = path.resolve(base, f);
+      if (resolved !== base && !resolved.startsWith(base + path.sep))
+        throw new Error(`relative path '${f}' escapes the manifest base directory`);
+      return fs.readFileSync(resolved, "utf8");
+    }
+    return fs.readFileSync(f, "utf8");
+  };
+  const reg = resolveRunIndex(manifest, { readFile: readRegistryFile });
   const regRun = validateRun(changeSet, { index: reg.index, version: reg.version });
   const REG_SOURCE_NOTE = {
     "stand-export": `checked against the TARGET STAND's own component registry (version ${reg.version})`,

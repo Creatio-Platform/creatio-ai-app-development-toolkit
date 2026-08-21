@@ -1975,6 +1975,36 @@ const guidelinesReturnFor = () => ""
   check("ENG-95543 doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
     tableNames.length >= 8 && undocumented.length === 0,
     () => ({ names: tableNames, undocumented }));
+  // A CODE-level audit, the counterpart of the doc lint: every `crt.*` COMPONENT type the engine's own modules
+  // name must exist in the index. This is what catches a new control-table entry or a new row naming a type that
+  // does not exist — the run-time check would only find it once some real page emitted it.
+  //
+  // Two exclusions, both stated: `crt.*Request` / `crt.*Service` are not components (see above), and `crt.Tab` is
+  // an ACCEPTANCE spelling — `TAB_TYPES` carries it so `--verify` accepts a built page that still reports it,
+  // measured on a live stand as a type no platform builds. The engine never EMITS it, and the golden suite asserts
+  // that separately (a rich tabbed page emits `crt.TabContainer`).
+  const engineSrc = ["mapper.mjs", "designspec.mjs", "migrate.mjs", "mapping-table.mjs", "mapping-registry.mjs"]
+    .map((f) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/" + f, import.meta.url)), "utf8")).join("\n");
+  const ACCEPTANCE_ONLY = new Set(["crt.Tab"]);
+  // The same counter-example rule the doc lint applies: a note saying "NOT `crt.X`" is a WARNING that the type does
+  // not exist, and the engine's own notes carry one (`crt.ContactCommunication` — the `ContactCommunication` ENTITY
+  // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
+  const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
+  const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
+    .filter((t) => !/(?:Request|Service)$/.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
+  const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
+  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services and the crt.Tab acceptance spelling)",
+    engineTypes.length >= 15 && unknownEngineTypes.length === 0,
+    () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
+  // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
+  // a convenient way to hide a type. If the registry ever carries it, the exclusion is wrong.
+  check("ENG-95543 code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
+    codeCounterExamples.size >= 1 && [...codeCounterExamples].every((t) => !index.components[t]),
+    () => [...codeCounterExamples].filter((t) => index.components[t]));
+  check("ENG-95543 code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
+    !index.components["crt.Tab"],
+    () => Object.keys(index.components).filter((t) => /^crt\.Tab/.test(t)));
+
   // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
   // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,
   // which is how the "change both in the same commit" rule quietly stops being followed.
