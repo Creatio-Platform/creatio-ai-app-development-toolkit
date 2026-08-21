@@ -164,10 +164,55 @@ own approve/reject actions). Agents typically add only the list — that is inco
 is what shows the current approval state/actions. Read `get-component-info` for the exact component types + their
 required config before building, and add both.
 
-**Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes, and
-printables are marked "⚠ ADD only if present" precisely because the schema alone doesn't say. Run each query
-at plan time and act on the result; never build "faithful to the classic body" while a `⚠` on-stand check is
-still pending — the classic body having no dashboard/button does NOT mean the section has no case/process.
+**Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes,
+printables, and the on-save duplicate check are marked "⚠ ADD only if present" precisely because the schema
+alone doesn't say. Run each query at plan time and act on the result; never build "faithful to the classic
+body" while a `⚠` on-stand check is still pending — the classic body having no dashboard/button does NOT mean
+the section has no case/process.
+
+**On-save duplicate check → does this entity have one, and will it survive?** (ENG-94274) Two separate facts,
+because they fail differently.
+
+1. **Is there a rule?** `odata-read DuplicatesRule` (a `BaseLookup` in `CrtDeduplication`); select
+   `Name`, `IsActive`, `UseAtSave`, `ProcedureName`. The rows that matter are the ones whose `Object` is your
+   entity with **`IsActive` AND `UseAtSave` both true** — `UseAtSave` is the "Use this rule on save" checkbox.
+   None ⇒ nothing to lose, record `present: false` and move on. List the matching rule names under **`names`**
+   — the CANONICAL key for this signal, and an **array** even for a single rule (`"names": ["Contact
+   duplicates. Contact name"]`; a bare string is tolerated but lists nothing). `items` is accepted only because
+   the sibling signals use it; no other alias is read.
+2. **Can the Freedom flow run on the target stand?** `get-sys-setting DeduplicationWebApiUrl` must be
+   non-empty AND the features `ESDeduplication` + `BulkESDeduplication` must be enabled (read
+   `AdminUnitFeatureState` via `execute-esq`, columns `Feature.Code` / `FeatureState` — **no state row means
+   OFF**). Record the answer as `signals.deduplication.serviceConfigured` (a **boolean**). This one is
+   **required whenever `present: true`** — the `--plan` gate treats a rule with no recorded service answer as
+   unresolved and exits non-zero, because that is the half-answer that would otherwise ship an approvable plan
+   whose own text says the key question is unanswered. With `present: false` it is not needed.
+
+Why both: **Classic has two paths, Freedom has one.** The Classic hook is an `asyncValidate` override in
+`CrtDeduplication.BaseEntityPage` that branches on
+`if (this.getIsFeatureEnabled("ESDeduplication") && !this.isNewMode())`; with that feature off it falls back to
+the rule's own SQL procedure (e.g. `tsp_FindContactDuplicateByName`), so Classic keeps working with no service
+at all. The Freedom side is the platform's `crt.ValidateDuplicatesOnSaveHandler` (registered on
+`crt.SaveDataRequest`, scoped to `BasePageTemplate` / `BaseMiniPageTemplate`, so entity-generic) plus the
+`DuplicateNotificationPage` dialog — and it goes through the deduplication service. Measured 2026-08-21 on a
+stand newer than 8.3.4: Classic posted `DeduplicationService/FindDuplicatesOnSave` and showed its duplicates
+screen, while the Freedom form page issued only `InsertQuery` and saved the duplicate silently, with
+`DeduplicationWebApiUrl` empty and the ES features off.
+
+So a rule **with** the service configured ⇒ verify the dialog on the built page. A rule **without** it ⇒ the
+check stops at migration, silently; that is a decision for the operator (configure the service, keep the
+Classic page for this entity, install the `Deduplication Freedom UI enhancements` marketplace app, or accept
+the loss). Never write this up as "Freedom cannot check duplicates" — it can, and the wording must stay true
+the day the service is turned on. Note the rules themselves live on the ENTITY, not the page, so they survive
+the page migration untouched — only the check is at risk.
+
+**Scope of the answer: one entity.** The recorded answer describes the entity of the page it was resolved for,
+so the engine carries it to every fold of the SAME entity — each per-type form of a typed entity and the
+add-record mini page each get their own row. A **child edit page** is a different entity: it gets a
+child-scoped row telling you to run step 1 for THAT entity, never the parent's verdict (the same convention as
+the section-level Print / Run-process notes). Record the child's own answer as `signals.deduplication` **on that
+child's bundle** and the instruction is replaced by the real verdict for its entity — an operator who runs the
+query must have a way to close the row, and `present: false` there closes it with no row at all.
 
 **DCM case → does the object have one?** `SysSchema` WHERE `ManagerName = 'DcmSchemaManager'` (the case-schema
 manager). Match the case to the entity by its caption + the object's own stage column (`Stage`); active +

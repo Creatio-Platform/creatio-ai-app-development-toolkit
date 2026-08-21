@@ -142,7 +142,12 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // carries no `targetPackage`, so at depth >= 2 the placement row silently vanished and `--units` published
     // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
     // one run has exactly one target package, so it cannot vary between two folds of the same key).
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, ...extra });
+    // `inheritedSignals` rides along for the same reason and with the same memo rule: the on-stand answers are
+    // recorded ONCE on the ROOT manifest, so a child bundle (which has none) used to see `{}` and every
+    // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
+    // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
+    // between two folds of the same key and must not enter the memo key.
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -641,7 +646,31 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
 // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
 // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-const SIGNAL_KEYS = ["dcm", "processes", "printables"];
+// `deduplication` (ENG-94274) joins them for exactly the same reason: the on-save duplicate check is an
+// `asyncValidate` override on `CrtDeduplication.BaseEntityPage`, so it arrives via the base seed chain, counts as
+// `fromTemplate`, and is classified as ledger `context` — the page body NEVER shows it, and a migration therefore
+// dropped it in total silence. Its answer carries one extra field beyond present/absent:
+//   "deduplication": { "resolved": true, "present": true, "names": ["Contact duplicates. Contact name"],
+//                      "serviceConfigured": false }
+// `present` = this entity HAS an active rule marked use-on-save; `serviceConfigured` = the target stand can
+// actually run the Freedom flow. Both are needed because they fail differently: no rule means nothing to lose,
+// while a rule + no service means the check silently stops at migration (measured — see mapDedupOnSave).
+const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication"];
+// Is signal `k` still UNRESOLVED? The generic rule is "absent, not an object, or resolved !== true". `deduplication`
+// adds ONE field-aware clause, because the key carries two facts and the gate must not pass on half of them: a rule
+// IS present but `serviceConfigured` was never recorded is precisely the likely real-world half-answer (an operator
+// who ran only the DuplicatesRule query), and letting it exit 0 would ship an approvable plan whose own text says
+// "cannot say whether the check survives migration". `present:false` needs no service answer — nothing to lose —
+// so the nine `{resolved:true, present:false}` answers stay valid. Own fn so the filter stays a one-liner (Sonar CC).
+function signalUnresolved(k, signals) {
+  const s = signals[k];
+  if (!s || typeof s !== "object" || s.resolved !== true) return true;
+  // `s.present` by TRUTHINESS, not `=== true`: a hand-authored `"present": "yes"` must not slip past the
+  // service requirement into the mapper's "serviceConfigured unrecorded" branch — that is the same half-answered
+  // plan this clause exists to block. The mapper reads `present` the same way.
+  if (k === "deduplication" && s.present && typeof s.serviceConfigured !== "boolean") return true;
+  return false;
+}
 // PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
 // built five pages, and only then discovered that `create-app-section` cannot run at all: the owning app was an
 // install-time wrapper with NO primary package, its one package was locked, and the editable target package was
@@ -711,14 +740,18 @@ export function placementIssues(manifest) {
 export function checklistOpts(manifest, opts = {}) {
   const pm = manifest.planMeta || {};
   const blank = (v) => v == null || String(v).trim() === "";
-  const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
+  // A nested run's manifest is the CHILD bundle, which carries no `signals` of its own — the on-stand answers are
+  // supplied ONCE on the root manifest (one stand check covers the whole surface), exactly like `behaviourIndex`
+  // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
+  // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
+  const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: manifest.planMeta,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
-    signalsMissing: SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true),
+    signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
@@ -1841,6 +1874,9 @@ export function runMigration(manifest, opts = {}) {
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // ENG-93928 — the embedded profile schemas a profile card renders (profiled entity + displayed columns).
   const profileSchemas = parseProfileSchemas(manifest, bodyOf);
+  // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
+  // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
+  const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
@@ -1849,7 +1885,8 @@ export function runMigration(manifest, opts = {}) {
     profileSchemas,                           // ENG-93928 — parsed embedded-profile bodies (entity + displayed columns)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
-    signals: manifest.signals || {},          // on-stand signals (dcm/…) — gate DCM widget emission on the resolved case
+    signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
+    ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
   });
   attachDetailAddModes(changeSet, detailSchemas);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
@@ -1970,7 +2007,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -2561,7 +2598,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
-  if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
+  if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);

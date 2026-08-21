@@ -2051,7 +2051,7 @@ YOUR OUTPUT FILE IS \`${preflightFile(bi)}\` AND NOTHING ELSE. Other preflight a
 
 Write your file as exactly \`{ "evidence": { "<id>": <record-or-false>, … } }\` — nothing else in it.
 
-For EACH item: run its specific on-stand query and record the ANSWER (DCM → \`SysSchema\` where \`ManagerName='DcmSchemaManager'\`; connected processes → \`ProcessInModules\` by the section's SysModule, then \`VwSysProcess\` for the name; printables → \`SysModuleReport\`; a component question → \`get-component-info\`). A record carries the required fields — \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. An empty array, \`{}\` or \`""\` is an INCOMPLETE record and the row stays open.
+For EACH item: run its specific on-stand query and record the ANSWER (DCM → \`SysSchema\` where \`ManagerName='DcmSchemaManager'\`; connected processes → \`ProcessInModules\` by the section's SysModule, then \`VwSysProcess\` for the name; printables → \`SysModuleReport\`; an on-save duplicate check → \`DuplicatesRule\` filtered to this entity with \`IsActive\`+\`UseAtSave\` true, AND whether the stand's deduplication service is live (\`DeduplicationWebApiUrl\` non-empty, \`ESDeduplication\`/\`BulkESDeduplication\` on) — a rule with no service means the check does not survive the migration, so record BOTH; a component question → \`get-component-info\`). A record carries the required fields — \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. An empty array, \`{}\` or \`""\` is an INCOMPLETE record and the row stays open.
 
 Three outcomes, all legitimate, and the difference matters:
 - resolved → a complete record under its id in your file, returned in \`resolved\`;

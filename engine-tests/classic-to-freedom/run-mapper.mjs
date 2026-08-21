@@ -2277,7 +2277,7 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
 // resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
 // (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
-const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } };
 // settled PLACEMENT — the app-hosting facts a `--plan` run must carry: the target package is writable, and the
 // app that will host the section is decided. This shape is the `existing-app` happy path: the app's primary
 // package IS the target package and is editable, so `create-app-section` (which takes no package parameter)
@@ -4328,17 +4328,18 @@ check("typed bindOnly: the SHARED base form IS rendered (its fields present), no
   && typedBindBase.structure.complete === true,
   () => typedBindBase.plan.split("\n").filter((l) => /Shared form|Bind-only|Amount|Typed page/.test(l)));
 
-/* ---- on-stand signals gate: DCM / connected processes / printables must be RESOLVED before the plan, not
-   deferred to build (the recurring "faithful to the classic body, check later" miss — Documents session). No
-   new tool: the agent runs the existing ESQ/odata queries and records manifest.signals; unresolved blocks. */
+/* ---- on-stand signals gate: DCM / connected processes / printables / on-save deduplication must be RESOLVED
+   before the plan, not deferred to build (the recurring "faithful to the classic body, check later" miss —
+   Documents session). No new tool: the agent runs the existing ESQ/odata queries and records manifest.signals;
+   unresolved blocks. */
 const sigBase = {
   entity: "X",
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
   planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "L", formTemplate: "F" },
 };
 const sigUnresolved = runMigration({ ...sigBase });
-check("signals gate: absent manifest.signals → all three unresolved",
-  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,printables,processes",
+check("signals gate: absent manifest.signals → all four unresolved",
+  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,deduplication,printables,processes",
   () => sigUnresolved.signalsMissing);
 check("signals gate: --plan carries the ⛔ signals-incomplete banner when unresolved",
   /PLAN INCOMPLETE — on-stand signals not resolved/.test(sigUnresolved.plan));
@@ -4346,6 +4347,7 @@ const sigResolved = runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: true, cases: ["CaseA"] },
   processes: { resolved: true, present: false },
   printables: { resolved: true, present: true, items: ["Template"] },
+  deduplication: { resolved: true, present: false },
 } });
 check("signals gate: all resolved → signalsMissing empty + resolved summary (present/none) rendered",
   (sigResolved.signalsMissing || []).length === 0
@@ -4354,11 +4356,202 @@ check("signals gate: all resolved → signalsMissing empty + resolved summary (p
   && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template"),
   () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables/i.test(l)));
 check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
-  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
+  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
 const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
+
+/* ---- ENG-94274: the on-save DUPLICATE CHECK signal. The behaviour is an `asyncValidate` override on the seed
+   chain (CrtDeduplication.BaseEntityPage), so it is `fromTemplate`, never a mappable member, and a migration used
+   to drop it in total silence. MEASURED on a stand newer than 8.3.4: Classic posts FindDuplicatesOnSave and shows
+   its duplicates screen; the Freedom form page issues only InsertQuery and saves the duplicate without a word.
+   Three states must behave differently, and the third one is the whole point of the signal. */
+const dedupSig = (dedup) => runMigration({ ...sigBase, signals: {
+  dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+  printables: { resolved: true, present: false }, ...(dedup ? { deduplication: dedup } : {}),
+} });
+const dedupRows = (r) => (r.changeSet?.needsDecision || []).filter((d) => d.kind === "dedup-on-save");
+const dedupUnresolved = dedupSig(null);
+check("ENG-94274 dedup signal: UNRESOLVED blocks the plan — the whole point is that 'never checked' cannot pass",
+  (dedupUnresolved.signalsMissing || []).includes("deduplication")
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dedupUnresolved.plan),
+  () => dedupUnresolved.signalsMissing);
+check("ENG-94274 dedup signal: the gate text tells the operator BOTH queries — the rule (DuplicatesRule/UseAtSave) and the service (DeduplicationWebApiUrl)",
+  /DuplicatesRule/.test(dedupUnresolved.plan) && /UseAtSave/.test(dedupUnresolved.plan)
+  && /DeduplicationWebApiUrl/.test(dedupUnresolved.plan) && /ESDeduplication/.test(dedupUnresolved.plan));
+const dedupNone = dedupSig({ resolved: true, present: false });
+check("ENG-94274 dedup signal: resolved + present:false emits NO row — no rule means nothing to lose, and a verified zero must not manufacture a worklist item",
+  (dedupNone.signalsMissing || []).length === 0 && dedupRows(dedupNone).length === 0,
+  () => dedupRows(dedupNone));
+const dedupNoSvc = dedupSig({ resolved: true, present: true, names: ["Contact duplicates. Contact name"], serviceConfigured: false });
+check("ENG-94274 dedup signal: rule present + service NOT configured → a ⚠ Confirm row that names the rule and says the check STOPS after migration",
+  dedupRows(dedupNoSvc).length === 1
+  && dedupRows(dedupNoSvc)[0].reason.includes("Contact duplicates. Contact name")
+  && /STOPS HAPPENING/.test(dedupRows(dedupNoSvc)[0].reason),
+  () => dedupRows(dedupNoSvc));
+check("ENG-94274 dedup signal: that row reaches the RENDERED plan (a decision nobody reads is not a decision)",
+  /on-save duplicate check/i.test(dedupNoSvc.plan) && /deduplication service is NOT configured/.test(dedupNoSvc.plan),
+  () => dedupNoSvc.plan.split("\n").filter((l) => /duplicate/i.test(l)));
+const dedupSvc = dedupSig({ resolved: true, present: true, names: ["R1"], serviceConfigured: true });
+check("ENG-94274 dedup signal: rule present + service CONFIGURED → still a row, but worded as VERIFY, never as 'Freedom cannot do this' (the platform ships crt.ValidateDuplicatesOnSaveHandler)",
+  dedupRows(dedupSvc).length === 1
+  && /VERIFY/.test(dedupRows(dedupSvc)[0].reason)
+  && !/cannot/i.test(dedupRows(dedupSvc)[0].reason)
+  && /Potential duplicates found/.test(dedupRows(dedupSvc)[0].reason),
+  () => dedupRows(dedupSvc));
+// review finding 6 — `renderConfirmWorklist` escapes the whole `reason` with `esc`, which maps every backtick to
+// U+02CB. So an engine-authored reason must be plain prose: a backticked identifier renders as ˋlike thisˋ in the
+// plan the operator reads. This asserts the RENDERED plan (not the pre-render mapper row), so re-introducing a
+// backtick into any of the three tails fails here instead of shipping a mangled token.
+check("ENG-94274 dedup signal: the reason's identifiers survive `esc` in the RENDERED plan — engine-authored reason text carries no backticks",
+  dedupSvc.plan.includes("Potential duplicates found") && dedupNoSvc.plan.includes("DeduplicationWebApiUrl empty")
+  && ![dedupSvc, dedupNoSvc].some((r) => r.plan.split("\n").some((l) => /\[dedup-on-save\]/.test(l) && /\u02cb/.test(l))),
+  () => [dedupSvc, dedupNoSvc].flatMap((r) => r.plan.split("\n").filter((l) => /\[dedup-on-save\]/.test(l))));
+check("ENG-94274 dedup signal: the On-stand signals section states which of the two service states applies — never the generic '→ build it' (nothing here is authored)",
+  /\*\*On-save duplicate check:\*\* active/.test(dedupNoSvc.plan)
+  && !/\*\*On-save duplicate check:\*\* present.*build it/.test(dedupNoSvc.plan),
+  () => dedupNoSvc.plan.split("\n").filter((l) => /On-save duplicate check/.test(l)));
+// review finding 1 (child half) — a child edit page migrates a DIFFERENT entity, so the parent's verdict would
+// state a fact about the wrong entity; but silence is the exact silent loss this row exists to prevent. So the
+// child branch carries a child-scoped INSTRUCTION (the `processActionNote`/`printActionNote` convention), gated
+// on `resolved` ALONE: the parent's `present:false` says nothing about the child's entity.
+const dedupChildRows = (dedup) => mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [] })]), {
+  signals: { deduplication: dedup }, isChildPage: true,
+}).needsDecision.filter((d) => d.kind === "dedup-on-save");
+check("ENG-94274 dedup signal: a CHILD page gets a CHILD-SCOPED row (run DuplicatesRule for THIS child's entity), never the parent's verdict",
+  dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false }).length === 1
+  && /THIS child's entity/.test(dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false })[0].reason)
+  && !/STOPS HAPPENING/.test(dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false })[0].reason)
+  && !/R1/.test(dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false })[0].reason),
+  () => dedupChildRows({ resolved: true, present: true, names: ["R1"], serviceConfigured: false }));
+check("ENG-94274 dedup signal: the child row is gated on `resolved` alone — the parent's present:false says nothing about the child's entity, and an UNRESOLVED parent answer still emits nothing",
+  dedupChildRows({ resolved: true, present: false }).length === 1
+  && dedupChildRows({ present: true, serviceConfigured: false }).length === 0,
+  () => ({ parentNone: dedupChildRows({ resolved: true, present: false }).length, unresolved: dedupChildRows({ present: true, serviceConfigured: false }).length }));
+
+/* ---- review findings 1-3 (m-dymytrova, PR #113): the guard was unreachable through the CLI, the gate accepted a
+   half-answered key, and the typed-entity plan cross-referenced a row it never rendered. All three are asserted
+   through `runMigration` (the shipped path), not through a direct `mapToFreedom` call. */
+// finding 2 — `{resolved:true, present:true}` with NO `serviceConfigured` used to clear the gate and exit 0, while
+// the plan it produced said "cannot say whether the check survives migration". Half-answered is NOT resolved.
+const dedupHalf = dedupSig({ resolved: true, present: true, names: ["R1"] });
+check("ENG-94274 dedup gate: present:true with `serviceConfigured` UNRECORDED is INCOMPLETE — a gate that passes while the plan says the key question is unanswered defeats the field",
+  (dedupHalf.signalsMissing || []).includes("deduplication")
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dedupHalf.plan),
+  () => dedupHalf.signalsMissing);
+check("ENG-94274 dedup gate: `serviceConfigured` is required only when a rule EXISTS — the nine present:false answers stay valid (nothing to lose ⇒ no service question)",
+  (dedupSig({ resolved: true, present: false }).signalsMissing || []).length === 0
+  && (dedupSvc.signalsMissing || []).length === 0 && (dedupNoSvc.signalsMissing || []).length === 0);
+const dedupHalfCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
+  input: JSON.stringify({ ...sigBase, signals: {
+    dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false }, deduplication: { resolved: true, present: true, names: ["R1"] },
+  } }), encoding: "utf8" });
+check("ENG-94274 dedup gate CLI: the half-answered key exits 2 — the enforcement the row alone could not give (confirm rows are checked at --verify, i.e. AFTER the build)",
+  dedupHalfCli.status === 2 && /on-stand signals not resolved/i.test(dedupHalfCli.stderr || ""),
+  () => ({ status: dedupHalfCli.status, stderr: (dedupHalfCli.stderr || "").slice(0, 160) }));
+check("ENG-94274 dedup gate: the `serviceConfigured`-unrecorded wording renders when the key is deliberately deferred (the third mapper branch, previously untested)",
+  /Record whether the target stand's deduplication service is configured/.test(
+    dedupRows(dedupSig({ resolved: true, present: true, names: ["R1"], serviceConfigured: "later" }))[0]?.reason || ""),
+  () => dedupRows(dedupSig({ resolved: true, present: true, names: ["R1"], serviceConfigured: "later" })));
+// finding 4 — a hand-authored single rule written as a bare string must not abort the whole --plan run
+check("ENG-94274 dedup signal: a non-array `names` (a plausible hand-authored single-rule typo) degrades to no rule list instead of throwing",
+  dedupRows(dedupSig({ resolved: true, present: true, names: "Contact duplicates", serviceConfigured: false })).length === 1
+  && !/rule\(s\)/.test(dedupRows(dedupSig({ resolved: true, present: true, names: "Contact duplicates", serviceConfigured: false }))[0].reason));
+// finding 1 — the guard reads `opts.signals`, which a nested run rebuilt from the CHILD bundle (it has none), so
+// every typed / mini / child fold saw `{}` and the row vanished below the root. Driven through `runMigration`, and
+// asserted as the TOTAL row count across the root and every fold — the shipped path, not a direct mapper call.
+const dedupTypedBundle = (nm) => ({ seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F1",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F1"}}]};});` }] });
+const dedupTypedRun = runMigration({ ...sigBase,
+  typedPages: [{ schema: "XICPage", type: "Incoming" }, { schema: "XOCPage", type: "Outgoing" }],
+  typedPageSchemas: { XICPage: dedupTypedBundle("XICPage"), XOCPage: dedupTypedBundle("XOCPage") },
+  addRecordMiniPage: false,
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false },
+    deduplication: { resolved: true, present: true, names: ["Contact duplicates. Contact name"], serviceConfigured: false } },
+});
+const planDedupRows = (r) => (r.plan.match(/\*\*\[dedup-on-save\]\*\*/g) || []).length;
+check("ENG-94274 dedup signal: the run-level answer reaches every FOLD — a typed entity's two per-type forms each carry the row (was 0: foldSubPage threaded no signals, so the guard was unreachable through the CLI)",
+  planDedupRows(dedupTypedRun) === 2,
+  () => ({ rows: planDedupRows(dedupTypedRun), lines: dedupTypedRun.plan.split("\n").filter((l) => /dedup-on-save/.test(l)) }));
+// finding 3 — for a typed entity `renderPlan` renders the base page with `listPageOnly`, which returns before
+// `renderConfirmWorklist`; the signal line therefore may not cross-reference a ⚠ Confirm row. It must carry the
+// four decisions itself, or a typed plan states the alarm and offers no remedy anywhere in the document.
+check("ENG-94274 dedup signal: the On-stand signals line is SELF-CONTAINED — a TYPED plan carries the four decisions inline, with no dangling 'see the ⚠ Confirm row' cross-reference",
+  /\*\*On-save duplicate check:\*\* active/.test(dedupTypedRun.plan)
+  && /configure the deduplication service on the target stand/.test(dedupTypedRun.plan)
+  && /keep the Classic page for this entity/.test(dedupTypedRun.plan)
+  && /Deduplication Freedom UI enhancements/.test(dedupTypedRun.plan)
+  && !/see the ⚠ Confirm row/.test(dedupTypedRun.plan),
+  () => dedupTypedRun.plan.split("\n").filter((l) => /On-save duplicate check/.test(l)));
+const dedupMiniRun = runMigration({ ...sigBase,
+  addRecordMiniPage: { schema: "XMiniPage" },
+  miniPageSchemas: { XMiniPage: dedupTypedBundle("XMiniPage") },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false },
+    deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } },
+});
+/* ---- second-pass review (m-dymytrova, PR #113): the child row must be CLOSEABLE, `present` must be read by
+   truthiness, and the child path needs a golden through `runMigration` rather than a direct mapToFreedom call. */
+const dedupChildBundle = (own) => ({ entity: "CE", noParentTemplate: true,
+  schemas: [{ pkg: "CP", body: `define("CPage",[],function(){return{entitySchemaName:"CE",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});` }],
+  ...(own ? { signals: { deduplication: own } } : {}) });
+const dedupChildRun = (own, parent) => runMigration({ ...sigBase, noParentTemplate: true,
+  // the root body must DECLARE the detail for its edit page to be discovered and folded as a child
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{CDetail:{schemaName:"CDetail",entitySchemaName:"CE"}}};});` }],
+  detailSchemas: { CDetail: { entity: "CE", editPage: "CPage" } },
+  childPageSchemas: { CPage: dedupChildBundle(own) },
+  addRecordMiniPage: false,
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+    printables: { resolved: true, present: false }, deduplication: parent },
+});
+const childPlanRows = (r, re) => r.plan.split("\n").filter((l) => /\*\*\[dedup-on-save\]\*\*/.test(l) && re.test(l));
+const dedupChildNoOwn = dedupChildRun(null, { resolved: true, present: true, names: ["R1"], serviceConfigured: false });
+check("ENG-94274 dedup signal: through `runMigration`, a folded CHILD page with no answer of its own renders the child-scoped instruction — not the parent's verdict, and not silence",
+  childPlanRows(dedupChildNoOwn, /child entity/).length === 1
+  && /THIS child's entity/.test(childPlanRows(dedupChildNoOwn, /child entity/)[0])
+  && !/R1|STOPS HAPPENING/.test(childPlanRows(dedupChildNoOwn, /child entity/)[0])
+  && childPlanRows(dedupChildNoOwn, /rule\(s\): R1/).length === 1,   // …while the root still carries the parent's verdict
+  () => dedupChildNoOwn.plan.split("\n").filter((l) => /dedup-on-save/.test(l)));
+const dedupChildOwn = dedupChildRun({ resolved: true, present: true, names: ["ChildRule"], serviceConfigured: false },
+  { resolved: true, present: false });
+check("ENG-94274 dedup signal: a CHILD bundle's OWN `signals.deduplication` REPLACES the instruction with the real verdict — an operator who runs the query for the child's entity must have a way to close the row",
+  childPlanRows(dedupChildOwn, /ChildRule/).length === 1
+  && /STOPS HAPPENING/.test(childPlanRows(dedupChildOwn, /ChildRule/)[0])
+  && childPlanRows(dedupChildOwn, /child entity/).length === 0,
+  () => dedupChildOwn.plan.split("\n").filter((l) => /dedup-on-save/.test(l)));
+check("ENG-94274 dedup signal: a child that answered `present:false` for its OWN entity emits no row at all — a verified zero closes it, exactly as at the root",
+  childPlanRows(dedupChildRun({ resolved: true, present: false }, { resolved: true, present: false }), /dedup-on-save/).length === 0);
+check("ENG-94274 dedup gate: `present` is read by TRUTHINESS — a hand-authored `\"present\": \"yes\"` still requires `serviceConfigured` instead of slipping into the unrecorded-wording branch",
+  (dedupSig({ resolved: true, present: "yes", names: ["R1"] }).signalsMissing || []).includes("deduplication"),
+  () => dedupSig({ resolved: true, present: "yes", names: ["R1"] }).signalsMissing);
+
+// The fold now populates `signals` on BOTH sides of a sub-page — the nested run's own `changeSet.needsDecision`
+// and the `checklistOpts` the parent hands down — so the one thing worth pinning is that a page still publishes
+// exactly ONE dedup deliverable. A second source would make the operator file evidence twice per page before
+// `--verify` could go complete, and a plan-text row count cannot see that.
+const dedupUnitsRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--units"], {
+  input: JSON.stringify({ ...sigBase, noParentTemplate: true,
+    typedPages: [{ schema: "XICPage", type: "Incoming" }, { schema: "XOCPage", type: "Outgoing" }],
+    typedPageSchemas: { XICPage: dedupTypedBundle("XICPage"), XOCPage: dedupTypedBundle("XOCPage") },
+    addRecordMiniPage: { schema: "XMiniPage" }, miniPageSchemas: { XMiniPage: dedupTypedBundle("XMiniPage") },
+    signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+      printables: { resolved: true, present: false },
+      deduplication: { resolved: true, present: true, names: ["R1"], serviceConfigured: false } },
+  }), encoding: "utf8" });
+check("ENG-94274 dedup signal: every published page carries EXACTLY ONE dedup deliverable in `--units` — the fold feeds `signals` to both the sub-run and the handed-down checklistOpts, and a duplicate row would demand the same evidence twice",
+  (() => {
+    if (dedupUnitsRun.status !== 0) return false;
+    const u = JSON.parse(dedupUnitsRun.stdout);
+    const ids = u.preflight.filter((r) => r.kind === "dedup-on-save").map((r) => r.id);
+    return ids.length === u.pages.length && new Set(ids).size === ids.length
+      && u.evidenceRows.filter((r) => /confirm:dedup-on-save/.test(r.id)).length === u.pages.length;
+  })(),
+  () => ({ status: dedupUnitsRun.status, stderr: (dedupUnitsRun.stderr || "").slice(0, 200) }));
+check("ENG-94274 dedup signal: the add-record MINI page is the same entity, so it too carries the row through the fold (root + mini = 2)",
+  planDedupRows(dedupMiniRun) === 2,
+  () => ({ rows: planDedupRows(dedupMiniRun), lines: dedupMiniRun.plan.split("\n").filter((l) => /dedup-on-save/.test(l)) }));
 
 /* ---- review batch: colSpan clamp · rowSpan auto-row occupancy · multi-span collision · grandchild embedding ---- */
 // #2 colSpan clamp — a full-width classic field landing in Freedom column 2 must NOT span a phantom column 3.
@@ -5159,7 +5352,7 @@ const cmb = runMigration({
   typedPages: [{ schema: "XICPage", type: "Incoming" }],
   typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: cmbTyped }] } },
   planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsFreedomTemplate" },
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
 check("typed template: Main-scope typed row names the form template (not a generic 'per-type Freedom form')",
   /XICPage[^\n|]*\| PageWithTabsFreedomTemplate \| Rebuild \(per-type\) \|/.test(cmb.plan),
@@ -5449,7 +5642,7 @@ const ntDcm = runMigration({
   entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
   planMeta: { ...docPlanMeta, formTemplate: "FormPageTemplate" }, // a plain, non-progress-bar template
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
 check("non-typed DCM: the plan recommends PageWithTabsAndProgressBarTemplate AND flags the non-progress-bar template chosen",
   /\*\*Template — DCM case present:\*\*/.test(ntDcm.plan)
@@ -5460,7 +5653,7 @@ const ntDcmOk = runMigration({
   entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
   planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsAndProgressBarTemplate" },
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
 check("non-typed DCM: no template-mismatch ⚠ when a progress-bar template is already chosen",
   /\*\*Template — DCM case present:\*\*/.test(ntDcmOk.plan) && !/has no progress bar/.test(ntDcmOk.plan));
@@ -6353,7 +6546,7 @@ const PG_MANIFEST = {
     },
   },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
 const pgOpts = checklistOpts(PG_MANIFEST);
@@ -6696,7 +6889,7 @@ const KC_MANIFEST = {
       childPageSchemas: { XAltPage: { entity: "X", seed: KC_SEED, schemas: [{ pkg: "P", body: kcX("XAltPage") }] } } },
   },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const kcRun = runMigration(KC_MANIFEST, { baseDir: FIX });
 const kcOpts = checklistOpts(KC_MANIFEST);
@@ -6872,7 +7065,7 @@ const emptyChildManifest = {
     miniPageSchemas: { E1Mini: { entity: "E1", seed: KC_SEED, schemas: [{ pkg: "P", body: `define("E1Mini",[],function(){return{entitySchemaName:"E1",diff:[{operation:"insert",name:"MiniF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MiniF"}}]};});` }] } },
     schemas: [{ pkg: "P", body: `define("E1Page",[],function(){return{entitySchemaName:"E1",diff:[]};});` }] } },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const ecRun = runMigration(emptyChildManifest, { baseDir: FIX });
 const ecOpts = checklistOpts(emptyChildManifest);
@@ -7111,7 +7304,7 @@ const TAB_CHILD_MANIFEST = {
     TCPage: { entity: "TC", seed: PG_SEED, schemas: [{ pkg: "P", body: `define("TCPage",[],function(){return{entitySchemaName:"TC",diff:[{operation:"insert",name:"CT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:{bindTo:"Resources.Strings.CTCaption"}}},{operation:"insert",name:"CF1",parentName:"CT",propertyName:"items",values:{bindTo:"CF1"}},{operation:"insert",name:"CF2",parentName:"CT",propertyName:"items",values:{bindTo:"CF2"}}]};});` }] },
   },
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const tabChildRun = runMigration(TAB_CHILD_MANIFEST, { baseDir: FIX });
 const tabChildOpts = checklistOpts(TAB_CHILD_MANIFEST);
@@ -7151,7 +7344,7 @@ const M12_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[]
 const M12_MANIFEST = {
   entity: "X", seed: M12_SEED, targetPackage: "UsrX",
   planMeta: { formTemplate: "FormPageTemplate", sectionSchema: "XSection", listTemplate: "ListPageV3", scope: "s", environment: "e", package: "p", approach: "a", whatItDoes: "w" },
-  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",details:{V:{schemaName:"VisaDetailV2",entitySchemaName:"XVisa",filter:{detailColumn:"c",masterColumn:"Id"}}},diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"VT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"V",parentName:"VT",values:{itemType:2}}]};});` }],
 };
 const m12Run = runMigration(M12_MANIFEST, { baseDir: FIX });
@@ -7342,7 +7535,7 @@ const E1_MANIFEST = {
   addRecordMiniPage: { schema: "MMini" },
   miniPageSchemas: { MMini: { entity: "M", seed: KC_SEED, schemas: [{ pkg: "P", body: E1_MINI_BODY }] } },
   planMeta: { sectionSchema: "MSection", listTemplate: "ListPageTemplate", formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const e1Run = runMigration(E1_MANIFEST, { baseDir: FIX });
 const e1Opts = checklistOpts(E1_MANIFEST);
@@ -7419,7 +7612,7 @@ const E2_MANIFEST = {
   childPageSchemas: Object.fromEntries(Array.from({ length: E2_N }, (_, i) => [`E${i}Page`, { entity: `E${i}`, seed: KC_SEED,
     schemas: [{ pkg: "P", body: `define("E${i}Page",[],function(){return{entitySchemaName:"E${i}",diff:[{operation:"insert",name:"F${i}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F${i}"}}]};});` }] }])),
   planMeta: { formTemplate: "FormPageTemplate" },
-  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const e2Dir = fs.mkdtempSync(path.join(os.tmpdir(), `c2f_e2_${process.pid}_`));
 try {
