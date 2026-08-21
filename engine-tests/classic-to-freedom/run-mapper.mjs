@@ -7858,6 +7858,20 @@ try {
     badFileRun.changeSet.needsDecision.some((d) => d.kind === "registry-source" && /could not read it/.test(d.reason) && /reflects no stand|nothing here reflects your stand/.test(d.reason)),
     () => badFileRun.changeSet.needsDecision.filter((d) => /^registry-/.test(d.kind)));
 
+  // The PLAN VERSION covers the registry the run was planned against. Recorded as a decision reversed on
+  // inspection: hashing only the version identity would have kept approvals alive across a CDN refresh, but the
+  // registry changes which `registry-target` ⚠ items a plan carries, so an approval must not survive it.
+  const verOf = (extra) => runMigration({ entity: "X", noParentTemplate: true,
+    schemas: [{ pkg: "P", body: gmBody("", `{operation:"insert",name:"NoteLbl",parentName:"Header",propertyName:"items",values:{itemType:6}}`) }], ...extra },
+    { baseDir: FIX }).planVersion;
+  const vPlain = verOf({});
+  check("ENG-95543: the plan version is stable for one manifest, and MOVES when the registry the plan was checked against changes (platformVersion / a stand export)",
+    vPlain === verOf({}) && verOf({ platformVersion: "8.3.0" }) !== vPlain
+    && verOf({ platformVersion: "8.3.3" }) !== verOf({ platformVersion: "8.3.0" })
+    && verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) !== vPlain,
+    () => ({ plain: vPlain, pinned830: verOf({ platformVersion: "8.3.0" }), pinned833: verOf({ platformVersion: "8.3.3" }),
+      withExport: verOf({ componentRegistry: { resolvedTargetVersion: "8.3.9", components: [] } }) }));
+
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
   // names. Both halves are asserted together on purpose — emitting the binding without the options is exactly the
