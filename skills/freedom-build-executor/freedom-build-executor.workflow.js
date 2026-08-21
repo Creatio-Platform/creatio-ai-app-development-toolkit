@@ -1032,7 +1032,7 @@ function continuationBudgetBlock(budget) {
 // THE REPAIR PREAMBLE, for round 2 and later. Pure and out of `buildPrompt` for the same reason. A round with no open
 // row named still says so rather than rendering an empty list, which reads as "nothing to fix".
 function repairBlock(roundNo, shortRows, maxRounds, verifyTable) {
-  if (!(roundNo > 1)) return ''
+  if (roundNo <= 1) return ''
   const rows = shortRows || `  - (the verdict named no open row for this unit; re-read ${verifyTable})`
   return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and these rows are NOT closed — as the engine published them in the machine verdict:\n${rows}\nFix exactly those. The status text already says WHICH repair each needs: a field absent BY NAME, a component type absent, a wrong package, or a record filed but not judged. Do not rebuild what is already ✅.\n`
 }
