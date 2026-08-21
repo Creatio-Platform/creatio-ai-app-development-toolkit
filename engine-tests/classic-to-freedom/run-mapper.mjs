@@ -4446,6 +4446,85 @@ const secActHopRun = runMigration({ entity: "X",
 }, { baseDir: FIX });
 check("ENG-95254: a not-followed helper reaches the command-bar reason and is NOT described as undefined",
   (() => { const d = (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar");
+
+// Comments and string literals are PROSE, not code. A menu item or helper call written in either used to be
+// scanned as real, publishing a button that does not exist — a checklist row and an evidence id that can only
+// ever read MISSING, which is the phantom class this file already guards against on the hint fallback.
+const secActProse = (inner) => parseSchema(secActMk(
+  `getSectionActions:function(){var a=this.callParent(arguments);${inner}` +
+  `a.addItem(this.getButtonMenuItem({Click:{bindTo:"real"}}));return a;}`), "P");
+check("ENG-95254: a LINE-commented menu item is not published as an action",
+  secActProse('\n// a.addItem(this.getButtonMenuItem({Click:{bindTo:"ghostLine"}}));\n')
+    .sectionActions.map((x) => x.name).join(",") === "real",
+  () => secActProse('\n// a.addItem(this.getButtonMenuItem({Click:{bindTo:"ghostLine"}}));\n').sectionActions);
+check("ENG-95254: a BLOCK-commented menu item is not published as an action",
+  secActProse('/* a.addItem(this.getButtonMenuItem({Click:{bindTo:"ghostBlock"}})); */')
+    .sectionActions.map((x) => x.name).join(",") === "real",
+  () => secActProse('/* a.addItem(this.getButtonMenuItem({Click:{bindTo:"ghostBlock"}})); */').sectionActions);
+check("ENG-95254: a menu item written inside a STRING literal is not published as an action",
+  secActProse(`var doc='this.getButtonMenuItem({Click:{bindTo:"fake"}})';`)
+    .sectionActions.map((x) => x.name).join(",") === "real",
+  () => secActProse(`var doc='this.getButtonMenuItem({Click:{bindTo:"fake"}})';`).sectionActions);
+check("ENG-95254: a commented-out HELPER call is not reported as a completeness gap",
+  (() => { const r = secActProse("/* this.addSync(a); */");
+    return r.sectionActionUnresolved.length === 0 && r.sectionActionNotFollowed.length === 0; })(),
+  () => secActProse("/* this.addSync(a); */"));
+check("ENG-95254: a navigate hint mentioned in a COMMENT is not published as an action",
+  secActProse("// openShowOnMap is legacy\n").sectionActions.map((x) => x.name).join(",") === "real",
+  () => secActProse("// openShowOnMap is legacy\n").sectionActions);
+// The counterpart: field VALUES still come from the real text, so a brace or a quote inside a caption is intact.
+check("ENG-95254: a brace inside a caption string does not break the item, and the caption is read verbatim",
+  (() => { const r = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `a.addItem(this.getButtonMenuItem({Caption:"a } brace",Click:{bindTo:"doIt"}}));return a;}`), "P").sectionActions;
+    return r.length === 1 && r[0].name === "doIt" && r[0].caption === "a } brace"; })(),
+  () => parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `a.addItem(this.getButtonMenuItem({Caption:"a } brace",Click:{bindTo:"doIt"}}));return a;}`), "P").sectionActions);
+check("ENG-95254: an UNBALANCED brace degrades — the layer reports a parse error and nothing throws",
+  (() => { const r = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
+    + `a.addItem(this.getButtonMenuItem({Click:{bindTo:"doIt"});return a;}`), "P");
+    return !!r.error && Array.isArray(r.sectionActions); })());
+// The fold must not blank a field only the base layer declared.
+check("ENG-95254: `mergeSectionActions` merges FIELD BY FIELD — a partial top-layer override keeps the base layer's condition and icon",
+  (() => { const base = { name: "setOwner", caption: "BaseCaption", condition: "isSingleSelected", icon: "IconA", package: "Base", order: 0, group: 0 };
+    const top = { name: "setOwner", caption: "TopCaption", condition: null, icon: null, package: "Top", order: 0, group: 0 };
+    const m = mergeSectionActions([base, top])[0];
+    return m.caption === "TopCaption" && m.condition === "isSingleSelected" && m.icon === "IconA" && m.package === "Top"; })(),
+  () => mergeSectionActions([{ name: "setOwner", condition: "isSingleSelected", icon: "IconA", package: "Base" },
+    { name: "setOwner", caption: "TopCaption", condition: null, icon: null, package: "Top" }]));
+check("ENG-95254: `mergeSectionActions` still lets a FULL top-layer override replace the base layer's values",
+  (() => { const m = mergeSectionActions([
+    { name: "setOwner", condition: "isSingleSelected", icon: "IconA", package: "Base", order: 0, group: 0 },
+    { name: "setOwner", condition: "isAnySelected", icon: "IconB", package: "Top", order: 0, group: 0 }])[0];
+    return m.condition === "isAnySelected" && m.icon === "IconB"; })());
+
+// The comment/string-blanked view is shared by every text-scanned signal, not just section actions. Each of these
+// used to read a COMMENTED-OUT declaration as real; `addRecordMiniPage` was the worst — it preferred the
+// commented-out name over the real one, so the plan named a mini page the section does not open.
+const proseMk = (m) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{${m}},diff:[]};});`;
+check("ENG-95254: a commented-out QUICK FILTER is not published, and the real one keeps its column and type",
+  (() => { const qf = parseSchema(proseMk(`initFixedFiltersConfig:function(){this.set("F",{filters:[`
+    + `/* {name:"GhostFilter",columnName:"X",dataValueType:Terrasoft.DataValueType.TEXT}, */`
+    + `{name:"RealFilter",columnName:"Y",dataValueType:Terrasoft.DataValueType.TEXT}]});}`), "P").quickFilters;
+    return qf.length === 1 && qf[0].name === "RealFilter" && qf[0].column === "Y" && qf[0].type === "TEXT"; })(),
+  () => parseSchema(proseMk(`initFixedFiltersConfig:function(){this.set("F",{filters:[`
+    + `/* {name:"GhostFilter",columnName:"X",dataValueType:Terrasoft.DataValueType.TEXT}, */`
+    + `{name:"RealFilter",columnName:"Y",dataValueType:Terrasoft.DataValueType.TEXT}]});}`), "P").quickFilters);
+check("ENG-95254: a commented-out LIST COLUMN is not published",
+  parseSchema(proseMk(`getGridDataColumns:function(){return {/* Ghost:{path:"GhostCol"}, */Real:{path:"RealCol"}};}`), "P")
+    .listColumns.join(",") === "RealCol",
+  () => parseSchema(proseMk(`getGridDataColumns:function(){return {/* Ghost:{path:"GhostCol"}, */Real:{path:"RealCol"}};}`), "P").listColumns);
+check("ENG-95254: `getAddRecordMiniPage` returns the REAL mini page, not a commented-out one above it",
+  parseSchema(proseMk(`getAddRecordMiniPage:function(){/* return "GhostMiniPage"; */ return "RealMiniPage";}`), "P")
+    .addRecordMiniPage === "RealMiniPage",
+  () => parseSchema(proseMk(`getAddRecordMiniPage:function(){/* return "GhostMiniPage"; */ return "RealMiniPage";}`), "P").addRecordMiniPage);
+check("ENG-95254: a commented-out PROCESS launch is not named among the section's processes",
+  parseSchema(proseMk(`onX:function(){/* this.executeProcess("GhostProcess"); */ this.executeProcess("RealProcess");}`), "P")
+    .processLaunch?.names.join(",") === "RealProcess",
+  () => parseSchema(proseMk(`onX:function(){/* this.executeProcess("GhostProcess"); */ this.executeProcess("RealProcess");}`), "P").processLaunch);
+check("ENG-95254: a commented-out FEATURE toggle is not surfaced for a decision",
+  parseSchema(proseMk(`onX:function(){/* this.getIsFeatureEnabled("GhostFeature"); */ this.getIsFeatureEnabled("RealFeature");}`), "P")
+    .features.join(",") === "RealFeature",
+  () => parseSchema(proseMk(`onX:function(){/* this.getIsFeatureEnabled("GhostFeature"); */ this.getIsFeatureEnabled("RealFeature");}`), "P").features);
     return !!d && /addSecond/.test(d.reason) && /saw but did not read/.test(d.reason)
       && !/`addSecond` .{0,40}no layer in this chain defines/.test(d.reason); })(),
   () => (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));

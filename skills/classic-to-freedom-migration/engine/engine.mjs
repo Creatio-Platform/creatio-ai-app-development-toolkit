@@ -64,6 +64,13 @@ function getAcornParse() {
 function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
   const methodKeys = safeKeys(s.methods); // reused for the name list AND the empty-body (stub) subset below
   const secActions = sectionActionsOf(src, pkg); // menu items + resolved/unresolved helpers
+  // Two views of `src`, computed once. `code` blanks comments AND string contents — for scans that look for
+  // structure. `codeStr` blanks comments only — for scans that capture a quoted value. A commented-out
+  // declaration used to be read as real by every text-scanned signal below: a ghost quick filter, a ghost list
+  // column, a ghost process, and — worst — `getAddRecordMiniPage` returning the COMMENTED-OUT name in preference
+  // to the real one, so the plan named a mini page the section does not open.
+  const code = codeOnly(src);
+  const codeStr = codeOnly(src, true);
   return {
     pkg,
     error: parseError,
@@ -91,7 +98,7 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     modules: normalizeModules(s.modules),
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
-    features: [...new Set([...src.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
+    features: [...new Set([...codeStr.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
     // custom card-ACTION hints — the ACTIONS menu is built imperatively in getActions, so static parsing
     // can't fully reconstruct it. Scan ONLY the getActions body, not the whole file: `"Tag"` is a common
     // diff-item/button/config property elsewhere, and scanning globally over-captured non-action strings
@@ -113,13 +120,13 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // Detected by the classic process-launch APIs. The process NAMES (when quoted) are captured so the
     // mapper can name them; a run-process action maps to a Freedom "Run process" card action / handler.
     processLaunch: (() => {
-      if (!/ProcessModuleUtilities|executeProcess|RunProcessRequest|\brunProcess\b|showProcessPage|openProcessByRecord|ProcessSchemaManager/.test(src)) return null;
+      if (!/ProcessModuleUtilities|executeProcess|RunProcessRequest|\brunProcess\b|showProcessPage|openProcessByRecord|ProcessSchemaManager/.test(code)) return null;
       // The two `[\w.]*` runs around the literal alternation are BOUNDED ({0,128}) so this stays linear on a
       // hostile body: the previous unbounded form was polynomial (~O(n²)) ReDoS on `src` — a long unterminated
       // quoted run with many "Process" substrings drove per-schema parse time to seconds/tens-of-seconds (~32 s
       // at 700 KB, a size real Classic bodies reach), defeating the "must not hang on hostile input" guarantee
       // this file's MAX_AST_DEPTH / rowSpan clamps already defend. Real schema names are far under 128 chars.
-      const names = [...new Set([...src.matchAll(/["']([A-Za-z][\w.]{0,128}(?:Process|SecurityCheck|Recruiting)[\w.]{0,128})["']/g)].map(mt => mt[1]))];
+      const names = [...new Set([...codeStr.matchAll(/["']([A-Za-z][\w.]{0,128}(?:Process|SecurityCheck|Recruiting)[\w.]{0,128})["']/g)].map(mt => mt[1]))];
       return { names };
     })(),
     // ---- SECTION-schema signals (meaningful for *Section schemas; empty/null for pages) ----
@@ -127,14 +134,14 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // vs opening the full edit page. `getAddRecordMiniPage()` returning a quoted schema name = that mini
     // page; returning empty/null = none; a bare `useAddRecordMiniPage: true` = uses one (name unknown).
     addRecordMiniPage: (() => {
-      const body = extractFnBody(src, "getAddRecordMiniPage");
+      const body = extractFnBody(codeStr, "getAddRecordMiniPage");
       if (body) {
         const m = /return\s+["']([A-Za-z]\w+)["']/.exec(body);
         if (m) return m[1];
         if (/return\s+(?:null|""|'')/.test(body)) return null;
         return true;
       }
-      return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
+      return /useAddRecordMiniPage\s*[:=]\s*true/.test(code) ? true : null;
     })(),
     // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One entry
     // per menu item with its metadata: a name alone cannot build a Freedom command-bar button, and an item ported
@@ -151,7 +158,7 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
     // it as data-driven (#2).
     listColumns: (() => {
-      const body = extractFnBody(src, "getGridDataColumns") || extractFnBody(src, "initColumnsConfig") || "";
+      const body = extractFnBody(codeStr, "getGridDataColumns") || extractFnBody(codeStr, "initColumnsConfig") || "";
       if (!body) return [];
       return [...new Set([...body.matchAll(/(?:"?(?:path|bindTo)"?)\s*:\s*["']([A-Za-z][\w.]*)["']/g)].map(mt => mt[1]))];
     })(),
@@ -161,15 +168,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // controls, so they MUST reach the plan — they were being dropped entirely (the whole registry filter
     // bar vanished). A dynamic/column-less filter still surfaces by name (column null).
     quickFilters: (() => {
-      const body = extractFnBody(src, "initFixedFiltersConfig") || extractFnBody(src, "getFixedFiltersConfig");
+      const body = extractFnBody(code, "initFixedFiltersConfig") || extractFnBody(code, "getFixedFiltersConfig");
       if (!body) return [];
+      // Entry BOUNDARIES come from the code view (so a commented-out entry is not an entry); the entry TEXT comes
+      // from the original, because `name`/`columnName` are quoted values. Identical offsets make the slices align;
+      // if they ever diverge, fall back to the blanked body rather than slice at the wrong place.
+      const rawBody = extractFnBody(src, "initFixedFiltersConfig") || extractFnBody(src, "getFixedFiltersConfig");
       // Extract each filter object as a UNIT (brace-matched), then read name/columnName/dataValueType
       // INDEPENDENTLY within it. The old single regex demanded `name` THEN `columnName` in order within 400
       // chars, which (a) dropped a column-less filter and stole its `name` into the next entry's gap, and (b)
       // failed on `{ columnName, name }` order. Per-entry parsing makes it order-independent and yields
       // column:null for a column-less filter (the documented contract) instead of borrowing a neighbour's name.
       const out = [];
-      for (const obj of fixedFilterObjects(body)) {
+      for (const obj of fixedFilterObjects(body, rawBody.length === body.length ? rawBody : body)) {
         const name = /name\s*:\s*["']([^"']+)["']/.exec(obj);
         if (!name) continue;
         const col = /columnName\s*:\s*["']([^"']+)["']/.exec(obj);
@@ -874,7 +885,7 @@ function skipComment(src, j) {
 // fixed-filters method body). Entry boundaries are tracked by BRACE depth (so a nested `caption:{…}` /
 // `startDate:{}` doesn't split an entry) and the array end by BRACKET depth; strings are skipped so a brace
 // inside a literal is never counted. Lets quickFilters read each filter's fields independently (order-safe).
-function fixedFilterObjects(body) {
+function fixedFilterObjects(body, raw = body) {
   const m = /filters\s*:\s*\[/.exec(body);
   if (!m) return [];
   const objs = [];
@@ -883,7 +894,7 @@ function fixedFilterObjects(body) {
   while (i < body.length && depth.bracket > 0) {
     const c = body[i];
     if (c === '"' || c === "'" || c === "`") { i = skipStringLiteral(body, i); continue; }
-    trackFilterDepth(c, i, depth, body, objs);
+    trackFilterDepth(c, i, depth, raw, objs);
     i++;
   }
   return objs;
@@ -911,9 +922,41 @@ const ITEM_ICON = [
   /"?ImageConfig"?\s*:\s*\$?Resources\.Images\.(\w+)/,
   /"?ImageConfig"?\s*:\s*["']([^"']+)["']/,
 ];
+// A view of `body` with comment bodies and string CONTENTS blanked to spaces, offsets preserved 1:1. Every scan
+// that looks for STRUCTURE — a menu-item anchor, a helper call, a navigate hint — runs on this view, because a
+// regex over raw text cannot tell code from prose: a commented-out or string-quoted `getButtonMenuItem({…})`
+// matched and was published as a REAL action, giving a non-existent button a checklist row and an evidence id
+// that can only ever read MISSING. Field READS still use the original text, because a caption's value lives
+// inside the quotes this view blanks. `keepStrings` leaves string CONTENTS intact for the scans whose captured
+// value IS a quoted literal (a column path, a mini-page name, a process or feature name); those still get
+// comments blanked, which is the case that produced wrong answers. A declaration quoted inside another
+// string stays a known limit of the text route rather than something this view can resolve.
+function codeOnly(body, keepStrings = false) {
+  const out = body.split("");
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i], c2 = body[i + 1];
+    if (c === "/" && (c2 === "/" || c2 === "*")) {
+      const end = skipComment(body, i);
+      const stop = end == null ? body.length : end;
+      for (let j = i; j < stop; j++) out[j] = " ";
+      i = stop;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const end = skipStringLiteral(body, i);
+      if (!keepStrings) for (let j = i + 1; j < Math.min(end - 1, body.length); j++) out[j] = " ";
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
 // The locals a section builds its menu in: the one assigned from `callParent`, plus any local used with `.addItem(`
 // or handed back by `return`. Several are possible, and helper matching runs over all of them.
-function menuCollectionNames(body) {
+function menuCollectionNames(raw) {
+  const body = codeOnly(raw);
   const names = new Set();
   const fromParent = /(?:var|let|const)\s+(\w+)\s*=\s*this\.callParent\s*\(/.exec(body);
   if (fromParent) names.add(fromParent[1]);
@@ -927,10 +970,11 @@ function menuCollectionNames(body) {
 // this a child's `Click`/`Caption` inside `Items:[…]` is attributed to the parent, and whichever appears first in
 // the source wins. Equal-length whitespace keeps offsets valid while the scan continues over the original.
 function maskNestedItems(text) {
+  const code = codeOnly(text);
   const re = menuItemRe();
   let out = text;
   let m;
-  while ((m = re.exec(text))) {
+  while ((m = re.exec(code))) {
     const open = m.index + m[0].length - 1;
     const end = Math.min(open + 1 + sliceBracedBody(text, open).length + 1, text.length);
     out = out.slice(0, m.index) + " ".repeat(end - m.index) + out.slice(end);
@@ -943,14 +987,15 @@ function maskNestedItems(text) {
 // only the inner one matches, so an item is never counted twice. A nested item is a submenu child, emitted right
 // after its parent. `state.truncated` records that the depth cap stopped the walk with items still below.
 function menuItemObjects(body, depth, state) {
+  const code = codeOnly(body);
   if (depth >= MAX_MENU_NEST) {
-    if (menuItemRe().test(body)) state.truncated = true;
+    if (menuItemRe().test(code)) state.truncated = true;
     return [];
   }
   const out = [];
   const re = menuItemRe();
   let m;
-  while ((m = re.exec(body))) {
+  while ((m = re.exec(code))) {
     const open = m.index + m[0].length - 1;
     const inner = sliceBracedBody(body, open);
     out.push({ text: maskNestedItems(inner), depth }, ...menuItemObjects(inner, depth + 1, state));
@@ -983,7 +1028,8 @@ function readMenuItem(text) {
 // Helpers that contribute items: one handed a collection (`this.foo(actionMenuItems)`), one whose returned item is
 // added (`actionMenuItems.addItem(this.foo())`). Only these two shapes — matching every `this.x(` would report
 // `this.get`/`this.set` as menu helpers.
-function menuHelperNames(body, colls) {
+function menuHelperNames(raw, colls) {
+  const body = codeOnly(raw);
   const names = [];
   for (const coll of colls) {
     const handed = new RegExp(String.raw`this\.(\w+)\s*\(\s*` + coll + String.raw`\b`, "g");
@@ -1005,7 +1051,8 @@ function helperParamName(src, name) {
 // too — a braceless `if`/`else` guarding the call — and neither can precede a value-position `this.x(` in
 // valid JS. A `case "x": this.addOne(c);` carrier stays missed: `:` cannot join the list without readmitting
 // every `Enabled:`/`Visible:` data read.
-function delegateCallees(body) {
+function delegateCallees(raw) {
+  const body = codeOnly(raw);
   const out = new Set();
   for (const [, name] of body.matchAll(/(?:^|[;{})]|\breturn|\belse)\s*this\.(\w+)\s*\(/g)) {
     if (!NON_MENU_METHODS.has(name)) out.add(name);
@@ -1055,7 +1102,7 @@ function scanMenuHelpers(src, body, raw, state) {
 function appendHintActions(items, body, pkg) {
   const seen = new Set();
   for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
-  for (const [, hint] of body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)) {
+  for (const [, hint] of codeOnly(body).matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)) {
     if (hint === "callParent" || seen.has(hint)) continue;
     seen.add(hint);
     items.push({ name: hint, caption: null, condition: null, icon: null, parent: null,

@@ -1271,7 +1271,14 @@ export function mergeSectionActions(fromLayers = []) {
     const name = typeof a?.name === "string" ? a.name.trim() : "";
     if (!name) continue;
     const prev = byName.get(name);
-    byName.set(name, { ...a, name, order: prev ? prev.order : byName.size });
+    // Merge FIELD BY FIELD, not by replacing the object. A top layer that re-declares an item to restyle its
+    // caption need not repeat every field, and `readMenuItem` emits every key with `null` when absent — so a
+    // whole-object override (and a plain `{ ...prev, ...a }` spread, which is the same thing here) would blank a
+    // `condition` only the base layer declared, shipping a selection-gated button as always-enabled. That is the
+    // defect this ticket exists to fix, so it must not be reintroduced by the fold.
+    byName.set(name, prev
+      ? { ...prev, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)), name, order: prev.order }
+      : { ...a, name, order: byName.size });
   }
   const merged = [...byName.values()].sort((x, y) => x.order - y.order);
   const groups = new Map();

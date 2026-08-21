@@ -2346,12 +2346,11 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
   const columns = (section.listColumns || []).map((c) => listColumnSpec(c, entityColumns));
   const takenFilterNames = new Set();
   const filters = (section.quickFilters || []).map((qf, i) => listFilterSpec(qf, i, entityColumns, takenFilterNames));
-  // Actions arrive from the chain fold with their metadata; `source` names the classic surface they came from.
-  // A bare string still resolves to a name-only action, so a section object without metadata degrades rather
-  // than publishing `name: [object Object]`.
-  const actions = (section.sectionActions || []).map((a) => (typeof a === "string"
-    ? { name: a, source: "getSectionActions" }
-    : { ...a, source: "getSectionActions" }));
+  // Actions arrive from the chain fold carrying their metadata; `source` names the classic surface they came from.
+  // No string tolerance here on purpose: `mergeSectionActions` drops a nameless entry, so a bare string cannot
+  // reach this function through the only caller that builds `section` — a fallback for it would be unreachable
+  // code that no test could exercise through the pipeline.
+  const actions = (section.sectionActions || []).map((a) => ({ ...a, source: "getSectionActions" }));
   const rowActions = (section.rowActions || []).map(listRowActionSpec);
   return {
     entity: boundEntity,
