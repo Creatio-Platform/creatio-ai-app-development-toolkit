@@ -82,7 +82,7 @@ check("record: an ERROR entry keeps name+message and NOT the stack — a stack d
   () => { const e = record(workItem(okItem), OUTCOME.ERROR, new TypeError("529 overloaded"));
     return e.error.name === "TypeError" && e.error.message === "529 overloaded" && !("stack" in e.error); });
 check("errorShape: a null/undefined error still yields a usable message rather than `undefined`",
-  () => errorShape(null).message === "rejected with no reason given" && !/undefined/.test(errorShape(new Error()).message));
+  () => errorShape(null).message === "rejected with no reason given" && !/undefined/.test(errorShape(new Error("no message reaches the shape")).message));
 check("reviveError: an ERROR entry round-trips back into a real Error, so the core's own `catch` sees the cause",
   () => { const r = reviveError(errorShape(new RangeError("nope"))); return r instanceof Error && r.name === "RangeError" && r.message === "nope"; });
 check("record: an unknown outcome throws — there are exactly three states and a fourth is an orchestration bug",
@@ -188,7 +188,11 @@ function* echoCore(seen) {
   const seen = [];
   const run = newRun({ workflow: "echo", host: fullHost });
   let caught = null;
-  await drive({ core: echoCore(seen), run, host: fullHost, execute: async (i) => { if (i.id === "s2") throw new Error("adapter blew up"); return { outcome: OUTCOME.VALUE, value: i.id }; } })
+  const throwOnS2 = async (i) => {
+    if (i.id === "s2") { throw new Error("adapter blew up"); }
+    return { outcome: OUTCOME.VALUE, value: i.id };
+  };
+  await drive({ core: echoCore(seen), run, host: fullHost, execute: throwOnS2 })
     .catch((e) => { caught = e; });
   check("driver: an adapter that THROWS is normalised to an ERROR entry, not a crashed run — the run survives a failure the core is written to handle",
     !caught && seen[1][1] === "Error: adapter blew up", () => JSON.stringify({ caught: caught?.message, seen }));
@@ -424,7 +428,7 @@ function driveRetry(outcomes, onFailure) {
     if (res.done) return { outcome: res.value, attempts };
     attempts.push(res.value.items[0].id);
     const next = outcomes[attempts.length - 1];
-    send = next && next.throw ? { type: "throw", value: next.throw } : { type: "next", value: [next ? next.value : null] };
+    send = next?.throw ? { type: "throw", value: next.throw } : { type: "next", value: [next ? next.value : null] };
   }
 }
 {
@@ -588,6 +592,23 @@ console.log("\n===== cross-host parity =====");
    7. THE GENERATED ARTIFACT
    --------------------------------------------------------------------------- */
 console.log("\n===== the generated Claude workflow =====");
+// Does this line REFERENCE the injected `args` global (as opposed to mentioning it in prose, or carrying a
+// `.args` property or an `args:` key)? Written as a bounded scan rather than one regex with `^`/`$` alternations,
+// which backtracks super-linearly on a long line (Sonar S8786).
+const mentionsArgs = (line) => {
+  const code = line.replace(/\/\/.*$/, "");
+  let i = code.indexOf("args");
+  while (i >= 0) {
+    const before = i === 0 ? "" : code[i - 1];
+    const after = code[i + 4] ?? "";
+    const boundedBefore = before === "" || !/[.\w'`]/.test(before);
+    const boundedAfter = after === "" || !/[\w:]/.test(after);
+    if (boundedBefore && boundedAfter) return true;
+    i = code.indexOf("args", i + 1);
+  }
+  return false;
+};
+
 const GENERATED = path.join(ROOT, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
 const genSrc = readFileSync(GENERATED, "utf8");
 {
@@ -621,9 +642,9 @@ check("generated: it says it is generated and names the command that rebuilds it
   check("generated: the inlined block LOADS AS A STANDALONE MODULE — it closes over no injected global, which is what makes the same code runnable on Codex",
     !threw && typeof mod?.run === "function" && typeof mod?.packBatches === "function", () => `${threw?.name}: ${threw?.message}`);
   check("generated: `args` — the one thing that can only be a global — appears ONLY in the tail below the sentinels",
-    !genSrc.slice(from, to).split("\n").some((l) => /(^|[^.\w'`])args([^\w:]|$)/.test(l.replace(/\/\/.*$/, "")))
+    !genSrc.slice(from, to).split("\n").some(mentionsArgs)
       && /normalizeInput\(args\)/.test(genSrc.slice(to)),
-    () => genSrc.slice(from, to).split("\n").filter((l) => /(^|[^.\w'`])args([^\w:]|$)/.test(l.replace(/\/\/.*$/, ""))).slice(0, 3).join(" | "));
+    () => genSrc.slice(from, to).split("\n").filter(mentionsArgs).slice(0, 3).join(" | "));
 }
 
 // The real thing: EVALUATE the shipped file the way the host does, and confirm it

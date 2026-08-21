@@ -137,6 +137,9 @@ function behaviourScenarios() {
   const CRIT = { uncovered: [], conflicts: [], settledElsewhere: [], notes: "" };
   const MERGED = { reportPath: "out/customizations.md", indexPath: "out/behaviour-index.json", cardCount: 4, acCount: 6, droppedDuplicates: [] };
   const byPhase = (map) => () => ({ phase }) => (phase in map ? map[phase] : null);
+  // A Critique that answers with something that is NOT a critique: schema-valid to the host, unusable to the core.
+  // A lookup rather than a ternary chain, so the shape of the answer is data.
+  const UNUSABLE_CRITIQUE = { Context: CTX, Describe: FULL, Critique: 7 };
   return [
     { name: "happy path — one describe agent, complete", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: CRIT, Merge: MERGED }) },
     { name: "declared zero rows — exits before any agent", args: { ...ARGS, totals: { stubs: 0, members: 0 } }, answer: byPhase({}) },
@@ -154,7 +157,7 @@ function behaviourScenarios() {
       } },
     },
     { name: "dead Critique, retried once — critiqueRan false", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: null, Merge: MERGED }) },
-    { name: "unusable Critique return — treated as dead", args: ARGS, answer: () => ({ phase }) => (phase === "Context" ? CTX : phase === "Describe" ? FULL : phase === "Critique" ? 7 : MERGED) },
+    { name: "unusable Critique return — treated as dead", args: ARGS, answer: () => ({ phase }) => UNUSABLE_CRITIQUE[phase] ?? MERGED },
     { name: "dead Merge — coverage stands, run not complete", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: CRIT, Merge: null }) },
     {
       name: "fan-out — a wide surface packs into several describe agents",
@@ -339,5 +342,6 @@ function firstJsonDiff(a, b, at = "result") {
   return `${at}: key sets differ`;
 }
 
-console.log(`\nPARITY GOLDEN: ${pass} passed, ${fail} failed${warn ? `, ${warn} log-only warning(s)` : ""}`);
+const warnNote = warn ? `, ${warn} log-only warning(s)` : "";
+console.log(`\nPARITY GOLDEN: ${pass} passed, ${fail} failed${warnNote}`);
 if (fail) process.exit(1);

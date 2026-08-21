@@ -45,7 +45,8 @@ const WORKFLOWS = {
 }
 
 function usage(msg) {
-  const text = `${msg ? `${msg}\n\n` : ''}migration-workflow — run a Creatio migration workflow on any host
+  const head = msg ? `${msg}\n\n` : ''
+  const text = `${head}migration-workflow — run a Creatio migration workflow on any host
 
   start   <run.json> --workflow <name> --input <input.json> [host options]
   next    <run.json> [--out <dir>]
@@ -203,7 +204,7 @@ async function cmdSubmit(argv) {
 // reads as a scope that described nothing), not to reimplement a JSON-schema
 // validator in a file that must stay dependency-free.
 function missingRequired(schema, value) {
-  if (!schema || schema.type !== 'object' || !Array.isArray(schema.required)) return []
+  if (schema?.type !== 'object' || !Array.isArray(schema.required)) return []
   if (!value || typeof value !== 'object' || Array.isArray(value)) return schema.required
   return schema.required.filter((k) => value[k] === undefined)
 }

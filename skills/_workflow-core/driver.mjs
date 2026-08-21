@@ -111,7 +111,7 @@ async function loop({ core, run, host, io, requires, onPending, onDone }) {
 }
 
 function requireWorkStep(value) {
-  if (!value || value.kind !== 'work') throw new Error(`the core yielded something that is not a work step: ${JSON.stringify(value)?.slice(0, 200)}`)
+  if (value?.kind !== 'work') throw new Error(`the core yielded something that is not a work step: ${JSON.stringify(value)?.slice(0, 200)}`)
   return value
 }
 
@@ -181,7 +181,7 @@ async function executeStep(step, width, execute, runBatch) {
 async function safeExecute(item, execute) {
   try {
     const r = await execute(item)
-    if (!r || !r.outcome) throw new Error(`the host adapter returned no outcome for work item ${item.id}`)
+    if (!r?.outcome) throw new Error(`the host adapter returned no outcome for work item ${item.id}`)
     if (r.outcome === OUTCOME.VALUE) return record(item, OUTCOME.VALUE, r.value)
     if (r.outcome === OUTCOME.DEATH) return record(item, OUTCOME.DEATH)
     return record(item, OUTCOME.ERROR, r.error)

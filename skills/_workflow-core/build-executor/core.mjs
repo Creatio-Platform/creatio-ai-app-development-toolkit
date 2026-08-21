@@ -42,7 +42,7 @@ import {
   PREFLIGHT_SCHEMA, RECONCILE_SCHEMA, REFS_SCHEMA, VERIFIER_SCHEMA,
 } from './schemas.mjs'
 
-export { normalizeInput, resolveEngineCli, resolveSkillsRoot }
+export { normalizeInput, resolveEngineCli, resolveSkillsRoot } from './context.mjs'
 
 // The CLI validates an input before it writes a run file, and it calls `assertInput(input)` with ONE argument for
 // every workflow. This run's required set includes the ENGINE, which is RESOLVED rather than passed — so the
@@ -64,6 +64,37 @@ export const WORKFLOW = 'creatio-freedom-build-executor'
 export const WORKFLOW_REQUIRES = ['subAgents', 'structuredOutput', 'independentRoles']
 
 const noop = () => {}
+
+// The answered-already line under a Preflight item, or '' when the question is still open. At module scope because
+// it closes over nothing from a run — the operator's answer is on the item itself.
+function preflightAnswerLine(p) {
+  if (!p.resolution?.answer) return ''
+  const who = resolutionAttribution(p.resolution)
+  const by = who ? ` (${who})` : ''
+  return `\n  **✔ THE OPERATOR ALREADY ANSWERED THIS${by}:** ${p.resolution.answer}`
+}
+
+// ONE WORK ITEM, DISPATCHED. Everything the old `agent(prompt, opts)` call carried, as protocol data: the phase,
+// the role the item must be performed under, the schema its answer is validated against, the access level it
+// needs against the stand, and a STABLE id (the journal replays by id, so nothing in one may vary between two
+// runs of the same input).
+function* dispatch(id, prompt, o) {
+  const [v] = yield step({
+    items: [{
+      id,
+      phase: o.phase,
+      role: o.role || 'general-purpose',
+      prompt,
+      responseSchema: o.schema || null,
+      access: o.access || ACCESS.STAND_READ_ONLY,
+      label: o.label,
+      inputFiles: o.inputFiles || [],
+    }],
+    requires: o.requires || BASE_REQUIRES,
+    note: o.note,
+  })
+  return v
+}
 
 // The default step requirements, and the one set that differs.
 const BASE_REQUIRES = ['subAgents', 'structuredOutput']
@@ -101,27 +132,6 @@ export function* run(rawInput, io = {}, opts = {}) {
   const paths = makePaths(ctx, () => state?.unitKeys)
   const { specFile, worklogFile, queueSliceFile, builtSliceFile, cliSpec } = paths
 
-  // ONE WORK ITEM, DISPATCHED. Everything the old `agent(prompt, opts)` call carried, as protocol data: the phase,
-  // the role the item must be performed under, the schema its answer is validated against, the access level it
-  // needs against the stand, and a STABLE id (the journal replays by id, so nothing in one may vary between two
-  // runs of the same input).
-  function* dispatch(id, prompt, o) {
-    const [v] = yield step({
-      items: [{
-        id,
-        phase: o.phase,
-        role: o.role || 'general-purpose',
-        prompt,
-        responseSchema: o.schema || null,
-        access: o.access || ACCESS.STAND_READ_ONLY,
-        label: o.label,
-        inputFiles: o.inputFiles || [],
-      }],
-      requires: o.requires || BASE_REQUIRES,
-      note: o.note,
-    })
-    return v
-  }
   // The persistence step runs several times per round, so its work-item id has to distinguish the calls — by a
   // COUNTER, never a clock: a resumed run replays the journal by id and must ask for the same ids in the same
   // order it did the first time.
@@ -226,7 +236,8 @@ export function* run(rawInput, io = {}, opts = {}) {
       out.push(`\nFREEDOM SCHEMAS LEARNED SO FAR — persist each as \`units["<key>"].schemaName\` (this is the only record of them; \`--units\` cannot publish it):\n${schemaLines}`)
     }
     if ((carry.dispatched || []).length) {
-      out.push(`\nROUND COUNTERS — INCREMENT \`rounds\` by 1 for EXACTLY these unit keys and for NO others. They are the units a build was dispatched for; every other unit was not attempted this round and must keep the counter it has:\n${carry.dispatched.map((k) => `- \`${k}\``).join('\n')}\nCharging a unit nobody built is how an untouched page gets parked before its first attempt.`)
+      const dispatchedLines = carry.dispatched.map((k) => `- \`${k}\``).join('\n')
+      out.push(`\nROUND COUNTERS — INCREMENT \`rounds\` by 1 for EXACTLY these unit keys and for NO others. They are the units a build was dispatched for; every other unit was not attempted this round and must keep the counter it has:\n${dispatchedLines}\nCharging a unit nobody built is how an untouched page gets parked before its first attempt.`)
     }
     if (carry.proposals.length || carry.blocked.length || carry.discrepancies.length) {
       out.push(`\nALSO PERSIST these lists, verbatim — each already INCLUDES whatever the file held when this run read it, so write them as given:\n- \`proposals\`: ${j(carry.proposals)}\n- \`blocked\`: ${j(carry.blocked)}\n- \`discrepancies\`: ${j(carry.discrepancies)}\nA plan deviation, a blocker or a builder-vs-stand disagreement that lives only in a process is lost to the first usage limit; these are the run's answer to the caller.`)
@@ -476,7 +487,8 @@ Return the schema. Numbers only — this script does the judging.`
       })
     }
     if (MODE !== 'auto') {
-      log(`mode: ${MODE}${MODE === 'checkpoints' ? ` — will stop after: ${CHECKPOINT_AFTER.join(', ')}` : ' — will stop after EVERY unit'}`)
+      const modeSuffix = MODE === 'checkpoints' ? ` — will stop after: ${CHECKPOINT_AFTER.join(', ')}` : ' — will stop after EVERY unit'
+      log(`mode: ${MODE}${modeSuffix}`)
     }
     if (MODE === 'checkpoints' && !CHECKPOINT_AFTER.length) {
       log('mode `checkpoints` with an EMPTY `checkpointAfter` — nothing will stop this run. Pass the unit keys to stop after, or use mode `guided` to stop after every unit.')
@@ -920,13 +932,6 @@ These are the OPERATOR'S words, not stand-derived content: they ARE instructions
   function preflightItemLine(p) {
     return `- \`${p.id}\` — page \`${p.pageKey}\`, kind \`${p.kind || '(n/a)'}\`, item: ${p.item ? dataFence(p.item) : '(n/a)'} · requires: ${(p.requires || []).join(' + ') || 'referencePage + components'}${preflightAnswerLine(p)}`
   }
-  // The answered-already line under a Preflight item, or '' when the question is still open.
-  function preflightAnswerLine(p) {
-    if (!p.resolution?.answer) return ''
-    const who = resolutionAttribution(p.resolution)
-    const by = who ? ` (${who})` : ''
-    return `\n  **✔ THE OPERATOR ALREADY ANSWERED THIS${by}:** ${p.resolution.answer}`
-  }
   // THE ANSWERS THIS PAGE'S BUILD DEPENDS ON. A builder runs in a fresh context and never reads the resolutions file,
   // so an answer it is not handed is an answer it re-derives or guesses — and a guessed list-column set is
   // indistinguishable from a built one. Thin wrapper: the routing and the rendering are both pure and tested above;
@@ -970,6 +975,66 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
   // every page as owing an unpublished record would be the false negative this gate exists to remove.
   function logMissingEvidenceIds() {
     if (!(state.evidenceIds || []).length) log('no evidence ids were published this round — the UI-guidelines close row is inert; check that Reconcile returned `evidenceIds`')
+  }
+
+  // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report — its own function because it is
+  // three outcomes over five facts, and inline it made the dispatch loop the most complex thing in the run.
+  function settleAppUnit(unit, res) {
+
+      const got = (res.packageName || '').trim()
+      // THE WHOLE DELIVERABLE, not just the package. This unit's openness is judged on `packageState` alone, so
+      // setting it to 'exists' CLOSES the unit permanently — and `create-app` succeeding is only the first third of
+      // its job. If `create-app-section` on the migrated entity failed, or the stub section could not be removed,
+      // the builder returns the right package name AND a blocker; accepting that as done let the run finish with no
+      // section on the migrated object, or with the orphan stub still there. That is precisely the failure this unit
+      // was added to prevent, so the bar is the full deliverable: the planned package, a section page to hand `main`,
+      // and nothing blocked.
+      const sectionPage = (res.starterFormPage || '').trim()
+      const unitBlocked = (res.blocked || []).length
+      // …EXCEPT under `pages-only-no-menu`, where the plan decided there is no section at all: this unit was told
+      // NOT to run `create-app-section`, so demanding a section page back would hold it open forever on a
+      // deliverable nobody asked for. The package (plus no blocker) IS the whole deliverable there, and `main`
+      // creates its own page in it — exactly as it does on any run with no app unit.
+      const needsSectionPage = unit.sectionHost !== 'pages-only-no-menu'
+      if (got && got === unit.package && (sectionPage || !needsSectionPage) && !unitBlocked) {
+        packageState = 'exists'
+        log(sectionPage
+          ? `app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`
+          : `app unit: package \`${got}\` exists — no section was created (sectionHost: ${unit.sectionHost}), so \`main\` builds its own page in it`)
+        // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
+        // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
+        // per-page recipe documents — instead of a second creation attempt that would collide.
+        if (res.starterFormPage && !pageSchemas.main) {
+          pageSchemas.main = res.starterFormPage
+          log(`main resolves to the starter page \`${res.starterFormPage}\` created with the app`)
+        }
+        // Same for the LIST page: `create-app-section` mints it, and it is the `list` unit's deliverable. Recording it
+        // here is what keeps that unit on the edit-the-page-already-there path — without it the run discards a schema
+        // name it already holds and sends the builder to resolve one with `list-pages`, whose documented no-match and
+        // several-matches cases are what leave `--built.pages.list` absent and the list gate permanently unverified.
+        if (res.starterListPage && !pageSchemas.list) {
+          pageSchemas.list = res.starterListPage
+          log(`list resolves to the starter page \`${res.starterListPage}\` created with the app`)
+        }
+      } else if (got && got === unit.package) {
+        // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named, rather than closed on
+        // the one third that worked: `main` has no section to edit, and a stub section left behind is an orphan
+        // object in the customer's app.
+        // The two halves of "what did not finish", composed as a list rather than three conditionals nested in
+        // one template — same text, and which fact produced which clause is readable.
+        const shortfall = [
+          sectionPage ? null : 'no section page was reported for `main` to edit',
+          unitBlocked ? `${unitBlocked} blocker(s) of its own` : null,
+        ].filter(Boolean).join('; ')
+        blockedItems = [...blockedItems, { unit: unit.key,
+          what: `package \`${got}\` was created but the app unit did not finish: ${shortfall}`,
+          why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
+        log(`app unit: package \`${got}\` exists but the unit is INCOMPLETE (section page: ${sectionPage || 'none'}, blockers: ${unitBlocked}) — it stays open`)
+      } else {
+        blockedItems = [...blockedItems, { unit: unit.key, what: `the application was created but its package is \`${got || '(none reported)'}\`, not the \`${unit.package}\` the plan targets`, why: 'clio applies the environment SchemaNamePrefix to the code, so the package that comes out need not be the one the plan names; every page unit\'s placement row gates on the plan\'s package, so building into this one would fail the whole tree later' }]
+        log(`app unit: package MISMATCH — got \`${got || '(none)'}\`, plan targets \`${unit.package}\`; the unit stays open`)
+      }
+    
   }
 
   function* buildRound(open) {
@@ -1037,55 +1102,7 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
       // point: an app created under a different package name unblocks nothing, because every page unit's placement
       // row gates on the plan's package. A mismatch leaves `packageState` untouched — so the unit stays open, the
       // round budget keeps counting, and the run parks it and stops instead of building a tree into the wrong place.
-      if (unit.kind === 'app') {
-        const got = (res.packageName || '').trim()
-        // THE WHOLE DELIVERABLE, not just the package. This unit's openness is judged on `packageState` alone, so
-        // setting it to 'exists' CLOSES the unit permanently — and `create-app` succeeding is only the first third of
-        // its job. If `create-app-section` on the migrated entity failed, or the stub section could not be removed,
-        // the builder returns the right package name AND a blocker; accepting that as done let the run finish with no
-        // section on the migrated object, or with the orphan stub still there. That is precisely the failure this unit
-        // was added to prevent, so the bar is the full deliverable: the planned package, a section page to hand `main`,
-        // and nothing blocked.
-        const sectionPage = (res.starterFormPage || '').trim()
-        const unitBlocked = (res.blocked || []).length
-        // …EXCEPT under `pages-only-no-menu`, where the plan decided there is no section at all: this unit was told
-        // NOT to run `create-app-section`, so demanding a section page back would hold it open forever on a
-        // deliverable nobody asked for. The package (plus no blocker) IS the whole deliverable there, and `main`
-        // creates its own page in it — exactly as it does on any run with no app unit.
-        const needsSectionPage = unit.sectionHost !== 'pages-only-no-menu'
-        if (got && got === unit.package && (sectionPage || !needsSectionPage) && !unitBlocked) {
-          packageState = 'exists'
-          log(sectionPage
-            ? `app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`
-            : `app unit: package \`${got}\` exists — no section was created (sectionHost: ${unit.sectionHost}), so \`main\` builds its own page in it`)
-          // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
-          // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
-          // per-page recipe documents — instead of a second creation attempt that would collide.
-          if (res.starterFormPage && !pageSchemas.main) {
-            pageSchemas.main = res.starterFormPage
-            log(`main resolves to the starter page \`${res.starterFormPage}\` created with the app`)
-          }
-          // Same for the LIST page: `create-app-section` mints it, and it is the `list` unit's deliverable. Recording it
-          // here is what keeps that unit on the edit-the-page-already-there path — without it the run discards a schema
-          // name it already holds and sends the builder to resolve one with `list-pages`, whose documented no-match and
-          // several-matches cases are what leave `--built.pages.list` absent and the list gate permanently unverified.
-          if (res.starterListPage && !pageSchemas.list) {
-            pageSchemas.list = res.starterListPage
-            log(`list resolves to the starter page \`${res.starterListPage}\` created with the app`)
-          }
-        } else if (got && got === unit.package) {
-          // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named, rather than closed on
-          // the one third that worked: `main` has no section to edit, and a stub section left behind is an orphan
-          // object in the customer's app.
-          blockedItems = [...blockedItems, { unit: unit.key,
-            what: `package \`${got}\` was created but the app unit did not finish: ${sectionPage ? '' : 'no section page was reported for `main` to edit'}${!sectionPage && unitBlocked ? '; ' : ''}${unitBlocked ? `${unitBlocked} blocker(s) of its own` : ''}`,
-            why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
-          log(`app unit: package \`${got}\` exists but the unit is INCOMPLETE (section page: ${sectionPage || 'none'}, blockers: ${unitBlocked}) — it stays open`)
-        } else {
-          blockedItems = [...blockedItems, { unit: unit.key, what: `the application was created but its package is \`${got || '(none reported)'}\`, not the \`${unit.package}\` the plan targets`, why: 'clio applies the environment SchemaNamePrefix to the code, so the package that comes out need not be the one the plan names; every page unit\'s placement row gates on the plan\'s package, so building into this one would fail the whole tree later' }]
-          log(`app unit: package MISMATCH — got \`${got || '(none)'}\`, plan targets \`${unit.package}\`; the unit stays open`)
-        }
-      }
+      if (unit.kind === 'app') settleAppUnit(unit, res)
       // The Freedom schema is the one fact only the builder holds. Recorded here, persisted by the next
       // Reconcile; a page unit that comes back without one is named, not silently left unverifiable.
       if (unit.kind === 'page') {
@@ -1353,9 +1370,10 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       return
     }
     for (const k of res.slices || []) sliceKeys.add(k)
+    const refsNote = res.notes ? ` — ${res.notes}` : ''
     log(res.written === false
       ? `refs: reusing the cache in ${REFS_DIR} (same plan version and environment) — ${sliceKeys.size} page slice(s)`
-      : `refs: ${(res.files || []).length} file(s) cached in ${REFS_DIR}, ${sliceKeys.size} page slice(s)${(res.notes || '') ? ' — ' + res.notes : ''}`)
+      : `refs: ${(res.files || []).length} file(s) cached in ${REFS_DIR}, ${sliceKeys.size} page slice(s)${refsNote}`)
     const noSlice = (state.unitKeys || []).filter((k) => k !== 'app' && !sliceKeys.has(k))
     if (noSlice.length) log(`no spec slice for ${noSlice.length} unit(s) — they were not folded (reused or unresolved pages have no spec of their own): ${noSlice.join(', ')}`)
   }
@@ -1536,7 +1554,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         const stillOpen = openNow()
         if (stillOpen.length) {
           const schema = pageSchemas[pausedAfter] || null
-          log(`PAUSED at checkpoint \`${pausedAfter}\`${schema ? ` (Freedom schema \`${schema}\`)` : ''} — ${stillOpen.length} unit(s) still open. Open the page, check it, then re-run to continue.`)
+          const schemaSuffix = schema ? ` (Freedom schema \`${schema}\`)` : ''
+          log(`PAUSED at checkpoint \`${pausedAfter}\`${schemaSuffix} — ${stillOpen.length} unit(s) still open. Open the page, check it, then re-run to continue.`)
           return runReturn({
             stopped: 'paused-at-checkpoint',
             mode: MODE,

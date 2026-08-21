@@ -38,7 +38,7 @@ const DEGRADABLE = new Set(['parallelism'])
 // reduction the host will apply, so the caller can LOG the reduction rather than
 // discovering it in the wall-clock.
 export function negotiateStep(host, stepRequires, itemCount) {
-  const asked = new Set([...(stepRequires || [])])
+  const asked = new Set(stepRequires || [])
   const missing = []
   for (const cap of asked) {
     if (DEGRADABLE.has(cap)) continue
@@ -72,7 +72,8 @@ export function negotiateRun(host, workflowRequires) {
 // configuration answer, the second is a defect.
 export class CapabilityError extends Error {
   constructor(missing, where) {
-    super(`host lacks required capability/capabilities: ${(missing || []).join(', ')}${where ? ` (needed by ${where})` : ''}. This is an explicit stop: the guarantee does not survive its absence, so the run does NOT continue in a degraded form.`)
+    const needed = where ? ` (needed by ${where})` : ''
+    super(`host lacks required capability/capabilities: ${(missing || []).join(', ')}${needed}. This is an explicit stop: the guarantee does not survive its absence, so the run does NOT continue in a degraded form.`)
     this.name = 'CapabilityError'
     this.missing = [...(missing || [])]
     this.where = where || null

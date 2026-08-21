@@ -1436,7 +1436,10 @@ check("workflow: every path in a generated engine command is SHELL-QUOTED — a 
 // which is the point: the cases above check that the mechanisms do what they were built to do, not that the intent
 // survives an edit. All three P1s are false-success paths — the run finishes and reports fine.
 check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short-circuiting on a green gate made the operator findings channel dead in exactly the case it exists for (a ported handler the gate cannot see)",
-  /\n\s*\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)   // indented: the body is nested inside `run()` now
+  // `[ \t]*`, never `\s*`: `\s` matches the line terminator too, so the quantifier overlaps the `\n` it follows
+  // and the match backtracks super-linearly across a file this size. Indentation is also what this MEANS — the
+  // body is nested inside `run()` now (the same lesson this file already records for the `critiqueRan` pin).
+  /\n[ \t]*\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
@@ -1543,7 +1546,7 @@ check("cba workflow: the Critique call site DELEGATES to the executable `retryOn
 // Both legs must read the helper's `ran`, never `critique`'s truthiness: a falsy-but-present Critique result would
 // otherwise be reported as a phase that never ran, marking a real answer UNCHECKED (PR#88 review, Major).
 check("cba workflow: a Critique that never ran is LOUD and machine-readable — the log says coverage.complete is arithmetic-only, and the result carries `critiqueRan` so the caller sees it without reading logs",
-  /if \(!critiqueRan\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
+  /if \(!ran\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
     // `[ \t]*`, never `\s*`: `\s` matches the line terminator too, so under `/m` the quantifier overlaps the `^`
     // it follows and the match backtracks super-linearly across a source file this size. Indentation is also what
     // this actually means — a leading newline was never part of the shape being pinned.
@@ -1554,9 +1557,13 @@ check("cba workflow: NEITHER leg re-derives 'did it run' from the result's truth
 // direction: a non-nullish non-critique stops the retry loop legitimately, but reporting it as a pass that ran
 // claims `conflicts`/`settledElsewhere` are verified-empty for a pass that checked nothing.
 check("cba workflow: the REPORTED `critiqueRan` narrows the helper's `ran` through `isCritiqueShape` — `ran` alone would sell a non-critique return as an adversarial pass with no conflicts found",
-  /const critiqueRan = critiqueReturned && isCritiqueShape\(critique\)/.test(cbaSrc));
+  // The narrowing lives in `reportCritique` now (one home for the boolean AND its two log lines); the call site
+  // reads the answer instead of re-deriving it. Both halves are pinned: the narrowing itself, and that the caller
+  // takes it from there.
+  /const ran = critiqueReturned && isCritiqueShape\(critique\)/.test(cbaSrc)
+    && /const critiqueRan = reportCritique\(critique, critiqueReturned, log\)/.test(cbaSrc));
 check("cba workflow: a return that is present but NOT a critique gets its own log line — 'returned something unusable' and 'the host never answered' need different repairs, and one line for both made the first read as a clean pass",
-  /if \(critiqueReturned && !critiqueRan\) \{/.test(cbaSrc)
+  /if \(critiqueReturned && !ran\) \{/.test(cbaSrc)
     && /treating the pass as dead/.test(cbaSrc));
 /* ---- the Critique retry, EXECUTED — MOVED --------------------------------------------------------------
    `retryOnDeath`, `critiqueDeathLine` and `isCritiqueShape` now live in the host-neutral core

@@ -58,7 +58,7 @@ export function entriesFor(run, ids) {
   const byId = new Map()
   for (const e of run.journal) if (!byId.has(e.id)) byId.set(e.id, e)
   const found = ids.map((id) => byId.get(id) || null)
-  return found.some((e) => e === null) ? null : found
+  return found.includes(null) ? null : found
 }
 
 export function pendingIds(run, ids) {

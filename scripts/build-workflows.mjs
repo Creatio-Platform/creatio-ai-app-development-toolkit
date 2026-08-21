@@ -93,7 +93,11 @@ function inlineOne(rel) {
     // A RE-EXPORT (`export { a, b }` / `export { a } from '…'`) has nothing to inline: the names are already in
     // scope here. Stripping `export ` off it left a bare `{ a, b }` — a block of expression statements that does
     // nothing and reads like a mistake (Sonar S905), which is exactly what it was.
-    if (/^export\s*\{[^}]*\}\s*(from\s+'[^']+')?\s*$/.test(line.trim())) continue
+    // Split rather than one regex with an optional trailing group next to `\s*$` — that shape backtracks
+    // super-linearly (Sonar S8786), and the two questions are independent anyway.
+    const trimmed = line.trim()
+    if (trimmed.startsWith('export') && /^export\s*\{/.test(trimmed) && trimmed.endsWith('}')) continue
+    if (trimmed.startsWith('export') && /^export\s*\{/.test(trimmed) && /\}\s*from\s+'[^']+'$/.test(trimmed)) continue
     out.push(line.replace(/^export\s+(default\s+)?/, ''))
   }
   return `// ===== inlined from _workflow-core/${rel} =====\n${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`

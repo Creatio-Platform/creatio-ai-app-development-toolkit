@@ -209,7 +209,7 @@ const DEGRADABLE = new Set(['parallelism'])
 // reduction the host will apply, so the caller can LOG the reduction rather than
 // discovering it in the wall-clock.
 function negotiateStep(host, stepRequires, itemCount) {
-  const asked = new Set([...(stepRequires || [])])
+  const asked = new Set(stepRequires || [])
   const missing = []
   for (const cap of asked) {
     if (DEGRADABLE.has(cap)) continue
@@ -243,7 +243,8 @@ function negotiateRun(host, workflowRequires) {
 // configuration answer, the second is a defect.
 class CapabilityError extends Error {
   constructor(missing, where) {
-    super(`host lacks required capability/capabilities: ${(missing || []).join(', ')}${where ? ` (needed by ${where})` : ''}. This is an explicit stop: the guarantee does not survive its absence, so the run does NOT continue in a degraded form.`)
+    const needed = where ? ` (needed by ${where})` : ''
+    super(`host lacks required capability/capabilities: ${(missing || []).join(', ')}${needed}. This is an explicit stop: the guarantee does not survive its absence, so the run does NOT continue in a degraded form.`)
     this.name = 'CapabilityError'
     this.missing = [...(missing || [])]
     this.where = where || null
@@ -311,7 +312,7 @@ function entriesFor(run, ids) {
   const byId = new Map()
   for (const e of run.journal) if (!byId.has(e.id)) byId.set(e.id, e)
   const found = ids.map((id) => byId.get(id) || null)
-  return found.some((e) => e === null) ? null : found
+  return found.includes(null) ? null : found
 }
 
 function pendingIds(run, ids) {
@@ -457,7 +458,7 @@ async function loop({ core, run, host, io, requires, onPending, onDone }) {
 }
 
 function requireWorkStep(value) {
-  if (!value || value.kind !== 'work') throw new Error(`the core yielded something that is not a work step: ${JSON.stringify(value)?.slice(0, 200)}`)
+  if (value?.kind !== 'work') throw new Error(`the core yielded something that is not a work step: ${JSON.stringify(value)?.slice(0, 200)}`)
   return value
 }
 
@@ -527,7 +528,7 @@ async function executeStep(step, width, execute, runBatch) {
 async function safeExecute(item, execute) {
   try {
     const r = await execute(item)
-    if (!r || !r.outcome) throw new Error(`the host adapter returned no outcome for work item ${item.id}`)
+    if (!r?.outcome) throw new Error(`the host adapter returned no outcome for work item ${item.id}`)
     if (r.outcome === OUTCOME.VALUE) return record(item, OUTCOME.VALUE, r.value)
     if (r.outcome === OUTCOME.DEATH) return record(item, OUTCOME.DEATH)
     return record(item, OUTCOME.ERROR, r.error)
@@ -1077,7 +1078,7 @@ function normalizeInput(a) {
   if (typeof a === 'string') {
     const s = a.trim()
     if (!s) return {}
-    if (s[0] === '{') {
+    if (s.startsWith('{')) {
       try {
         const parsed = JSON.parse(s)
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
@@ -1103,6 +1104,36 @@ function assertInput(input) {
 
 const noop = () => {}
 
+// THE "NOTHING TO DESCRIBE" RETURN. Both exits — the caller's declared `totals` and the post-Context count — say
+// the same thing about the same surface, so they compose it in one place: an empty worklist is DONE, not
+// incomplete, and the two must never drift into disagreeing about that.
+const NOTHING_TO_DESCRIBE = 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply'
+function skippedReturn(surface, extra = {}) {
+  return {
+    surface,
+    skipped: true,
+    reason: NOTHING_TO_DESCRIBE,
+    coverage: { described: 0, total: 0, complete: true, uncovered: [], wiringOnly: [] },
+    describeAgents: 0,
+    ...extra,
+  }
+}
+
+// WHAT THE CALLER IS TOLD ABOUT THE ADVERSARIAL PASS, and the two log lines that go with it. Narrowed from the
+// retry loop's `ran` through `isCritiqueShape`, because the two questions are not the same one: a non-nullish value
+// that is not a critique stops the loop legitimately, and reporting it as a pass that RAN claims
+// `conflicts`/`settledElsewhere` were verified empty for a pass that checked nothing. The two failures also get
+// DIFFERENT lines — "returned something unusable" and "the host never answered" need different repairs.
+function reportCritique(critique, critiqueReturned, log) {
+  const ran = critiqueReturned && isCritiqueShape(critique)
+  if (critiqueReturned && !ran) {
+    const returned = Array.isArray(critique) ? 'an array' : `a ${typeof critique}`
+    log(`⚠ the Critique agent returned ${returned} without the uncovered/conflicts/settledElsewhere arrays its schema requires — treating the pass as dead`)
+  }
+  if (!ran) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
+  return ran
+}
+
 function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -1122,13 +1153,7 @@ function* run(rawInput, io = {}) {
   // The same check runs again after Context for a caller that did not pass `totals`.
   if (declaredNothingToDo(input.totals)) {
     log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return {
-      surface: SURFACE,
-      skipped: true,
-      reason: 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply',
-      coverage: { described: 0, total: 0, complete: true, uncovered: [], wiringOnly: [] },
-      describeAgents: 0,
-    }
+    return skippedReturn(SURFACE)
   }
 
   const RULES = rules({ surface: SURFACE, environment: input.environment, outDir: input.outDir, digest: input.digest, manifest: input.manifest })
@@ -1175,16 +1200,11 @@ function* run(rawInput, io = {}) {
   // DONE. Reached only when Context has already run, so its census and shared-core reading are still reported back.
   if (!worked.length) {
     log(`no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return {
-      surface: SURFACE,
-      skipped: true,
-      reason: 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply',
-      coverage: { described: 0, total: 0, complete: true, uncovered: [], wiringOnly: [] },
-      describeAgents: 0,
+    return skippedReturn(SURFACE, {
       scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: 0 })),
       censusNote: ctx.censusNote || null,
       refusals: ctx.refusals || [],
-    }
+    })
   }
 
   // --- Size-adaptive fan-out, decided here from the inventory -----------------
@@ -1286,12 +1306,7 @@ function* run(rawInput, io = {}) {
   // What the caller is told is STRONGER than what stopped the retry loop: `critiqueRan: true` sells
   // `conflicts`/`settledElsewhere` as verified-empty, so a non-nullish value that is not a critique satisfies the
   // first question and not the second.
-  const critiqueRan = critiqueReturned && isCritiqueShape(critique)
-  if (critiqueReturned && !critiqueRan) {
-    const returned = Array.isArray(critique) ? 'an array' : `a ${typeof critique}`
-    log(`⚠ the Critique agent returned ${returned} without the uncovered/conflicts/settledElsewhere arrays its schema requires — treating the pass as dead`)
-  }
-  if (!critiqueRan) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
+  const critiqueRan = reportCritique(critique, critiqueReturned, log)
 
   // --- One repair round, and only when there is something to repair ----------
   // Scoped to the SCOPES that own the uncovered rows — never to a bare row list, which is the per-row split the
@@ -1352,9 +1367,10 @@ function* run(rawInput, io = {}) {
   if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
   const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
-  log(complete
+  const verdictLine = complete
     ? `complete: ${covered.size}/${allKeys.size} rows described`
-    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`)
+    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
+  log(verdictLine)
 
   return {
     surface: SURFACE,

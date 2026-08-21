@@ -407,7 +407,7 @@ Return the schema. Anything you could not do goes in \`blocked\` with why — a 
 
 // Operator findings, indexed by unit.
 export function findingKeySet(findings) {
-  return new Set((findings || []).map((f) => f && f.unit).filter(Boolean))
+  return new Set((findings || []).map((f) => f?.unit).filter(Boolean))
 }
 export function findingsFor(findings, unitKey) {
   return (findings || []).filter((f) => f && f.unit === unitKey)
@@ -420,7 +420,7 @@ export function findingsFor(findings, unitKey) {
 // whole reason the finding exists. A park whose stated reason is "0 MISSING + 0 unconfirmed" is a question nobody
 // can answer.
 export function isUnitOpenWithFindings(unit, verify, reachState, findingKeys, packageState) {
-  if (findingKeys && findingKeys.has(unit.key)) return true
+  if (findingKeys?.has(unit.key)) return true
   return isUnitOpen(unit, verify, reachState, packageState)
 }
 
