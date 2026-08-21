@@ -7976,6 +7976,13 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95469 (review T4): a KNOWN page of the plan (`main`) is verdict'd for real and is NEVER flagged unknown — the loud path fires only for an unplanned key",
       known.error === undefined && known.complete === true,
       () => known);
+    // PR review RC-11: `pageKey` has NO default. A call that OMITS the argument must fail the same LOUD way an
+    // unknown key does — never silently resolve to `main` and hand back a confident verdict for the wrong page
+    // (the exact silent-wrong-page mode the T4 loud-unknown fix above was added to close).
+    const omitted = verifyUnit(applicantR1, {}, a3Complete);
+    check("ENG-95469 (review RC-11): verifyUnit called with pageKey OMITTED is LOUD (error:'unknown page', complete:false) — no default 'main', so a missing arg cannot silently green a wrong page",
+      omitted.error === "unknown page" && omitted.complete === false,
+      () => omitted);
   }
 }
 

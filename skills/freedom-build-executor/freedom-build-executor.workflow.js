@@ -981,6 +981,13 @@ const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachState, pack
 //   · `gate-not-run` — the builder returned `ran: false` (the documented escape hatch) on a unit the verifier finds
 //     open: legitimate, but surfaced (never silently accepted) so an operator can see which open units bypassed the
 //     scoped gate. A unit the verifier confirms complete needs no such note.
+//   · `ran-without-verdict` — the builder reported `ran: true` but NO boolean `complete` (PR review RC-12): the
+//     schema requires only `ran` inside `selfCheck`, so a self-report with `complete` absent is a valid page shape,
+//     yet `complete`/`missing`/`unverified` are meant to be COPIED VERBATIM from the engine's single-unit verdict —
+//     an absent `complete` on a gate that claims to have run is an inconclusive/malformed self-report. It also
+//     escapes `selfCheckStillShort` (which needs `complete === false`) and the two branches above, so without this
+//     branch such a unit reaches neither the fast park nor the audit trail on a still-open unit. Named here so it
+//     is surfaced, not silently dropped.
 // Pure: the verdict and the self-reports are handed in; `unitFor` injects the schedule lookup. It changes NO verdict
 // — it only names a discrepancy for the run's audit trail; the post-hoc verifier remains the authoritative evidence.
 const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageState) =>
@@ -989,6 +996,7 @@ const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageSta
     .map((c) => {
       const sc = c.sc
       if (sc && sc.ran === true && sc.complete === true) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
+      if (sc && sc.ran === true && sc.complete !== true && sc.complete !== false) return { key: c.key, kind: 'ran-without-verdict' }
       if (!sc || sc.ran === false) return { key: c.key, kind: 'gate-not-run' }
       return null
     })

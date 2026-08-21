@@ -3128,7 +3128,12 @@ export function renderVerify(result, opts = {}, built = {}) {
 // shortfall: a scoped entrypoint must NARROW, so a caller asking about one page is never handed the tree's numbers.
 // `planGaps` rides along so the gate can tell a repairable BUILD gap (build the piece, re-check) from a PLAN gap
 // (not buildable-out-of — return it to the caller), the same split `verifyReport` makes for the full sweep.
-export function verifyUnit(result, opts = {}, built = {}, pageKey = "main") {
+// `pageKey` is REQUIRED and has NO default (PR review RC-11): a default (`= "main"`) would reopen the exact
+// silent-wrong-page mode the unknown-key guard below was added to close — any call site that OMITS the argument
+// (a future caller, a refactor that drops a parameter) would silently resolve to `main` and get a confident
+// verdict for the wrong page. An omitted / `undefined` key is UNKNOWN to the plan and fails the same LOUD way a
+// typo'd key does, via the guard below.
+export function verifyUnit(result, opts = {}, built = {}, pageKey) {
   const p = renderVerify(result, opts, built).pages[pageKey];
   const gaps = planGaps(result);
   if (!p) {

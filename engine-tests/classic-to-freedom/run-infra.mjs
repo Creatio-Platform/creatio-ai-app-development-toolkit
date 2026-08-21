@@ -378,6 +378,19 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
   check("ENG-95469 T5: no self-checks at all is an empty mismatch list, not a throw",
     () => wf.selfCheckMismatches([], unitFor, openVerify, {}, undefined).length === 0
       && wf.selfCheckMismatches(undefined, unitFor, openVerify, {}, undefined).length === 0);
+  // PR review RC-12: a schema-valid self-report of `{ran:true}` with `complete` ABSENT (the schema requires only
+  // `ran` inside selfCheck) escapes both `selfCheckStillShort` (needs complete===false) and the two branches above
+  // (complete is neither true nor false), so without a dedicated branch such a unit reaches NEITHER the fast park
+  // NOR the audit trail on a still-open unit. It must be flagged `ran-without-verdict`, and must NOT collide with
+  // the honest short case `{ran:true, complete:false}`, which stays a non-mismatch (builder and verifier agree).
+  const ranNoVerdict = [{ key: "child:A", sc: { ran: true } }];
+  const honestShort = [{ key: "child:A", sc: { ran: true, complete: false } }];
+  check("ENG-95469 T5 (RC-12): `{ran:true, complete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
+    () => { const m = wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined);
+      return m.length === 1 && m[0].key === "child:A" && m[0].kind === "ran-without-verdict"; },
+    () => wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined));
+  check("ENG-95469 T5 (RC-12): the honest short case `{ran:true, complete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
+    () => wf.selfCheckMismatches(honestShort, unitFor, openVerify, {}, undefined).length === 0);
 }
 // The T5 cross-check WIRING, pinned at the source level (the round loop drives live agents): buildRound returns the
 // per-unit self-reports, and the round loop cross-checks them against the FRESH post-hoc `state.verify` and records a
