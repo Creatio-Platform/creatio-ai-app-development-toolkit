@@ -1350,21 +1350,33 @@ check("ENG-95474 review round 2: a Judge that reports the id in `evidenceWritten
     && !judgeFiles.evidence?.some((e) => e.verify === true),
   () => (judgeFiles.threw ? `threw: ${judgeFiles.threw}` : { trace: judgeFiles.evidence }));
 // The id-scoped clear, executed on the shipped helper's contract: only reported ids go, everything else stays pending.
+// `preflightEvidence = {}` must survive in exactly ONE place — the declaration. A second whole-object assignment is
+// the unconditional clear coming back. Counted rather than matched with `\s*\n\s*`, which backtracks (S8786).
 check("ENG-95474 review round 2: the evidence clear is ID-SCOPED — an unreported id survives while a reported one is dropped",
   /function markEvidenceFiled\(ids\) \{[\s\S]{0,400}?Object\.hasOwn\(preflightEvidence, id\)[\s\S]{0,200}?delete preflightEvidence\[id\]/.test(wfSrc)
-    && !/preflightEvidence = \{\}\s*\n\s*carryPersisted/.test(wfSrc),
-  () => wfSrc.slice(wfSrc.indexOf("function markEvidenceFiled"), wfSrc.indexOf("function markEvidenceFiled") + 420));
+    && (wfSrc.match(/preflightEvidence = \{\}/g) || []).length === 1,
+  () => ({ wholeObjectAssignments: (wfSrc.match(/preflightEvidence = \{\}/g) || []).length,
+    helper: wfSrc.slice(wfSrc.indexOf("function markEvidenceFiled"), wfSrc.indexOf("function markEvidenceFiled") + 420) }));
 // ORDERING is the whole fix on the Verify path: `markCarryPersisted` recomputes the fingerprint, so settling the carry
 // while unfiled records are still in it records them as durable. Evidence must be dropped FIRST.
 check("ENG-95474 review round 2: on the `queueWritten` path the evidence is settled BEFORE the carry — otherwise the fingerprint records unfiled records as durable",
   /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,400}?markEvidenceFiled\(lastVerifier\.evidenceWritten\)[\s\S]{0,40}?markCarryPersisted\(\)/.test(wfSrc)
     && /markEvidenceFiled\(persisted\.evidenceWritten\)[\s\S]{0,200}?markCarryPersisted\(\)/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("if (lastVerifier.queueWritten)"), wfSrc.indexOf("if (lastVerifier.queueWritten)") + 460));
+// Schema membership is read off the SLICE for each schema, not off an adjacency regex: `\s*\n\s*` backtracks (S8786),
+// and a slice also proves the field landed in the right schema rather than merely somewhere in the file.
+// A schema object closes with `}` at column 0, the same boundary the render harness below slices on.
+const schemaSrc = (name) => {
+  const at = wfSrc.indexOf(`const ${name} = {`);
+  return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
+};
+const EVIDENCE_SCHEMAS = ["VERIFIER_SCHEMA", "JUDGE_SCHEMA", "PERSIST_SCHEMA"];
 check("ENG-95474 review round 2: `queueWritten` is not read as evidence confirmation — the evidence carry block asks for its own `evidenceWritten` answer and says the two are different files",
   /A DIFFERENT FILE from the queue merge above/.test(wfSrc)
     && /\\`queueWritten\\` says nothing about this write/.test(wfSrc)
-    && /evidenceWritten: \{ type: 'array', items: \{ type: 'string' \} \},\s*\n\s*notes/.test(wfSrc),
-  () => wfSrc.split("\n").filter((l) => /A DIFFERENT FILE|says nothing about this write/.test(l)).join("\n").slice(0, 300));
+    // Every agent handed the block can now confirm it: Judge and the fallback writer gained the field, Verify had it.
+    && EVIDENCE_SCHEMAS.every((s) => schemaSrc(s).includes("evidenceWritten:")),
+  () => Object.fromEntries(EVIDENCE_SCHEMAS.map((s) => [s, schemaSrc(s).includes("evidenceWritten:")])));
 
 // --- THE CONTINUATION COUNTER IS MONOTONIC (review round 2). It is the ceiling's only input, so a stale lower report
 // from the queue file must not walk it backwards and hand a unit budget it already spent.
@@ -1382,8 +1394,8 @@ check("ENG-95474 review round 2: `reconcilePrompt` no longer promises a PREFLIGH
     && /function reconcilePrompt\(round\)/.test(wfSrc),
   () => wfSrc.split("\n").filter((l) => /PREFLIGHT EVIDENCE block below/.test(l)).join("\n") || "(clean)");
 check("ENG-95474 review round 2: `VERIFIER_SCHEMA` carries no dead `queueFile` field — nothing read it and no prompt asked for it",
-  !/queueWritten: \{ type: 'boolean' \},\s*\n\s*queueFile:/.test(wfSrc) && !/lastVerifier\.queueFile/.test(wfSrc),
-  () => wfSrc.split("\n").filter((l) => /queueFile/.test(l)).join("\n"));
+  !schemaSrc("VERIFIER_SCHEMA").includes("queueFile") && !wfSrc.includes("lastVerifier.queueFile"),
+  () => schemaSrc("VERIFIER_SCHEMA").split("\n").filter((l) => /queue/.test(l)).join("\n"));
 
 // THE PURE CEILING, executed directly: the predicate the loop above depends on.
 check("ENG-95474 review: `continuationAllowed` refuses at and past the cap, and treats a 0 or non-finite cap as 'no continuations'",
