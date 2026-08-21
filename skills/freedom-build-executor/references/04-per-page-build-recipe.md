@@ -221,9 +221,12 @@ Structured, and it is a CLAIM, not evidence:
 `selfCheck`** — the return schema enforces all five, because a page unit without a schema name can
 never be verified by anyone, one without `guidelines` closes on silence, and `selfCheck` is the
 in-context completeness gate (step 10): its numbers are copied verbatim from the engine's single-unit
-verdict, and a unit still short after its one bounded fix parks. For a **reachability** unit
-(`sectionRegistered`, `miniPageWired`, …) there is no page and no schema, so only `unit` and
-`claimedBuilt` are required.
+verdict, and a unit still short after its one bounded fix parks. A page that carries **no
+`#quality-gates` row** (an unfolded or reuse child) drops `guidelines` — there is no id to report —
+but still requires `unit`, `claimedBuilt`, `schemaName` **and `selfCheck`**: the gate runs for every
+page unit regardless of whether it owes guidelines, so the completeness self-report is never optional
+for a page. For a **reachability** unit (`sectionRegistered`, `miniPageWired`, …) there is no page and
+no schema, so only `unit` and `claimedBuilt` are required.
 
 `guidelines` is step 9's answer, and the verifier files the `#quality-gates` record from it verbatim:
 

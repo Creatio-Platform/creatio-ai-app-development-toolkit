@@ -145,7 +145,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
-  "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches"];
+  "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -402,6 +402,34 @@ check("ENG-95469 T5: buildRound returns `selfChecks` and the round loop cross-ch
   && /selfCheckMismatches\(selfChecks, unitOf, state\.verify, state\.reachabilityState, packageState\)/.test(wfSrc)
   && /discrepancies = \[\.\.\.discrepancies, \{ round, unit: m\.key/.test(wfSrc));
 
+// PR review round-4 (RC-17): the round-loop consumer of `selfCheckMismatches` used a 2-way ternary that folded
+// `ran-without-verdict` into the `gate-not-run` wording ("did NOT run (ran:false)") — factually the opposite of
+// what a `ran:true, complete-absent` builder reported, and textually indistinguishable from a genuine not-run.
+// `selfCheckDiscrepancyText` now maps ALL THREE kinds to distinct { label, claim } and fails loud on an unknown one.
+{
+  const KINDS = ["reported-complete-but-verifier-open", "ran-without-verdict", "gate-not-run"];
+  const texts = KINDS.map((k) => wf.selfCheckDiscrepancyText(k));
+  check("ENG-95469 RC-17: all three discrepancy kinds resolve to a DISTINCT label and claim — no two share wording, so `ran-without-verdict` can never read as the not-run case",
+    () => new Set(texts.map((t) => t.label)).size === 3 && new Set(texts.map((t) => t.claim)).size === 3,
+    () => texts);
+  check("ENG-95469 RC-17: `ran-without-verdict` names an INCONCLUSIVE verdict, and does NOT claim the gate did not run — the two repairs an operator would take are kept separable",
+    () => { const t = wf.selfCheckDiscrepancyText("ran-without-verdict");
+      const notRun = wf.selfCheckDiscrepancyText("gate-not-run");
+      return /no boolean verdict/i.test(t.claim) && !/did NOT run/i.test(t.claim) && t.claim !== notRun.claim && t.label !== notRun.label; },
+    () => ({ ranNoVerdict: wf.selfCheckDiscrepancyText("ran-without-verdict"), gateNotRun: wf.selfCheckDiscrepancyText("gate-not-run") }));
+  check("ENG-95469 RC-17: an UNRECOGNIZED kind throws loudly — a future kind added to `selfCheckMismatches` without a matching text entry cannot silently inherit stale wording",
+    () => { try { wf.selfCheckDiscrepancyText("some-new-kind"); return false; } catch (e) { return /unknown selfCheck discrepancy kind/.test(e.message); } });
+  // Every kind `selfCheckMismatches` can emit MUST have a text entry — the two lists cannot drift apart.
+  check("ENG-95469 RC-17: every kind `selfCheckMismatches` can return has a `selfCheckDiscrepancyText` entry (the producer and the renderer stay in lockstep)",
+    () => KINDS.every((k) => { try { const t = wf.selfCheckDiscrepancyText(k); return t && t.label && t.claim; } catch { return false; } }));
+}
+// The consumer WIRING, pinned at source: the round loop now routes through `selfCheckDiscrepancyText(m.kind)` (not a
+// 2-way ternary) and carries the machine `kind` onto the discrepancy row so an operator can tell the three apart.
+check("ENG-95469 RC-17: the round loop renders the discrepancy via `selfCheckDiscrepancyText(m.kind)` and records `kind` on the audit row — the old 2-way ternary is gone",
+  /const \{ label, claim \} = selfCheckDiscrepancyText\(m\.kind\)/.test(wfSrc)
+  && /discrepancies = \[\.\.\.discrepancies, \{ round, unit: m\.key, kind: m\.kind, claim,/.test(wfSrc)
+  && !/reported the in-context completeness gate did NOT run \(ran:false\)'\s*\n\s*log\(/.test(wfSrc));
+
 // --- ENG-94975 modes: auto / checkpoints / guided. A checkpoint stops the run at a PAGE BOUNDARY so a human can
 // open the built page and exercise it — the only check the `Form — Logic` handler rows get, since they carry no
 // verification key. Every failure mode below is silent-in-the-wrong-direction if it regresses: the operator asked
@@ -555,7 +583,19 @@ check("ENG-95471 review fix: the schema is selected by whether the unit OWES the
 check("ENG-95471 review fix: every schema label maps to a declared schema, and only the `page` one requires `guidelines`",
   /const BUILD_SCHEMAS = \{ app: BUILD_SCHEMA_APP, page: BUILD_SCHEMA_PAGE, 'page-no-guidelines': BUILD_SCHEMA_PAGE_NO_GUIDELINES, reach: BUILD_SCHEMA_REACH \}/.test(wfSrc)
     && /schema: BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\]/.test(wfSrc)
-    && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName'\]/.test(wfSrc));
+    && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'selfCheck'\]/.test(wfSrc));
+// PR review round-4 (RC-16): the in-context gate prompt (`inContextGateBlock`) fires for EVERY `unit.kind === 'page'`
+// regardless of schema kind, so a `page-no-guidelines` unit that could omit `selfCheck` would reopen the "closes on
+// silence" hole for that class. Pin `selfCheck` into the SHIPPED no-guidelines required set the same way T7 pins it
+// for the page schema — parsed from source, executed against a with/without-`selfCheck` result, so it cannot drift.
+const NOGL_REQ = reqOf(/const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*?required:\s*\[([^\]]*)\]/);
+const noglNoSelfCheck = { unit: "child:U1", claimedBuilt: ["crt.Input"], schemaName: "UsrChildPage" };
+const noglWithSelfCheck = { ...noglNoSelfCheck, selfCheck: scRanFalse };
+check("ENG-95469 RC-16: the no-guidelines page contract ALSO requires `selfCheck` — the gate runs for every page unit, so a `page-no-guidelines` result WITHOUT `selfCheck` FAILS the required set and one WITH it PASSES (and `guidelines` is still NOT required for this class)",
+  () => Array.isArray(NOGL_REQ) && NOGL_REQ.includes("selfCheck") && !NOGL_REQ.includes("guidelines")
+    && missingReq(noglNoSelfCheck, NOGL_REQ).includes("selfCheck")
+    && missingReq(noglWithSelfCheck, NOGL_REQ).length === 0,
+  () => ({ NOGL_REQ, oldMissing: missingReq(noglNoSelfCheck, NOGL_REQ), newMissing: missingReq(noglWithSelfCheck, NOGL_REQ) }));
 check("ENG-95471: the close row runs at DISPATCH and its decision is CARRIED to the claim, not recomputed",
   /guidelinesMiss: guidelinesCloseMiss\(unit, res, state\.evidenceIds, earnedEvidenceIds\(\)\)/.test(wfSrc)
     && /owesGuidelines: owesGuidelines\(unit, state\.evidenceIds\)/.test(wfSrc)

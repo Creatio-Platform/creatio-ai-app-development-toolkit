@@ -674,8 +674,11 @@ const BUILD_PROPERTIES = {
 // record with no page body, so demanding a schema name there would reject a correct answer.
 const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'], properties: BUILD_PROPERTIES }
 // The same page obligations MINUS `guidelines`, for a published page key that carries no quality-gates row (an
-// unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable.
-const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
+// unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable. `selfCheck` is
+// required too: the guidelines exemption is about the missing quality-gates id, NOT about the in-context gate —
+// `inContextGateBlock` fires for EVERY `unit.kind === 'page'` regardless of schema kind, and these units still have
+// a real, checkable page body, so omitting `selfCheck` here would reopen the "closes on silence" hole for this class.
+const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'selfCheck'], properties: BUILD_PROPERTIES }
 const BUILD_SCHEMA_REACH = { type: 'object', required: ['unit', 'claimedBuilt'], properties: BUILD_PROPERTIES }
 // The APP unit must come back with the package it actually produced — the one fact the rest of the run schedules
 // on. `packageName` is REQUIRED and is compared against the plan's target by the script, not by the agent: clio
@@ -1001,6 +1004,24 @@ const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageSta
       return null
     })
     .filter(Boolean)
+
+// THE THREE DISCREPANCY KINDS `selfCheckMismatches` can return, each with its OWN claim text (what the self-report
+// said) and log label. A map, not a ternary: the consumer (round loop) must render all three distinctly — folding
+// `ran-without-verdict` into the `gate-not-run` wording would tell an operator "builder skipped the gate" when the
+// builder actually ran it and returned an inconclusive verdict, two different repairs. `label` heads the log line;
+// `claim` is copied into the `discrepancies` audit row verbatim. Pure and exported-in-spirit so a golden can pin it.
+const SELF_CHECK_DISCREPANCY_TEXT = {
+  'reported-complete-but-verifier-open': { label: 'MISMATCH', claim: 'selfCheck reported the in-context completeness gate PASSED (ran + complete)' },
+  'ran-without-verdict': { label: 'INCONCLUSIVE', claim: 'selfCheck reported the gate RAN but returned NO boolean verdict (ran:true, complete absent)' },
+  'gate-not-run': { label: 'NOT RUN', claim: 'selfCheck reported the in-context completeness gate did NOT run (ran:false)' },
+}
+// Resolve one kind to its { label, claim }. FAIL LOUD on an unrecognized kind — a new kind added to
+// `selfCheckMismatches` without a matching entry here would otherwise inherit stale wording silently.
+function selfCheckDiscrepancyText(kind) {
+  const text = SELF_CHECK_DISCREPANCY_TEXT[kind]
+  if (!text) throw new Error(`unknown selfCheck discrepancy kind '${kind}' — add it to SELF_CHECK_DISCREPANCY_TEXT`)
+  return text
+}
 
 // WHY a unit parked from the IN-CONTEXT gate (ENG-95469) — distinct from `parkWhy`'s "still short after N round(s)".
 // The in-context completeness gate gives a unit EXACTLY ONE bounded fix in its own build context; still short after
@@ -2811,11 +2832,9 @@ while (true) {
   // never ran and the unit is still open) as a discrepancy — it changes no verdict (the post-hoc verifier still
   // governs), it removes the "nothing independently checks the gate ran" gap by recording where the two disagree.
   for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
-    const claim = m.kind === 'reported-complete-but-verifier-open'
-      ? 'selfCheck reported the in-context completeness gate PASSED (ran + complete)'
-      : 'selfCheck reported the in-context completeness gate did NOT run (ran:false)'
-    log(`in-context gate ${m.kind === 'reported-complete-but-verifier-open' ? 'MISMATCH' : 'NOT RUN'}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
-    discrepancies = [...discrepancies, { round, unit: m.key, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
+    const { label, claim } = selfCheckDiscrepancyText(m.kind)
+    log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
+    discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
   }
   // IN-CONTEXT PARKS FIRST (ENG-95469): a unit whose builder spent its one bounded fix and stayed short parks after
   // ONE round, with its own gate's open rows as the reason — before the round-budget park runs, so the same unit is
