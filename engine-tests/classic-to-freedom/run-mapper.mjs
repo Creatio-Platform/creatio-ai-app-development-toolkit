@@ -8,7 +8,7 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, consolidatedPlacementStop } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -7963,6 +7963,44 @@ try {
     && gateForComponentType("crt.CommunicationOptions")?.id === "CrtCustomer360App"
     && gateForComponentType("crt.NotAComponent") === null,
     () => ({ comms: FEATURE_CATALOG.ContactCommunicationDetail?.gate, activity: FEATURE_CATALOG.ActivityDetailV2?.gate }));
+
+  // T3b — the profile-card gate resolves BY KIND too. Profile-card rows are keyed by PROFILE_ENTITY, so they are
+  // NOT in FEATURE_CATALOG (a SCHEMA_SUFFIX-only view) — but the gate they derive from `pkg` is still reachable
+  // through `gateForComponentType`, the same API the registry gate uses. A card with a `pkg` gates a COMPOSITE on it;
+  // a card with no `pkg` gates nothing.
+  check("ENG-95683 (T3b/R3): a profile card's `pkg` becomes a BY-KIND composite gate, and a pkg-less card gates nothing",
+    gateForComponentType("crt.ContactCompactProfile")?.kind === GATE_KIND.COMPOSITE
+    && gateForComponentType("crt.ContactCompactProfile")?.id === "CrtCustomer360App"
+    && gateForComponentType("crt.AccountCompactProfile")?.id === "CrtCustomer360App"
+    && gateForComponentType("crt.UserCompactProfile") === null,
+    () => ({ contact: gateForComponentType("crt.ContactCompactProfile"), user: gateForComponentType("crt.UserCompactProfile") }));
+
+  // T3c — a `component-absent-in-version` finding carries the gate too, but the guidance branches by KIND, not by the
+  // presence of a gate: the component IS registered (so it is not "install a package"), it is just absent in the
+  // requested version — the fix is a platform-version change or a re-plan. Built against a synthetic index where a
+  // gated type (crt.CommunicationOptions) is present only in a later version, so the requested 8.3.0 run misses it.
+  const gatedVersionIdx = { meta: { versions: ["8.3.0", "8.3.3"] },
+    components: { "crt.CommunicationOptions": { v: 0b10, compositeOnly: true } } };
+  const absentRun = validateRun({ standardFeatures: [{ feature: "Communication options" }] },
+    { index: gatedVersionIdx, version: "8.3.0" });
+  const absentFinding = absentRun.findings.find((f) => f.componentType === "crt.CommunicationOptions");
+  check("ENG-95683 (T3c/R1): a gated component ABSENT in the requested version is a `component-absent-in-version` finding that carries the gate but gets VERSION guidance — not an install",
+    !!absentFinding && absentFinding.kind === "component-absent-in-version"
+    && absentFinding.gate?.id === "CrtCustomer360App" && absentFinding.presentIn?.includes("8.3.3")
+    && /absent in this platform version/.test(registrySettleGuidance(absentFinding))
+    && /target a version that carries it/.test(registrySettleGuidance(absentFinding))
+    && !/install the `CrtCustomer360App` package/.test(registrySettleGuidance(absentFinding)),
+    () => ({ finding: absentFinding, guidance: registrySettleGuidance(absentFinding) }));
+
+  // T3d — the one-gate-per-type invariant. The real table is clean (repeated types share one gate value), and a
+  // divergent gate for a single type is reported as a `gate-conflict`.
+  check("ENG-95683 (T3d/R3): the shipped MAPPING_ROWS carry no gate conflict, and two divergent gates for one type ARE flagged",
+    gateConflicts(MAPPING_ROWS).length === 0
+    && gateConflicts([{ gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } },
+      { gate: { kind: "composite", id: "B" }, verify: { componentType: "crt.X" } }]).length === 1
+    && gateConflicts([{ gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } },
+      { gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } }]).length === 0,
+    () => gateConflicts(MAPPING_ROWS));
 
   // T4 — the three package-precondition conditions the build executor's `packagePreconditionStop` distinguishes as
   // SEPARATE returns now route through ONE plan-side consolidated stop, reconciled against the manifest registry

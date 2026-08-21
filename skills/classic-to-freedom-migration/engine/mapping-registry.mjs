@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS, SOURCE, gateForComponentType } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -127,9 +127,12 @@ export const isAdvisory = (f) => ADVISORY.has(f.kind);
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
 export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), version = null } = {}) {
   const findings = rows.flatMap((r) => validateRow(r, { index, version }));
+  // Table-wide invariant (ENG-95683): no component type may carry two divergent gates. This is a whole-table check,
+  // not a per-row one, so it is folded in here after the per-row findings. `gate-conflict` is a hard error.
+  const conflicts = gateConflicts(rows);
   return {
     version, indexVersions: index?.meta?.versions || [],
-    errors: findings.filter((f) => !isAdvisory(f)),
+    errors: [...findings.filter((f) => !isAdvisory(f)), ...conflicts],
     advisories: findings.filter(isAdvisory),
   };
 }

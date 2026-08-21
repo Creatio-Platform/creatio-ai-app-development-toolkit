@@ -529,3 +529,26 @@ export function gateForComponentType(type) {
   }
   return null;
 }
+
+// The ONE-GATE-PER-TYPE invariant (ENG-95683). `gateForComponentType` returns the FIRST matching row's gate, so two
+// rows carrying DIFFERENT gates for the same component type would let array order silently decide the winner.
+// Repeating a type with the SAME gate is legal and expected — the Communication-options schema row and the entity
+// fallback row both carry `COMMS_GATE` — so the invariant is one-gate-VALUE-per-type, not one-row-per-type; only a
+// DIVERGENT gate for a single type is a defect. `validateTable` folds these into its errors so the CI table check
+// fails on a conflict rather than a build resolving a stale gate. Returns one finding per conflicting type.
+export function gateConflicts(rows = MAPPING_ROWS) {
+  const byType = new Map();                       // componentType -> Map(gateKey -> gate)
+  for (const r of rows) {
+    if (!r.gate) continue;
+    const t = rowComponentType(r);
+    if (!t) continue;
+    let seen = byType.get(t);
+    if (!seen) { seen = new Map(); byType.set(t, seen); }
+    seen.set(JSON.stringify(r.gate), r.gate);
+  }
+  const out = [];
+  for (const [componentType, gates] of byType) {
+    if (gates.size > 1) out.push({ kind: "gate-conflict", componentType, gates: [...gates.values()] });
+  }
+  return out;
+}

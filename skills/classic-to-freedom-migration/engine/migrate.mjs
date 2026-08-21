@@ -1807,12 +1807,19 @@ function computePlanVersion(manifest, readBody) {
 // blanket "settle the target before building" whether it was a real component an install could recover or a name no
 // action short of a re-plan can fix. The finding now carries the row's structured `{kind,id}` gate, so the guidance
 // can say the actionable thing:
+//   • a VERSION-scoped miss (`component-absent-in-version`) — the component IS registered, just not carried by the
+//     target platform version, so no package install can add it; target a version that carries it (or re-plan). This
+//     branch is checked FIRST, by KIND: a gate-only branch would wrongly tell an operator to install a package for a
+//     gated composite that is absent in a version, when the plan/version is the real lever.
 //   • a gated COMPOSITE (a `gate.id` package, sometimes a `gate.feature`) — install/enable it and re-run the BUILD;
 //     the plan is correct, so this is explicitly NOT a re-plan.
 //   • anything else (no row gates the type — a fabricated `crt.*`, or a real component simply absent on the target)
 //     — fix the mapping or the plan and re-run `--plan --out`, because no package install makes it appear.
 // Pure and exported so the branch is unit-testable without driving a whole migration (mirrors placementIssues).
 export function registrySettleGuidance(finding) {
+  if (finding?.kind === "component-absent-in-version") {
+    return "this is not a package-install away — the component is registered but absent in this platform version; target a version that carries it, or re-plan, before building.";
+  }
   const g = finding?.gate;
   if (g && g.id) {
     const feat = g.feature ? ` and enable the \`${g.feature}\` feature` : "";
