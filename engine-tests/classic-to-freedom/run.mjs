@@ -209,7 +209,7 @@ const setMixedClient = parseSchema(realBody([
   `{operation:"insert",name:"CliKid",parentName:"Box",propertyName:"items",values:{bindTo:"Other"}}`,
   `{operation:"set",name:"Box",values:{itemType:7}}`].join(",")), "Client");
 const setMixed = mergeHierarchy([setMixedClient], { seedTemplate: [setMixedSeed] });
-const setMixedRemoved = setMixed.removed.map((r) => r.name).sort();
+const setMixedRemoved = setMixed.removed.map((r) => r.name).sort((a, b) => a.localeCompare(b));
 check("PR#105 Major: a `set` that drops a mixed-ownership child set keeps the CLIENT-authored child in removed[] as its own decision row, while the template-owned one is swept as structural cleanup",
   setMixedRemoved.join(",") === "CliKid" && !setMixed.items.some((i) => ["TplKid", "CliKid"].includes(i.name)),
   () => ({ removed: setMixedRemoved, items: setMixed.items.map((i) => i.name) }));
@@ -240,7 +240,7 @@ const aliasExclOp = realRun2(
   `{operation:"insert",name:"RealFld",parentName:"Header",propertyName:"items",values:{bindTo:"Name"},alias:{name:"OldFld",excludeOperations:["remove"]}}`,
   `{operation:"remove",name:"OldFld"}`);
 check("ENG-95412: an alias `excludeOperations` entry makes that operation a no-op — the remove never runs and the element is not tombstoned",
-  !!aliasExclOp.items.find((i) => i.name === "RealFld") && !aliasExclOp.removed.some((r) => r.name === "RealFld"),
+  aliasExclOp.items.some((i) => i.name === "RealFld") && !aliasExclOp.removed.some((r) => r.name === "RealFld"),
   () => ({ items: aliasExclOp.items.map((i) => i.name), removed: aliasExclOp.removed.map((r) => r.name) }));
 // The runtime's carve-out: a `remove` carrying `properties` is a DIFFERENT operation and is never excluded.
 const aliasExclCarveOut = realRun2(
