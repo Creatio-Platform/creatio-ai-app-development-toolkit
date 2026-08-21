@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts, gateShapeIssues } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -47,7 +47,9 @@ function versionBit(version, index) {
 // the thing the `--verify` gate looks for on the built page (`verify`). The second half matters as much as the
 // first: a standard-feature row emits nothing itself, but a wrong gate type there is how a page gets judged
 // against a component that does not exist (`crt.ContactCommunication` — the defect ENG-95555 catalogues by hand).
-const namedType = (row) => row?.target?.componentType || row?.verify?.componentType || null;
+// Reuses the table's own `rowComponentType` resolver (ENG-95683 RC-7) so the emit-over-verify precedence is
+// single-sourced with the gate lookup — a local copy here was free to drift from the one the gate resolves through.
+const namedType = rowComponentType;
 const isEmitter = (row) => !!namedType(row) || !!row?.target?.foldInto;
 
 // The COMPONENT-level half: does the type exist, and does it exist on the version being targeted? Own function so

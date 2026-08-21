@@ -8,7 +8,7 @@ import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -8088,6 +8088,27 @@ try {
     && shapeErrs({ kind: GATE_KIND.COMPONENT, id: "P" }).length === 1
     && shapeErrs({ kind: GATE_KIND.COMPOSITE_ONLY, id: "P" }).length === 1,
     () => ({ shipped: gateShapeIssues(MAPPING_ROWS), mistyped: shapeErrs({ kind: GATE_KIND.COMPOSITE, package: "P" }) }));
+
+  // T3h — the ONE resolver, and its emit-over-verify precedence pinned (ENG-95683 RC-7). `rowComponentType` is the
+  // single exported resolver that `gateForComponentType`, `gateConflicts`, `gateShapeIssues` AND the registry-side
+  // `namedType` all use, so there is no second copy free to drift. Every gated row today is verify-only, but a future
+  // row naming a DIFFERENT `target` type would attach its gate to the EMITTED type — so the precedence (target over
+  // verify) is the intended contract and is asserted here rather than left implicit.
+  check("ENG-95683 (T3h/R3): rowComponentType is the single resolver and prefers the EMITTED target type over the verify type (precedence pinned so the gate attaches to the type the run emits)",
+    rowComponentType({ target: { componentType: "crt.Emit" }, verify: { componentType: "crt.Verify" } }) === "crt.Emit"
+    && rowComponentType({ verify: { componentType: "crt.Verify" } }) === "crt.Verify"
+    && rowComponentType({}) === null && rowComponentType(null) === null,
+    () => rowComponentType({ target: { componentType: "crt.Emit" }, verify: { componentType: "crt.Verify" } }));
+
+  // T3i — `gateConflicts` identity is key-ORDER independent (ENG-95683 RC-8). Two rows for one type whose gates are
+  // deep-equal but written with the keys in a DIFFERENT order (`{ kind, id }` vs `{ id, kind }` — both accepted by
+  // `gateShapeIssues`, which keys on a Set) are the SAME gate, so they must NOT read as a divergent `gate-conflict`.
+  // A `JSON.stringify` dedup key regresses this (the two serialize differently); the field-keyed `gateKey` does not.
+  const ck = (gate) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "ZDetail" }, verify: { componentType: "crt.X" }, gate });
+  check("ENG-95683 (T3i/R3): gateConflicts treats deep-equal gates written in a different key ORDER as the same gate (no spurious conflict), and still flags a genuinely divergent one",
+    gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]).length === 0
+    && gateConflicts([ck({ kind: "composite", id: "A" }), ck({ kind: "composite", id: "B" })]).length === 1,
+    () => gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket

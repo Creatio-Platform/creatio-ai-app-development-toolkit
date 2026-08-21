@@ -512,10 +512,12 @@ export function satisfiedLegacyTypes() {
   return [...new Set(MAPPING_ROWS.flatMap((r) => r.verify?.satisfies || []))];
 }
 
-// The `crt.*` component type a row NAMES as its Freedom target — as the thing it emits (`target.componentType`) or
-// the thing the built page is gated on (`verify.componentType`). One helper so the gate lookup below and any future
-// reader agree on where a row's real type lives.
-const rowComponentType = (r) => r?.target?.componentType || r?.verify?.componentType || null;
+// The `crt.*` component type a row NAMES as its Freedom target — the thing it emits (`target.componentType`) with the
+// thing the built page is gated on (`verify.componentType`) as the fallback. Exported as the ONE resolver so the gate
+// lookup below, `gateConflicts`/`gateShapeIssues`, the registry-side check, and any future reader agree on where a
+// row's real type lives AND on the emit-over-verify precedence (ENG-95683 RC-7) — a second private copy that reordered
+// these would silently attach a gate to a different type than `--verify` gates on.
+export const rowComponentType = (r) => r?.target?.componentType || r?.verify?.componentType || null;
 
 // The structured gate intent for a component type, resolved BY KIND from the shared rows (ENG-95683). This is the
 // typed replacement for reading a package/feature prerequisite out of a row's prose: given a `crt.*` type, return
@@ -536,6 +538,11 @@ export function gateForComponentType(type) {
 // fallback row both carry `COMMS_GATE` — so the invariant is one-gate-VALUE-per-type, not one-row-per-type; only a
 // DIVERGENT gate for a single type is a defect. `validateTable` folds these into its errors so the CI table check
 // fails on a conflict rather than a build resolving a stale gate. Returns one finding per conflicting type.
+// Key-order-independent identity of a gate value (ENG-95683 RC-8): key on the fields themselves, not `JSON.stringify`,
+// which is key-INSERTION-order sensitive — an inline-constructed `{ id, kind }` (which `gateShapeIssues` accepts,
+// since it keys on a Set) would hash differently from the constructor's `{ kind, id }` and read as a spurious
+// conflict. Safe direction only today, but this removes the foot-gun for any future inline gate.
+const gateKey = (g) => `${g?.kind ?? ""}|${g?.id ?? ""}|${g?.feature ?? ""}`;
 export function gateConflicts(rows = MAPPING_ROWS) {
   const byType = new Map();                       // componentType -> Map(gateKey -> gate)
   for (const r of rows) {
@@ -544,7 +551,7 @@ export function gateConflicts(rows = MAPPING_ROWS) {
     if (!t) continue;
     let seen = byType.get(t);
     if (!seen) { seen = new Map(); byType.set(t, seen); }
-    seen.set(JSON.stringify(r.gate), r.gate);
+    seen.set(gateKey(r.gate), r.gate);
   }
   const out = [];
   for (const [componentType, gates] of byType) {
