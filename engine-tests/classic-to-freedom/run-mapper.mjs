@@ -8026,6 +8026,37 @@ try {
       { gate: { kind: "composite", id: "A" }, verify: { componentType: "crt.X" } }]).length === 0,
     () => gateConflicts(MAPPING_ROWS));
 
+  // T1e — the AC1 payoff END-TO-END, at the level an operator actually sees. T1 asserts the finding and the guidance
+  // function in isolation; this drives a GATED type through the whole run so the ⚠ worklist item ITSELF carries the
+  // structured gate and the branched SETTLE clause. Without it, deleting `gate: f.gate || null` or swapping the
+  // `registrySettleGuidance(f)` call in `reportRegistryFindings` passes the entire suite — the only other run-level
+  // registry test emits an UNGATED `crt.Label`, so it never exercises either.
+  const commsStandRun = gmRun(`{operation:"insert",name:"Comm",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.DETAIL}}`,
+    `details:{Comm:{schemaName:"Schema9Detail",entitySchemaName:"ContactCommunication",detailColumn:"Contact",masterColumn:"Id"}},`,
+    { componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] } });
+  const commsWarn = commsStandRun.changeSet.needsDecision.find((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions");
+  check("ENG-95683 (T1e/R1): a gated type missing from the STAND export reaches the ⚠ worklist carrying the structured {kind,id} gate AND the install/BUILD settle clause — not the re-plan one",
+    !!commsWarn && commsWarn.gate?.kind === GATE_KIND.COMPOSITE && commsWarn.gate?.id === "CrtCustomer360App"
+    && commsWarn.gate?.feature === "CommonCommunicationsBehavior"
+    && /install the `CrtCustomer360App` package/.test(commsWarn.reason)
+    && /enable the `CommonCommunicationsBehavior` feature/.test(commsWarn.reason)
+    && /re-run the BUILD/.test(commsWarn.reason) && !/--plan --out/.test(commsWarn.reason),
+    () => commsStandRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // T3e — the invariant is only load-bearing because `validateTable` FOLDS it into `errors`. The run-time
+  // `gateForComponentType` returns the FIRST matching row's gate and has no conflict detection of its own, so this
+  // table-level check is the only thing between a divergent gate and a build resolving the wrong one. T3d proves
+  // `gateConflicts` in isolation; this proves the wiring — dropping `...conflicts` from the errors array fails HERE.
+  // The rows name a REGISTERED type on purpose, so the only error a clean pair can produce is the conflict itself.
+  const gateRow = (id) => ({ match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "ZDetail" },
+    verify: { componentType: "crt.CommunicationOptions" }, gate: { kind: GATE_KIND.COMPOSITE, id } });
+  check("ENG-95683 (T3e/R3): `validateTable` surfaces a divergent gate as a `gate-conflict` ERROR, and a repeated SAME gate leaves the table clean",
+    validateTable({ rows: [gateRow("A"), gateRow("B")] }).errors
+      .some((e) => e.kind === "gate-conflict" && e.componentType === "crt.CommunicationOptions")
+    && validateTable({ rows: [gateRow("A"), gateRow("A")] }).errors.length === 0,
+    () => ({ divergent: validateTable({ rows: [gateRow("A"), gateRow("B")] }).errors,
+      same: validateTable({ rows: [gateRow("A"), gateRow("A")] }).errors }));
+
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
   // names. Both halves are asserted together on purpose — emitting the binding without the options is exactly the

@@ -1776,7 +1776,7 @@ export function registrySettleGuidance(finding) {
     return "this is not a package-install away — the component is registered but absent in this platform version; target a version that carries it, or re-plan, before building.";
   }
   const g = finding?.gate;
-  if (g && g.id) {
+  if (g?.id) {
     const feat = g.feature ? ` and enable the \`${g.feature}\` feature` : "";
     return `install the \`${g.id}\` package${feat} on the stand, then re-run the BUILD — the plan is correct, so no re-plan is needed.`;
   }
