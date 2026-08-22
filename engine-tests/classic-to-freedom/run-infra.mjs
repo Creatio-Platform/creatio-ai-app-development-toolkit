@@ -145,6 +145,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
+  "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
@@ -964,7 +965,7 @@ check("workflow: Reconcile transcribes the DIGEST, not the full verdict, and the
 check("workflow: the parent edge is COPIED from `--units`, and reconstructing it from the plan's prose is forbidden",
   /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
 check("ENG-95474 C4: each sequential Build unit writes its own audit file AND appends the same entry to worklog.md, so no Close worklog agent is needed",
-  /worklogFile\(unit\.key\)/.test(wfSrc)
+  /worklogFile\(unit\.key, unit\.kind\)/.test(wfSrc)
     && /sharedWorklogPath: `\$\{input\.outDir\}\/worklog\.md`/.test(wfSrc)
     && /Build units run sequentially, so an append has no writer race/.test(wfSrc)
     && !/close:worklog/.test(wfSrc));
@@ -2320,18 +2321,28 @@ check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the
   /const SLICE_DIR = `\$\{input\.outDir\}\/slices`/.test(wfSrc)
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
-check("ENG-95472: NO per-unit file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name",
+check("ENG-95472: NO per-PAGE file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name (a NON-page unit has no such number — see the reopen checks below)",
   /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(state\.unitKeys, key\)/.test(wfSrc)
     && /queue-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc)
-    && /spec-\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
-    && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
+    && /spec-\$\{unitFileStem\(key, 'page'\)\}\.md/.test(wfSrc)
+    && /worklog\/\$\{unitFileStem\(key, kind\)\}\.md/.test(wfSrc)
     && !/sliceFileName/.test(dsSrc),
-  () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
+  () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|unitFileStem|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
 check("ENG-95472: and there is ONE numbering rule, not one per file family — every file helper reads the same bound `unitNoOf`",
   (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length === 1
     && (wfSrc.match(/indexOf\(key\)/g) || []).length === 1,
   () => ({ bound: (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length,
     indexOf: (wfSrc.match(/indexOf\(key\)/g) || []).length }));
+// REOPEN (2026-08-22): the numbering rule was TOTAL over pages and undefined for every other unit class the
+// schedule produces, so the first file named for a reachability unit threw and killed the run after 12 agents.
+// One rule, one entry point, and the kind — not a membership test — decides which half applies: keying off
+// "is it in `unitKeys`?" would silently name a file for a MISTYPED page key, which is the defect `unitNo` stops.
+check("ENG-95472 reopen: ONE naming entry point, and it is KIND-driven — the `app` unit and the reachability keys are scheduled but are not in `unitKeys`, so a rule defined only for pages cannot name their files",
+  /const unitFileStem = \(key, kind\) => unitStem\(\{ key, kind \}, unitNoOf\)/.test(wfSrc)
+    && /function unitStem\(unit, pageNo\)/.test(wfSrc)
+    && /if \(kind && kind !== 'page'\) return nonPageUnitStem\(key, kind\)/.test(wfSrc)
+    && /worklogFile\(unit\.key, unit\.kind\)/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /unitFileStem|function unitStem|nonPageUnitStem/.test(l)).slice(0, 8));
 // RC-4/RC-14: the two failures must read differently. A missing key list is not a schedule mismatch, and a
 // caller told the wrong one goes hunting an inconsistency that does not exist.
 check("ENG-95472: an ABSENT key list gets its own message, distinct from the key-not-in-list one — `unitNo`'s own error would misdiagnose it as a schedule mismatch",
@@ -2385,6 +2396,80 @@ check("ENG-95472: an ABSENT key list gets its own message, distinct from the key
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
+}
+// THE PREMISE, OBSERVED against the engine rather than inferred: an APPLICABLE reachability key is published in
+// its own array and is NOT among `pages[]` — so it is not in `unitKeys` either, and the positional rule cannot name
+// a file for it. This is the whole reason the naming rule needs a second half; if the engine ever published reach
+// keys as pages, this check is where that shows up.
+{
+  const ENGINE_MJS2 = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/classic-to-freedom-migration/engine/migrate.mjs");
+  const manifest = JSON.stringify({
+    entity: "Applicant",
+    // `planMeta.sectionSchema` is what gates the `Navigable section registered` row, and that row is what makes
+    // `sectionRegistered` applicable — the exact shape of the run that crashed.
+    planMeta: { sectionSchema: "Applicant1Section", listTemplate: "ListPage" },
+    schemas: [{ pkg: "HRApplicant", body: `define("N2Reach", [], function() {
+  return {
+    entitySchemaName: "Applicant",
+    details: /**SCHEMA_DETAILS*/{
+      "A": { "schemaName": "EduA", "entitySchemaName": "Education", "filter": { "detailColumn": "Applicant", "masterColumn": "Id" } }
+    }/**SCHEMA_DETAILS*/,
+    diff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/
+  };
+});` }],
+    detailSchemas: { EduA: { title: "Education", entity: "Education" } },
+  });
+  const r = spawnSync(process.execPath, [ENGINE_MJS2, "-", "--units"], { input: manifest, encoding: "utf8" });
+  const units = r.stdout?.trim().startsWith("{") ? JSON.parse(r.stdout) : null;
+  const pageKeys = (units?.pages || []).map((pg) => pg.key);
+  const applicable = (units?.reachability || []).filter((x) => x.appliesWhen).map((x) => x.key);
+  check("ENG-95472 reopen: the engine really publishes an APPLICABLE reachability key that is NOT a published page key — the premise the second naming rule rests on, observed rather than assumed",
+    () => applicable.includes("sectionRegistered") && applicable.every((k) => !pageKeys.includes(k)),
+    () => ({ status: r.status, pageKeys, applicable, stderr: (r.stderr || "").slice(0, 200) }));
+  check("ENG-95472 reopen: and the positional rule REFUSES that key while the kind-driven rule names it — the crash and its fix, over the engine's own output",
+    () => { let threw = false;
+      try { wf.unitNo(pageKeys, "sectionRegistered"); } catch { threw = true; }
+      return threw && wf.unitStem({ key: "sectionRegistered", kind: "reach" }, () => 0) === "reach-sectionRegistered"; },
+    () => ({ pageKeys, stem: wf.unitStem({ key: "sectionRegistered", kind: "reach" }, () => 0) }));
+}
+// THE REOPEN, DRIVEN. A full run died naming a file for `sectionRegistered`: the schedule produces THREE unit
+// classes and the naming rule covered one. So this drives the REAL schedule — pages, the app unit and an applicable
+// reachability key — through the REAL rule and asserts it is total, collision-free, and byte-identical for pages.
+{
+  const buildOrder = ["child:\u041e\u0441\u0432\u0456\u0442\u0430", "list", "main"];
+  const reachability = [
+    { key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the app-menu entry", miss: "unreachable" },
+    { key: "relatedPageBound", appliesWhen: false, pages: ["main"] },
+  ];
+  const appUnit = wf.appUnitFor("HRApplicant", "missing", "Applicant", null);
+  const schedule = wf.scheduleUnits(buildOrder, reachability, appUnit);
+  const pageNo = (k) => wf.unitNo(buildOrder, k);
+  const stemOf = (u) => { try { return wf.unitStem(u, pageNo); } catch (e) { return `THREW: ${e.message}`; } };
+  const stems = schedule.map((u) => ({ key: u.key, kind: u.kind, stem: stemOf(u) }));
+  check("ENG-95472 reopen: the schedule really carries all three unit classes, or the totality check below proves nothing",
+    () => new Set(schedule.map((u) => u.kind)).size === 3 && schedule.length === 5,
+    () => schedule.map((u) => ({ key: u.key, kind: u.kind, at: u.at })));
+  check("ENG-95472 reopen: EVERY scheduled unit can be named — a reachability unit threw here before, after 12 agents and 73 minutes, with `main` built and the section never registered",
+    () => stems.every((s) => !s.stem.startsWith("THREW")),
+    () => stems);
+  check("ENG-95472 reopen: and the stems are DISTINCT — a shared stem would put two units' worklogs in one file",
+    () => new Set(stems.map((s) => s.stem)).size === stems.length, () => stems);
+  check("ENG-95472 reopen: a PAGE stem is unchanged — `<readable>-<published position>`, the same bytes the numbering rule produced before, so no existing per-page file is renamed",
+    () => stems.filter((s) => s.kind === "page")
+      .every((s) => s.stem === `${wf.readableUnitPart(s.key)}-${pageNo(s.key)}`)
+      && stems.find((s) => s.key === "main")?.stem === "main-3",
+    () => stems.filter((s) => s.kind === "page"));
+  check("ENG-95472 reopen: a NON-page stem comes from the KEY, namespaced by the kind — stable across rounds and sessions, where a schedule position shifts on a park or an absent app unit",
+    () => stems.find((s) => s.key === "sectionRegistered")?.stem === "reach-sectionRegistered"
+      && stems.find((s) => s.key === "app")?.stem === "app",
+    () => stems.filter((s) => s.kind !== "page"));
+  check("ENG-95472 reopen: a MISTYPED page key still STOPS — the kind, not membership in `unitKeys`, chooses the rule, so an unpublished page key cannot quietly acquire a file name",
+    () => { const r = stemOf({ key: "child:NotPublished", kind: "page" });
+      return r.startsWith("THREW") && /not in the published key list/.test(r); },
+    () => stemOf({ key: "child:NotPublished", kind: "page" }));
+  check("ENG-95472 reopen: a reachability key `--units` does NOT publish as applicable is not scheduled, so nothing names a file for it",
+    () => !schedule.some((u) => u.key === "relatedPageBound"), () => schedule.map((u) => u.key));
 }
 check("ENG-95472: the engine writes those files under the same positional rule, 1-based over `pages[]`",
   /\$\{prefix\}-\$\{i \+ 1\}\.json/.test(mgSrc) && /forEach\(\(pg, i\)/.test(mgSrc),
@@ -2465,13 +2550,9 @@ const REF_BLOCK = "<refs>"
 const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
-const state = { applicationCode: "UsrApp" }
+const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
-const specFile = (k) => "/m/refs/spec-" + k + ".md"
-const worklogFile = (k) => "/m/worklog/" + k + ".md"
-const queueSliceFile = (k) => "/m/slices/queue-" + k + ".json"
-const builtSliceFile = (k) => "/m/slices/built-" + k + ".json"
 const cliChecklistPage = (k) => "node e.mjs m.json --checklist --page " + k
 const cliUnitsPage = (k) => "node e.mjs m.json --units --page " + k
 const cliBuiltPage = (k) => "node e.mjs m.json --verify --built b.json --page " + k
@@ -2483,9 +2564,18 @@ const checkFirstPromptBlock = () => ""
 const guidelinesReturnFor = () => ""
 const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "")
 `;
+    // THE REAL PER-UNIT FILE NAMES, not stubs. A stub of `worklogFile` is exactly what hid the reopened defect:
+    // it took the key alone and could not throw, so this harness rendered a reachability prompt while the shipped
+    // helper died on the same unit. The shipped block is sliced in and reads the `state.unitKeys` in STUBS above.
+    const NAMES_BEGIN = "// ---8<--- PER-UNIT FILE NAMES ---8<---";
+    const NAMES_END = "// ---8<--- END PER-UNIT FILE NAMES ---8<---";
+    const nFrom = wfSrc.indexOf(NAMES_BEGIN), nTo = wfSrc.indexOf(NAMES_END);
+    check("ENG-95472 reopen: the per-unit file-name block is delimited in the shipped file, so this harness renders the REAL names instead of stubs that cannot throw",
+      nFrom >= 0 && nTo > nFrom, () => ({ nFrom, nTo }));
+    const namesSrc = nFrom >= 0 && nTo > nFrom ? wfSrc.slice(nFrom + NAMES_BEGIN.length, nTo) : "";
     // ONE source of truth for what is stubbed: the names are read back out of the declarations above, so the
     // guard below cannot drift from them.
-    const stubbed = new Set([...STUBS.matchAll(/^const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
+    const stubbed = new Set([...`${STUBS}\n${namesSrc}`.matchAll(/^const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
     // A free variable with no stub FAILS here; auto-stubbing would swallow the typo this check exists to catch.
     // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
@@ -2509,7 +2599,7 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
         const at = wfSrc.indexOf(`function ${name}(`);
         return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
       };
-      writeFileSync(modPath, `${STUBS}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${fnSrc}\nexport { buildPrompt };\n`);
+      writeFileSync(modPath, `${STUBS}\n${pureFn("unitNo")}\n${pureFn("readableUnitPart")}\n${pureFn("nonPageUnitStem")}\n${pureFn("unitStem")}\n${namesSrc}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${fnSrc}\nexport { buildPrompt };\n`);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
@@ -2527,10 +2617,17 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
     check("ENG-95472: the two app arms really are different prompts — the no-menu arm forbids the section the default arm creates",
       () => /DO NOT CREATE A SECTION/.test(rendered.appNoMenu || "") && !/DO NOT CREATE A SECTION/.test(rendered.app || ""),
       () => ({ noMenu: /DO NOT CREATE A SECTION/.test(rendered.appNoMenu || ""), dflt: /DO NOT CREATE A SECTION/.test(rendered.app || "") }));
+    // `main` is 3rd in the stubbed `unitKeys`, so its slices are `queue-3` / `built-3` — the REAL numbering,
+    // and `list` (2nd) must not appear in `main`'s prompt.
     check("ENG-95472: a rendered PAGE prompt carries BOTH slice paths for its own key and no other unit's",
-      () => /\/m\/slices\/queue-main\.json/.test(rendered.main) && /\/m\/slices\/built-main\.json/.test(rendered.main)
-        && !/slices\/queue-list\.json/.test(rendered.main) && !/slices\/queue-child/.test(rendered.main),
+      () => /\/m\/slices\/queue-3\.json/.test(rendered.main) && /\/m\/slices\/built-3\.json/.test(rendered.main)
+        && !/slices\/queue-2\.json/.test(rendered.main) && !/slices\/queue-1\.json/.test(rendered.main),
       () => [...(rendered.main || "").matchAll(/\/m\/slices\/\S+\.json/g)].map((m) => m[0]));
+    check("ENG-95472 reopen: a NON-page unit's prompt carries a REAL worklog path named from its key — this is the render that used to pass on a stub while the shipped helper threw",
+      () => /\/m\/worklog\/reach-sectionRegistered\.md/.test(rendered.reach || "")
+        && /\/m\/worklog\/app\.md/.test(rendered.app || "")
+        && /\/m\/worklog\/main-3\.md/.test(rendered.main || ""),
+      () => ["reach", "app", "main"].map((k) => [...(rendered[k] || "").matchAll(/\/m\/worklog\/\S+\.md/g)].map((m) => m[0])));
     check("ENG-95472: a NON-page unit is handed no slice path — `--units` publishes slices for page keys, and `app` / reachability units are not among them",
       () => !/\/m\/slices\//.test(rendered.app) && !/\/m\/slices\//.test(rendered.appNoMenu) && !/\/m\/slices\//.test(rendered.reach),
       () => ({ app: /\/m\/slices\//.test(rendered.app || ""), reach: /\/m\/slices\//.test(rendered.reach || "") }));

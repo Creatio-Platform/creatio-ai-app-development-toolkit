@@ -152,6 +152,13 @@ the reconcile step's own `--units` and `--verify` runs:
 sanitising one merges two pages into one file. Each slice names its own page in `pageKey` so a builder can
 confirm the file is its own.
 
+**A non-page unit is named the other way round.** The `app` unit and every applicable reachability key are
+scheduled, but `--units` publishes neither — `pages[]` holds page keys only — so they have no position to be
+numbered by. Their per-unit files are named from the KEY, namespaced by the kind: `worklog/app.md`,
+`worklog/reach-sectionRegistered.md`. Those keys are the engine's own fixed identifiers, so the name is unique,
+and unlike a schedule position it is stable across rounds and sessions. Neither unit gets a queue or built slice:
+it owns no page row.
+
 They are NOT in `refs`: the plan-slice tier of that cache is keyed on the plan version, and a slice goes stale on an
 operator's answer or on any round that writes the stand. A build agent reads its two and cuts no row out of a whole file. See
 `./references/02-queue-and-built-files.md`.

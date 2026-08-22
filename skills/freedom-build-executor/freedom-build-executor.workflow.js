@@ -232,9 +232,15 @@ const VERIFY_DIGEST = `${input.outDir}/verify-digest.json`
 // not in here still calls the tool.
 const REFS_DIR = `${input.outDir}/refs`
 const REFS_INDEX = `${REFS_DIR}/index.md`
+// ---8<--- PER-UNIT FILE NAMES ---8<---
+// `engine-tests/classic-to-freedom/run-infra.mjs` slices THIS block into its `buildPrompt` render harness, instead of
+// stubbing these helpers — a stub is what let the reachability crash ship: the harness rendered a reach prompt
+// against a key-only `worklogFile` that could not throw, while the shipped one did. Keep the block self-contained:
+// it may read only `input`, `state`, `REFS_DIR` and the pure helpers below.
 // Bound to THIS run's published key list; the rule is the pure `unitNo` in the helpers block below. Every per-unit
-// FILE carries the number, because a name derived from the page key alone is many-to-one. The readable part stays
-// for the folder's sake; the number is what makes it unique.
+// PAGE file carries the number, because a name derived from the page key alone is many-to-one. The readable part
+// stays for the folder's sake; the number is what makes it unique. A NON-PAGE unit is named the other way — see
+// `unitFileStem` / `nonPageUnitStem` below: it has no position in the published list to be numbered by.
 // TWO FAILURES, TWO MESSAGES. `unitNo`'s own error says the schedule and the key list disagree, which is the
 // wrong diagnosis when the list is simply not there yet — a caller reading it would go hunting a key mismatch
 // that does not exist.
@@ -244,12 +250,21 @@ const unitNoOf = (key) => {
   }
   return unitNo(state.unitKeys, key)
 }
-const readablePart = (key) => key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')
-const specFile = (key) => `${REFS_DIR}/spec-${readablePart(key)}-${unitNoOf(key)}.md`
+// THE ONE PER-UNIT FILE NAME, over every unit class the schedule produces. A PAGE is named by its published
+// POSITION — the same number the engine wrote its slices under; a NON-PAGE unit (the `app` unit, every applicable
+// reachability key) by its own key, because it has no position to be numbered by. The rule itself is the pure
+// `unitStem` in the helpers block, with `unitNoOf` injected as the numberer, so the numbering and the guard above
+// stay in one place. Nothing else composes a per-unit file name.
+const unitFileStem = (key, kind) => unitStem({ key, kind }, unitNoOf)
+// PAGE-ONLY. Every key `--units` publishes is a page key, and `--spec` renders a page — a non-page unit has no
+// design spec to slice, so this is never called for one.
+const specFile = (key) => `${REFS_DIR}/spec-${unitFileStem(key, 'page')}.md`
 // One worklog FILE per unit, so a builder writes its own and reads nobody else's. Builders run SEQUENTIALLY, so each
 // also APPENDS its entry to the shared worklog once — append-only, never read-then-write: reading a growing shared log
 // to append to it costs O(n²) across a run, and the per-unit files are the audit trail either way.
-const worklogFile = (key) => `${input.outDir}/worklog/${readablePart(key)}-${unitNoOf(key)}.md`
+// EVERY SCHEDULED UNIT CLASS gets one, not only the page ones — which is why it takes the KIND: the `app` unit and
+// the reachability keys are scheduled but are not in `unitKeys`, and naming them by position threw.
+const worklogFile = (key, kind) => `${input.outDir}/worklog/${unitFileStem(key, kind)}.md`
 // THE PER-UNIT SLICES of the build queue and the built file, one file per page key: a build agent reads its own row
 // and never the whole artifact.
 // NOT under `${REFS_DIR}` — that cache is keyed on the plan version, and a slice goes stale on an operator's answer
@@ -267,6 +282,7 @@ const builtSliceFile = (key) => `${SLICE_DIR}/built-${unitNoOf(key)}.json`
 // authoritative evidence — so a short unit is caught before it reports complete, not a round later.
 const selfBuiltFile = (key) => `${SLICE_DIR}/self-built-${unitNoOf(key)}.json`
 const selfVerdictFile = (key) => `${SLICE_DIR}/self-verdict-${unitNoOf(key)}.json`
+// ---8<--- END PER-UNIT FILE NAMES ---8<---
 // SHELL-QUOTE every path that goes into a command line. These strings are handed to an agent to run in a shell, so
 // an unquoted `/tmp/My Migration/manifest.json` splits into two arguments and every engine phase then reads or
 // writes the wrong path — with no error, because the engine is simply given a path that is not the one intended.
@@ -853,6 +869,35 @@ function unitNo(unitKeys, key) {
     throw new Error(`unit '${key}' is not in the published key list [${(unitKeys || []).join(', ') || 'empty'}] — the schedule and unitKeys disagree, so no file can be named for it. Re-run Reconcile rather than building.`);
   }
   return i + 1;
+}
+// A unit key, reduced to what a filename can hold. One sanitiser for the whole run: the readable half of a page
+// file and a non-page unit's whole stem are the same transformation, and two copies of it would drift.
+function readableUnitPart(key) {
+  return String(key).replace(/[^A-Za-z0-9_.:@-]+/g, '_');
+}
+// A NON-PAGE unit's file stem. `scheduleUnits` schedules the `app` unit and every applicable REACHABILITY key
+// alongside the pages, but `unitKeys` is `--units.pages[].key` VERBATIM — so neither is in it, and `unitNo` threw
+// on the first attempt to name a file for one. That killed any run whose plan needs a menu entry, after the pages
+// were already built.
+// The fix is a rule of its own rather than a wider key list: the engine numbers its slice files by position in
+// `pages[]`, so putting a reach key into `unitKeys` would shift every page's number away from the file the engine
+// wrote, and every other consumer reads that list as "the page keys".
+// NAMED BY THE KEY, not by a position. These keys are the engine's own fixed identifiers (`app`,
+// `sectionRegistered`, …) — never a customer-derived caption — so a filename built from one is unique, and it is
+// STABLE across rounds and sessions, which a schedule position is not (a park, or an app unit the run does not
+// need, shifts it). The kind namespaces it, so a page stem (`<readable>-<n>`) and a non-page stem cannot collide.
+function nonPageUnitStem(key, kind) {
+  const readable = readableUnitPart(key);
+  return kind === key ? readable : `${kind}-${readable}`;
+}
+// THE per-unit file stem, for a unit of ANY kind. `pageNo` is injected — the caller's bound numberer — so this
+// function owns the RULE and the run owns the key list; a page stem therefore still ends in exactly the number the
+// engine wrote that page's slices under, and a non-page unit never asks for one.
+function unitStem(unit, pageNo) {
+  const key = unit?.key;
+  const kind = unit?.kind;
+  if (kind && kind !== 'page') return nonPageUnitStem(key, kind);
+  return `${readableUnitPart(key)}-${pageNo(key)}`;
 }
 const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
@@ -2262,7 +2307,7 @@ RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this
 
   // Assembled by a PURE composer so the hand-off is executable: every block is rendered here and ordered there.
   return composeBuildPrompt({
-    rules: RULES, behaviour: BEHAVIOUR_BLOCK, worklogPath: worklogFile(unit.key), sharedWorklogPath: `${input.outDir}/worklog.md`,
+    rules: RULES, behaviour: BEHAVIOUR_BLOCK, worklogPath: worklogFile(unit.key, unit.kind), sharedWorklogPath: `${input.outDir}/worklog.md`,
     kindBlock, repair: `${repair}${continuationBudget}`,
     guidelinesReturn: guidelinesReturnFor(unit, state.evidenceIds),
     gate: inContextGateBlock(unit),
