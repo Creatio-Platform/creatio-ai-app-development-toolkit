@@ -105,6 +105,15 @@ Rules that make it trustworthy:
 - `nonPageUnits` keys are the reachability keys from `--units.reachability[]` whose
   `appliesWhen` is `true`. A key with `appliesWhen: false` is not an obligation of this run and
   gets no entry.
+- **`reachability.sectionRegistered` is a COUNT, not a flag (ENG-95850 / B2).** Every other wiring key is a
+  boolean, because the wiring either exists or does not. A workplace registration is different: it only ADDS, so a
+  section "moved" from `My applications` to `Recruiting` is bound to BOTH until the old row is removed — two
+  `SysModuleInWorkplace` rows, and a `true` cannot tell that from one. So the verifier writes
+  `{ "workplaces": <n>, "names": [...] }` with the number it counted, and the gate closes the row at exactly 1,
+  reports 0 as unreachable, and reports 2+ by naming them. `n` must be a real integer (a quoted `"1"` is not
+  accepted — an agent that quoted the number has not reported a count the row can gate on); a key you could not
+  count is OMITTED, which reads ⚠ not-checked. **Nothing in the run unbinds a workplace** — that is a deletion of a
+  customer record, so the extra binding is reported for a human to settle.
 - **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
   else in this file is bookkeeping about units; this is the one section that records a change made outside the
   file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before
@@ -138,7 +147,7 @@ without redoing settled work.
               "businessRules": { "count": 2, "rules": [ { "name": "BR_Contact", "caption": "...", "condition": {}, "actions": [] } ] } },
     "child:Education": false
   },
-  "reachability": { "sectionRegistered": true, "miniPageWired": false },
+  "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["Recruiting"] }, "miniPageWired": false },
   "evidence": { "main#quality-gates": { "referencePage": "AccountPage", "components": ["crt.ExpansionPanel"] } },
   "judge":    { "main#quality-gates": { "convincing": true, "why": "prop-level diff, 3 components" } }
 }

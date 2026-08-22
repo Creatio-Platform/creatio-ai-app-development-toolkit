@@ -634,6 +634,19 @@ const BUILD_PROPERTIES = {
   // the script logs any disagreement rather than smoothing it over.
   claimedBuilt: { type: 'array', items: { type: 'string' } },
   reboundFrom: { type: 'string' },
+  // ENG-95850 (B2) — WHAT THE `sectionRegistered` UNIT COUNTED. A workplace registration only ADDS, so the unit's
+  // own report has to carry the NUMBER of bindings, not the fact that it registered one: on a real run the section
+  // ended up in two workplaces and looked right in the one that was opened. The count travels to the verifier, which
+  // writes it into `built.reachability.sectionRegistered` and lets the gate close the row at exactly one. Reporting
+  // is the whole job — the unit never unbinds, because removing a workplace binding is a stand deletion.
+  workplaceBindings: {
+    type: 'object',
+    required: ['count'],
+    properties: {
+      count: { type: 'integer' },
+      names: { type: 'array', items: { type: 'string' } },
+    },
+  },
   // The UI-guidelines pass, as the record the verifier files from. REQUIRED on a page unit: an absent answer
   // is not a valid outcome, `ran: false` with `notRunWhy` is. `evidenceId` is COPIED from this unit's published
   // ids, never composed — an invented id matches no row. `componentsDiffed` is the prop-diffed set, which is
@@ -2379,7 +2392,7 @@ ${unit.sectionHost === 'pages-only-no-menu'
     const appNote = unit.key !== 'sectionRegistered' ? '' : (appCode
       ? ` REGISTER IT INTO THE APPROVED APPLICATION: \`${appCode}\` — that code comes from the approved plan's placement. Do NOT resolve an application by name/caption off the stand, and do NOT fall back to another one if this one errors: a \`create-app-section\` failure here is a REPORT (\`blocked\`), never a cue to pick a different app.`
       : ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.')
-    kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
+    kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${unit.key !== 'sectionRegistered' ? '' : ` THEN COUNT THE WORKPLACE BINDINGS (ENG-95850 / B2): registering a section into a workplace does NOT unbind the one it was in, so after this unit the section can sit in TWO workplaces and look correct in the one you opened — that is exactly what a real run shipped. Count this section's \`SysModuleInWorkplace\` rows, report \`workplaceBindings: { count: <n>, names: [...] }\`, and if it is more than the one the plan approved, say so in \`proposals\` naming every workplace. **Do NOT unbind anything** — a workplace binding is a customer record, its removal is not this unit's decision, and the gate reports the extra binding for a human to settle.`}`
   } else {
     const schemaNote = known
       ? ` The queue records it as the Freedom schema \`${known}\` — work on THAT page.`
@@ -2524,6 +2537,28 @@ function recordPackageCreated(pkg, sectionPage, appUnitComplete = true) {
     },
   }
   log(`state file: recording that THIS run created the package \`${pkg}\` (app unit ${complete ? 'complete' : 'INCOMPLETE'}) — the placement gate reads it as ours, on this route and the other one`)
+}
+
+// ENG-95850 (B2) — THE BINDING COUNT THE `sectionRegistered` UNIT REPORTED. The VERIFIER's own count is what the
+// gate reads (it is the read-only authority that writes the payload); this is the BUILDER's claim, and it exists so a
+// second binding is in the run's answer even on a round where the verifier omitted the key. A count that is not
+// exactly one is surfaced as a blocker naming every workplace — surfaced, never acted on: unbinding is a stand
+// deletion, and this run reports it for a human to settle.
+function applyWorkplaceBindings(unit, res) {
+  const wb = res.workplaceBindings
+  if (!wb || !Number.isInteger(wb.count)) return
+  const names = (wb.names || []).filter((n) => typeof n === 'string' && n.trim())
+  const named = names.length ? ` (${names.join(', ')})` : ''
+  if (wb.count === 1) {
+    log(`${unit.key}: bound to exactly 1 workplace${named} — as the deliverable states`)
+    return
+  }
+  log(`${unit.key}: reports ${wb.count} workplace binding(s)${named} — the deliverable is exactly one`)
+  blockedItems = [...blockedItems, { unit: unit.key,
+    what: `the section is bound to ${wb.count} workplace(s)${named}, and the deliverable is exactly one`,
+    why: wb.count === 0
+      ? 'a section in no workplace is unreachable from the menu, which is the deliverable this unit exists for'
+      : 'a workplace registration only ADDS — the previous binding is still there. Removing one is a deletion of a customer record, so this run reports it instead of unbinding; the intended workplace is the operator\'s to confirm' }]
 }
 
 // WHICH THIRD OF THE APP UNIT IS MISSING, named in the blocker. Both halves can be absent at once, so they are
@@ -2708,6 +2743,7 @@ async function dispatchUnit(unit, r) {
   r.claims.push(claimFor(unit, res))
   reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
   if (unit.kind === 'app') applyAppUnitResult(unit, res)
+  if (unit.kind === 'reach') applyWorkplaceBindings(unit, res)
   if (unit.kind === 'page') recordPageSchema(unit, res, r)
   proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
   blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
@@ -2758,6 +2794,7 @@ WRITE THREE THINGS into ${BUILT_FILE}, and nothing else — the \`judge\` object
 
 1. \`pages\` — for every published key WITH a schema in the table above, clio \`get-page\` that schema and store \`{ viewConfig: <bundle.viewConfig VERBATIM>, viewModelConfig: <bundle.viewModelConfig VERBATIM>, modelConfig: <bundle.modelConfig VERBATIM>, entitySchemaName, packageName, parentSchemaName, schemaUId }\`. **\`entitySchemaName\` is the object the page's PRIMARY data source is bound to** — read it off \`modelConfig\`: the data source named by \`primaryDataSourceName\`, its \`entitySchemaName\`. Record \`modelConfig\` verbatim as well, so that scalar can be audited against the structure it came from. THIS IS THE MIGRATION'S WHOLE POINT: the Freedom page must sit on the SAME object the Classic page did, so the customer's existing records show up in it. A page on a fresh object is not a migration. Nothing used to record this, and a real run got 13 units deep with pages bound to a stub entity \`create-app\` had minted. \`bundle.viewConfig\` is the MERGED page: NOT \`ownBodySummary\`, NOT the page's own body — a template-provided element (Feed, FileList, ApprovalList, ContactCommunication, the DCM bar) is touched with \`operation: "merge"\` and carries no \`type\`, so the own body makes a CORRECT page read ❌ MISSING. A page whose schema exists but which the stand does not have is \`false\`. A page you could not fetch is OMITTED — absent means nobody looked, and the engine reports the two differently. If you confirm a schema for a key the table did not have (the builder named it in this round's report and the stand agrees), return it in \`schemasConfirmed\` so the queue keeps it.
 2. \`reachability\` — for each applicable key, \`true\` ONLY after you confirmed the wiring on-stand, \`false\` when you confirmed it is absent, and OMIT the key when you did not check. Return what you wrote in \`reachabilityWritten\` as the strings 'true' / 'false' / 'unset'.
+   - **\`sectionRegistered\` IS A COUNT, NOT A FLAG (ENG-95850 / B2).** Registering a section into a workplace does NOT unbind the one it was in, so \`true\` is the same answer for one binding and for two — and on a real run it hid a section left in BOTH "Recruiting" and "My applications". COUNT the workplace bindings this section actually has (its \`SysModuleInWorkplace\` rows) and write \`reachability.sectionRegistered = { "workplaces": <n>, "names": ["<workplace>", …] }\`, \`n\` a real integer you counted, not a guess. The gate closes the row at exactly 1, reports 0 as unreachable, and reports 2+ by naming them. Write \`false\` only when you confirmed no registration exists, and OMIT the key if you could not count — an omitted key is ⚠ not-checked, which is honest; a \`true\` here is neither, and the row will ask you for the number anyway. **You COUNT and REPORT; you never unbind — removing a workplace binding is a stand deletion and not this run's to make.**
 3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
 
 Then report \`discrepancies\`: where a builder CLAIMED a component and get-page does not show it, or the reverse. Record them — do not smooth them over.

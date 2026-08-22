@@ -1734,7 +1734,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (pm.sectionSchema || result.section) {
     pages.push(opts.sectionHostMode === "pages-only-no-menu"
       ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
-      : { label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it", vk: { type: "onstand", evidence: "sectionRegistered", what: "app-menu section-registration check", miss: "the section is not in the menu — its pages are unreachable" } });
+      : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings", miss: "the section is not in the menu — its pages are unreachable" } });
   }
   return pages;
 }
@@ -2826,9 +2826,48 @@ const VK_RULE = new Set(["rule"]);
 // gate: an unproven one may leave built pages unreachable. So it reads an explicit on-stand EVIDENCE boolean the agent
 // supplies in `--built` (e.g. `built.typedRouting`): true → Done; false → MISSING (exit 2); ABSENT → unverified
 // (exit 2, NOT "skip") — so `--verify` cannot exit 0 until the wiring is confirmed. (deep-review #1.)
+// ENG-95850 (B2) — A WORKPLACE "MOVE" ONLY ADDS. Registering a section into a workplace does not unbind the one it
+// was in: on the Applicant run the section sat in "Recruiting" AND still in "My applications" (2 SysModuleInWorkplace
+// rows), and a boolean deliverable could not see it, because `true` is the same answer for one binding and for two.
+// So a row can declare `expectCount`, and then the payload must carry a COUNT rather than a flag. The count IS the
+// deliverable: "bound to exactly one workplace" is checkable, "registered" is not.
+// Reported as a number the agent counted on the stand — `{ workplaces: <n>, names: [...] }`; `names` is optional and
+// is only ever quoted back to the reader.
+// STRICT about the type, like every other acceptance in this engine: a NUMBER, integer, not negative. A string "1"
+// is not coerced — an agent that quoted the number has not reported a count this row can gate on, and silently
+// accepting the quoted form is how a shape nobody documented becomes load-bearing. Anything else reads ⚠ and the
+// row says which object to supply.
+function onstandCount(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const n = v.workplaces ?? v.count;
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null;
+}
+const onstandNames = (v) => {
+  const names = Array.isArray(v?.names) ? v.names.filter((x) => typeof x === "string" && x.trim()) : [];
+  return names.length ? ` (${names.map((x) => esc(x)).join(", ")})` : "";
+};
+// The count-gated form of an `onstand` row. Its own fn so `resolveOnstandVk` stays under Sonar CC 15 and the boolean
+// path below is provably untouched for every row that declares no `expectCount`.
+// A bare `true` is NOT acceptance here, deliberately: it is exactly the answer that hid the second binding, so it
+// reads ⚠ unverified and names the number to supply. That does re-open a row an earlier run closed with `true` —
+// which is what adding a gate means, and the row asks for a specific number rather than failing mutely.
+function resolveOnstandCountVk(vk, v) {
+  const want = vk.expectCount;
+  if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  const n = onstandCount(v);
+  if (n === null) {
+    return ["⚠ verify", v === true
+      ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
+      : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
+  }
+  if (n === want) return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  return ["❌ MISSING", `bound to ${n} workplaces${onstandNames(v)}, expected exactly ${want} — a registration only ADDS, so the previous binding is still there; unbind all but the intended one (this row REPORTS it, the build does not undo it on its own)`, "missing"];
+}
 function resolveOnstandVk(vk, ctx) {
   const v = reachabilityValue(ctx.root, vk.evidence);
   const what = vk.what ? ` — run the on-stand ${vk.what}` : "";
+  if (vk.expectCount) return resolveOnstandCountVk(vk, v);
   if (v === true) return ["✅ Done", `${vk.evidence} confirmed on-stand`, "ok"];
   if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified"];

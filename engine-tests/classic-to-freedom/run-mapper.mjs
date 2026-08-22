@@ -2379,14 +2379,14 @@ check("placement gate: an approved 'pages-only-no-menu' plan is NOT blocked — 
 const clPagesOnly = checklistWithPlacement(pagesOnlyPlacement);
 check("placement: 'pages-only-no-menu' renders the section row as deliberately NOT built — no gated row nothing will ever satisfy",
   /Navigable section registered — \*\*deliberately NOT built\*\*/.test(clPagesOnly.stdout || "")
-  && !/Navigable section registered — the Freedom section appears/.test(clPagesOnly.stdout || ""),
+  && !/Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(clPagesOnly.stdout || ""),
   () => (clPagesOnly.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
 // (f) 'new-app' needs no primary match — the build creates its own app — but it KEEPS the gated registration row.
 const newAppPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "new-app" } };
 check("placement gate: mode 'new-app' clears the gate (the build creates its own app, so no primary match is required)",
   planWithPlacement(newAppPlacement).status === 0);
 check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
-  /Navigable section registered — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
+  /Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
 // …and the decision reaches the BUILD side. A build agent owns one page and never sees `manifest.placement`, so
 // `--units` republishes the host mode: without it `new-app` would be an approvable plan whose build still fails at
 // the last unit (an agent calling create-app-section against an app that cannot host a section) — a milder form of
@@ -5565,7 +5565,7 @@ const vOk = renderVerify(vResult, {}, {
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
   // (ENG-94975: `reachabilityValue` still reads these root-level booleans when `reachability` says nothing about
   // the key, so the existing literal stays valid; `reachability.<k> === false` would override them, `true` never does.)
-  miniPageWired: true, sectionRegistered: true,
+  miniPageWired: true, sectionRegistered: { workplaces: 1, names: ["Recruiting"] },
   ...QG_EVIDENCE, // D7: the page-DESIGN pass is an evidence row now — record + independent judge, or NOT complete
 });
 check("verify: a built page with all deliverables present AND on-stand wiring evidence supplied → complete",
@@ -7186,9 +7186,9 @@ const rcPages = { main: { viewConfig: { items: [] }, parentSchemaName: "T" } };
 const SECTION_RE = /Navigable section registered/;
 const WIRED_RE = /Mini page wired to/;
 const rcNothing = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: {} });
-const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: true } });
+const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } } });
 check("ENG-94975 P2 reachability: a key in `built.reachability` CLOSES its row — the canonical home is read, not just the legacy root-level booleans (control: the same payload with an empty `reachability` leaves it ⚠)",
-  allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /sectionRegistered confirmed on-stand/.test(rcSection.markdown)
+  allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /bound to exactly 1 workplace/.test(rcSection.markdown)
   && allEq(marksFor(rcNothing.markdown, SECTION_RE), "⚠ verify"),
   () => ({ section: marksFor(rcSection.markdown, SECTION_RE), nothing: marksFor(rcNothing.markdown, SECTION_RE) }));
 // …and the SAME row under an approved `pages-only-no-menu` placement. This is the leg that decides whether the
@@ -7217,10 +7217,48 @@ check("ENG-94975 P2 reachability PRECEDENCE: `reachability.miniPageWired = false
   && rcConflict.missing > 0,
   () => ({ wired: marksFor(rcConflict.markdown, WIRED_RE), missing: rcConflict.missing,
     row: rcConflict.markdown.split("\n").filter((l) => WIRED_RE.test(l)).map((l) => l.slice(-140)) }));
+// --- ENG-95850 (B2): A WORKPLACE "MOVE" ONLY ADDS, so the deliverable is a COUNT. On the Applicant run the section
+// was registered into "Recruiting" and stayed bound to "My applications" — 2 SysModuleInWorkplace rows — and the
+// boolean row could not see it, because `true` is the same answer for one binding and for two. The row now asks for
+// the number. Non-destructive by decision: the gate REPORTS a second binding, it does not unbind anything.
+const rcCount = (v) => renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: v } });
+check("ENG-95850 (B2): exactly ONE workplace binding closes the row, and the evidence says which — the count is the deliverable, not the flag",
+  allEq(marksFor(rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown, SECTION_RE), "✅ Done")
+    && /bound to exactly 1 workplace \(Recruiting\)/.test(rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown),
+  () => rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+const rcTwo = rcCount({ workplaces: 2, names: ["Recruiting", "My applications"] });
+check("ENG-95850 (B2): TWO bindings is a HARD ❌ MISSING that names both workplaces and says the old binding is still there — the exact defect a boolean hid",
+  allEq(marksFor(rcTwo.markdown, SECTION_RE), "❌ MISSING")
+    && /bound to 2 workplaces \(Recruiting, My applications\)/.test(rcTwo.markdown)
+    && /unbind all but the intended one/.test(rcTwo.markdown),
+  () => rcTwo.markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+check("ENG-95850 (B2): the report does not promise the build will fix it — the row states it REPORTS the extra binding, so nothing reads it as an automatic unbind",
+  /this row REPORTS it, the build does not undo it on its own/.test(rcTwo.markdown));
+check("ENG-95850 (B2): ZERO bindings is ❌ MISSING on the not-registered wording, not on the count wording — a section in no workplace is unreachable, which is the original failure",
+  allEq(marksFor(rcCount({ workplaces: 0 }).markdown, SECTION_RE), "❌ MISSING")
+    && /bound to NO workplace/.test(rcCount({ workplaces: 0 }).markdown));
+const rcBareTrue = rcCount(true);
+check("ENG-95850 (B2): a bare `true` no longer CLOSES the row — it is ⚠ unverified and names the object to supply, because `true` is precisely the answer that hid the second binding",
+  allEq(marksFor(rcBareTrue.markdown, SECTION_RE), "⚠ verify")
+    && /BINDING COUNT was not reported/.test(rcBareTrue.markdown)
+    && /workplaces/.test(rcBareTrue.markdown),
+  () => rcBareTrue.markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+check("ENG-95850 (B2): `false` stays a HARD ❌ MISSING on the un-wired wording — the count gate did not soften the confirmed-absent case",
+  allEq(marksFor(rcCount(false).markdown, SECTION_RE), "❌ MISSING")
+    && /NOT wired/.test(rcCount(false).markdown));
+check("ENG-95850 (B2): a malformed count (not an integer, negative, or a bare array) is ⚠ unverified — never read as a satisfied count",
+  allEq(marksFor(rcCount({ workplaces: "1" }).markdown, SECTION_RE), "⚠ verify")
+    && allEq(marksFor(rcCount({ workplaces: -1 }).markdown, SECTION_RE), "⚠ verify")
+    && allEq(marksFor(rcCount({ workplaces: 1.5 }).markdown, SECTION_RE), "⚠ verify")
+    && allEq(marksFor(rcCount([1]).markdown, SECTION_RE), "⚠ verify"));
+check("ENG-95850 (B2): `count` is accepted as a synonym of `workplaces` — one shape change in the reader must not silently reopen every row",
+  allEq(marksFor(rcCount({ count: 1 }).markdown, SECTION_RE), "✅ Done"));
+check("ENG-95850 (B2): the OTHER wiring keys are untouched — `miniPageWired: true` still closes its row on the boolean path, so the count gate is scoped to the row that declares it",
+  allEq(marksFor(renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: true } }).markdown, WIRED_RE), "✅ Done"));
 // …and the fallback is still a fallback: a NON-EMPTY `reachability` that simply says nothing about a key leaves
 // the root-level boolean in charge (this is the leg that the opposite mutation — reading only `reachability` —
 // would break, and the legacy payloads in the suite would not notice because they carry no `reachability` at all).
-const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: true }, miniPageWired: true });
+const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, miniPageWired: true });
 check("ENG-94975 P2 reachability: a key ABSENT from a non-empty `reachability` object still resolves from the payload root — the canonical map takes precedence over the legacy shape without abolishing it",
   allEq(marksFor(rcFallback.markdown, WIRED_RE), "✅ Done") && allEq(marksFor(rcFallback.markdown, SECTION_RE), "✅ Done"),
   () => ({ wired: marksFor(rcFallback.markdown, WIRED_RE), section: marksFor(rcFallback.markdown, SECTION_RE) }));
@@ -7399,7 +7437,7 @@ for (const e of pageUnits(m12Run, m12Opts).evidenceRows) {
   m12Evidence[e.id] = { referencePage: "SomeExistingFreedomPage", components: ["crt.Input"] };
   m12Judge[e.id] = { convincing: true, why: "the record names the page and the components built on it" };
 }
-const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: true }, evidence: m12Evidence, judge: m12Judge });
+const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, evidence: m12Evidence, judge: m12Judge });
 // `entitySchemaName` matches this fixture's own entity (`X`): the migration invariant is that the Freedom page
 // sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
 const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
@@ -7594,7 +7632,11 @@ const e1Payload = (over = {}, extra = {}) => {
   const evidence = {}, judge = {};
   for (const e of e1Units.evidenceRows) { evidence[e.id] = { referencePage: "an existing Freedom page", components: ["crt.Input"] }; judge[e.id] = { convincing: true, why: "checked" }; }
   const reachability = {};
-  for (const r of e1Units.reachability) if (r.appliesWhen) reachability[r.key] = true;
+  // `true` closes a boolean wiring key; `sectionRegistered` is COUNT-gated since ENG-95850 (B2) — a workplace
+  // registration only ADDS, so a flag cannot tell one binding from two and the row asks for the number instead.
+  // This helper writes what a real verifier writes, so E1's subject (the keyed mini-page payload) is not masked
+  // by an unrelated open row.
+  for (const r of e1Units.reachability) if (r.appliesWhen) reachability[r.key] = r.key === "sectionRegistered" ? { workplaces: 1, names: ["Recruiting"] } : true;
   for (const [k, v] of Object.entries(over)) { if (v === undefined) delete pages[k]; else pages[k] = v; }
   return { pages, reachability, evidence, judge, ...extra };
 };
@@ -8829,7 +8871,7 @@ const N2_NO_SUCH_KEY = "child:NotAPage";
   const listIds = lpUnits.evidenceRows.filter((r) => r.pageKey === "list").map((r) => r.id);
   const builtAll = {
     pages: { main: { viewConfig: { items: ["main-body"] }, schemaUId: "u-main" }, list: false },
-    reachability: { sectionRegistered: true },
+    reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } },
     evidence: Object.fromEntries([...mainIds.map((id) => [id, { referencePage: "AccountPage", components: ["crt.Input"] }]),
       ...listIds.map((id) => [id, { referencePage: "ContactPage", components: ["crt.DataGrid"] }])]),
     judge: Object.fromEntries(listIds.map((id) => [id, { convincing: false, why: "no prop diff" }])),

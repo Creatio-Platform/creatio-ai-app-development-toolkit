@@ -1041,6 +1041,30 @@ check("ENG-95850 (B1): an absent `businessRules` slot is stated as NOT-CHECKABLE
     && /not-checkable, not absent/.test(wfSrc));
 check("ENG-95850 (B1): the rule is GENERALISED past business rules — establish that the artifact you read would carry the deliverable before ruling it absent",
   /the artifact you read is the one that would CARRY it/.test(wfSrc));
+// --- ENG-95850 (B2): the EXECUTOR's half of the workplace count. The engine gate is covered in run-mapper; these pin
+// that the run actually SUPPLIES the number and that it never unbinds anything (the operator chose the
+// non-destructive half deliberately, so "reports it" is the contract, not an implementation detail).
+check("ENG-95850 (B2): the verifier is told `sectionRegistered` is a COUNT, and is given the exact object shape the gate reads",
+  /sectionRegistered\\` IS A COUNT, NOT A FLAG/.test(wfSrc)
+    && /reachability\.sectionRegistered = \{ "workplaces": <n>, "names": \[/.test(wfSrc)
+    && /SysModuleInWorkplace/.test(wfSrc));
+check("ENG-95850 (B2): the verifier is told an OMITTED key is the honest answer when it could not count — a `true` is neither counted nor not-checked",
+  /OMIT the key if you could not count/.test(wfSrc)
+    && /here is neither, and the row will ask you for the number anyway/.test(wfSrc));
+check("ENG-95850 (B2): the reach unit reports its own count, and the schema carries it — a claim the run can surface even on a round the verifier omitted the key",
+  /workplaceBindings: \{\s*\n\s*type: 'object',\s*\n\s*required: \['count'\]/.test(wfSrc)
+    && /report \\`workplaceBindings: \{ count: <n>, names: \[\.\.\.\] \}\\`/.test(wfSrc));
+check("ENG-95850 (B2): NOTHING in the run unbinds a workplace — both the verifier step and the build unit say so explicitly, because the non-destructive half was a deliberate choice",
+  /You COUNT and REPORT; you never unbind/.test(wfSrc)
+    && /\*\*Do NOT unbind anything\*\*/.test(wfSrc)
+    && /reports it instead of unbinding/.test(wfSrc));
+check("ENG-95850 (B2): a count that is not exactly one becomes a BLOCKER in the run's answer, and 0 vs 2+ are given different reasons — unreachable is not the same defect as a leftover binding",
+  /function applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
+    && /if \(unit\.kind === 'reach'\) applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
+    && /a section in no workplace is unreachable/.test(wfSrc)
+    && /the previous binding is still there/.test(wfSrc));
+check("ENG-95850 (B2): a non-integer count is IGNORED rather than reported as a binding — a malformed claim must not manufacture a blocker",
+  /if \(!wb \|\| !Number\.isInteger\(wb\.count\)\) return/.test(wfSrc));
 check("ENG-95850 (A2): the app unit RECORDS its stand write through one writer, on the closed branch and on the short one, so the two cannot disagree about the record's shape",
   /function recordPackageCreated\(pkg, sectionPage, appUnitComplete = true\)/.test(wfSrc)
     && /recordStarterPages\(res\)\s*\n[\s\S]{0,600}?recordPackageCreated\(got, sectionPage\)/.test(wfSrc)
