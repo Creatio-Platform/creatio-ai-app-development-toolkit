@@ -1270,8 +1270,15 @@ function renderPlanBanners(result, opts) {
 // sites) and they differ too much to share a sentence, but a rename must not have to find them all.
 export const RECONCILE_REFERENCE = "./references/existing-freedom-reconcile.md";
 
+// ENG-95850 (D) — `list-pages` ALONE cannot answer this for a TYPED entity. An entity whose records are typed
+// registers a per-type edit card in `SysModuleEdit` instead of one `<Entity>Page`, so a search for a single `*Page`
+// legitimately finds nothing while the entity has many. A real run recorded `editPage: false` for `InternalRequest`,
+// which has ~18 typed edit pages, and the plan then asserted there was nothing to migrate; it was caught only by a
+// hand-written Adjustments entry. So the answer list names the second call that settles it.
 export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema to `manifest.childPageSchemas` '
-  + '(rebuild it here); none exists → record `"editPage": false`; the CHILD entity already ships a `kind: freedom` '
+  + '(rebuild it here); none exists → record `"editPage": false`, and check `list-entity-client-schemas` by that '
+  + 'entity FIRST: a TYPED entity registers per-type edit cards instead of one `<Entity>Page`, so `list-pages` '
+  + 'finding no `*Page` is not the same as the entity having no Classic card; the CHILD entity already ships a `kind: freedom` '
   + 'form page (`list-entity-client-schemas`) → record `"reuseFreedomPage": "<Freedom form page>"` (the related '
   + 'list opens THAT page and nothing is rebuilt here). `"editable": false` records that the list is read-only, '
   + 'which is NOT an answer to whether a page exists — pair it with one of the three above. '
@@ -1283,7 +1290,7 @@ export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema t
 // claim about it. Own fn for Sonar CC 15.
 function reuseClassicChildSentence(c) {
   if (typeof c.editPage === "string" && c.editPage) return `The Classic \`${esc(c.editPage)}\` is NOT migrated — it is superseded, not skipped.`;
-  if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form.";
+  if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form. (A TYPED entity registers per-type cards rather than one `*Page`, so confirm `list-entity-client-schemas` reports no `editPages` either before reading this as none.)";
   return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
 }
 
@@ -1307,7 +1314,7 @@ function renderChildMappings(childs) {
     } else if (typeof c.editPage === "string" && c.editPage) {
       P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
     } else if (c.editPage === false) {
-      P.push(`> **Verified: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list; nothing to migrate here.`);
+      P.push(`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`);
     } else if (c.editable === false) {
       // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
       // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.

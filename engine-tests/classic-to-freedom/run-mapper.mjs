@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -3336,6 +3336,21 @@ check("ENG-95021: the reuse run's own `onstand` keys are registered in REACHABIL
 // mini-page path would pass unnoticed. Scanning the source covers all of them: an `onstand` row whose key is not
 // in REACHABILITY_KEYS can never be offered by `--units` nor cleared by `--verify` — exit 2 with no valid answer.
 const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
+// --- ENG-95850 (D): a single `*Page` search cannot answer the child-page question for a TYPED entity. `list-pages`
+// finding no `<Entity>Page` is not the same as the entity having no Classic card — a typed entity registers a per-type
+// card in `SysModuleEdit` instead. A real run recorded `editPage: false` for `InternalRequest` (~18 typed edit pages)
+// and the plan asserted there was nothing to migrate; only a hand-written Adjustments entry caught it.
+check("ENG-95850 (D): the recorded `editPage: false` sentence no longer reads as VERIFIED — it names the typed-entity check that has to confirm it",
+  () => /Recorded: no separate child page/.test(DESIGNSPEC_SRC)
+    && !/\*\*Verified: no separate child page\.\*\*/.test(DESIGNSPEC_SRC)
+    && /TYPED entity registers a per-type edit card/.test(DESIGNSPEC_SRC)
+    && /also returns no \\`editPages\\`/.test(DESIGNSPEC_SRC));
+check("ENG-95850 (D): the child-page ANSWER list names `list-entity-client-schemas` as the call that settles a typed entity, so the answer is not recorded off `list-pages` alone",
+  () => /list-entity-client-schemas` by that '/.test(DESIGNSPEC_SRC)
+    && /TYPED entity registers per-type edit cards instead of one/.test(CHILD_PAGE_ANSWERS)
+    && /finding no `\*Page` is not the same as the entity having no Classic card/.test(CHILD_PAGE_ANSWERS));
+check("ENG-95850 (D): the REUSE sentence carries the same caveat — the two places that state 'no Classic child page' cannot disagree about how strong that claim is",
+  () => /A TYPED entity registers per-type cards rather than one/.test(DESIGNSPEC_SRC));
 const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\s*evidence:\s*"([A-Za-z]+)"/g)].map((m) => m[1]))];
 // Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
 // registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward
