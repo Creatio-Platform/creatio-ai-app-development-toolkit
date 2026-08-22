@@ -141,7 +141,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
@@ -784,6 +784,41 @@ check("packagePreconditionStop: every other host mode over an existing package i
 check("packagePreconditionStop: the unknown/unnamed stops still win — a `new-app` plan whose package state was inconclusive stops on THAT, not on the host mode",
   () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app").stopped === "target-package-unknown"
     && wf.packagePreconditionStop(null, "absent", "new-app").stopped === "target-package-unnamed"));
+
+// --- ENG-95850 (A2): WHOSE PACKAGE IS IT. `new-app` + a package that exists had ONE answer for two opposite facts —
+// a package somebody else owns (a plan-vs-stand mismatch, a stop) and the package this migration's own app unit
+// created (a resume). The second is what the Applicant run hit: the Agent route created `UsrApplicantFreedom`, the
+// Workflow route saw an existing package, and clearing it cost a re-plan plus a SECOND approval of unchanged scope.
+// It is also, unnoticed until now, why a `new-app` plan could not survive its own success: the app unit sets
+// `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
+const ownRec = (o = {}) => ({ package: "UsrPkg", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrPkg_FormPage", ...o });
+check("packagePreconditionStop: a package THIS migration created, app unit COMPLETE, is NOT a stop — it is a resume, and `new-app` surviving its own app unit depends on exactly this",
+  () => (wf.packagePreconditionStop("UsrPkg", "exists", "new-app", ownRec()) === null));
+check("packagePreconditionStop: with NO provenance record the stop is unchanged, and its `next` says so — absence is never read as ownership, which is what keeps a stranger's application safe",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app", null);
+    return s && s.stopped === "new-app-over-existing-package" && /no state file records this migration creating it/.test(s.next)
+      && /re-plan/.test(s.next) && /BY HAND/.test(s.next); });
+check("packagePreconditionStop: OUR package with an INCOMPLETE app unit still stops — nothing here may infer a section nobody created — but names the finish-and-re-run route and that it needs no second approval",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app", ownRec({ appUnitComplete: false }));
+    return s && s.stopped === "new-app-over-existing-package" && /THIS migration created it/.test(s.next)
+      && /INCOMPLETE/.test(s.next) && /without a second approval/.test(s.next); });
+check("packagePreconditionStop: a record naming a DIFFERENT package authorises nothing — it says nothing about the package in front of the run, so the stop stands",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app", ownRec({ package: "UsrOther" }));
+    return s && s.stopped === "new-app-over-existing-package" && /no state file records this migration creating it/.test(s.next); });
+check("ownPackageRecord: matched on the package NAME (whitespace-insensitive), and a missing/empty name matches nothing — a record cannot be stretched over a package it does not name",
+  () => (wf.ownPackageRecord({ package: " UsrPkg ", appUnitComplete: true }, "UsrPkg")?.package === "UsrPkg"
+    && wf.ownPackageRecord({ package: "", appUnitComplete: true }, "UsrPkg") === null
+    && wf.ownPackageRecord({ appUnitComplete: true }, "UsrPkg") === null
+    && wf.ownPackageRecord(null, "UsrPkg") === null
+    && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, null) === null));
+check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy string or a missing flag reads as incomplete, so a malformed record cannot wave the run past the stop",
+  () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
+    && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
+    && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
+check("packagePreconditionStop: provenance changes ONLY the `new-app`-over-existing branch — the unknown and unnamed stops are untouched by a record, and the other host modes still proceed",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()).stopped === "target-package-unknown"
+    && wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
+    && wf.packagePreconditionStop("UsrPkg", "exists", "existing-app", null) === null));
 check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
   () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
 check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
@@ -988,6 +1023,57 @@ check("workflow: the starter page `create-app` minted is recorded as `main`'s sc
   /pageSchemas\.main = res\.starterFormPage/.test(wfSrc));
 check("workflow: Reconcile is asked for the package state as THREE values and told not to resolve doubt into either answer",
   /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
+// --- ENG-95850: THE ONE STATE FILE, and the wiring that keeps it one. The decision helpers are tested above; these
+// pin the parts that are prompt text and call sites, where a regression is invisible to a unit test.
+check("ENG-95850 (A2): the app unit RECORDS its stand write through one writer, on the closed branch and on the short one, so the two cannot disagree about the record's shape",
+  /function recordPackageCreated\(pkg, sectionPage, appUnitComplete = true\)/.test(wfSrc)
+    && /recordStarterPages\(res\)\s*\n[\s\S]{0,600}?recordPackageCreated\(got, sectionPage\)/.test(wfSrc)
+    && /recordPackageCreated\(got, sectionPage, false\)/.test(wfSrc));
+check("ENG-95850 (A2): `standWrites` is declared ABOVE `runReturn` — every return reads it, and `runReturn` is reachable from the earliest stop, so a declaration below a caller is the TDZ throw this suite already has a class of tests for",
+  wfSrc.indexOf("let standWrites") > 0 && wfSrc.indexOf("let standWrites") < wfSrc.indexOf("function runReturn(")
+    && /packageCreatedByRun: standWrites\.packageCreated \|\| null/.test(wfSrc));
+check("ENG-95850 (A2): a recorded `appUnitComplete: true` is MONOTONIC — a later partial report cannot walk the met deliverable back to `false`, because only a stand read could contradict it",
+  /const complete = appUnitComplete === true \|\| standWrites\.packageCreated\?\.appUnitComplete === true/.test(wfSrc));
+check("ENG-95850 (A2): the app unit's stand write is persisted IMMEDIATELY after its dispatch, not at the round's Verify — every later unit in the round is a long killable agent, and this is the one carried fact whose loss is an irreversible stand change the next run cannot account for",
+  /await dispatchUnit\(unit, r\)\n(?:\s*\/\/[^\n]*\n)*\s*if \(unit\.kind === 'app' && standWrites\.packageCreated\) await persistPending\(/.test(wfSrc));
+check("ENG-95850 (A2): the record RIDES THE CARRY into the queue file at its ROOT — the package is not a page, and the next run's placement gate looks for it before any unit exists",
+  /standWrites/.test(wfSrc)
+    && /merge under the ROOT key \\`standWrites\\`/.test(wfSrc)
+    && /"units": \{\}, "nonPageUnits": \{\}, "standWrites": \{\} \}/.test(wfSrc));
+check("ENG-95850 (A2): BOTH package gates are handed `ownPackageNow()` — this process's own record beats the report, or a `new-app` run stops on its own app unit's success one Reconcile later",
+  (wfSrc.match(/packagePreconditionStop\(state\.targetPackage, state\.packageState, state\.sectionHost, ownPackageNow\(\)\)/g) || []).length === 2
+    && /const ownPackageNow = \(\) => standWrites\.packageCreated \|\| state\?\.packageCreatedByRun \|\| null/.test(wfSrc));
+check("ENG-95850 (A2): Reconcile is told to read the provenance OFF THE FILE and never to derive it from the stand — a stand read can say a package exists, never who created it",
+  /Return \\`packageCreatedByRun\\`/.test(wfSrc)
+    && /do NOT derive it from the stand/.test(wfSrc)
+    && /no stand read can say WHO created it/.test(wfSrc));
+check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper — a raw `agent(reconcilePrompt(...))` outside it is a call site the retry does not cover",
+  (wfSrc.match(/await reconcileAgent\(/g) || []).length === 3
+    && (wfSrc.match(/agent\(reconcilePrompt\(/g) || []).length === 1
+    && /async function reconcileAgent\(roundNo, label\)/.test(wfSrc));
+// THE SCHEMA-SIZE BUDGET (A3). The rejection that cost the Applicant run its route was reported as "output schema too
+// large to classify safely" at this exact agent, and the host's threshold is not something this repo can reproduce —
+// so the retry above is the fix and this is the guardrail: the Reconcile schema's SERIALIZED size (what the classifier
+// sees; the JS comments around it are not part of it) stays inside a stated budget instead of drifting upward one
+// field at a time. Raising the ceiling is a deliberate act, which is the point.
+const RECONCILE_SCHEMA_BUDGET = 6000;
+let reconcileSchemaBytes = -1;
+let tmpSchema;
+try {
+  tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
+  const modPath = path.join(tmpSchema, "schema.mjs");
+  const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
+  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA };\n`);
+  const mod = await import(pathToFileURL(modPath).href);
+  reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
+} catch (e) {
+  check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
+} finally {
+  if (tmpSchema) rmSync(tmpSchema, { recursive: true, force: true });
+}
+check(`ENG-95850 (A3): the Reconcile structured-output schema stays inside its stated budget of ${RECONCILE_SCHEMA_BUDGET} serialized bytes — the classifier sees this object, and it is on the critical path of the run's first agent`,
+  reconcileSchemaBytes > 0 && reconcileSchemaBytes <= RECONCILE_SCHEMA_BUDGET,
+  () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET})`);
 check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fallback persistence only if Verify cannot confirm that write",
   /lastVerifier = await verifyRound\(builtThisRound, claims, carryNow\(\)\)/.test(wfSrc)
     && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
@@ -1348,6 +1434,50 @@ check("workflow EXECUTES the combined stop: a baseline with new-app-over-existin
     && Array.isArray(combinedStop.componentMismatches) && combinedStop.componentMismatches.some((c) => c.type === "crt.ContactCommunication")
     && /crt\.ContactCommunication/.test(combinedStop.next || ""),
   () => (combinedStop.threw ? `threw: ${combinedStop.threw}` : `stopped=${combinedStop.stopped} mismatches=${JSON.stringify(combinedStop.componentMismatches)} next=${(combinedStop.next || "").slice(0, 140)}`));
+
+// --- ENG-95850 (A2) AS AN EXECUTION PATH. The pure-helper checks above prove the DECISION; these run the real
+// prologue through it, which is the only thing that proves the provenance record is actually THREADED into both
+// package gates. A gate handed `undefined` instead of the record passes every pure test and stops every resumed run.
+const newAppBaseline = (packageCreatedByRun) => ({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicantFreedom", packageState: "exists", sectionHost: "new-app",
+  componentResolution: [], packageCreatedByRun,
+});
+const ownedResume = await runToBaseline(newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" })).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the ENG-95850 resume: a baseline whose state file records THIS migration creating the target package does NOT stop on `new-app-over-existing-package` — it reaches a downstream stop, so a gate that ignored the record would surface here",
+  !ownedResume.threw && ownedResume.stopped === "unknown-checkpoint-key",
+  () => (ownedResume.threw ? `threw: ${ownedResume.threw}` : `stopped=${ownedResume.stopped} next=${(ownedResume.next || "").slice(0, 160)}`));
+const strangerPkg = await runToBaseline(newAppBaseline(null)).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the unchanged stop: the SAME baseline with no provenance record still stops on `new-app-over-existing-package`, and the return carries `packageCreatedByRun: null` — so the resume above is the record's doing and not a weakened gate",
+  !strangerPkg.threw && strangerPkg.stopped === "new-app-over-existing-package" && strangerPkg.packageCreatedByRun === null,
+  () => (strangerPkg.threw ? `threw: ${strangerPkg.threw}` : `stopped=${strangerPkg.stopped} rec=${JSON.stringify(strangerPkg.packageCreatedByRun)}`));
+const ownedShort = await runToBaseline(newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: false })).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the half-finished app unit: OUR package with `appUnitComplete: false` still stops, the return CARRIES the record so the caller can see whose package it is, and `next` names the finish-by-hand route",
+  !ownedShort.threw && ownedShort.stopped === "new-app-over-existing-package"
+    && ownedShort.packageCreatedByRun?.package === "UsrApplicantFreedom" && ownedShort.packageCreatedByRun?.appUnitComplete === false
+    && /INCOMPLETE/.test(ownedShort.next || "") && /without a second approval/.test(ownedShort.next || ""),
+  () => (ownedShort.threw ? `threw: ${ownedShort.threw}` : `stopped=${ownedShort.stopped} rec=${JSON.stringify(ownedShort.packageCreatedByRun)}`));
+
+// --- ENG-95850 (A3): RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Two consecutive launches of the real run were
+// rejected at this exact call in 9 ms with 0 writes, a later identical launch passed, and in between the flake read
+// as a hard block and pushed the run onto the other route — which is where A2's split state came from. Executed, not
+// source-pinned: a retry loop that returned on the first `null` passes any regex and still loses the run.
+let retryCalls = 0;
+const afterRetry = await runWith({}, async () => {
+  retryCalls += 1;
+  if (retryCalls === 1) return null;                       // the transient rejection
+  if (retryCalls === 2) return newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true });
+  return null;
+}).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the Reconcile retry: a baseline Reconcile that returns nothing ONCE is retried, the second answer is accepted, and the run proceeds instead of reporting `reconcile-failed`",
+  !afterRetry.threw && afterRetry.stopped !== "reconcile-failed" && afterRetry.stopped === "unknown-checkpoint-key" && retryCalls >= 2,
+  () => (afterRetry.threw ? `threw: ${afterRetry.threw}` : `stopped=${afterRetry.stopped} calls=${retryCalls}`));
+let deadCalls = 0;
+const stillDead = await runWith({}, async () => { deadCalls += 1; return null; }).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly twice and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
+  !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 2
+    && /SAME route/.test(stillDead.next || "") && /switching routes/.test(stillDead.next || ""),
+  () => (stillDead.threw ? `threw: ${stillDead.threw}` : `stopped=${stillDead.stopped} calls=${deadCalls} next=${(stillDead.next || "").slice(0, 160)}`));
 
 // --- HARD STOP 3.5 MID-RUN in `acceptReconciled` as an EXECUTION path (ENG-95468). The baseline gate is executed
 // above; this drives a LATER Reconcile — the post-preflight one, the FIRST `acceptReconciled` call site — through the
@@ -2012,7 +2142,7 @@ check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistP
     && !/if \(persisted\?\.written\) \{ markParksPersisted\(\); carryPersisted = carryNowFp \}/.test(wfSrc));
 check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by Verify/Reconcile on the normal path and by fallback persistence only when needed — a kill still cannot come back with the budget reset",
   /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence\]\)/.test(wfSrc)
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites\]\)/.test(wfSrc)
     && /markCarryPersisted\(\)/.test(wfSrc)
     && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",

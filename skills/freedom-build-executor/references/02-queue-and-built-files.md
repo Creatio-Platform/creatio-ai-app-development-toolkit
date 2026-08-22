@@ -45,6 +45,10 @@ there is no "resume" command: there is one command, and it does the next undone 
     "sectionRegistered": { "rounds": 1, "parked": false },
     "miniPageWired":     { "rounds": 0, "parked": false }
   },
+  "standWrites": {
+    "packageCreated": { "package": "UsrApplicantFreedom", "appUnitComplete": true,
+                        "planVersion": "plan-4f9c2ab17e03", "sectionPage": "UsrApplicants_FormPage" }
+  },
   "proposals": [
     { "unit": "main", "deviation": "merge two profile islands into one",
       "why": "second island holds a single field", "applied": false }
@@ -101,6 +105,24 @@ Rules that make it trustworthy:
 - `nonPageUnits` keys are the reachability keys from `--units.reachability[]` whose
   `appliesWhen` is `true`. A key with `appliesWhen: false` is not an obligation of this run and
   gets no entry.
+- **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
+  else in this file is bookkeeping about units; this is the one section that records a change made outside the
+  file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before
+  any unit exists. **All three routes write it**, which is what makes them interchangeable over one migration
+  folder: a route is how work is dispatched, never a separate memory of the stand.
+  - `packageCreated` — the application/package the `app` unit created. `package` is the name read back off the
+    stand (never the `code` passed to `create-app`: clio applies the environment's `SchemaNamePrefix`).
+    `appUnitComplete` is the unit's FULL deliverable — the planned package AND a section on the migrated object
+    AND no stub left behind — so it is `true` only on the branch that closes the unit, and `false` while the
+    unit is short. It never walks back from `true`: only a stand read could contradict a met deliverable, and a
+    later builder's summary is not one.
+  - **Why it has to be on disk.** From the stand, a package this migration created and a package a stranger owns
+    are the same fact — no stand read says who created one. Under `sectionHost: new-app` they need opposite
+    handling (a stranger's is a stop; ours is a resume), so a missing record means the run must assume the
+    stranger. Dropping this key does not degrade the next run, it stops it: on its own package, on its own work.
+  - **Absence is never ownership.** A folder written before this key existed has none, and every gate then
+    behaves exactly as it did then — it stops. Reconcile reports the record as `packageCreatedByRun`, read off
+    THIS FILE and never derived from the stand.
 
 ## `built.json` — the payload `--verify` reads
 
