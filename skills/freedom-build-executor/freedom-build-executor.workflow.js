@@ -208,6 +208,14 @@ const FINDING_KEYS = findingKeySet(FINDINGS)
 // the page is still wrong after the attempt, they pass the finding again.
 const findingsPending = new Set(FINDING_KEYS)
 const QUEUE_FILE = `${input.outDir}/build-queue.json`
+// ENG-95850 (A2) — THIS PROCESS'S OWN STAND WRITES, for the single state file both routes share. Today it holds one
+// fact, the app unit's created package — the only stand write whose absence from the file made a run mistake its own
+// work for a stranger's. AUTHORITATIVE OVER THE REPORT, exactly like `pageSchemas`: what this process did, it knows
+// first-hand, and a queue write that has not landed yet must not make the next gate read the package as somebody
+// else's. Declared UP HERE, beside the file it is written into, and not down with the rest of the run state: both
+// `carryNow()` and every `runReturn` read it, and `runReturn` is reachable from the earliest stop in the script —
+// a declaration below any of its callers is a temporal-dead-zone throw on exactly the run that stops first.
+let standWrites = {}
 const BUILT_FILE = `${input.outDir}/built.json`
 // Per-preflight-agent output files. The ⚠ Confirm fan-out is READ-ONLY AGAINST THE STAND — but "read-only" is
 // about the STAND, and up to `MAX_PREFLIGHT` agents were told to write their records into the ONE `built.json`.
@@ -404,6 +412,23 @@ const RECONCILE_SCHEMA = {
     // over an existing app is not a no-op) nor as "it is there" (which puts every unit back in the loop that
     // wasted the run). It stops the run and says which check was inconclusive.
     packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
+    // ENG-95850 (A2) — THE ONE STAND WRITE THIS RUN'S OWN STATE FILE CARRIES ACROSS ROUTES AND SESSIONS: the
+    // application/package the app unit created, read off `build-queue.json`.`standWrites.packageCreated`. It is what
+    // lets the `new-app` placement stop tell a package SOMEONE ELSE owns (a plan-vs-stand mismatch, still a stop) from
+    // the package THIS migration created (a resume, which continues). `null`/absent on a folder written before the
+    // field, which keeps the old behaviour exactly — a stop — so absence is never read as ownership.
+    // NOT REQUIRED, deliberately: an agent that cannot read the file must be able to say nothing rather than guess,
+    // and the safe side of "nothing" here is the stop.
+    packageCreatedByRun: {
+      type: ['object', 'null'],
+      required: ['package', 'appUnitComplete'],
+      properties: {
+        package: { type: 'string' },
+        appUnitComplete: { type: 'boolean' },
+        planVersion: { type: ['string', 'null'] },
+        sectionPage: { type: ['string', 'null'] },
+      },
+    },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -1181,14 +1206,40 @@ function repairBlock(roundNo, shortRows, maxRounds, verifyTable) {
 // `create-app` over what may be an existing application; guessing "exists" puts every page unit back into the loop
 // that spent 12 agents and 1.9M tokens discovering the same blocker four times. And a package that is absent with
 // no NAME published cannot be created at all — there is nothing to pass to `create-app`.
-function packagePreconditionStop(targetPackage, packageState, sectionHost) {
+// ENG-95850 (A2) — WHOSE PACKAGE IS IT. The stop below asks "does the planned package already exist", and until this
+// helper existed that question had exactly one answer for two very different facts: a package SOMEONE ELSE owns (a
+// real plan-vs-stand mismatch) and the package THIS MIGRATION'S OWN app unit created (a resume). Only the first is a
+// blocker. The record comes from the ONE state file both routes write (`build-queue.json`.`standWrites.packageCreated`,
+// reported by Reconcile as `packageCreatedByRun`, and overridden by whatever THIS process created), so a run moved
+// from the Agent route to the Workflow route reads its predecessor's stand write instead of rediscovering it as a
+// stranger's. Matched on the package NAME: a record naming another package says nothing about this plan's target,
+// and the run must not carry a stand write it cannot tie to the package in front of it.
+// `appUnitComplete` is the app unit's FULL deliverable (the planned package AND a section on the migrated object AND
+// no stub left behind) — the same bar `applyAppUnitResult` closes the unit on. A half-finished app unit stays a stop:
+// nothing here may infer a section that was never created.
+const ownPackageRecord = (rec, targetPackage) => {
+  const name = String(rec?.package ?? '').trim()
+  const planned = String(targetPackage ?? '').trim()
+  if (!name || !planned || name !== planned) return null
+  return { package: name, appUnitComplete: rec.appUnitComplete === true, planVersion: rec.planVersion ?? null, sectionPage: rec.sectionPage ?? null }
+}
+function packagePreconditionStop(targetPackage, packageState, sectionHost, packageCreatedByRun) {
   // `new-app` over a package that ALREADY exists is unsatisfiable by construction, so it is a stop rather than a
   // unit. `create-app` mints its OWN package, and the app unit's acceptance criterion is an exact equality with
   // the planned package name — no `create-app` can produce a package that is already there. The only route to an
   // application owning an existing package is attaching it and flipping the primary flag: a mutation of which
   // package owns the app's identity, which is a user decision, never something a build round does on its own.
+  // …UNLESS this migration created it itself. Then there is nothing for `create-app` to do and nothing for an
+  // operator to decide: the app unit already closed on its full deliverable, so this is a RESUME and the run
+  // continues. Without this branch a `new-app` plan could not survive its own success — the app unit sets
+  // `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
   if (sectionHost === 'new-app' && packageState === 'exists') {
-    return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\`, but the target package \`${targetPackage || '(unnamed)'}\` is ALREADY on the stand — \`create-app\` always mints its own package, so it cannot produce one that exists, and the app unit would fail its name-equality check. Two ways out, both yours to pick: (a) re-plan against a package that does NOT exist yet, and this run's app unit creates the application, the package and the section in one go; or (b) attach the existing package to an application and make it primary BY HAND, then re-plan with \`sectionHost: existing-app\`. Nothing has been built` }
+    const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+    if (own && own.appUnitComplete) return null
+    if (own) {
+      return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\` and the target package \`${targetPackage || '(unnamed)'}\` is on the stand because THIS migration created it — but the state file records its app unit as INCOMPLETE (the package exists; the section on the migrated object and/or the removal of the stub \`create-app\` mints did not finish). \`create-app\` cannot be re-run over a package that is already there, and this run will not infer a section nobody confirmed. Two ways out, both yours to pick: (a) finish the app unit BY HAND — \`create-app-section --entity-schema-name <the migrated object>\` in that application, then \`delete-app-section\` for the stub — and re-run this build, which then resumes without a re-plan and without a second approval; or (b) re-plan with \`sectionHost: existing-app\` against the package that now exists. Nothing further has been built` }
+    }
+    return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\`, but the target package \`${targetPackage || '(unnamed)'}\` is ALREADY on the stand and no state file records this migration creating it — \`create-app\` always mints its own package, so it cannot produce one that exists, and the app unit would fail its name-equality check. Two ways out, both yours to pick: (a) re-plan against a package that does NOT exist yet, and this run's app unit creates the application, the package and the section in one go; or (b) attach the existing package to an application and make it primary BY HAND, then re-plan with \`sectionHost: existing-app\`. Nothing has been built` }
   }
   // Anything that is not one of the three published states — absent, empty, misspelled — is UNKNOWN. The schema
   // requires the field; this is what makes a result that slipped through anyway stop the run instead of being read
@@ -1516,6 +1567,16 @@ function runReturn(extra) {
     // the package question was even asked.
     targetPackage: null,
     packageState: null,
+    // WHOSE PACKAGE IT IS (ENG-95850), on every return like `packageState` itself: `null` when nothing records this
+    // migration creating it, otherwise the state file's own `{ package, appUnitComplete, … }`. A caller reading a
+    // `new-app-over-existing-package` stop needs both halves — the package exists, and whether the run made it —
+    // to know whether the answer is "re-plan" or "finish the app unit and re-run".
+    // Defaulted from THIS PROCESS's record, which is declared before the first return can happen. The two package
+    // stops — the returns where an operator has to act on it — override with `ownPackageNow()`, which also falls
+    // back to what Reconcile read off the file; on other returns a record only Reconcile saw reads as `null` here,
+    // and the queue file remains its home. Reading `state` in this default would be a temporal-dead-zone throw on
+    // the earliest return (a Reconcile that answered nothing).
+    packageCreatedByRun: standWrites.packageCreated || null,
     // The APPROVED section host, carried verbatim from `--units.sectionHost`. `null` = a plan written before
     // placement was gated; every predicate below must then behave exactly as it did before this field existed.
     sectionHost: null,
@@ -1572,6 +1633,14 @@ function carryBlock(carry) {
     const parkedLines = carry.parked.map((p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${p.parkedWhy}`).join('\n')
     out.push(`\nPARKED — persist each under \`units\`/\`nonPageUnits\` as \`parked: true\` with its \`parkedWhy\` VERBATIM, and do NOT increment their counters:\n${parkedLines}`)
   }
+  // ENG-95850 (A2) — THE RUN'S OWN STAND WRITES, at the ROOT of the queue file rather than under a unit: the package
+  // is not a page, and the next run's placement gate looks for it before any unit exists. Persisted from a MACHINE
+  // record this script composed (a package name read back off the stand by the app unit, plus this run's own plan
+  // version), so unlike the lists above it is not stand-derived prose — but it goes into the same merge, so the
+  // instruction is the same: copy it exactly.
+  if (carry.standWrites && Object.keys(carry.standWrites).length) {
+    out.push(`\nTHIS RUN'S STAND WRITES — merge under the ROOT key \`standWrites\` (create it if absent), copying the JSON EXACTLY: ${j(carry.standWrites)}\nThis is how the NEXT run — on this route or the other one — knows the target package exists because THIS migration created it, and not because somebody else owns it. Drop it and the next \`new-app\` reconcile stops the run on its own work.`)
+  }
   if (Object.keys(carry.pageSchemas).length) {
     const schemaLines = Object.entries(carry.pageSchemas).map(([k, s]) => `- \`${k}\` → \`${s}\``).join('\n')
     out.push(`\nFREEDOM SCHEMAS LEARNED SO FAR — persist each as \`units["<key>"].schemaName\` (this is the only record of them; \`--units\` cannot publish it):\n${schemaLines}`)
@@ -1620,7 +1689,7 @@ DO SIX THINGS, in order:
 
 2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` — the root-level \`--units.resolutionsUnmatched\`, verbatim: those are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks, and this run is the only thing that can tell the operator so.
 
-2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that.
+2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that. **\`'exists'\` does not say WHOSE it is.** A package this migration created itself reads exactly like a stranger's from the stand, and the two need opposite handling under \`sectionHost: new-app\`; the only thing that tells them apart is the \`standWrites.packageCreated\` record in the queue file, which step 5 has you report as \`packageCreatedByRun\`. Report the state you actually read here, and let that record answer the ownership question.
 
 3. READ THE QUEUE FILE. From \`${QUEUE_FILE}\` (absent ⇒ every list below is empty and the run is starting fresh) return:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
@@ -1641,7 +1710,8 @@ DO SIX THINGS, in order:
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
    - \`⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete\` is NOT a plan gap. It is the repairable one. Do not put it in \`planGaps\`.
-    - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` and \`continuations\` counters each unit already has. **Do NOT increment either one here.** A round is charged per ATTEMPT, and you are not the phase that attempts anything: incrementing for every open unit charges the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parks untouched pages. The counters are moved by the phase that runs straight after Build, for exactly the units it dispatched. Return \`roundOf\` = the rounds counter now on file for every key and \`continuationOf\` = the continuations counter now on file for every key.
+    - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` and \`continuations\` counters each unit already has. **Do NOT increment either one here.** A round is charged per ATTEMPT, and you are not the phase that attempts anything: incrementing for every open unit charges the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parks untouched pages. The counters are moved by the phase that runs straight after Build, for exactly the units it dispatched. Return \`roundOf\` = the rounds counter now on file for every key and \`continuationOf\` = the continuations counter now on file for every key. **KEEP the root \`standWrites\` key exactly as the file holds it** — it records stand writes an earlier run or the other route made, and it is not yours to recompute.
+   - Return \`packageCreatedByRun\` — the file's \`standWrites.packageCreated\`, VERBATIM (\`{ package, appUnitComplete, planVersion, sectionPage }\`), or \`null\` when the file has no such record. This is the run's own memory of having created the target package, and it is the ONE thing that tells a package this migration made apart from a package somebody else owns: under \`sectionHost: new-app\` the second is a stop and the first is a resume. **Read it off the file; do NOT derive it from the stand.** \`find-app\`/\`list-packages\` can say a package EXISTS — no stand read can say WHO created it — so a record you infer would authorise building over somebody's application. No record ⇒ \`null\`: absence is the safe answer here, and the script stops on it.
 
 6. REPORT QUEUE DRIFT. \`staleQueueKeys\` = keys in the queue file that \`--units\` no longer publishes (the plan was regenerated — they gate nothing now). \`newKeys\` = keys \`--units\` publishes that the queue did not have. Report both; never silently trust either.
 
@@ -1684,15 +1754,44 @@ function mergeContinuationCounters(continuationOf) {
     if (Number.isInteger(count) && count > 0) continuations[key] = Math.max(continuations[key] ?? 0, count)
   }
 }
-const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched], continuations, preflightEvidence })
+const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched], continuations, preflightEvidence, standWrites })
 
-let state = await agent(reconcilePrompt(round), {
-  agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: 'reconcile:baseline',
-})
+// ENG-95850 (A3) — RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later
+// phase depends on it, so a transient failure there costs the whole run: measured on the Applicant baseline, two
+// consecutive Workflow launches were rejected at this exact call in 9 ms with 0 writes ("output schema too large to
+// classify safely"), a LATER identical launch passed — and in between, the flake read as a hard block and pushed the
+// run onto the Agent route, which is where the divergent state of A2 came from. One retry is what turns that from a
+// route switch into a hiccup. Bounded and never silent: each attempt is logged, and exhausting them is still the
+// honest `reconcile-failed` stop, not a run that proceeds on a state nobody produced.
+const RECONCILE_ATTEMPTS = 2
+async function reconcileAgent(roundNo, label) {
+  for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
+    // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
+    // round's own `await dispatchUnit(...)` loop, which is sequential for the same reason).
+    const answer = await agent(reconcilePrompt(roundNo), {
+      agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile',
+      label: attempt === 1 ? label : `${label}:retry-${attempt - 1}`,
+    })
+    if (answer) return answer
+    if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; a rejection here has been transient before, and switching routes over it is what split the state file`)
+  }
+  return null
+}
+// The one wording for both Reconcile failures, and it names the recovery the Applicant run got wrong: re-run THIS
+// route. A rejection at the first agent is not evidence the route is unavailable, and a route switch mid-folder is
+// how two routes ended up with two views of one stand.
+const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. Nothing was built`
+
+let state = await reconcileAgent(round, 'reconcile:baseline')
 
 if (!state) {
-  return runReturn({ stopped: 'reconcile-failed', next: 'the Reconcile agent returned nothing — re-run; nothing was built' })
+  return runReturn({ stopped: 'reconcile-failed', next: RECONCILE_FAILED_NEXT })
 }
+// THE PACKAGE PROVENANCE EVERY PACKAGE GATE GOES BY (ENG-95850). This process's own record wins over the reported
+// one: the queue write that carries it to a later Reconcile happens AFTER the app unit, so within the round that
+// created the package the report cannot know yet — and the mid-run gate would otherwise stop the run on its own
+// success. Declared here, below `state`, so it can never be called inside its temporal dead zone.
+const ownPackageNow = () => standWrites.packageCreated || state?.packageCreatedByRun || null
 mergeContinuationCounters(state.continuationOf)
 // Said BEFORE any gate can stop the run: an answer that matched nothing is worth knowing about even on a run that
 // stops for an unrelated reason, because the operator will otherwise re-run believing it was applied.
@@ -1744,13 +1843,14 @@ const componentMismatches = componentTypeMismatches(state.componentResolution, s
 const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
 const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
 if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
-const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
+const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
   log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}`)
   return runReturn({
     ...stopOnPackage,
     componentMismatches,
+    packageCreatedByRun: ownPackageNow(),
     // `...stopOnPackage` carries the package fix in `next`; when component types ALSO fail, spell them out in the
     // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
     // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
@@ -1981,7 +2081,7 @@ function markEvidenceFiled(ids) {
 // inside the round and left to a LATER phase to write, so a kill during Build took the whole round's answer
 // with it. This fingerprint is what makes "is there anything unwritten?" a question with an answer, so the
 // round-close write below can run when there is something to write and be skipped when there is not.
-const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence])
+const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites])
 let carryPersisted = carryFingerprint()
 async function persistPending(why) {
   const unpersistedParks = parked.filter((p) => !parksPersisted.has(p.key))
@@ -1996,7 +2096,7 @@ async function persistPending(why) {
 ${RULES}
 ${READ_ONLY_RULE} (the queue file is the one thing you write)
 
-Open ${QUEUE_FILE} (create it as \`{ "schemaVersion": 1, "manifest": "${input.manifest}", "builtFile": "${BUILT_FILE}", "units": {}, "nonPageUnits": {} }\` if it is missing) and MERGE — do not drop keys you do not recognise:${carryBlock(carryNow())}
+Open ${QUEUE_FILE} (create it as \`{ "schemaVersion": 1, "manifest": "${input.manifest}", "builtFile": "${BUILT_FILE}", "units": {}, "nonPageUnits": {}, "standWrites": {} }\` if it is missing) and MERGE — do not drop keys you do not recognise:${carryBlock(carryNow())}
 
 Return \`written: true\` and the park keys you wrote. Change nothing on the stand and run no gate.`,
     { agentType: 'general-purpose', schema: PERSIST_SCHEMA, phase: 'Close', label: 'persist:carry' },
@@ -2360,6 +2460,27 @@ function recordStarterPages(res) {
   }
 }
 
+// ENG-95850 (A2) — THE APP UNIT'S STAND WRITE, INTO THE RUN'S SINGLE STATE FILE. One writer, so the two call sites
+// (the unit closed, and the unit short) cannot disagree about the record's shape. `planVersion` travels with it
+// because the file outlives the run: it is the version this run was operating under when the package was minted
+// (state is replaced only at a round boundary, and the app unit runs first), so a later reader can say WHICH plan
+// made it — while the approval gate remains the thing that decides whether a plan still authorises anything. MONOTONIC on completeness — a later partial
+// report never walks a recorded `true` back to `false`: the deliverable was met once, and the only thing that could
+// contradict it is a stand read, not a second builder's summary.
+function recordPackageCreated(pkg, sectionPage, appUnitComplete = true) {
+  const complete = appUnitComplete === true || standWrites.packageCreated?.appUnitComplete === true
+  standWrites = {
+    ...standWrites,
+    packageCreated: {
+      package: pkg,
+      appUnitComplete: complete,
+      planVersion: state?.planVersion ?? null,
+      sectionPage: sectionPage || standWrites.packageCreated?.sectionPage || null,
+    },
+  }
+  log(`state file: recording that THIS run created the package \`${pkg}\` (app unit ${complete ? 'complete' : 'INCOMPLETE'}) — the placement gate reads it as ours, on this route and the other one`)
+}
+
 // WHICH THIRD OF THE APP UNIT IS MISSING, named in the blocker. Both halves can be absent at once, so they are
 // composed rather than picked.
 function partialAppUnitWhat(got, sectionPage, unitBlocked) {
@@ -2392,11 +2513,20 @@ function applyAppUnitResult(unit, res) {
       ? `app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`
       : `app unit: package \`${got}\` exists — no section was created (sectionHost: ${unit.sectionHost}), so \`main\` builds its own page in it`)
     recordStarterPages(res)
+    // ENG-95850 (A2) — RECORD WHO MADE THIS PACKAGE, in the run's single state file. Written ONLY on this branch, the
+    // one where the app unit met its FULL deliverable, so `appUnitComplete: true` never overstates what happened. It
+    // is what makes the `new-app` placement stop read this package as ours on the next Reconcile, in the next
+    // session, and on the other route — instead of as a stranger's package that stops the run.
+    recordPackageCreated(got, sectionPage)
     return
   }
   // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named rather than closed on the one
   // third that worked: `main` has no section to edit, and a stub section left behind is an orphan in the customer's app.
   if (got && got === unit.package) {
+    // The package IS ours even though the unit is short, and the state file has to say both — otherwise a resumed run
+    // reads a package this migration created as a stranger's and stops with the wrong two ways out. `false` here is
+    // still a stop, but it is the stop that names what is left to finish.
+    recordPackageCreated(got, sectionPage, false)
     blockedItems = [...blockedItems, { unit: unit.key,
       what: partialAppUnitWhat(got, sectionPage, unitBlocked),
       why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
@@ -2443,6 +2573,14 @@ async function buildRound(open) {
     // the continued one. The continued unit still waits for the next round — this loop makes one pass over `open`.
     if (r.pausedAfter) { r.deferred.push(unit.key); continue }
     await dispatchUnit(unit, r)
+    // ENG-95850 (A2) — THE APP UNIT'S STAND WRITE IS PERSISTED IMMEDIATELY, not at the round's Verify. Every other
+    // thing in the carry is a DECISION this run made about its own bookkeeping, and losing one to a kill costs a
+    // re-derivation. `standWrites.packageCreated` is not that: it is an IRREVERSIBLE change to a live stand, and
+    // losing it is unrecoverable in the sense that matters — the next run finds the package there, cannot tell it
+    // apart from a stranger's, and stops on this migration's own work. That is precisely the incident (a run that
+    // created the package and then moved on), and every build unit after this one in the round is a long, killable
+    // agent. One extra small write, on runs that create an application at all, which is once.
+    if (unit.kind === 'app' && standWrites.packageCreated) await persistPending('recording the package the app unit created')
   }
   if (r.noSchema.length) log(`no Freedom schema reported for: ${r.noSchema.join(', ')} — those units cannot be verified until one is`)
   if (r.pausedAfter) {
@@ -2567,7 +2705,7 @@ REACHABILITY KEYS THAT APPLY: ${(state.reachability || []).filter((r) => r.appli
 
 ${verifierSchemaTable()}
 
-FIRST, before any stand read, MERGE the run carry into ${QUEUE_FILE}. This replaces the old dedicated PERSISTENCE agent: you are already the single sequential agent after Build, and this bookkeeping is transcription only, not verification. Open ${QUEUE_FILE} (create it as \`{ "schemaVersion": 1, "manifest": "${input.manifest}", "builtFile": "${BUILT_FILE}", "units": {}, "nonPageUnits": {} }\` if it is missing) and MERGE — do not drop keys you do not recognise:${carryBlock(carry)}
+FIRST, before any stand read, MERGE the run carry into ${QUEUE_FILE}. This replaces the old dedicated PERSISTENCE agent: you are already the single sequential agent after Build, and this bookkeeping is transcription only, not verification. Open ${QUEUE_FILE} (create it as \`{ "schemaVersion": 1, "manifest": "${input.manifest}", "builtFile": "${BUILT_FILE}", "units": {}, "nonPageUnits": {}, "standWrites": {} }\` if it is missing) and MERGE — do not drop keys you do not recognise:${carryBlock(carry)}
 
 Return \`queueWritten: true\` only after that queue-file merge is saved. If you cannot write the queue file, still verify the stand if possible and return \`queueWritten: false\` with the reason in \`notes\`; the workflow will run the fallback persistence writer before it trusts the carry as durable.
 
@@ -2648,9 +2786,7 @@ if (pendingJudgeIds.size) {
   markEvidenceFiled(judged?.evidenceWritten)
   pendingJudgeIds.clear()
   phase('Reconcile')
-  const refreshed = await agent(reconcilePrompt(round), {
-    agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: 'reconcile:after-preflight',
-  })
+  const refreshed = await reconcileAgent(round, 'reconcile:after-preflight')
   if (refreshed) {
     const stop = acceptReconciled(refreshed, 'the post-preflight Reconcile')
     if (stop) {
@@ -2811,10 +2947,13 @@ function acceptReconciled(next, whereFrom) {
     log(`STOP after ${whereFrom} — the approval no longer authorises this plan (${stopApproval.stopped}): approved=${(state.approval || approval)?.version || '(none)'} plan=${state.planVersion || '(unversioned)'}`)
     return { ...stopApproval, approval: state.approval || approval, planVersion: state.planVersion || null }
   }
-  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost)
+  // `ownPackageNow()` and not `state.packageCreatedByRun`: on the round that created the package this process holds
+  // the record and the refreshed report cannot yet, so reading only the report would stop a `new-app` run on its own
+  // app unit's success — which is exactly what it did before ENG-95850.
+  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
   if (stopPkg) {
     log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
-    return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null }
+    return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null, packageCreatedByRun: ownPackageNow() }
   }
   // The component-type gate (ENG-95468) is a mid-run GUARANTEE too, for the same reason the two stops above are:
   // a Reconcile can surface a `resolved: false` type that the BASELINE gate never saw — a resumed run whose baseline
@@ -2915,9 +3054,7 @@ while (true) {
   }
 
   phase('Reconcile')
-  const next = await agent(reconcilePrompt(round), {
-    agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: `reconcile:round-${round + 1}`,
-  })
+  const next = await reconcileAgent(round, `reconcile:round-${round + 1}`)
   if (!next) {
     // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
     // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.
@@ -2931,7 +3068,7 @@ while (true) {
       planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
       discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: 're-run to refresh the queue state; the built file and the verdict from this round are on disk',
+      next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it`,
     })
   }
   const stopAfterRound = acceptReconciled(next, `round ${round}'s Reconcile`)
