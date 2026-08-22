@@ -2339,15 +2339,37 @@ export const LIST_DECISION_KIND = {
   process: "list-process",
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
+// THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
+// answer. TWO shapes ask it, and the second was the ENG-95503 chain break: an EMPTY set was gated, while a FALLBACK
+// set — the section declared no columns, so the resolver returned the entity's single display column — was rendered
+// as ⚠ prose in the design spec and raised no decision at all. So the question reached the operator while their
+// ANSWER had no published id to be recorded against, on exactly the shape this channel exists for.
+// A `schema-default` set deliberately asks NOTHING: the Classic section declared those columns, so they already are
+// the answer, and gating every parsed list would put an unanswerable row on every migration's queue. A REJECTED
+// on-stand read over a chain parse resolves to `schema-default` too, and that was CONSIDERED here rather than
+// missed: the parse is real evidence, the rejection is already named as a structure issue with its own remedy, and
+// a question whose answer the run already holds is a row an operator cannot usefully answer. It stays silent.
+function listColumnsDecision(section, columns) {
+  if (!columns.length) {
+    return { kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
+      reason: "the Freedom grid would ship empty — confirm the column set the list should show" };
+  }
+  // The ITEM is a fixed literal, NOT the fallback column's name: it is half the key an operator's recorded answer
+  // matches on, and a key that moved with the entity's display column would send a real answer to
+  // `resolutionsUnmatched` — an answer reported as belonging to no question is an answer that reaches no builder.
+  if (section?.listColumnSource === "entity-default") {
+    return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
+      reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
+  }
+  return null;
+}
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
 function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
   const out = [];
-  if (!columns.length) {
-    out.push({ kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
-      reason: "the Freedom grid would ship empty — confirm the column set the list should show" });
-  }
+  const columnSet = listColumnsDecision(section, columns);
+  if (columnSet) out.push(columnSet);
   for (const c of columns.filter((x) => x.dataValueType == null)) {
     out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
       reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });
