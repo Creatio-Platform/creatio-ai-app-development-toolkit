@@ -1025,6 +1025,22 @@ check("workflow: Reconcile is asked for the package state as THREE values and to
   /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
 // --- ENG-95850: THE ONE STATE FILE, and the wiring that keeps it one. The decision helpers are tested above; these
 // pin the parts that are prompt text and call sites, where a regression is invisible to a unit test.
+// --- ENG-95850 (B1): the JUDGE's half of the business-rule defect. ENG-95470 gave the ENGINE a rule slot and a
+// NOT-CHECKABLE verdict; the judge prompt still said nothing about where rules live, and a judge that token-searches
+// `body.js` gets a structural zero on a page whose rules are all present. That produced a FAIL on 8 correct rules
+// plus 2 entity filters and cost 4 diagnostic rounds.
+check("ENG-95850 (B1): the judge is told page business rules do NOT live in the page body, and is pointed at the slot / the dedicated reader instead",
+  /BusinessRule_\*.*schema/.test(wfSrc)
+    && /are not in its body/i.test(wfSrc)
+    && /read-page-business-rules/.test(wfSrc));
+check("ENG-95850 (B1): a body-text zero is explicitly BARRED from producing a `convincing: false` about rules — the prompt states the prohibition, not merely the better source",
+  /body-text zero is NEVER evidence/.test(wfSrc)
+    && /must never produce a [^\n]*convincing: false[^\n]* about rules/.test(wfSrc));
+check("ENG-95850 (B1): an absent `businessRules` slot is stated as NOT-CHECKABLE for the judge too, matching the engine's own row — nobody-read is not absent",
+  /slot means nobody READ the rules/.test(wfSrc)
+    && /not-checkable, not absent/.test(wfSrc));
+check("ENG-95850 (B1): the rule is GENERALISED past business rules — establish that the artifact you read would carry the deliverable before ruling it absent",
+  /the artifact you read is the one that would CARRY it/.test(wfSrc));
 check("ENG-95850 (A2): the app unit RECORDS its stand write through one writer, on the closed branch and on the short one, so the two cannot disagree about the record's shape",
   /function recordPackageCreated\(pkg, sectionPage, appUnitComplete = true\)/.test(wfSrc)
     && /recordStarterPages\(res\)\s*\n[\s\S]{0,600}?recordPackageCreated\(got, sectionPage\)/.test(wfSrc)
