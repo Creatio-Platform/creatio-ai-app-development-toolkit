@@ -1089,6 +1089,18 @@ check("ENG-95850 (B4): the VERIFIER is told which pages are orphans and not to r
     && /ORPHANED PAGES — these are on the stand and belong to NO published key/.test(wfSrc)
     && /Do NOT fetch one of these as any key's page/.test(wfSrc)
     && /\$\{orphanBlock\(\)\}Then report/.test(wfSrc));
+check("ENG-95850 (B4): the orphan list is READ BACK from the state file — the incident was a LATER diagnosis reading a dead page, so a write-only list fixes nothing",
+  /orphanedPagesOnFile: \{/.test(wfSrc)
+    && /Return \\`orphanedPagesOnFile\\`/.test(wfSrc)
+    && /function mergeOrphanedPages\(fromFile\)/.test(wfSrc));
+check("ENG-95850 (B4): the merge is a UNION keyed on the schema name, NOT the `pageSchemas` this-process-wins rule — an orphan an earlier session recorded must not be dropped",
+  /const known = new Set\(orphanedPages\.map\(\(o\) => o\.schema\)\)/.test(wfSrc)
+    && /!known\.has\(o\.schema\)/.test(wfSrc)
+    && /orphanedPages = \[\.\.\.orphanedPages, \.\.\.extra\]/.test(wfSrc));
+check("ENG-95850 (B4): the merged list is pushed BACK into `standWrites`, so the next write persists the whole list and not just this process's half",
+  /orphanedPages = \[\.\.\.orphanedPages, \.\.\.extra\]\s*\n\s*standWrites = \{ \.\.\.standWrites, orphanedPages \}/.test(wfSrc));
+check("ENG-95850 (B4): BOTH acceptance paths merge it — the BASELINE (the resumed run, where it matters most) and every later refresh",
+  (wfSrc.match(/mergeOrphanedPages\(state\.orphanedPagesOnFile\)/g) || []).length === 2);
 check("ENG-95850 (B4): the orphan block renders NOTHING when the run recorded none — no heading over an empty list",
   /if \(!orphanedPages\.length\) return ''/.test(wfSrc));
 check("ENG-95850 (B4): the BUILD prompt asks for `reboundFrom` on any re-point and forbids deleting the page left behind",

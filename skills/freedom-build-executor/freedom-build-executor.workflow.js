@@ -449,6 +449,23 @@ const RECONCILE_SCHEMA = {
         sectionPage: { type: ['string', 'null'] },
       },
     },
+    // ENG-95850 (B4/C3) — the orphans an EARLIER run or the other route recorded, read off
+    // `build-queue.json`.`standWrites.orphanedPages`. Required for the record to do the job it exists for: the
+    // incident it comes from was a LATER diagnosis reading a dead page, so a list this run writes but never reads
+    // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
+    // session found is still an orphan), never overwritten by it.
+    orphanedPagesOnFile: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['schema'],
+        properties: {
+          schema: { type: 'string' },
+          orphanedBy: { type: ['string', 'null'] },
+          at: { type: ['string', 'null'] },
+        },
+      },
+    },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -1777,6 +1794,7 @@ DO SIX THINGS, in order:
    - \`⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete\` is NOT a plan gap. It is the repairable one. Do not put it in \`planGaps\`.
     - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` and \`continuations\` counters each unit already has. **Do NOT increment either one here.** A round is charged per ATTEMPT, and you are not the phase that attempts anything: incrementing for every open unit charges the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parks untouched pages. The counters are moved by the phase that runs straight after Build, for exactly the units it dispatched. Return \`roundOf\` = the rounds counter now on file for every key and \`continuationOf\` = the continuations counter now on file for every key. **KEEP the root \`standWrites\` key exactly as the file holds it** — it records stand writes an earlier run or the other route made, and it is not yours to recompute.
    - Return \`packageCreatedByRun\` — the file's \`standWrites.packageCreated\`, VERBATIM (\`{ package, appUnitComplete, planVersion, sectionPage }\`), or \`null\` when the file has no such record. This is the run's own memory of having created the target package, and it is the ONE thing that tells a package this migration made apart from a package somebody else owns: under \`sectionHost: new-app\` the second is a stop and the first is a resume. **Read it off the file; do NOT derive it from the stand.** \`find-app\`/\`list-packages\` can say a package EXISTS — no stand read can say WHO created it — so a record you infer would authorise building over somebody's application. No record ⇒ \`null\`: absence is the safe answer here, and the script stops on it.
+   - Return \`orphanedPagesOnFile\` — the file's \`standWrites.orphanedPages\` array, VERBATIM (\`[]\` when the file has none; REQUIRED to be present, never omitted). These are pages an EARLIER run or the other route left bound to no key after a re-bind. They are read back for one reason: the failure they come from was a LATER diagnosis fetching a dead page and concluding the build was short, so a list nobody reads is a list that helps nobody. Copy it; do not recompute it from the stand, and do not drop an entry because the page looks fine — an orphan is perfectly fetchable, which is the whole problem.
 
 6. REPORT QUEUE DRIFT. \`staleQueueKeys\` = keys in the queue file that \`--units\` no longer publishes (the plan was regenerated — they gate nothing now). \`newKeys\` = keys \`--units\` publishes that the queue did not have. Report both; never silently trust either.
 
@@ -1858,6 +1876,10 @@ if (!state) {
 // success. Declared here, below `state`, so it can never be called inside its temporal dead zone.
 const ownPackageNow = () => standWrites.packageCreated || state?.packageCreatedByRun || null
 mergeContinuationCounters(state.continuationOf)
+// ENG-95850 (B4/C3) — AT THE BASELINE TOO, and this is the call that matters most: the baseline is the RESUMED run,
+// which is exactly when an orphan a previous session recorded is about to be read as a live page. The refresh sites
+// go through `acceptReconciled`; the baseline assigns `state` directly, so it needs the same merge explicitly.
+mergeOrphanedPages(state.orphanedPagesOnFile)
 // Said BEFORE any gate can stop the run: an answer that matched nothing is worth knowing about even on a run that
 // stops for an unrelated reason, because the operator will otherwise re-run believing it was applied.
 logUnmatchedResolutions('baseline reconcile')
@@ -2558,6 +2580,21 @@ function orphanBlock() {
   return `\nORPHANED PAGES — these are on the stand and belong to NO published key (a re-bind left them behind):\n${lines}\nDo NOT fetch one of these as any key's page, and do not read its contents as evidence about a key: a dead page reads exactly like a live one, and a run that judged build progress off an orphan concluded "main not built" about a form that was ~80% complete. Do not delete them either — they are reported for a human to settle. If one of them IS the page a key resolves to, that is a discrepancy worth reporting, not a correction to make here.\n`
 }
 
+// ENG-95850 (B4/C3) — FOLD IN WHAT THE FILE ALREADY KNEW. A union keyed on the schema name: an orphan a previous
+// session or the other route recorded is still an orphan, and one this process recorded is not on file yet. First
+// record wins, so the original `orphanedBy` and plan version survive a later re-report. Also pushed back into
+// `standWrites`, so the next write persists the merged list rather than only this process's half.
+function mergeOrphanedPages(fromFile) {
+  const known = new Set(orphanedPages.map((o) => o.schema))
+  const extra = (fromFile || [])
+    .filter((o) => o && typeof o.schema === 'string' && o.schema.trim() && !known.has(o.schema))
+    .map((o) => ({ schema: o.schema, orphanedBy: o.orphanedBy ?? null, at: o.at ?? null }))
+  if (!extra.length) return
+  orphanedPages = [...orphanedPages, ...extra]
+  standWrites = { ...standWrites, orphanedPages }
+  log(`${extra.length} orphaned page(s) carried over from the state file: ${extra.map((o) => `\`${o.schema}\``).join(', ')} — named to this run's readers so none of them is fetched as a live page`)
+}
+
 // ENG-95850 (B4/C3) — THE PAGE A RE-BIND LEFT BEHIND. `create-app` seeds start pages (`<Code>_FormPage`,
 // `_ListPage`, `_Detail`); a builder that builds the real form as a NEW page on a different template and re-binds the
 // section leaves the seeded one on the stand, bound to nothing. On the Applicant run nothing flagged it, and the DEAD
@@ -3073,6 +3110,10 @@ function acceptReconciled(next, whereFrom) {
   // item's text out from under a recorded answer, so the set can change after the run has started.
   logUnmatchedResolutions(whereFrom)
   pageSchemas = { ...state.pageSchemas, ...pageSchemas }   // this process is authoritative for what it learned
+  // ENG-95850 (B4/C3) — the orphan list is a UNION, deliberately NOT the `pageSchemas` precedence rule above. An
+  // orphan an earlier session recorded is still an orphan, so "this process wins" would silently drop it; and a
+  // page this process orphaned is not in the file yet. Keyed on the schema name, first record kept.
+  mergeOrphanedPages(state.orphanedPagesOnFile)
   // Taken AFTER the merge: the merge can reorder keys without changing content, and a fingerprint captured before it
   // would read as "something new to write" and buy an extra agent call every round.
   carryPersisted = carryFingerprint()
