@@ -1688,6 +1688,48 @@ check("ENG-95503: the answer reaches the queue item that ASKED it — `--units.p
     return !!hit && hit.pageKey === "main" && hit.resolution?.answer === "Name, Status, Owner, DueDate, Priority, Flagged"
       && hit.resolution.decidedBy === "operator" && hit.resolution.date === "2026-08-19"; },
   () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.map((p) => ({ id: p.id, res: p.resolution })));
+/* ---- ENG-95503 (reopened) — THE FALLBACK COLUMN SET. Measured on a full Applicant1Section run: the operator
+   answered the list-column question, the columns were built, and `--units` kept publishing the one-column
+   expectation — because the question had NO published id to answer. The section declared no columns, so the
+   on-stand read returned the entity's single display column (`entity-default`), and the design spec rendered that
+   as ⚠ prose while the ChangeSet raised no decision at all: the ⚠ Confirm gate only fired on a set that was
+   EMPTY. A fallback set is an unanswered question too, so the resolutions channel had nothing to key against on
+   exactly the shape this ticket names as the most common one. ---- */
+const LP_FALLBACK_MANIFEST = { ...LP_MANIFEST, addRecordMiniPage: false,
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "entity-default",
+      columns: [{ name: "Name", caption: "Name" }], notes: ["entity fallback"] },
+  },
+};
+const lpFallback = runMigration(LP_FALLBACK_MANIFEST, { baseDir: FIX });
+const lpFallbackOpts = checklistOpts(LP_FALLBACK_MANIFEST);
+const lpFallbackConfirm = pageUnits(lpFallback, lpFallbackOpts).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+const RES_FALLBACK_ANSWER = "Name, Owner, Stage, Source, ModifiedOn";
+check("ENG-95503: a FALLBACK column set (`entity-default`) raises a `list-columns` ⚠ Confirm item — the design spec has always rendered this case with ⚠, and now the question has a published id an answer can be recorded against",
+  () => { const nd = lpFallback.listChangeSet.needsDecision.filter((d) => d.kind === KIND_LIST_COLUMNS);
+    return (lpFallback.section?.listColumns || []).join(",") === "Name"
+      && lpFallback.section?.listColumnSource === "entity-default"
+      && nd.length === 1 && !!lpFallbackConfirm?.id
+      && /confirm which columns the Freedom list should show/.test(lpFallback.designSpec); },
+  () => ({ src: lpFallback.section?.listColumnSource, nd: lpFallback.listChangeSet.needsDecision.map((d) => d.kind),
+    preflight: pageUnits(lpFallback, lpFallbackOpts).preflight.map((x) => x.id) }));
+check("ENG-95503: the fallback item is a FIXED literal, never the fallback column's own name — `item` is half the key a recorded answer matches on, so a key that moved with the entity's display column would send a real answer to `resolutionsUnmatched`",
+  () => lpFallbackConfirm?.item === "fallback list column set" && !/\bName\b/.test(lpFallbackConfirm?.item || ""),
+  () => lpFallbackConfirm?.item);
+check("ENG-95503: an answer recorded against the FALLBACK question reaches the queue item that asked it — the reopened run's exact case: the operator's five columns now travel as data instead of as prose the build never reads",
+  () => { const u = pageUnits(lpFallback, { ...lpFallbackOpts, resolutions: { resolutions: [
+      { kind: lpFallbackConfirm?.kind, item: lpFallbackConfirm?.item, answer: RES_FALLBACK_ANSWER, decidedBy: "operator", date: "2026-08-22" }] } });
+    const hit = u.preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    return hit?.resolution?.answer === RES_FALLBACK_ANSWER && hit.resolution.decidedBy === "operator"
+      && u.resolutionsUnmatched.length === 0 && u.resolutionsConflicts.length === 0; },
+  () => pageUnits(lpFallback, { ...lpFallbackOpts, resolutions: { resolutions: [{ kind: lpFallbackConfirm?.kind, item: lpFallbackConfirm?.item, answer: RES_FALLBACK_ANSWER }] } }).preflight.map((x) => ({ id: x.id, res: x.resolution })));
+check("ENG-95503: a `schema-default` set raises NO `list-columns` question — the Classic section declared those columns, so they ARE the answer; gating every parsed list would put an unanswerable row on every migration's queue",
+  () => { const parsed = runMigration(LP_MANIFEST, { baseDir: FIX });
+    return parsed.section?.listColumnSource === "schema-default"
+      && !parsed.listChangeSet.needsDecision.some((d) => d.kind === KIND_LIST_COLUMNS); },
+  () => ({ src: runMigration(LP_MANIFEST, { baseDir: FIX }).section?.listColumnSource,
+    nd: runMigration(LP_MANIFEST, { baseDir: FIX }).listChangeSet.needsDecision.map((d) => `${d.kind}:${d.item}`) }));
 check("ENG-95503: an UNANSWERED question publishes `resolution: null` — an explicit \"nobody answered\", not an omitted field an executor could not tell apart from an engine that does not publish resolutions at all",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     return u.preflight.length >= 1 && u.preflight.every((p) => "resolution" in p && p.resolution === null); },
