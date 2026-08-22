@@ -216,6 +216,10 @@ const QUEUE_FILE = `${input.outDir}/build-queue.json`
 // `carryNow()` and every `runReturn` read it, and `runReturn` is reachable from the earliest stop in the script —
 // a declaration below any of its callers is a temporal-dead-zone throw on exactly the run that stops first.
 let standWrites = {}
+// ENG-95850 (B4/C3) — pages a re-bind left pointing at nothing. Its own binding as well as a `standWrites` member,
+// because `applyReboundOrphan` appends to it and the carry persists whatever it holds; declared here for the same
+// reason `standWrites` is — every `runReturn` reads it.
+let orphanedPages = []
 const BUILT_FILE = `${input.outDir}/built.json`
 // Per-preflight-agent output files. The ⚠ Confirm fan-out is READ-ONLY AGAINST THE STAND — but "read-only" is
 // about the STAND, and up to `MAX_PREFLIGHT` agents were told to write their records into the ONE `built.json`.
@@ -1635,6 +1639,9 @@ function runReturn(extra) {
     // and the queue file remains its home. Reading `state` in this default would be a temporal-dead-zone throw on
     // the earliest return (a Reconcile that answered nothing).
     packageCreatedByRun: standWrites.packageCreated || null,
+    // ENG-95850 (B4/C3) — pages a re-bind left behind, on every return: they are on the stand, they belong to no
+    // published key, and the run does not delete them. A caller that never sees them cannot decide about them.
+    orphanedPages,
     // The APPROVED section host, carried verbatim from `--units.sectionHost`. `null` = a plan written before
     // placement was gated; every predicate below must then behave exactly as it did before this field existed.
     sectionHost: null,
@@ -2415,6 +2422,8 @@ Get your inputs from the engine, not from memory. YOUR TWO ROWS ARE ALREADY CUT 
 - \`${cliChecklistPage(unit.key)}\` → your acceptance criteria, THIS page's rows only. Every group title for a SUB-page is prefixed with its page key (\`child:Education · Form — Coverage\`); the \`main\` page's groups carry NO prefix, so for \`main\` your rows are exactly the unprefixed groups.
 - the approved plan's block for this page (\`### Child page mappings\` / \`### Typed page mappings\` / \`### Add mini-page mapping\`).
 
+IF YOU RE-BIND, SAY WHAT YOU RE-BOUND AWAY FROM (ENG-95850 / B4). \`create-app\` seeds start pages, and building the real page as a NEW schema and re-pointing the section at it leaves the seeded one on the stand bound to nothing. Return \`reboundFrom\` = the schema you re-bound AWAY from, whenever you re-point a section, a RelatedPage binding or a detail at a different page than the one it had. The run records it as an ORPHAN, names it in its answer and tells later readers not to mistake it for a live page — a real run spent four diagnostic rounds reading exactly such a dead page as \`main\`. **Do NOT delete it**: a page on a customer's stand is not yours to remove, and the decision is reported, not taken.
+
 RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this page key now resolves to — the page a later \`get-page\` must be handed. Return it whether you created the page or found it already there. \`--units\` cannot publish it (its \`schema\` field is the CLASSIC source, and it is \`null\` for \`main\` and for an unfolded child) and the queue file is its only home. Omit it and nothing can verify this unit, in this session or any later one.`
   }
 
@@ -2537,6 +2546,42 @@ function recordPackageCreated(pkg, sectionPage, appUnitComplete = true) {
     },
   }
   log(`state file: recording that THIS run created the package \`${pkg}\` (app unit ${complete ? 'complete' : 'INCOMPLETE'}) — the placement gate reads it as ours, on this route and the other one`)
+}
+
+// ENG-95850 (B4/C3) — the orphans, NAMED to the reader of the stand. The Applicant run's four wasted diagnostic
+// rounds came from reading a dead page as if it were `main`: it was still there, still fetchable, and nothing said it
+// belonged to nobody. Empty when this run has recorded none, so it never renders a heading over an empty list.
+function orphanBlock() {
+  if (!orphanedPages.length) return ''
+  const lines = orphanedPages.map((o) => `- \`${o.schema}\` — orphaned when \`${o.orphanedBy}\` re-bound to a different page`).join('\n')
+  return `\nORPHANED PAGES — these are on the stand and belong to NO published key (a re-bind left them behind):\n${lines}\nDo NOT fetch one of these as any key's page, and do not read its contents as evidence about a key: a dead page reads exactly like a live one, and a run that judged build progress off an orphan concluded "main not built" about a form that was ~80% complete. Do not delete them either — they are reported for a human to settle. If one of them IS the page a key resolves to, that is a discrepancy worth reporting, not a correction to make here.\n`
+}
+
+// ENG-95850 (B4/C3) — THE PAGE A RE-BIND LEFT BEHIND. `create-app` seeds start pages (`<Code>_FormPage`,
+// `_ListPage`, `_Detail`); a builder that builds the real form as a NEW page on a different template and re-binds the
+// section leaves the seeded one on the stand, bound to nothing. On the Applicant run nothing flagged it, and the DEAD
+// page was the one being read while the run judged how far the build had got — "main not built" about a form that was
+// ~80% complete. So an orphan is RECORDED the moment the re-bind is reported: named in the run's answer, persisted in
+// the state file so a later pass can act on it, and named to the verifier so nobody reads it as a live page.
+// NON-DESTRUCTIVE BY DECISION: this marks and reports. Deleting a page on a customer's stand is not a build round's
+// call, and a page that looks orphaned to this run may be one an operator still wants.
+function applyReboundOrphan(unit, res) {
+  const from = (res.reboundFrom || '').trim()
+  if (!from) return
+  // A schema that is STILL some published key's page is not an orphan — a re-bind between two live keys, or a
+  // builder reporting the page it edited, must not be marked dead.
+  const live = Object.entries(pageSchemas).filter(([, sch]) => sch === from).map(([k]) => k)
+  if (live.length) {
+    log(`${unit.key}: re-bound from \`${from}\`, which is still the recorded page of ${live.join(', ')} — not an orphan`)
+    return
+  }
+  if (orphanedPages.some((o) => o.schema === from)) return
+  orphanedPages = [...orphanedPages, { schema: from, orphanedBy: unit.key, at: state?.planVersion ?? null }]
+  standWrites = { ...standWrites, orphanedPages }
+  log(`ORPHAN: \`${from}\` was re-bound away by \`${unit.key}\` and is now the page of no published key — recorded in the state file and reported, NOT deleted`)
+  blockedItems = [...blockedItems, { unit: unit.key,
+    what: `the page \`${from}\` is orphaned — \`${unit.key}\` re-bound to a different page and nothing points at this one any more`,
+    why: 'a seeded start page left behind by a re-bind stays on the stand looking live, and a later diagnosis reads it as this key\'s page (measured: a run concluded "main not built" off an orphan while the real form was ~80% complete). Deleting it is a stand deletion and not this run\'s call — decide whether to remove it or keep it' }]
 }
 
 // ENG-95850 (B2) — THE BINDING COUNT THE `sectionRegistered` UNIT REPORTED. The VERIFIER's own count is what the
@@ -2744,6 +2789,7 @@ async function dispatchUnit(unit, r) {
   reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
   if (unit.kind === 'app') applyAppUnitResult(unit, res)
   if (unit.kind === 'reach') applyWorkplaceBindings(unit, res)
+  if (unit.kind === 'page') applyReboundOrphan(unit, res)
   if (unit.kind === 'page') recordPageSchema(unit, res, r)
   proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
   blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
@@ -2797,7 +2843,7 @@ WRITE THREE THINGS into ${BUILT_FILE}, and nothing else — the \`judge\` object
    - **\`sectionRegistered\` IS A COUNT, NOT A FLAG (ENG-95850 / B2).** Registering a section into a workplace does NOT unbind the one it was in, so \`true\` is the same answer for one binding and for two — and on a real run it hid a section left in BOTH "Recruiting" and "My applications". COUNT the workplace bindings this section actually has (its \`SysModuleInWorkplace\` rows) and write \`reachability.sectionRegistered = { "workplaces": <n>, "names": ["<workplace>", …] }\`, \`n\` a real integer you counted, not a guess. The gate closes the row at exactly 1, reports 0 as unreachable, and reports 2+ by naming them. Write \`false\` only when you confirmed no registration exists, and OMIT the key if you could not count — an omitted key is ⚠ not-checked, which is honest; a \`true\` here is neither, and the row will ask you for the number anyway. **You COUNT and REPORT; you never unbind — removing a workplace binding is a stand deletion and not this run's to make.**
 3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
 
-Then report \`discrepancies\`: where a builder CLAIMED a component and get-page does not show it, or the reverse. Record them — do not smooth them over.
+${orphanBlock()}Then report \`discrepancies\`: where a builder CLAIMED a component and get-page does not show it, or the reverse. Record them — do not smooth them over.
 
 Do not build, repair or re-bind anything. If a page is wrong, the next round's build agent fixes it; you report.`,
     { agentType: 'general-purpose', schema: VERIFIER_SCHEMA, phase: 'Verify', label: `verify:round-${round}` },

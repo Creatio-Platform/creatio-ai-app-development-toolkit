@@ -1044,6 +1044,31 @@ check("ENG-95850 (B1): the rule is GENERALISED past business rules — establish
 // --- ENG-95850 (B2): the EXECUTOR's half of the workplace count. The engine gate is covered in run-mapper; these pin
 // that the run actually SUPPLIES the number and that it never unbinds anything (the operator chose the
 // non-destructive half deliberately, so "reports it" is the contract, not an implementation detail).
+// --- ENG-95850 (B4/C3): the page a re-bind leaves behind. `create-app` seeds start pages; a builder that builds the
+// real form as a NEW page and re-binds the section orphans the seeded one, and nothing flagged it — the DEAD page was
+// what a run read while judging progress, concluding "main not built" about a form that was ~80% complete.
+// Non-destructive by decision: recorded, reported, named to later readers; never deleted.
+check("ENG-95850 (B4): a page unit's `reboundFrom` is turned into a recorded ORPHAN, and the orphan is persisted through the same state file as the run's other stand facts",
+  /function applyReboundOrphan\(unit, res\)/.test(wfSrc)
+    && /if \(unit\.kind === 'page'\) applyReboundOrphan\(unit, res\)/.test(wfSrc)
+    && /standWrites = \{ \.\.\.standWrites, orphanedPages \}/.test(wfSrc));
+check("ENG-95850 (B4): a schema that is STILL some published key's page is NOT marked an orphan — a re-bind between two live keys must not mark a live page dead",
+  /const live = Object\.entries\(pageSchemas\)\.filter/.test(wfSrc)
+    && /is still the recorded page of/.test(wfSrc));
+check("ENG-95850 (B4): the orphan reaches the run's ANSWER on every return and as a blocker naming what to decide",
+  /^\s*orphanedPages,$/m.test(wfSrc)
+    && /is orphaned —/.test(wfSrc)
+    && /Deleting it is a stand deletion and not this run/.test(wfSrc));
+check("ENG-95850 (B4): the VERIFIER is told which pages are orphans and not to read one as a key's page — that misread is what cost the four diagnostic rounds",
+  /function orphanBlock\(\)/.test(wfSrc)
+    && /ORPHANED PAGES — these are on the stand and belong to NO published key/.test(wfSrc)
+    && /Do NOT fetch one of these as any key's page/.test(wfSrc)
+    && /\$\{orphanBlock\(\)\}Then report/.test(wfSrc));
+check("ENG-95850 (B4): the orphan block renders NOTHING when the run recorded none — no heading over an empty list",
+  /if \(!orphanedPages\.length\) return ''/.test(wfSrc));
+check("ENG-95850 (B4): the BUILD prompt asks for `reboundFrom` on any re-point and forbids deleting the page left behind",
+  /IF YOU RE-BIND, SAY WHAT YOU RE-BOUND AWAY FROM/.test(wfSrc)
+    && /\*\*Do NOT delete it\*\*/.test(wfSrc));
 check("ENG-95850 (B2): the verifier is told `sectionRegistered` is a COUNT, and is given the exact object shape the gate reads",
   /sectionRegistered\\` IS A COUNT, NOT A FLAG/.test(wfSrc)
     && /reachability\.sectionRegistered = \{ "workplaces": <n>, "names": \[/.test(wfSrc)

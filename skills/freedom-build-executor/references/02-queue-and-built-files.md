@@ -47,7 +47,10 @@ there is no "resume" command: there is one command, and it does the next undone 
   },
   "standWrites": {
     "packageCreated": { "package": "UsrApplicantFreedom", "appUnitComplete": true,
-                        "planVersion": "plan-4f9c2ab17e03", "sectionPage": "UsrApplicants_FormPage" }
+                        "planVersion": "plan-4f9c2ab17e03", "sectionPage": "UsrApplicants_FormPage" },
+    "orphanedPages": [
+      { "schema": "UsrApplicants_FormPage", "orphanedBy": "main", "at": "plan-4f9c2ab17e03" }
+    ]
   },
   "proposals": [
     { "unit": "main", "deviation": "merge two profile islands into one",
@@ -105,6 +108,15 @@ Rules that make it trustworthy:
 - `nonPageUnits` keys are the reachability keys from `--units.reachability[]` whose
   `appliesWhen` is `true`. A key with `appliesWhen: false` is not an obligation of this run and
   gets no entry.
+- **`standWrites.orphanedPages` are pages a RE-BIND left pointing at nothing (ENG-95850 / B4).** `create-app` seeds
+  start pages (`<Code>_FormPage`, `_ListPage`, `_Detail`); a builder that builds the real page as a NEW schema on a
+  different template and re-points the section at it leaves the seeded one on the stand, bound to no key. It is
+  recorded the moment a unit reports `reboundFrom` — unless that schema is still some key's recorded page, which is a
+  re-bind between two live keys and not an orphan. Why it is worth a record: an orphan is fetchable and reads exactly
+  like a live page, and a run that judged build progress off one concluded "main not built" about a form that was
+  ~80% complete. The verifier is handed the list and told not to read an orphan as any key's page. **Nothing deletes
+  them** — a page on a customer's stand is not a build round's to remove, so the list is the run's report and the
+  decision is the operator's.
 - **`reachability.sectionRegistered` is a COUNT, not a flag (ENG-95850 / B2).** Every other wiring key is a
   boolean, because the wiring either exists or does not. A workplace registration is different: it only ADDS, so a
   section "moved" from `My applications` to `Recruiting` is bound to BOTH until the old row is removed — two
