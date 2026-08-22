@@ -229,8 +229,8 @@ the round a builder needs its row.
 
 `<n>` is the PAGE's 1-based position in `--units.pages[]`. Only page keys are published there, so a
 non-page unit — the `app` unit, an applicable reachability key — has no `<n>` and no slice: it owns no page
-row. Its own per-unit files are named from the key instead (`worklog/app.md`,
-`worklog/reach-sectionRegistered.md`), and the naming rule is total over the three unit classes for that
+row. Its own per-unit files are named from the key instead — in the `worklog` folder, `app.md` and
+`reach-sectionRegistered.md` — and the naming rule is total over the three unit classes for that
 reason: the executor names every file it hands out, and a unit class the rule did not cover used to stop the
 run outright.
 

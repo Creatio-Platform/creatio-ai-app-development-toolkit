@@ -174,8 +174,8 @@ confirm the file is its own.
 
 **A non-page unit is named the other way round.** The `app` unit and every applicable reachability key are
 scheduled, but `--units` publishes neither — `pages[]` holds page keys only — so they have no position to be
-numbered by. Their per-unit files are named from the KEY, namespaced by the kind: `worklog/app.md`,
-`worklog/reach-sectionRegistered.md`. Those keys are the engine's own fixed identifiers, so the name is unique,
+numbered by. Their per-unit files are named from the KEY, namespaced by the kind — in the `worklog` folder,
+`app.md` and `reach-sectionRegistered.md`. Those keys are the engine's own fixed identifiers, so the name is unique,
 and unlike a schedule position it is stable across rounds and sessions. Neither unit gets a queue or built slice:
 it owns no page row.
 
