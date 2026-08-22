@@ -145,6 +145,18 @@ Rules that make it trustworthy:
     behaves exactly as it did then — it stops. Reconcile reports the record as `packageCreatedByRun`, read off
     THIS FILE and never derived from the stand.
 
+### `verify.md` / `verify.json` are only current as of the last COMPLETED Reconcile (ENG-95850 / D)
+
+They are written by the Reconcile phase, so an ABORTED round leaves the previous round's numbers on disk with
+nothing on the files themselves saying so. On the Applicant run the crash left `missing 5 / unverified 20` while the
+stand was materially further along, and reading those files by hand made the run look worse than it was.
+
+Two things follow. **Do not read a verdict file as the current state after a run that did not finish** — re-run, and
+the baseline Reconcile re-runs `--verify` against the stand and replaces both files, which is why an interrupted run
+is self-healing as long as nobody acts on the stale copy in between. And when the VERIFIER answers but the round
+still stops, the run says so itself: it returns `verdictStale: true` with `stopped: 'verifier-failed'` rather than
+reporting the previous verdict as current.
+
 ## `built.json` — the payload `--verify` reads
 
 Exactly the `--built` shape the CLI accepts. It ACCUMULATES across rounds: evidence and judge

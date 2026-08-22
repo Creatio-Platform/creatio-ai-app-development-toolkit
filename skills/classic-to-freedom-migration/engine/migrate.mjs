@@ -1128,7 +1128,15 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
 // `char.IsLetter`/`char.IsLetterOrDigit`, which are Unicode-aware — an ASCII-only `[A-Za-z][\w.]*` rejects output
 // clio legitimately returns, so the class is spelled with Unicode properties to match the producing contract.
 const RESOLVED_COLUMN_PATH = /^\p{L}[\p{L}\p{N}_.]*$/u;
-const RESOLVED_COLUMN_SOURCES = ["schema-default", "entity-default", "none"];
+// ENG-95850 (D) — `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
+// profile the section ACTUALLY renders, and its own contract says a product section usually resolves to exactly that
+// ("A product section usually resolves to profile: its code declares far fewer columns than the list shows").
+// Leaving it out of this list rejected the tool's most common and most accurate answer as MALFORMED, and the run then
+// had to re-read with `ignore-profile=true` — which returns the STATICALLY declared set, i.e. deliberately fewer
+// columns than the list shows. Measured on the Applicant run: one wasted round-trip and a worse column set.
+// Accepting it is not the same as trusting it blindly: a profile can be scoped, so a profile-sourced set RAISES a
+// ⚠ Confirm decision (see `listColumnsDecision`) instead of being silently adopted as the section's default.
+const RESOLVED_COLUMN_SOURCES = ["profile", "schema-default", "entity-default", "none"];
 
 // Validate + normalize a `get-classic-list-columns` response supplied as `manifest.section.listColumns`.
 // RECOVERABLE failures return `{ error }` — the caller routes them into the STRUCTURE gate so the run still

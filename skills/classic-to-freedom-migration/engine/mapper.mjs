@@ -2361,6 +2361,17 @@ function listColumnsDecision(section, columns) {
     return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
       reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
   }
+  // ENG-95850 (D) — A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
+  // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
+  // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
+  // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
+  // profile can be SCOPED, so adopting one silently would migrate whatever scope happened to be read as the
+  // section's default for everyone. So: use it, and ask once. Fixed literal `item`, same reason as the fallback
+  // branch — it is half the key an operator's recorded answer matches on, so it must not move with the columns.
+  if (section?.listColumnSource === "profile") {
+    return { kind: LIST_DECISION_KIND.columns, item: "profile-sourced list column set",
+      reason: "these columns come from the saved grid PROFILE the Classic list actually renders, not from the section's static declaration — a profile can be scoped, so confirm this is the set every user should get in Freedom" };
+  }
   return null;
 }
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.

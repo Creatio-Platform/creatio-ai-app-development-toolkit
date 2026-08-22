@@ -1140,11 +1140,31 @@ check("ENG-95229: list-column evidence from another section is gated, not thrown
     source: "entity-default", columns: [{ name: "Name" }] }), /belongs to another section/),
   () => listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
     source: "entity-default", columns: [{ name: "Name" }] }).structure?.issues);
+// The example used to be `"profile"` — which is a REAL source `get-classic-list-columns` returns, and gating it was
+// ENG-95850's D defect (the engine rejected the tool's most common answer as malformed and forced a worse re-read).
+// The subject of this check is an UNKNOWN source, so it needs a value the tool genuinely never returns.
 check("ENG-95229: an unknown source is gated with the received value named",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-    source: "profile", columns: [{ name: "Name" }] }), /malformed: source "profile"/),
+    source: "grid-profile", columns: [{ name: "Name" }] }), /malformed: source "grid-profile"/),
   () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-    source: "profile", columns: [{ name: "Name" }] }).structure?.issues);
+    source: "grid-profile", columns: [{ name: "Name" }] }).structure?.issues);
+// --- ENG-95850 (D): `source: "profile"` is ACCEPTED, USED, and ASKED ABOUT ONCE. Classic keeps a section's visible
+// columns as saved grid-profile data, so this is the set the list actually renders — and the tool's own contract says
+// a product section usually resolves to it. The engine used to reject it as malformed, so the run re-read with
+// `ignore-profile=true` and got the statically declared set: fewer columns than the list shows.
+const profileRun = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+  source: "profile", columns: [{ name: "Name" }, { name: "JobTitle" }] });
+check("ENG-95850 (D): a profile-sourced read is NOT gated any more — it is the set the Classic list renders, and rejecting it forced a re-read that returns fewer columns",
+  () => !gatedOn(profileRun, /malformed: source/) && !gatedOn(profileRun, /list-column/),
+  () => profileRun.structure?.issues);
+check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the design spec says they came from the profile rather than the static declaration",
+  () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
+    && /read from the saved grid PROFILE/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
+check("ENG-95850 (D): a profile-sourced set still raises ONE ⚠ Confirm decision — a profile can be scoped, so it is used but not silently adopted for every user",
+  () => /profile-sourced list column set/.test(profileRun.designSpec)
+    && /confirm this is the set every user should get/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));

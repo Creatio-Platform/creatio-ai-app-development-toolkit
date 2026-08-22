@@ -402,6 +402,12 @@ function listColumnLine(section) {
   if (section.listColumnSource === "entity-default") {
     return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
   }
+  // ENG-95850 (D) — say WHERE a profile-sourced set came from. It is the set the list actually renders (which is why
+  // the engine takes it over the static declaration), and it is also profile data that can be scoped — the reader
+  // has to know which of the two they are confirming.
+  if (section.listColumnSource === "profile") {
+    return `- **List columns:** ${rendered}${why} — read from the saved grid PROFILE the Classic list actually renders (Classic keeps each user's visible set as per-user list/profile data), NOT from the section's static declaration, which usually names fewer columns; a profile can be scoped, so confirm this is the set every user should get in Freedom`;
+  }
   return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
 }
 // The list page's own LAYOUT tables — the positioned contents of `result.listChangeSet`. Same STATUS as the form's
