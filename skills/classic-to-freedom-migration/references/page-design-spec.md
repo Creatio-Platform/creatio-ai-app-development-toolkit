@@ -99,8 +99,12 @@ it reaches `--units.preflight` and cannot be read past. The list page raises its
 
 #### ⚠ Confirm before I build (<n>)
 All eight kinds the list page can raise — the set is closed, so a kind absent from a run's plan means the run had
-nothing to ask, never that the question went unasked:
+nothing to ask, never that the question went unasked. Nine bullets, eight kinds: `list-columns` is listed twice
+because it asks about an EMPTY set and about a FALLBACK one, and the two are answered separately:
 - **[list-columns]** no list columns resolved — the grid would be built empty …
+- **[list-columns]** fallback list column set — the Classic section declares no list columns, so the grid would
+  ship with a single fallback column … (the SAME kind, second item: a fallback set is an unanswered question
+  too, and it carries an id so the operator's answer has somewhere to be recorded)
 - **[list-column-type]** `<column>` — classic type `<T>` has no confirmed Freedom `dataValueType` …
 - **[list-column-path]** `<column>.<display>` — a display path, bound as the lookup column `<column>` …
 - **[list-filter-type]** `<FilterName>` — its Classic `dataValueType` maps to no known `quickFilterType` …

@@ -1161,6 +1161,28 @@ check("ENG-95503 AC4: the stand-derived QUESTION text is passed through the call
   () => { const text = wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
     return text.includes("<<DATA no list columns resolved DATA>>") && !text.includes(`<<DATA ${AC4_COLUMNS}`); },
   () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(0, 260));
+/* THE FALLBACK SHAPE of the same acceptance criterion, and it is NOT the case above. A fallback set carries ONE
+   column, so the list page has a gated deliverable and the `list` key IS published — the question rides on `list`
+   while the empty-set question rides on `main`. Measured on the reopened Applicant1Section run: that shape had no
+   published id at all, so its answer could reach no builder. Both halves are asserted, because the negative one is
+   what a naive `pageKey === unit.key` filter gets wrong in the other direction. */
+const AC4_FALLBACK_ITEM = "fallback list column set";
+const ac4FallbackItems = [
+  { id: `list#confirm:list-columns:${AC4_FALLBACK_ITEM}`, pageKey: "list", kind: KIND_LIST_COLS,
+    item: AC4_FALLBACK_ITEM,
+    resolution: { answer: AC4_COLUMNS, decidedBy: "operator", date: "2026-08-22" } },
+];
+check("ENG-95503 AC4 (fallback): a resolved column set answered against the FALLBACK question reaches the `list` builder's inputs verbatim — the shape whose id the reopened run did not publish at all",
+  () => { const mine = wf.resolutionsForUnit(ac4FallbackItems, "list", new Set(["main", "list"]));
+    const text = wf.resolutionsBlockText(mine, ac4Fence);
+    return mine.length === 1 && text.includes(AC4_COLUMNS) && text.includes(`<<DATA ${AC4_FALLBACK_ITEM} DATA>>`)
+      && text.includes("operator, 2026-08-22"); },
+  () => ({ routed: wf.resolutionsForUnit(ac4FallbackItems, "list", new Set(["main", "list"])).length,
+    text: wf.resolutionsBlockText(wf.resolutionsForUnit(ac4FallbackItems, "list", new Set(["main", "list"])), ac4Fence).slice(0, 300) }));
+check("ENG-95503 AC4 (fallback): the same answer is NOT also handed to `main` while a `list` unit exists — the grid is built on `list`, and a second copy would have two builders acting on one decision",
+  () => wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])).length === 0
+    && wf.resolutionsBlockText(wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])), ac4Fence) === "",
+  () => wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])).map((x) => x.id));
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
    deciding WHICH batches receive it is executable logic — and as an inline expression nothing referenced it, so a
