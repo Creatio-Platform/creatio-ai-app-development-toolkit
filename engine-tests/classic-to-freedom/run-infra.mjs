@@ -1044,6 +1044,23 @@ check("ENG-95850 (B1): the rule is GENERALISED past business rules — establish
 // --- ENG-95850 (B2): the EXECUTOR's half of the workplace count. The engine gate is covered in run-mapper; these pin
 // that the run actually SUPPLIES the number and that it never unbinds anything (the operator chose the
 // non-destructive half deliberately, so "reports it" is the contract, not an implementation detail).
+// --- ENG-95850 (B3): a stale `get-page` read is EXPOSED, not silently believed. Cache-busting belongs to clio; what
+// this run owes is to notice the disagreement. A cached bundle showed a form "almost empty (3 elements)" while its
+// metadata was 40 minutes newer — four diagnostic rounds and one wrong conclusion ("main not built") on a page that
+// was ~80% complete. Deliberately does NOT soften the gate: a staleness report stops a diagnosis, it closes no row.
+check("ENG-95850 (B3): the verifier records BOTH timestamps and compares them — a bundle older than the page's `modifiedOn` is a cached response, not a short page",
+  /fetchedAt\\` \(the bundle's own\) and \\`modifiedOn\\` \(the page metadata's\)/.test(wfSrc)
+    && /is NEWER than \\`fetchedAt\\`/.test(wfSrc)
+    && /Re-fetch that page ONCE/.test(wfSrc));
+check("ENG-95850 (B3): a persisting disagreement is REPORTED as a discrepancy, and a short verdict may not be concluded off a read believed stale",
+  /record a \\`discrepancies\\` entry/.test(wfSrc)
+    && /Do not conclude a page is short off a read you have reason to believe is stale/.test(wfSrc));
+check("ENG-95850 (B3): the staleness path explicitly does NOT soften the gate — the numbers stay the engine's, so this cannot become a way to avoid a red",
+  /A staleness report never SOFTENS the gate/.test(wfSrc));
+check("ENG-95850 (B3): the BUILDER's own in-context read is guarded too — a stale self-read would burn its one bounded fix re-doing work that is already there",
+  /CHECK YOUR OWN READ IS NOT STALE/.test(wfSrc)
+    && /re-fetch ONCE before you write the file/.test(wfSrc)
+    && /rather than gating on a read you cannot trust/.test(wfSrc));
 // --- ENG-95850 (B4/C3): the page a re-bind leaves behind. `create-app` seeds start pages; a builder that builds the
 // real form as a NEW page and re-binds the section orphans the seeded one, and nothing flagged it — the DEAD page was
 // what a run read while judging progress, concluding "main not built" about a form that was ~80% complete.
