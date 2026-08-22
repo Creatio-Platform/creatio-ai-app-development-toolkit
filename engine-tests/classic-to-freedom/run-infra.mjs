@@ -1044,6 +1044,14 @@ check("ENG-95850 (B1): the rule is GENERALISED past business rules — establish
 // --- ENG-95850 (B2): the EXECUTOR's half of the workplace count. The engine gate is covered in run-mapper; these pin
 // that the run actually SUPPLIES the number and that it never unbinds anything (the operator chose the
 // non-destructive half deliberately, so "reports it" is the contract, not an implementation detail).
+// --- ENG-95850 (C1): `create-app` minting mobile pages against `with-mobile-pages=false` is a PLATFORM defect. The
+// app unit cannot fix it; what it can do is notice and say so, with the unwind order the residue actually needs.
+// Report-only by decision — the residue is on a customer's stand.
+check("ENG-95850 (C1): the app unit CHECKS whether `with-mobile-pages=false` was honoured and reports the residue with the unwind order, and is told not to remove it",
+  /THEN CHECK WHETHER THE FLAG WAS HONOURED/.test(wfSrc)
+    && /MobileRelatedPage/.test(wfSrc)
+    && /create-related-page-addon … pages=\[\]/.test(wfSrc)
+    && /Do NOT delete them and do NOT unwind the binding/.test(wfSrc));
 // --- ENG-95850 (B3): a stale `get-page` read is EXPOSED, not silently believed. Cache-busting belongs to clio; what
 // this run owes is to notice the disagreement. A cached bundle showed a form "almost empty (3 elements)" while its
 // metadata was 40 minutes newer — four diagnostic rounds and one wrong conclusion ("main not built") on a page that
