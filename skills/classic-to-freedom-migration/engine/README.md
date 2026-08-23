@@ -100,7 +100,7 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 ```jsonc
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
-  "reachability": { "sectionRegistered": true, "reuseBindings": false },
+  "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
   "evidence": { "<id from --units>": { "referencePage": "…", "components": ["…"] } },
   "judge":    { "<id from --units>": { "convincing": true, "why": "…" } } }
 ```

@@ -2906,6 +2906,9 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
  * that CAN silently drift — a `crt.*` type that does not exist, and a table row nobody documented.
  */
 {
+  // Suffix classes the COMPONENT index cannot judge: requests and Angular services live in the CDN's
+  // separate RequestRegistry, and a `*Handler` is platform-registered against a request, never placed on a page.
+  const NON_COMPONENT_SUFFIX = /(?:Request|Service|Handler)$/;
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
@@ -2913,11 +2916,14 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
   // DOC form: `crt.ContactCommunication` was written in prose long before anyone checked it against a stand, and
   // prose is what an agent reads when Node is unavailable.
   const allDocTypes = [...new Set((doc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || []))];
-  // A `crt.*Request` / `crt.*Service` is NOT a component: requests live in the CDN's separate RequestRegistry
-  // (published for `latest` only, and it does not carry all of them — `crt.HandlerChainService` is an Angular
-  // service, `crt.EntityStageProgressBarLoadDataRequest` a component-specific request). The component index cannot
-  // judge them, so they are excluded here and remain UNCHECKED — stated rather than silently folded in.
-  const isComponentName = (t) => !/(?:Request|Service)$/.test(t);
+  // A `crt.*Request` / `crt.*Service` / `crt.*Handler` is NOT a component: requests live in the CDN's separate
+  // RequestRegistry (published for `latest` only, and it does not carry all of them — `crt.HandlerChainService` is
+  // an Angular service, `crt.EntityStageProgressBarLoadDataRequest` a component-specific request), and a `*Handler`
+  // is platform-registered against a request rather than placed on a page (`crt.ValidateDuplicatesOnSaveHandler`
+  // on `crt.SaveDataRequest`). The component index cannot judge any of the three, so they are excluded here and
+  // remain UNCHECKED — stated rather than silently folded in. The exclusion is kept honest below: a suffix-excluded
+  // type that DOES appear in the index would mean the suffix is hiding a real component.
+  const isComponentName = (t) => !NON_COMPONENT_SUFFIX.test(t);
   // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
   // it is the warning that it does not. Those are checked the other way round below.
   const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
@@ -2963,9 +2969,9 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
   // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
   const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
-    .filter((t) => !/(?:Request|Service)$/.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
+    .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
   const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
-  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services and the crt.Tab acceptance spelling)",
+  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers and the crt.Tab acceptance spelling)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
