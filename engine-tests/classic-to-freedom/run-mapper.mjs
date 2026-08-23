@@ -3265,13 +3265,15 @@ const unresolvedChild = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{OpenDetail:{schemaName:"OpenDetail",entitySchemaName:"OpenEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"OpenDetail",parentName:"T",values:{itemType:2}}]};});` }],
   detailSchemas: { OpenDetail: { body: `define("OpenDetail",[],function(){return{entitySchemaName:"OpenEntity",diff:[]};});`, entity: "OpenEntity" } } }, { baseDir: FIX });
 const openIssue = unresolvedChild.structure.issues.find((i) => /OpenEntity/.test(i)) || "";
-check("ENG-95021: the gate's remediation names ALL THREE resolving answers, reuseFreedomPage included",
-  /childPageSchemas/.test(openIssue) && /"editPage": false/.test(openIssue) && /"reuseFreedomPage"/.test(openIssue),
+check("ENG-95021/95861: the gate's remediation names ALL FOUR resolving answers, reuseFreedomPage + opensClassicPage included",
+  /childPageSchemas/.test(openIssue) && /"editPage": false/.test(openIssue) && /"reuseFreedomPage"/.test(openIssue)
+  && /"opensClassicPage"/.test(openIssue),
   () => openIssue);
 check("ENG-95021: the remediation states that read-only is NOT one of them",
   /`"editable": false` records that the list is read-only, which is NOT an answer/.test(openIssue), () => openIssue);
-check("ENG-95021: the unresolved-child plan note offers reuseFreedomPage too (same three answers as the gate)",
-  /<FILL: verify child page>/.test(unresolvedChild.plan) && /"reuseFreedomPage"/.test(unresolvedChild.plan));
+check("ENG-95021/95861: the unresolved-child plan note offers the SAME four answers as the gate",
+  /<FILL: verify child page>/.test(unresolvedChild.plan) && /"reuseFreedomPage"/.test(unresolvedChild.plan)
+  && /"opensClassicPage"/.test(unresolvedChild.plan));
 
 // (4) Reuse: never print a Classic page name nobody supplied, and never derive one from the entity. Reuse
 //     supersedes the BASE page only, so the client-delta reconcile is still owed.
@@ -3337,6 +3339,152 @@ check("ENG-95021: the reuse run's own `onstand` keys are registered in REACHABIL
 // mini-page path would pass unnoticed. Scanning the source covers all of them: an `onstand` row whose key is not
 // in REACHABILITY_KEYS can never be offered by `--units` nor cleared by `--verify` — exit 2 with no valid answer.
 const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
+
+// --- ENG-95861: THE SECTION BOUNDARY — the fourth child resolution ----------------------------------------------
+// Migrating "this section" means this section's own pages. A related list whose child entity owns ANOTHER SECTION is
+// that other section's work: on Freedom the list keeps opening the child's CLASSIC card, which the platform handles.
+// The measured cost of not being able to say that (2026-08-22/23 Applicant run): `InternalRequestHRPage` — another
+// section's card, ~18 typed pages of its own — was a MANDATORY fold, one of ITS own merge warnings ⛔'d the parent
+// plan 5 min 24 s before the user had answered anything, the gated executor could not run, and the final verdict
+// carried 6 MISSING rows for a page that was never a deliverable. The real Applicant manifest is not in this repo,
+// so this is its synthetic stand-in: a child page whose own fold BLOCKS, resolved two ways.
+// The child's body carries a `remove` of an item nothing declares → `eff.warnings` → the child's OWN gate blocks,
+// which is the exact shape that reached the parent as `nested child page(s) failed their own gate`.
+const XS_PARENT = `define("P",[],function(){return{entitySchemaName:"Applicant",details:{VacDetail:{schemaName:"VacDetail",entitySchemaName:"InternalRequest",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"Header",values:{itemType:0}},{operation:"insert",name:"CardContentContainer",values:{itemType:0}},{operation:"insert",name:"Tabs",parentName:"CardContentContainer",values:{itemType:15}},{operation:"insert",name:"Name",parentName:"Header",values:{itemType:4,bindTo:"Name"}},{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"VacDetail",parentName:"T",values:{itemType:2}}]};});`;
+const XS_DETAIL = `define("VacDetail",[],function(){return{entitySchemaName:"InternalRequest",methods:{getEditPageName:function(){return "InternalRequestHRPage";}},diff:[]};});`;
+const XS_CHILD_BUNDLE = { schemas: [{ pkg: "IR", body: `define("IR",[],function(){return{entitySchemaName:"InternalRequest",diff:[{operation:"remove","name":"RequesterNobodyDeclared"},{operation:"insert",name:"Subject",parentName:"Header",values:{itemType:4,bindTo:"Subject"}}]};});` }], noParentTemplate: true };
+// `noParentTemplate` on BOTH the parent and the child bundle: this block is about the CHILD disposition, so the
+// parent must not carry gate reasons of its own — a parent that also blocks proves nothing about the boundary.
+const xsManifest = (detailExtra) => ({ entity: "Applicant", noParentTemplate: true,
+  schemas: [{ pkg: "P", body: XS_PARENT }],
+  detailSchemas: { VacDetail: { body: XS_DETAIL, entity: "InternalRequest", ...detailExtra } },
+  childPageSchemas: { InternalRequestHRPage: XS_CHILD_BUNDLE } });
+
+// (0) THE BASELINE — without the boundary the child is folded and its own warning ⛔s the PARENT. If this ever stops
+//     being true the rest of this block proves nothing, so it is asserted rather than assumed.
+const xsFolded = runMigration(xsManifest({}), { baseDir: FIX });
+check("ENG-95861 baseline: folding another section's card lets ITS OWN warning block the PARENT gate",
+  xsFolded.gate.blocked && xsFolded.gate.reasons.some((r) => /nested child page\(s\) failed their own gate/.test(r))
+  && xsFolded.childPages.some((c) => c.entity === "InternalRequest" && c.childBlocked),
+  () => ({ blocked: xsFolded.gate.blocked, reasons: xsFolded.gate.reasons }));
+
+// (1) THE FIX — the same manifest with the boundary recorded. The child is NOT folded, so the child's gate never
+//     runs, so nothing of it can reach the parent. This is the single most valuable line of the ticket.
+const xsBoundary = runMigration(xsManifest({ opensClassicPage: "InternalRequestHRPage", ownSection: "Internal requests" }), { baseDir: FIX });
+const xsChild = xsBoundary.childPages.find((c) => c.entity === "InternalRequest");
+check("ENG-95861: a boundary child is NOT folded — no spec, no child gate, no childBlocked (even with a bundle supplied)",
+  !!xsChild && !xsChild.spec && !xsChild.childBlocked && !xsChild.resolvedFrom,
+  () => xsChild && { spec: !!xsChild.spec, childBlocked: xsChild.childBlocked, resolvedFrom: xsChild.resolvedFrom });
+check("ENG-95861: the parent gate is CLEAR — a warning inside a page nobody is migrating cannot ⛔ this plan",
+  !xsBoundary.gate.blocked, () => xsBoundary.gate.reasons);
+check("ENG-95861: the boundary RESOLVES the structure gate, exactly as the other three answers do",
+  xsBoundary.structure.complete && !xsBoundary.structure.issues.some((i) => /InternalRequest/.test(i)),
+  () => xsBoundary.structure.issues);
+check("ENG-95861: the plan is APPROVABLE — no plan-level gap at all (gate + structure + coverage)",
+  verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pages: {} }).planGaps.length === 0,
+  () => verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pages: {} }).planGaps);
+
+// (2) ZERO DELIVERABLES. The 6 MISSING rows of the measured run were all `child:InternalRequest`; under the boundary
+//     that key does not exist, so there is nothing to report MISSING — in `--units`, `--checklist` or `--verify`.
+const xsOpts = checklistOpts(xsManifest({ opensClassicPage: "InternalRequestHRPage", ownSection: "Internal requests" }));
+const xsUnits = pageUnits(xsBoundary, xsOpts);
+check("ENG-95861: `--units` publishes NO build unit for a boundary child (and none in buildOrder)",
+  !xsUnits.pages.some((p) => /InternalRequest/.test(p.key)) && !xsUnits.buildOrder.some((k) => /InternalRequest/.test(k)),
+  () => ({ keys: xsUnits.pages.map((p) => p.key), order: xsUnits.buildOrder }));
+check("ENG-95861: no page NODE is published for it either — `subPageNodes` does not carry it",
+  !subPageNodes(xsBoundary).some((nd) => /InternalRequest/.test(nd.pageKey || "")),
+  () => subPageNodes(xsBoundary).map((nd) => nd.pageKey));
+// `--verify` against a build that contains NOTHING for the child: not one row may read ❌ MISSING or ⚠ for it.
+const xsVerify = renderVerify(xsBoundary, xsOpts, { pages: {} });
+const xsOpenRows = Object.values(xsVerify.pages).flatMap((p) => p.openRows || []);
+check("ENG-95861: `--verify` opens NO row for the boundary child — nothing about it can be MISSING or unverified",
+  !xsOpenRows.some((r) => /InternalRequest|cross-section boundary/i.test(r.deliverable || "")),
+  () => xsOpenRows.filter((r) => /InternalRequest/.test(r.deliverable || "")).map((r) => r.status + " " + r.deliverable.slice(0, 70)));
+
+// (3) …but "publishes nothing" must not mean "says nothing": the boundary is VISIBLE, as N/A, never as a `☐` that
+//     invites someone to close it. A row nobody can see is a boundary the next round re-litigates.
+const xsChecklist = renderChecklist(xsBoundary, xsOpts);
+check("ENG-95861: the checklist carries the boundary as `N/A — cross-section boundary (approved)`, never `☐ pending`",
+  /\| Cross-section boundaries \(1\) — [^|]*InternalRequest[^|]*\| N\/A — cross-section boundary \(approved\) \|/.test(xsChecklist)
+  && !/Cross-section boundaries[^|]*\| ☐ pending/.test(xsChecklist),
+  () => (xsChecklist.match(/^\| \d+ \| Cross-section boundaries.*$/m) || [])[0]);
+check("ENG-95861: `--verify` renders that same row N/A too — and tallies it as neither missing nor unverified",
+  /\| Cross-section boundaries \(1\)[^|]*\| N\/A — cross-section boundary \(approved\) \|/.test(xsVerify.markdown)
+  && xsVerify.missing === 0,
+  () => ({ missing: xsVerify.missing, row: (xsVerify.markdown.match(/^\| \d+ \| Cross-section boundaries.*$/m) || [])[0] }));
+
+// (4) THE PLAN STATES IT, in the user's terms, in both places a reader looks: the Main-scope row and the child section.
+check("ENG-95861: the Main-scope row calls it `Reuse (Classic)` and names the page + the section it belongs to",
+  /\| InternalRequest — opened by detail "VacDetail" \| Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
+  () => (xsBoundary.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
+check("ENG-95861: the child section states the boundary and that NOTHING is built for it",
+  /Reuse \(Classic\) — cross-section boundary \(approved\)/.test(xsBoundary.plan)
+  && /Nothing here is folded, rebuilt or built/.test(xsBoundary.plan)
+  && /publishes NO deliverable/.test(xsBoundary.plan));
+check("ENG-95861: it also states how to REVERSE the decision — a scope decision, not a defect",
+  /drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
+  && /reversible by re-planning, never a defect of this plan/.test(xsBoundary.plan));
+check("ENG-95861: the Main-scope LEGEND enumerates the fourth call (a 3-call legend under a 4-call table is a gap)",
+  /\*\*`Reuse \(Classic\)`\*\* = a cross-section boundary the user approved/.test(xsBoundary.plan));
+check("ENG-95861: the plan never claims the child page was mapped, and prints no `Rebuild (child)` for it",
+  !/\| InternalRequest[^|]*\| Rebuild \(child\) \|/.test(xsBoundary.plan));
+
+// (4b) THE BOUNDARY IS ABOUT THE CHILD'S EDIT PAGE, NOT THE RELATED LIST. The list itself is still built on the
+//      Freedom form — that is what keeps opening the Classic card — so the parent must still owe it. A boundary that
+//      also dropped the related list would silently shrink the page the user DID ask for.
+const xsCover = checklistGroups(xsBoundary, xsOpts).flatMap((g) => g.rows);
+check("ENG-95861: the parent still owes the RELATED LIST itself — the boundary drops the child page, not the detail",
+  xsCover.some((r) => r.vk?.type === "details" && r.vk.n === 1)
+  && /VacDetail/.test(xsBoundary.plan),
+  () => xsCover.filter((r) => r.vk?.type === "details").map((r) => r.label));
+
+// (5) `ownSection` is OPTIONAL and never invented — an invented section name inside a sentence the user is asked to
+//     approve is worse than no name. Same rule the reuse renderer already follows for the Classic page name.
+const xsNoSection = runMigration(xsManifest({ opensClassicPage: true }), { baseDir: FIX });
+check("ENG-95861: `opensClassicPage: true` alone resolves the child (the boundary is the answer, the name is extra)",
+  !xsNoSection.gate.blocked && xsNoSection.structure.complete,
+  () => ({ reasons: xsNoSection.gate.reasons, issues: xsNoSection.structure.issues }));
+check("ENG-95861: with no `ownSection` the plan says `another section` and invents none",
+  /belongs to another section/.test(xsNoSection.plan) && !/belongs to the `/.test(xsNoSection.plan));
+check("ENG-95861: `opensClassicPage: true` still names the page the detail's OWN body read (`getEditPageName`)",
+  /Classic `InternalRequestHRPage` stays Classic/.test(xsNoSection.plan));
+// No `getEditPageName`, no name supplied → the plan must not derive `<Entity>Page`.
+const xsNameless = runMigration({ entity: "Applicant", noParentTemplate: true,
+  schemas: [{ pkg: "P", body: XS_PARENT }],
+  detailSchemas: { VacDetail: { body: `define("VacDetail",[],function(){return{entitySchemaName:"InternalRequest",diff:[]};});`, entity: "InternalRequest", opensClassicPage: true } } }, { baseDir: FIX });
+check("ENG-95861: a boundary with no page name anywhere does NOT derive `InternalRequestPage`",
+  /the Classic page the detail already opens/.test(xsNameless.plan) && !/InternalRequestPage/.test(xsNameless.plan),
+  () => (xsNameless.plan.match(/^> \*\*Reuse \(Classic\).*$/m) || [])[0]);
+
+// (6) Normalization: only a non-empty string or `true` is a recorded boundary. `false` says "NO, not a boundary" and
+//     must fall through to the unresolved arm — reading it as truthy would waive a child page on a typo.
+for (const [label, v] of [["false", false], ["empty string", '""'], ["a number", 0]]) {
+  const run = runMigration({ entity: "Applicant", noParentTemplate: true,
+    schemas: [{ pkg: "P", body: XS_PARENT }],
+    detailSchemas: { VacDetail: { body: `define("VacDetail",[],function(){return{entitySchemaName:"InternalRequest",diff:[]};});`, entity: "InternalRequest", opensClassicPage: v === '""' ? "" : v } } }, { baseDir: FIX });
+  check(`ENG-95861: \`opensClassicPage: ${label}\` is NOT a boundary — the child stays unresolved and the gate blocks`,
+    !run.structure.complete && run.structure.issues.some((i) => /InternalRequest/.test(i)),
+    () => run.structure.issues);
+}
+
+// (7) Precedence: if the child ALREADY ships a Freedom form, reuse is the better answer — the related list opens
+//     Freedom instead of staying on Classic, and reuse owes a binding row the boundary does not.
+const xsBoth = runMigration({ entity: "Applicant", noParentTemplate: true,
+  schemas: [{ pkg: "P", body: XS_PARENT }],
+  detailSchemas: { VacDetail: { body: XS_DETAIL, entity: "InternalRequest", opensClassicPage: "InternalRequestHRPage", reuseFreedomPage: "InternalRequests_FormPage" } } }, { baseDir: FIX });
+check("ENG-95861: `reuseFreedomPage` WINS over `opensClassicPage` — Freedom beats staying on Classic",
+  /\| InternalRequest[^|]*\| existing Freedom form `InternalRequests_FormPage` \| Reuse \(Freedom\) \|/.test(xsBoth.plan)
+  // the negative reads the CHILD's own prose, not the plan-wide legend (which names every call unconditionally)
+  && !/cross-section boundary \(approved\)/.test(xsBoth.plan),
+  () => (xsBoth.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
+
+// (8) The shared answer list is what an agent actually follows, and the boundary must read as a scope DECISION there
+//     — the run this fixes had the agent argue the user out of the boundary because the list called it a skip.
+check("ENG-95861: CHILD_PAGE_ANSWERS names the boundary AND that it is the user's scope decision, not a skip",
+  /"opensClassicPage"/.test(CHILD_PAGE_ANSWERS) && /OWNS ANOTHER SECTION/.test(CHILD_PAGE_ANSWERS)
+  && /a SECTION BOUNDARY is the user's scope decision, not a skip you declare/.test(CHILD_PAGE_ANSWERS),
+  () => CHILD_PAGE_ANSWERS);
+
 // --- ENG-95850 (D): a single `*Page` search cannot answer the child-page question for a TYPED entity. `list-pages`
 // finding no `<Entity>Page` is not the same as the entity having no Classic card — a typed entity registers a per-type
 // card in `SysModuleEdit` instead. A real run recorded `editPage: false` for `InternalRequest` (~18 typed edit pages)

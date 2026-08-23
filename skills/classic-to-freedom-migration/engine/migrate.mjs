@@ -15,6 +15,10 @@
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
+//        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
+//        // + optional `"ownSection": "<Section>"` (ENG-95861 — the child entity owns ANOTHER SECTION: its Classic card stays
+//        // Classic, this related list keeps opening it, the page is NEVER folded and publishes no deliverable)
 //     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
@@ -73,7 +77,8 @@ import { GATE_KIND } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
-  pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
+  pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
+  boundaryChild } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -93,6 +98,13 @@ function childPageIssue(c) {
   // Positive evidence required: the agent supplies the Freedom page NAME, verified with list-entity-client-schemas
   // (a `kind: "freedom"` section/edit page for the CHILD entity) — the absence of a working fold is NOT a reason.
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return null;
+  // THE SECTION BOUNDARY (ENG-95861). The child entity owns ANOTHER SECTION, and the user drew that line: on Freedom
+  // this related list keeps opening the child's CLASSIC card, which the platform handles, so the child is RESOLVED —
+  // not a gap, and not the self-declared skip the rule above forbids (that rule stops an AGENT dropping a child
+  // because it looks big or shared; a boundary is the USER's scope decision, recorded in the manifest).
+  // This is the resolution that keeps the fold from happening at all (`foldOneChildPage` returns early), so a warning
+  // inside a page NOBODY IS MIGRATING can no longer block the parent's gate — the whole cost of the run this fixes.
+  if (boundaryChild(c)) return null;
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
     : null;
@@ -417,6 +429,11 @@ function enumerateChildPages(changeSet, detailSchemas) {
       editable: ds ? ds.editable : null,
       // agent-verified: the child entity already has a shipped Freedom form page → Reuse, nothing to rebuild
       reuseFreedomPage: ds ? (ds.reuseFreedomPage ?? null) : null,
+      // USER-approved section boundary (ENG-95861): the child entity owns another section, so its Classic card stays
+      // Classic and this list keeps opening it. Carried here as well as parsed on the detail record — a key present
+      // in only one of the two places reaches no gate and no renderer, and fails silently.
+      opensClassicPage: ds ? (ds.opensClassicPage ?? null) : null,
+      ownSection: ds ? (ds.ownSection ?? null) : null,
     };
   }).filter((c) => c.entity);
 }
@@ -872,10 +889,11 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
 }
 // A child that is NOT rebuilt here still publishes its page key when it owes a deliverable — with a GATED row.
 // A reuse child owes the RelatedPage binding; a child whose Classic page exists (or was never verified) owes the
-// whole page. A child verified to have NO separate page, one already mapped higher on this branch (cycle) and one
-// whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at all and
-// keep only the parent's identity row — a gated row there would be a permanent false red, and the two latter are
-// PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
+// whole page. A child verified to have NO separate page, one behind an approved SECTION BOUNDARY (ENG-95861 — its
+// Classic card stays Classic, so this plan builds nothing for it), one already mapped higher on this branch (cycle)
+// and one whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at
+// all and keep only the parent's identity row — a gated row there would be a permanent false red, and the last two
+// are PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
 function publishUnfoldedChild(c, pageKey) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
     publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c));
@@ -890,6 +908,16 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
   // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
+  // THE SECTION BOUNDARY, and the reason this ticket exists: the child's page is NOT FOLDED. No recursive
+  // sub-migration, so no sub-run gate, so no `c.childBlocked` — and `migrate.mjs`'s `filter(c => c.childBlocked)`
+  // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card used to be mandatory, and
+  // ONE of that card's own merge warnings was enough to ⛔ the parent plan for work nobody had asked for.
+  // Checked AFTER `reuseFreedomPage` on purpose: if the child already ships a Freedom form, reuse is the better
+  // answer (the related list opens Freedom rather than staying on Classic), and it owes a binding row this does not.
+  // Routed through `publishUnfoldedChild`, which publishes NOTHING here — `childPageIssue` resolves the boundary, so
+  // it falls out with no page key, exactly like a verified `editPage: false`. No units, no checklist gate, no verify
+  // row: nothing about this child can be reported MISSING, because nothing about it is a deliverable.
+  if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey);
   const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
   if (!key) return publishUnfoldedChild(c, pageKey);
   const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
@@ -1515,6 +1543,14 @@ function detailBodySignals(scanText, p) {
   };
 }
 
+// `opensClassicPage` → `string | true | null`. Anything else (a number, `false`, an empty string) is NOT a recorded
+// boundary and must not read as one: `false` in particular means "no, this is not a boundary", so it has to fall to
+// `null` rather than to a truthy sentinel. Own fn so both readers share one normalization.
+function normalizeBoundary(v) {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return v === true ? true : null;
+}
+
 // ONE detail-schema entry → its record, always the same shape so callers never type-check the return (the
 // counterpart to `profileSchemaRecord`). Per field, a SUPPLIED answer beats a body-derived one: the manifest
 // entry is what the agent verified, the scan is only a heuristic.
@@ -1530,6 +1566,15 @@ function detailSchemaRecord(e, scanText, p) {
     // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
     // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
     reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
+    // USER-approved SECTION BOUNDARY (ENG-95861): this child entity owns another section, so its Classic edit page
+    // stays Classic and the Freedom related list keeps opening it. A STRING names that page (the honest form — the
+    // plan can then print it); `true` declares the boundary and leaves the name to the body's own `editPage` read.
+    // Normalized to `string | true | null` here so every reader tests one shape. NOT body-derivable: no detail body
+    // states which section its child entity belongs to — that is a stand fact plus a user decision.
+    opensClassicPage: normalizeBoundary(eObj.opensClassicPage),
+    // Optional, and only ever supplied: the section that child entity belongs to, for the plan's wording. Never
+    // inferred — an invented section name in a sentence the user is asked to approve is worse than no name.
+    ownSection: (typeof eObj.ownSection === "string" && eObj.ownSection.trim()) ? eObj.ownSection.trim() : null,
     addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
     error: p.error || null,
     astDiagnostics: p.astDiagnostics || [],
