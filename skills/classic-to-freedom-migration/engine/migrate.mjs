@@ -1128,7 +1128,15 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
 // `char.IsLetter`/`char.IsLetterOrDigit`, which are Unicode-aware — an ASCII-only `[A-Za-z][\w.]*` rejects output
 // clio legitimately returns, so the class is spelled with Unicode properties to match the producing contract.
 const RESOLVED_COLUMN_PATH = /^\p{L}[\p{L}\p{N}_.]*$/u;
-const RESOLVED_COLUMN_SOURCES = ["schema-default", "entity-default", "none"];
+// ENG-95850 (D) — `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
+// profile the section ACTUALLY renders, and its own contract says a product section usually resolves to exactly that
+// ("A product section usually resolves to profile: its code declares far fewer columns than the list shows").
+// Leaving it out of this list rejected the tool's most common and most accurate answer as MALFORMED, and the run then
+// had to re-read with `ignore-profile=true` — which returns the STATICALLY declared set, i.e. deliberately fewer
+// columns than the list shows. Measured on the Applicant run: one wasted round-trip and a worse column set.
+// Accepting it is not the same as trusting it blindly: a profile can be scoped, so a profile-sourced set RAISES a
+// ⚠ Confirm decision (see `listColumnsDecision`) instead of being silently adopted as the section's default.
+const RESOLVED_COLUMN_SOURCES = ["profile", "schema-default", "entity-default", "none"];
 
 // Validate + normalize a `get-classic-list-columns` response supplied as `manifest.section.listColumns`.
 // RECOVERABLE failures return `{ error }` — the caller routes them into the STRUCTURE gate so the run still
@@ -2220,7 +2228,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at `--units` because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;

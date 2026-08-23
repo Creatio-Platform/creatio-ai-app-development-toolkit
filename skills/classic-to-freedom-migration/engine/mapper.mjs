@@ -2339,15 +2339,48 @@ export const LIST_DECISION_KIND = {
   process: "list-process",
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
+// THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
+// answer. TWO shapes ask it, and the second was the ENG-95503 chain break: an EMPTY set was gated, while a FALLBACK
+// set — the section declared no columns, so the resolver returned the entity's single display column — was rendered
+// as ⚠ prose in the design spec and raised no decision at all. So the question reached the operator while their
+// ANSWER had no published id to be recorded against, on exactly the shape this channel exists for.
+// A `schema-default` set deliberately asks NOTHING: the Classic section declared those columns, so they already are
+// the answer, and gating every parsed list would put an unanswerable row on every migration's queue. A REJECTED
+// on-stand read over a chain parse resolves to `schema-default` too, and that was CONSIDERED here rather than
+// missed: the parse is real evidence, the rejection is already named as a structure issue with its own remedy, and
+// a question whose answer the run already holds is a row an operator cannot usefully answer. It stays silent.
+function listColumnsDecision(section, columns) {
+  if (!columns.length) {
+    return { kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
+      reason: "the Freedom grid would ship empty — confirm the column set the list should show" };
+  }
+  // The ITEM is a fixed literal, NOT the fallback column's name: it is half the key an operator's recorded answer
+  // matches on, and a key that moved with the entity's display column would send a real answer to
+  // `resolutionsUnmatched` — an answer reported as belonging to no question is an answer that reaches no builder.
+  if (section?.listColumnSource === "entity-default") {
+    return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
+      reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
+  }
+  // ENG-95850 (D) — A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
+  // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
+  // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
+  // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
+  // profile can be SCOPED, so adopting one silently would migrate whatever scope happened to be read as the
+  // section's default for everyone. So: use it, and ask once. Fixed literal `item`, same reason as the fallback
+  // branch — it is half the key an operator's recorded answer matches on, so it must not move with the columns.
+  if (section?.listColumnSource === "profile") {
+    return { kind: LIST_DECISION_KIND.columns, item: "profile-sourced list column set",
+      reason: "these columns come from the saved grid PROFILE the Classic list actually renders, not from the section's static declaration — a profile can be scoped, so confirm this is the set every user should get in Freedom" };
+  }
+  return null;
+}
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
 function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
   const out = [];
-  if (!columns.length) {
-    out.push({ kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
-      reason: "the Freedom grid would ship empty — confirm the column set the list should show" });
-  }
+  const columnSet = listColumnsDecision(section, columns);
+  if (columnSet) out.push(columnSet);
   for (const c of columns.filter((x) => x.dataValueType == null)) {
     out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
       reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });

@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1141,11 +1141,31 @@ check("ENG-95229: list-column evidence from another section is gated, not thrown
     source: "entity-default", columns: [{ name: "Name" }] }), /belongs to another section/),
   () => listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
     source: "entity-default", columns: [{ name: "Name" }] }).structure?.issues);
+// The example used to be `"profile"` — which is a REAL source `get-classic-list-columns` returns, and gating it was
+// ENG-95850's D defect (the engine rejected the tool's most common answer as malformed and forced a worse re-read).
+// The subject of this check is an UNKNOWN source, so it needs a value the tool genuinely never returns.
 check("ENG-95229: an unknown source is gated with the received value named",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-    source: "profile", columns: [{ name: "Name" }] }), /malformed: source "profile"/),
+    source: "grid-profile", columns: [{ name: "Name" }] }), /malformed: source "grid-profile"/),
   () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-    source: "profile", columns: [{ name: "Name" }] }).structure?.issues);
+    source: "grid-profile", columns: [{ name: "Name" }] }).structure?.issues);
+// --- ENG-95850 (D): `source: "profile"` is ACCEPTED, USED, and ASKED ABOUT ONCE. Classic keeps a section's visible
+// columns as saved grid-profile data, so this is the set the list actually renders — and the tool's own contract says
+// a product section usually resolves to it. The engine used to reject it as malformed, so the run re-read with
+// `ignore-profile=true` and got the statically declared set: fewer columns than the list shows.
+const profileRun = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+  source: "profile", columns: [{ name: "Name" }, { name: "JobTitle" }] });
+check("ENG-95850 (D): a profile-sourced read is NOT gated any more — it is the set the Classic list renders, and rejecting it forced a re-read that returns fewer columns",
+  () => !gatedOn(profileRun, /malformed: source/) && !gatedOn(profileRun, /list-column/),
+  () => profileRun.structure?.issues);
+check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the design spec says they came from the profile rather than the static declaration",
+  () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
+    && /read from the saved grid PROFILE/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
+check("ENG-95850 (D): a profile-sourced set still raises ONE ⚠ Confirm decision — a profile can be scoped, so it is used but not silently adopted for every user",
+  () => /profile-sourced list column set/.test(profileRun.designSpec)
+    && /confirm this is the set every user should get/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
@@ -1689,6 +1709,48 @@ check("ENG-95503: the answer reaches the queue item that ASKED it — `--units.p
     return !!hit && hit.pageKey === "main" && hit.resolution?.answer === "Name, Status, Owner, DueDate, Priority, Flagged"
       && hit.resolution.decidedBy === "operator" && hit.resolution.date === "2026-08-19"; },
   () => pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.map((p) => ({ id: p.id, res: p.resolution })));
+/* ---- ENG-95503 (reopened) — THE FALLBACK COLUMN SET. Measured on a full Applicant1Section run: the operator
+   answered the list-column question, the columns were built, and `--units` kept publishing the one-column
+   expectation — because the question had NO published id to answer. The section declared no columns, so the
+   on-stand read returned the entity's single display column (`entity-default`), and the design spec rendered that
+   as ⚠ prose while the ChangeSet raised no decision at all: the ⚠ Confirm gate only fired on a set that was
+   EMPTY. A fallback set is an unanswered question too, so the resolutions channel had nothing to key against on
+   exactly the shape this ticket names as the most common one. ---- */
+const LP_FALLBACK_MANIFEST = { ...LP_MANIFEST, addRecordMiniPage: false,
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "entity-default",
+      columns: [{ name: "Name", caption: "Name" }], notes: ["entity fallback"] },
+  },
+};
+const lpFallback = runMigration(LP_FALLBACK_MANIFEST, { baseDir: FIX });
+const lpFallbackOpts = checklistOpts(LP_FALLBACK_MANIFEST);
+const lpFallbackConfirm = pageUnits(lpFallback, lpFallbackOpts).preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+const RES_FALLBACK_ANSWER = "Name, Owner, Stage, Source, ModifiedOn";
+check("ENG-95503: a FALLBACK column set (`entity-default`) raises a `list-columns` ⚠ Confirm item — the design spec has always rendered this case with ⚠, and now the question has a published id an answer can be recorded against",
+  () => { const nd = lpFallback.listChangeSet.needsDecision.filter((d) => d.kind === KIND_LIST_COLUMNS);
+    return (lpFallback.section?.listColumns || []).join(",") === "Name"
+      && lpFallback.section?.listColumnSource === "entity-default"
+      && nd.length === 1 && !!lpFallbackConfirm?.id
+      && /confirm which columns the Freedom list should show/.test(lpFallback.designSpec); },
+  () => ({ src: lpFallback.section?.listColumnSource, nd: lpFallback.listChangeSet.needsDecision.map((d) => d.kind),
+    preflight: pageUnits(lpFallback, lpFallbackOpts).preflight.map((x) => x.id) }));
+check("ENG-95503: the fallback item is a FIXED literal, never the fallback column's own name — `item` is half the key a recorded answer matches on, so a key that moved with the entity's display column would send a real answer to `resolutionsUnmatched`",
+  () => lpFallbackConfirm?.item === "fallback list column set" && !/\bName\b/.test(lpFallbackConfirm?.item || ""),
+  () => lpFallbackConfirm?.item);
+check("ENG-95503: an answer recorded against the FALLBACK question reaches the queue item that asked it — the reopened run's exact case: the operator's five columns now travel as data instead of as prose the build never reads",
+  () => { const u = pageUnits(lpFallback, { ...lpFallbackOpts, resolutions: { resolutions: [
+      { kind: lpFallbackConfirm?.kind, item: lpFallbackConfirm?.item, answer: RES_FALLBACK_ANSWER, decidedBy: "operator", date: "2026-08-22" }] } });
+    const hit = u.preflight.find((p) => p.kind === KIND_LIST_COLUMNS);
+    return hit?.resolution?.answer === RES_FALLBACK_ANSWER && hit.resolution.decidedBy === "operator"
+      && u.resolutionsUnmatched.length === 0 && u.resolutionsConflicts.length === 0; },
+  () => pageUnits(lpFallback, { ...lpFallbackOpts, resolutions: { resolutions: [{ kind: lpFallbackConfirm?.kind, item: lpFallbackConfirm?.item, answer: RES_FALLBACK_ANSWER }] } }).preflight.map((x) => ({ id: x.id, res: x.resolution })));
+check("ENG-95503: a `schema-default` set raises NO `list-columns` question — the Classic section declared those columns, so they ARE the answer; gating every parsed list would put an unanswerable row on every migration's queue",
+  () => { const parsed = runMigration(LP_MANIFEST, { baseDir: FIX });
+    return parsed.section?.listColumnSource === "schema-default"
+      && !parsed.listChangeSet.needsDecision.some((d) => d.kind === KIND_LIST_COLUMNS); },
+  () => ({ src: runMigration(LP_MANIFEST, { baseDir: FIX }).section?.listColumnSource,
+    nd: runMigration(LP_MANIFEST, { baseDir: FIX }).listChangeSet.needsDecision.map((d) => `${d.kind}:${d.item}`) }));
 check("ENG-95503: an UNANSWERED question publishes `resolution: null` — an explicit \"nobody answered\", not an omitted field an executor could not tell apart from an engine that does not publish resolutions at all",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     return u.preflight.length >= 1 && u.preflight.every((p) => "resolution" in p && p.resolution === null); },
@@ -2338,14 +2400,14 @@ check("placement gate: an approved 'pages-only-no-menu' plan is NOT blocked — 
 const clPagesOnly = checklistWithPlacement(pagesOnlyPlacement);
 check("placement: 'pages-only-no-menu' renders the section row as deliberately NOT built — no gated row nothing will ever satisfy",
   /Navigable section registered — \*\*deliberately NOT built\*\*/.test(clPagesOnly.stdout || "")
-  && !/Navigable section registered — the Freedom section appears/.test(clPagesOnly.stdout || ""),
+  && !/Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(clPagesOnly.stdout || ""),
   () => (clPagesOnly.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
 // (f) 'new-app' needs no primary match — the build creates its own app — but it KEEPS the gated registration row.
 const newAppPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "new-app" } };
 check("placement gate: mode 'new-app' clears the gate (the build creates its own app, so no primary match is required)",
   planWithPlacement(newAppPlacement).status === 0);
 check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
-  /Navigable section registered — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
+  /Navigable section registered in exactly ONE workplace — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
 // …and the decision reaches the BUILD side. A build agent owns one page and never sees `manifest.placement`, so
 // `--units` republishes the host mode: without it `new-app` would be an approvable plan whose build still fails at
 // the last unit (an agent calling create-app-section against an app that cannot host a section) — a milder form of
@@ -3275,6 +3337,21 @@ check("ENG-95021: the reuse run's own `onstand` keys are registered in REACHABIL
 // mini-page path would pass unnoticed. Scanning the source covers all of them: an `onstand` row whose key is not
 // in REACHABILITY_KEYS can never be offered by `--units` nor cleared by `--verify` — exit 2 with no valid answer.
 const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
+// --- ENG-95850 (D): a single `*Page` search cannot answer the child-page question for a TYPED entity. `list-pages`
+// finding no `<Entity>Page` is not the same as the entity having no Classic card — a typed entity registers a per-type
+// card in `SysModuleEdit` instead. A real run recorded `editPage: false` for `InternalRequest` (~18 typed edit pages)
+// and the plan asserted there was nothing to migrate; only a hand-written Adjustments entry caught it.
+check("ENG-95850 (D): the recorded `editPage: false` sentence no longer reads as VERIFIED — it names the typed-entity check that has to confirm it",
+  () => /Recorded: no separate child page/.test(DESIGNSPEC_SRC)
+    && !/\*\*Verified: no separate child page\.\*\*/.test(DESIGNSPEC_SRC)
+    && /TYPED entity registers a per-type edit card/.test(DESIGNSPEC_SRC)
+    && /also returns no \\`editPages\\`/.test(DESIGNSPEC_SRC));
+check("ENG-95850 (D): the child-page ANSWER list names `list-entity-client-schemas` as the call that settles a typed entity, so the answer is not recorded off `list-pages` alone",
+  () => /list-entity-client-schemas` by that '/.test(DESIGNSPEC_SRC)
+    && /TYPED entity registers per-type edit cards instead of one/.test(CHILD_PAGE_ANSWERS)
+    && /finding no `\*Page` is not the same as the entity having no Classic card/.test(CHILD_PAGE_ANSWERS));
+check("ENG-95850 (D): the REUSE sentence carries the same caveat — the two places that state 'no Classic child page' cannot disagree about how strong that claim is",
+  () => /A TYPED entity registers per-type cards rather than one/.test(DESIGNSPEC_SRC));
 const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\s*evidence:\s*"([A-Za-z]+)"/g)].map((m) => m[1]))];
 // Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
 // registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward
@@ -5827,7 +5904,7 @@ const vOk = renderVerify(vResult, {}, {
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
   // (ENG-94975: `reachabilityValue` still reads these root-level booleans when `reachability` says nothing about
   // the key, so the existing literal stays valid; `reachability.<k> === false` would override them, `true` never does.)
-  miniPageWired: true, sectionRegistered: true,
+  miniPageWired: true, sectionRegistered: { workplaces: 1, names: ["Recruiting"] },
   ...QG_EVIDENCE, // D7: the page-DESIGN pass is an evidence row now — record + independent judge, or NOT complete
 });
 check("verify: a built page with all deliverables present AND on-stand wiring evidence supplied → complete",
@@ -7448,9 +7525,9 @@ const rcPages = { main: { viewConfig: { items: [] }, parentSchemaName: "T" } };
 const SECTION_RE = /Navigable section registered/;
 const WIRED_RE = /Mini page wired to/;
 const rcNothing = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: {} });
-const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: true } });
+const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } } });
 check("ENG-94975 P2 reachability: a key in `built.reachability` CLOSES its row — the canonical home is read, not just the legacy root-level booleans (control: the same payload with an empty `reachability` leaves it ⚠)",
-  allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /sectionRegistered confirmed on-stand/.test(rcSection.markdown)
+  allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /bound to exactly 1 workplace/.test(rcSection.markdown)
   && allEq(marksFor(rcNothing.markdown, SECTION_RE), "⚠ verify"),
   () => ({ section: marksFor(rcSection.markdown, SECTION_RE), nothing: marksFor(rcNothing.markdown, SECTION_RE) }));
 // …and the SAME row under an approved `pages-only-no-menu` placement. This is the leg that decides whether the
@@ -7479,10 +7556,48 @@ check("ENG-94975 P2 reachability PRECEDENCE: `reachability.miniPageWired = false
   && rcConflict.missing > 0,
   () => ({ wired: marksFor(rcConflict.markdown, WIRED_RE), missing: rcConflict.missing,
     row: rcConflict.markdown.split("\n").filter((l) => WIRED_RE.test(l)).map((l) => l.slice(-140)) }));
+// --- ENG-95850 (B2): A WORKPLACE "MOVE" ONLY ADDS, so the deliverable is a COUNT. On the Applicant run the section
+// was registered into "Recruiting" and stayed bound to "My applications" — 2 SysModuleInWorkplace rows — and the
+// boolean row could not see it, because `true` is the same answer for one binding and for two. The row now asks for
+// the number. Non-destructive by decision: the gate REPORTS a second binding, it does not unbind anything.
+const rcCount = (v) => renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: v } });
+check("ENG-95850 (B2): exactly ONE workplace binding closes the row, and the evidence says which — the count is the deliverable, not the flag",
+  allEq(marksFor(rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown, SECTION_RE), "✅ Done")
+    && /bound to exactly 1 workplace \(Recruiting\)/.test(rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown),
+  () => rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+const rcTwo = rcCount({ workplaces: 2, names: ["Recruiting", "My applications"] });
+check("ENG-95850 (B2): TWO bindings is a HARD ❌ MISSING that names both workplaces and says the old binding is still there — the exact defect a boolean hid",
+  allEq(marksFor(rcTwo.markdown, SECTION_RE), "❌ MISSING")
+    && /bound to 2 workplaces \(Recruiting, My applications\)/.test(rcTwo.markdown)
+    && /unbind all but the intended one/.test(rcTwo.markdown),
+  () => rcTwo.markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+check("ENG-95850 (B2): the report does not promise the build will fix it — the row states it REPORTS the extra binding, so nothing reads it as an automatic unbind",
+  /this row REPORTS it, the build does not undo it on its own/.test(rcTwo.markdown));
+check("ENG-95850 (B2): ZERO bindings is ❌ MISSING on the not-registered wording, not on the count wording — a section in no workplace is unreachable, which is the original failure",
+  allEq(marksFor(rcCount({ workplaces: 0 }).markdown, SECTION_RE), "❌ MISSING")
+    && /bound to NO workplace/.test(rcCount({ workplaces: 0 }).markdown));
+const rcBareTrue = rcCount(true);
+check("ENG-95850 (B2): a bare `true` no longer CLOSES the row — it is ⚠ unverified and names the object to supply, because `true` is precisely the answer that hid the second binding",
+  allEq(marksFor(rcBareTrue.markdown, SECTION_RE), "⚠ verify")
+    && /BINDING COUNT was not reported/.test(rcBareTrue.markdown)
+    && /workplaces/.test(rcBareTrue.markdown),
+  () => rcBareTrue.markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+check("ENG-95850 (B2): `false` stays a HARD ❌ MISSING on the un-wired wording — the count gate did not soften the confirmed-absent case",
+  allEq(marksFor(rcCount(false).markdown, SECTION_RE), "❌ MISSING")
+    && /NOT wired/.test(rcCount(false).markdown));
+check("ENG-95850 (B2): a malformed count (not an integer, negative, or a bare array) is ⚠ unverified — never read as a satisfied count",
+  allEq(marksFor(rcCount({ workplaces: "1" }).markdown, SECTION_RE), "⚠ verify")
+    && allEq(marksFor(rcCount({ workplaces: -1 }).markdown, SECTION_RE), "⚠ verify")
+    && allEq(marksFor(rcCount({ workplaces: 1.5 }).markdown, SECTION_RE), "⚠ verify")
+    && allEq(marksFor(rcCount([1]).markdown, SECTION_RE), "⚠ verify"));
+check("ENG-95850 (B2): `count` is accepted as a synonym of `workplaces` — one shape change in the reader must not silently reopen every row",
+  allEq(marksFor(rcCount({ count: 1 }).markdown, SECTION_RE), "✅ Done"));
+check("ENG-95850 (B2): the OTHER wiring keys are untouched — `miniPageWired: true` still closes its row on the boolean path, so the count gate is scoped to the row that declares it",
+  allEq(marksFor(renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: true } }).markdown, WIRED_RE), "✅ Done"));
 // …and the fallback is still a fallback: a NON-EMPTY `reachability` that simply says nothing about a key leaves
 // the root-level boolean in charge (this is the leg that the opposite mutation — reading only `reachability` —
 // would break, and the legacy payloads in the suite would not notice because they carry no `reachability` at all).
-const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: true }, miniPageWired: true });
+const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, miniPageWired: true });
 check("ENG-94975 P2 reachability: a key ABSENT from a non-empty `reachability` object still resolves from the payload root — the canonical map takes precedence over the legacy shape without abolishing it",
   allEq(marksFor(rcFallback.markdown, WIRED_RE), "✅ Done") && allEq(marksFor(rcFallback.markdown, SECTION_RE), "✅ Done"),
   () => ({ wired: marksFor(rcFallback.markdown, WIRED_RE), section: marksFor(rcFallback.markdown, SECTION_RE) }));
@@ -7661,7 +7776,7 @@ for (const e of pageUnits(m12Run, m12Opts).evidenceRows) {
   m12Evidence[e.id] = { referencePage: "SomeExistingFreedomPage", components: ["crt.Input"] };
   m12Judge[e.id] = { convincing: true, why: "the record names the page and the components built on it" };
 }
-const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: true }, evidence: m12Evidence, judge: m12Judge });
+const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, evidence: m12Evidence, judge: m12Judge });
 // `entitySchemaName` matches this fixture's own entity (`X`): the migration invariant is that the Freedom page
 // sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
 const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
@@ -7856,7 +7971,11 @@ const e1Payload = (over = {}, extra = {}) => {
   const evidence = {}, judge = {};
   for (const e of e1Units.evidenceRows) { evidence[e.id] = { referencePage: "an existing Freedom page", components: ["crt.Input"] }; judge[e.id] = { convincing: true, why: "checked" }; }
   const reachability = {};
-  for (const r of e1Units.reachability) if (r.appliesWhen) reachability[r.key] = true;
+  // `true` closes a boolean wiring key; `sectionRegistered` is COUNT-gated since ENG-95850 (B2) — a workplace
+  // registration only ADDS, so a flag cannot tell one binding from two and the row asks for the number instead.
+  // This helper writes what a real verifier writes, so E1's subject (the keyed mini-page payload) is not masked
+  // by an unrelated open row.
+  for (const r of e1Units.reachability) if (r.appliesWhen) reachability[r.key] = r.key === "sectionRegistered" ? { workplaces: 1, names: ["Recruiting"] } : true;
   for (const [k, v] of Object.entries(over)) { if (v === undefined) delete pages[k]; else pages[k] = v; }
   return { pages, reachability, evidence, judge, ...extra };
 };
@@ -9091,7 +9210,7 @@ const N2_NO_SUCH_KEY = "child:NotAPage";
   const listIds = lpUnits.evidenceRows.filter((r) => r.pageKey === "list").map((r) => r.id);
   const builtAll = {
     pages: { main: { viewConfig: { items: ["main-body"] }, schemaUId: "u-main" }, list: false },
-    reachability: { sectionRegistered: true },
+    reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } },
     evidence: Object.fromEntries([...mainIds.map((id) => [id, { referencePage: "AccountPage", components: ["crt.Input"] }]),
       ...listIds.map((id) => [id, { referencePage: "ContactPage", components: ["crt.DataGrid"] }])]),
     judge: Object.fromEntries(listIds.map((id) => [id, { convincing: false, why: "no prop diff" }])),

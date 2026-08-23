@@ -45,6 +45,13 @@ there is no "resume" command: there is one command, and it does the next undone 
     "sectionRegistered": { "rounds": 1, "parked": false },
     "miniPageWired":     { "rounds": 0, "parked": false }
   },
+  "standWrites": {
+    "packageCreated": { "package": "UsrApplicantFreedom", "appUnitComplete": true,
+                        "planVersion": "plan-4f9c2ab17e03", "sectionPage": "UsrApplicants_FormPage" },
+    "orphanedPages": [
+      { "schema": "UsrApplicants_FormPage", "orphanedBy": "main", "at": "plan-4f9c2ab17e03" }
+    ]
+  },
   "proposals": [
     { "unit": "main", "deviation": "merge two profile islands into one",
       "why": "second island holds a single field", "applied": false }
@@ -101,6 +108,54 @@ Rules that make it trustworthy:
 - `nonPageUnits` keys are the reachability keys from `--units.reachability[]` whose
   `appliesWhen` is `true`. A key with `appliesWhen: false` is not an obligation of this run and
   gets no entry.
+- **`standWrites.orphanedPages` are pages a RE-BIND left pointing at nothing (ENG-95850 / B4).** `create-app` seeds
+  start pages (`<Code>_FormPage`, `_ListPage`, `_Detail`); a builder that builds the real page as a NEW schema on a
+  different template and re-points the section at it leaves the seeded one on the stand, bound to no key. It is
+  recorded the moment a unit reports `reboundFrom` — unless that schema is still some key's recorded page, which is a
+  re-bind between two live keys and not an orphan. Why it is worth a record: an orphan is fetchable and reads exactly
+  like a live page, and a run that judged build progress off one concluded "main not built" about a form that was
+  ~80% complete. The verifier is handed the list and told not to read an orphan as any key's page. **Nothing deletes
+  them** — a page on a customer's stand is not a build round's to remove, so the list is the run's report and the
+  decision is the operator's.
+- **`reachability.sectionRegistered` is a COUNT, not a flag (ENG-95850 / B2).** Every other wiring key is a
+  boolean, because the wiring either exists or does not. A workplace registration is different: it only ADDS, so a
+  section "moved" from `My applications` to `Recruiting` is bound to BOTH until the old row is removed — two
+  `SysModuleInWorkplace` rows, and a `true` cannot tell that from one. So the verifier writes
+  `{ "workplaces": <n>, "names": [...] }` with the number it counted, and the gate closes the row at exactly 1,
+  reports 0 as unreachable, and reports 2+ by naming them. `n` must be a real integer (a quoted `"1"` is not
+  accepted — an agent that quoted the number has not reported a count the row can gate on); a key you could not
+  count is OMITTED, which reads ⚠ not-checked. **Nothing in the run unbinds a workplace** — that is a deletion of a
+  customer record, so the extra binding is reported for a human to settle.
+- **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
+  else in this file is bookkeeping about units; this is the one section that records a change made outside the
+  file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before
+  any unit exists. **All three routes write it**, which is what makes them interchangeable over one migration
+  folder: a route is how work is dispatched, never a separate memory of the stand.
+  - `packageCreated` — the application/package the `app` unit created. `package` is the name read back off the
+    stand (never the `code` passed to `create-app`: clio applies the environment's `SchemaNamePrefix`).
+    `appUnitComplete` is the unit's FULL deliverable — the planned package AND a section on the migrated object
+    AND no stub left behind — so it is `true` only on the branch that closes the unit, and `false` while the
+    unit is short. It never walks back from `true`: only a stand read could contradict a met deliverable, and a
+    later builder's summary is not one.
+  - **Why it has to be on disk.** From the stand, a package this migration created and a package a stranger owns
+    are the same fact — no stand read says who created one. Under `sectionHost: new-app` they need opposite
+    handling (a stranger's is a stop; ours is a resume), so a missing record means the run must assume the
+    stranger. Dropping this key does not degrade the next run, it stops it: on its own package, on its own work.
+  - **Absence is never ownership.** A folder written before this key existed has none, and every gate then
+    behaves exactly as it did then — it stops. Reconcile reports the record as `packageCreatedByRun`, read off
+    THIS FILE and never derived from the stand.
+
+### `verify.md` / `verify.json` are only current as of the last COMPLETED Reconcile (ENG-95850 / D)
+
+They are written by the Reconcile phase, so an ABORTED round leaves the previous round's numbers on disk with
+nothing on the files themselves saying so. On the Applicant run the crash left `missing 5 / unverified 20` while the
+stand was materially further along, and reading those files by hand made the run look worse than it was.
+
+Two things follow. **Do not read a verdict file as the current state after a run that did not finish** — re-run, and
+the baseline Reconcile re-runs `--verify` against the stand and replaces both files, which is why an interrupted run
+is self-healing as long as nobody acts on the stale copy in between. And when the VERIFIER answers but the round
+still stops, the run says so itself: it returns `verdictStale: true` with `stopped: 'verifier-failed'` rather than
+reporting the previous verdict as current.
 
 ## `built.json` — the payload `--verify` reads
 
@@ -116,7 +171,7 @@ without redoing settled work.
               "businessRules": { "count": 2, "rules": [ { "name": "BR_Contact", "caption": "...", "condition": {}, "actions": [] } ] } },
     "child:Education": false
   },
-  "reachability": { "sectionRegistered": true, "miniPageWired": false },
+  "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["Recruiting"] }, "miniPageWired": false },
   "evidence": { "main#quality-gates": { "referencePage": "AccountPage", "components": ["crt.ExpansionPanel"] } },
   "judge":    { "main#quality-gates": { "convincing": true, "why": "prop-level diff, 3 components" } }
 }
@@ -204,6 +259,13 @@ The engine writes them. `--slices <dir>` on `--units` writes `queue-<n>.json` fo
 and on `--verify` writes `built-<n>.json` for the same keys — so the reconcile step's two existing engine
 runs produce them and nothing extra is invoked. They are written on **exit 2** as well, which is precisely
 the round a builder needs its row.
+
+`<n>` is the PAGE's 1-based position in `--units.pages[]`. Only page keys are published there, so a
+non-page unit — the `app` unit, an applicable reachability key — has no `<n>` and no slice: it owns no page
+row. Its own per-unit files are named from the key instead — in the `worklog` folder, `app.md` and
+`reach-sectionRegistered.md` — and the naming rule is total over the three unit classes for that
+reason: the executor names every file it hands out, and a unit class the rule did not cover used to stop the
+run outright.
 
 ```json
 // queue-3.json — the run-level fields a single unit still needs, plus its own row

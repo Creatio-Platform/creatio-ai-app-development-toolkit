@@ -402,6 +402,12 @@ function listColumnLine(section) {
   if (section.listColumnSource === "entity-default") {
     return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
   }
+  // ENG-95850 (D) — say WHERE a profile-sourced set came from. It is the set the list actually renders (which is why
+  // the engine takes it over the static declaration), and it is also profile data that can be scoped — the reader
+  // has to know which of the two they are confirming.
+  if (section.listColumnSource === "profile") {
+    return `- **List columns:** ${rendered}${why} — read from the saved grid PROFILE the Classic list actually renders (Classic keeps each user's visible set as per-user list/profile data), NOT from the section's static declaration, which usually names fewer columns; a profile can be scoped, so confirm this is the set every user should get in Freedom`;
+  }
   return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
 }
 // The list page's own LAYOUT tables — the positioned contents of `result.listChangeSet`. Same STATUS as the form's
@@ -1273,8 +1279,15 @@ function renderPlanBanners(result, opts) {
 // sites) and they differ too much to share a sentence, but a rename must not have to find them all.
 export const RECONCILE_REFERENCE = "./references/existing-freedom-reconcile.md";
 
+// ENG-95850 (D) — `list-pages` ALONE cannot answer this for a TYPED entity. An entity whose records are typed
+// registers a per-type edit card in `SysModuleEdit` instead of one `<Entity>Page`, so a search for a single `*Page`
+// legitimately finds nothing while the entity has many. A real run recorded `editPage: false` for `InternalRequest`,
+// which has ~18 typed edit pages, and the plan then asserted there was nothing to migrate; it was caught only by a
+// hand-written Adjustments entry. So the answer list names the second call that settles it.
 export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema to `manifest.childPageSchemas` '
-  + '(rebuild it here); none exists → record `"editPage": false`; the CHILD entity already ships a `kind: freedom` '
+  + '(rebuild it here); none exists → record `"editPage": false`, and check `list-entity-client-schemas` by that '
+  + 'entity FIRST: a TYPED entity registers per-type edit cards instead of one `<Entity>Page`, so `list-pages` '
+  + 'finding no `*Page` is not the same as the entity having no Classic card; the CHILD entity already ships a `kind: freedom` '
   + 'form page (`list-entity-client-schemas`) → record `"reuseFreedomPage": "<Freedom form page>"` (the related '
   + 'list opens THAT page and nothing is rebuilt here). `"editable": false` records that the list is read-only, '
   + 'which is NOT an answer to whether a page exists — pair it with one of the three above. '
@@ -1286,7 +1299,7 @@ export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema t
 // claim about it. Own fn for Sonar CC 15.
 function reuseClassicChildSentence(c) {
   if (typeof c.editPage === "string" && c.editPage) return `The Classic \`${esc(c.editPage)}\` is NOT migrated — it is superseded, not skipped.`;
-  if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form.";
+  if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form. (A TYPED entity registers per-type cards rather than one `*Page`, so confirm `list-entity-client-schemas` reports no `editPages` either before reading this as none.)";
   return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
 }
 
@@ -1310,7 +1323,7 @@ function renderChildMappings(childs) {
     } else if (typeof c.editPage === "string" && c.editPage) {
       P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
     } else if (c.editPage === false) {
-      P.push(`> **Verified: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list; nothing to migrate here.`);
+      P.push(`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`);
     } else if (c.editable === false) {
       // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
       // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.
@@ -1743,7 +1756,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (pm.sectionSchema || result.section) {
     pages.push(opts.sectionHostMode === "pages-only-no-menu"
       ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
-      : { label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it", vk: { type: "onstand", evidence: "sectionRegistered", what: "app-menu section-registration check", miss: "the section is not in the menu — its pages are unreachable" } });
+      : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings", miss: "the section is not in the menu — its pages are unreachable" } });
   }
   return pages;
 }
@@ -2846,9 +2859,48 @@ const VK_RULE = new Set(["rule"]);
 // gate: an unproven one may leave built pages unreachable. So it reads an explicit on-stand EVIDENCE boolean the agent
 // supplies in `--built` (e.g. `built.typedRouting`): true → Done; false → MISSING (exit 2); ABSENT → unverified
 // (exit 2, NOT "skip") — so `--verify` cannot exit 0 until the wiring is confirmed. (deep-review #1.)
+// ENG-95850 (B2) — A WORKPLACE "MOVE" ONLY ADDS. Registering a section into a workplace does not unbind the one it
+// was in: on the Applicant run the section sat in "Recruiting" AND still in "My applications" (2 SysModuleInWorkplace
+// rows), and a boolean deliverable could not see it, because `true` is the same answer for one binding and for two.
+// So a row can declare `expectCount`, and then the payload must carry a COUNT rather than a flag. The count IS the
+// deliverable: "bound to exactly one workplace" is checkable, "registered" is not.
+// Reported as a number the agent counted on the stand — `{ workplaces: <n>, names: [...] }`; `names` is optional and
+// is only ever quoted back to the reader.
+// STRICT about the type, like every other acceptance in this engine: a NUMBER, integer, not negative. A string "1"
+// is not coerced — an agent that quoted the number has not reported a count this row can gate on, and silently
+// accepting the quoted form is how a shape nobody documented becomes load-bearing. Anything else reads ⚠ and the
+// row says which object to supply.
+function onstandCount(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const n = v.workplaces ?? v.count;
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null;
+}
+const onstandNames = (v) => {
+  const names = Array.isArray(v?.names) ? v.names.filter((x) => typeof x === "string" && x.trim()) : [];
+  return names.length ? ` (${names.map((x) => esc(x)).join(", ")})` : "";
+};
+// The count-gated form of an `onstand` row. Its own fn so `resolveOnstandVk` stays under Sonar CC 15 and the boolean
+// path below is provably untouched for every row that declares no `expectCount`.
+// A bare `true` is NOT acceptance here, deliberately: it is exactly the answer that hid the second binding, so it
+// reads ⚠ unverified and names the number to supply. That does re-open a row an earlier run closed with `true` —
+// which is what adding a gate means, and the row asks for a specific number rather than failing mutely.
+function resolveOnstandCountVk(vk, v) {
+  const want = vk.expectCount;
+  if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  const n = onstandCount(v);
+  if (n === null) {
+    return ["⚠ verify", v === true
+      ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
+      : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
+  }
+  if (n === want) return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  return ["❌ MISSING", `bound to ${n} workplaces${onstandNames(v)}, expected exactly ${want} — a registration only ADDS, so the previous binding is still there; unbind all but the intended one (this row REPORTS it, the build does not undo it on its own)`, "missing"];
+}
 function resolveOnstandVk(vk, ctx) {
   const v = reachabilityValue(ctx.root, vk.evidence);
   const what = vk.what ? ` — run the on-stand ${vk.what}` : "";
+  if (vk.expectCount) return resolveOnstandCountVk(vk, v);
   if (v === true) return ["✅ Done", `${vk.evidence} confirmed on-stand`, "ok"];
   if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified"];
