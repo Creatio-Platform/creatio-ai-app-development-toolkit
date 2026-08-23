@@ -1468,7 +1468,11 @@ function makeItem(op, seed, pkg) {
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
     labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
-    handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
+    // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
+    // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
+    // then saw a handler that the first run had removed. Harmless while nothing read the map, load-bearing now
+    // that an absent entry is what distinguishes a modelled handler from an unmodelled static literal.
+    handlers: { ...(op.handlers || {}) }, // control→method bindings; the CONTROL end of a method's trigger
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
@@ -1664,8 +1668,21 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
     // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
     // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
     // silenced the trigger but left the static value would be half-applied.
-    if (HANDLER_PROPS.has(k) && cur.handlers) delete cur.handlers[k];
-    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // handler-only key: the map entry above was the whole effect
+    if (HANDLER_PROPS.has(k)) {
+      // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
+      // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
+      // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
+      // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
+      // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
+      // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+      const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
+      if (wasModelled) delete cur.handlers[k];
+      if (!TOP_LEVEL_ITEM_PROPS.has(k)) {   // handler-only key: the map entry was the whole effect it could have
+        if (!wasModelled) unmodelled.push(k);
+        continue;
+      }
+    }
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // not a handler and not a field: nothing modelled to clear
     // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
     // "absent vs unreadable" ambiguity this ticket removed elsewhere.
     cur[k] = null;

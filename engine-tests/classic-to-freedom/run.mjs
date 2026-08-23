@@ -684,6 +684,26 @@ const hVisItem = mergeHierarchy([hVisBase, hVis]).items.find((i) => i.name === "
 check("ENG-95862 (key audit): `visible` is in BOTH vocabularies — removing it clears the field AND the handler entry, never half of it",
   !!hVisItem && hVisItem.visible === null && !hVisItem.handlers.visible, () => hVisItem);
 
+// The four AMBIGUOUS keys (`enabled`, `visible`, `readonly`, `required`) appear in a classic body both as a handler
+// (`{bindTo:"m"}`, modelled in `handlers`) and as a static literal (`enabled: false`, which `handlerBindings` skips
+// and no field holds). Removing the modelled form is fully represented; removing the static form changes nothing,
+// and a silent no-op there is the drop this whole function exists to prevent. So each of the three that has NO
+// second slot must warn on the literal and stay quiet on the handler — `visible` is asserted above, it has one.
+for (const key of ["enabled", "readonly", "required"]) {
+  const litBase = ps("LitB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: false } }]);
+  const litTop = ps("LitT", [{ operation: "remove", name: "F", properties: [key] }]);
+  const lit = mergeHierarchy([litBase, litTop]);
+  check(`ENG-95862 (key audit): a STATIC \`${key}: false\` removal is an unmodelled effect — it warns (fidelity) instead of silently doing nothing`,
+    lit.warnings.length === 1 && lit.warnings[0].severity === "fidelity" && new RegExp(key).test(lit.warnings[0].hint),
+    () => lit.warnings);
+  const dynBase = ps("DynB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: { bindTo: "m" } } }]);
+  const dyn = mergeHierarchy([dynBase, litTop]);
+  const dynItem = dyn.items.find((i) => i.name === "F");
+  check(`ENG-95862 (key audit): the HANDLER form of \`${key}\` is modelled, so removing it clears the map entry and raises nothing`,
+    dyn.warnings.length === 0 && !!dynItem && !dynItem.handlers?.[key],
+    () => ({ warnings: dyn.warnings, handlers: dynItem?.handlers }));
+}
+
 // A genuinely unmodelled key stays a warning — but a FIDELITY one, which no longer blocks.
 const unBase = ps("UBase", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F" } }]);
 const unTop = ps("UTop", [{ operation: "remove", name: "F", properties: ["wrapClass"] }]);
