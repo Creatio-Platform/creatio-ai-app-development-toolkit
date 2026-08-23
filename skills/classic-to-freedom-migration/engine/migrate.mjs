@@ -178,13 +178,66 @@ function isStructuralDiag(d) {
   return IDENTITY_FIELDS.has(seg[2]);
 }
 
+// ENG-95862 — the SEVERITY axis on `eff.warnings`, and the operator's escape hatch for the advisory half.
+//
+// `engine.mjs` now tags every warning `correctness` (the op targeted an item no lower schema defined, or the seed is
+// not a real body) or `fidelity` (the mapping is RIGHT; an effect of the op is not represented in the item model).
+// Only the first kind can block: a fidelity note's remedy lives in this engine, not in the body or the seed, so
+// blocking on it produced a ⛔ nobody could clear — measured once as 12 h on one `remove properties:
+// ["labelConfig"]`. Exactly the reasoning `isStructuralDiag` already applies to `unknown-enum-member`.
+//
+// A warning with NO severity is treated as `correctness`: a producer that forgot to declare one must fail loud,
+// never quietly demote itself to an advisory.
+const isCorrectnessWarning = (w) => (w?.severity ?? "correctness") === "correctness";
+
+// The only dispositions `manifest.warningDispositions` may carry — same validated-enum rule as
+// `MEMBER_DISPOSITIONS`, and for the same reason: a truthy `resolved` with a typo'd disposition would clear a
+// warning with no valid answer behind it.
+//   accepted            — read, understood, and the unrepresented effect does not change the Freedom mapping
+//   reproduced-manually — it DOES change it, and the build reproduces that effect by hand (the note says how)
+//   n/a                 — the element this warning is about is not being migrated
+const WARNING_DISPOSITIONS = new Set(["accepted", "reproduced-manually", "n/a"]);
+
+// The key a disposition is written under: `"<op>:<name>:<schema>"`, with `"<op>:<name>"` accepted as a bare
+// fallback — the same scoped-or-bare rule `memberDispositions` uses. The schema is part of the primary key because
+// the same op on the same element in a DIFFERENT layer is a different fact and must be answered separately.
+const warningKeys = (w) => [`${w.op}:${w.name}:${w.schema}`, `${w.op}:${w.name}`];
+
+// Annotate each warning with the operator's recorded answer, in place of nothing. Returns a NEW array (the engine's
+// own array is not mutated) where a dispositioned FIDELITY warning carries `{ accepted: true, disposition, note }`.
+// A disposition aimed at a CORRECTNESS warning is REFUSED and reported as `dispositionRefused`: those name a real
+// missing item, and an operator cannot decide a page readable that the engine could not read.
+function applyWarningDispositions(warnings, manifest) {
+  const declared = plainObject(manifest?.warningDispositions);
+  if (!Object.keys(declared).length) return (warnings || []).map((w) => ({ ...w }));
+  return (warnings || []).map((w) => {
+    const dec = plainObject(warningKeys(w).map((k) => declared[k]).find((v) => v != null));
+    const valid = dec.resolved === true && WARNING_DISPOSITIONS.has(dec.disposition);
+    if (!valid) return { ...w };
+    if (isCorrectnessWarning(w)) return { ...w, dispositionRefused: "a correctness warning cannot be dispositioned — it names an item no lower schema defined; fix the schema order (F1) or the base seed (F2)" };
+    return { ...w, accepted: true, disposition: dec.disposition, note: typeof dec.note === "string" ? dec.note : null };
+  });
+}
+
+// The gate's warning reason, or null. Quotes each blocking warning's OWN hint: the single summary string this line
+// used to append to all eight producers ("op hit a missing item / skeletal seed") described a condition that was
+// provably absent on the run it blocked, and sent the remedy search to the wrong file for 12 hours.
+function warningsReason(warnings) {
+  const blocking = (warnings || []).filter(isCorrectnessWarning);
+  if (!blocking.length) return null;
+  const quoted = blocking.slice(0, 6).map((w) => `${w.op} '${w.name}' @${w.schema}: ${w.hint || w.message || "(no hint)"}`);
+  const more = blocking.length > quoted.length ? ` (+${blocking.length - quoted.length} more — see \`effective.warnings\`)` : "";
+  return `warnings (${blocking.length}, correctness): ${quoted.join(" | ")}${more}`;
+}
+
 // ⛔ HARD GATE (RV1) — the correctness signals, computed ONCE so the CLI, renderer and callers share one verdict.
 // Pure (no throw): returns { blocked, reasons }. Extracted from runMigration to keep it under Sonar CC 15 (S3776).
 function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage }) {
   const reasons = [];
   if (parseErrors.length) reasons.push(`parseErrors (${parseErrors.length}): ${parseErrors.map((e) => e.pkg).join(", ")} — a schema body failed to parse`);
   if ((eff.unresolvedParents || []).length) reasons.push(`unresolvedParents: ${eff.unresolvedParents.join(", ")} — base-template seed incomplete (F2) or schemas out of order (F1)`);
-  if ((eff.warnings || []).length) reasons.push(`warnings (${eff.warnings.length}): ${[...new Set(eff.warnings.map((w) => w.name || w.op))].join(", ")} — op hit a missing item / skeletal seed`);
+  const warnReason = warningsReason(eff.warnings);
+  if (warnReason) reasons.push(warnReason);
   if (eff.seedQuality?.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
   if (eff.seedQuality && !eff.seedQuality.seeded && !manifest.noParentTemplate)
     reasons.push("no parent-template seed — a Classic page extends a base template (BaseModulePageV2/BasePageV2/…); building without its fetched body drops inherited base actions + container layout (F2). Fetch the parent-template schemas and pass them as `seed`, or set `noParentTemplate: true` ONLY if you have VERIFIED on-stand that this page has no parent template.");
@@ -2127,6 +2180,9 @@ export function runMigration(manifest, opts = {}) {
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
   // turns `blocked` into a loud banner + non-zero exit, and the renderer prints the banner into the artifact.
+  // The operator's recorded answers on FIDELITY warnings, folded in BEFORE the gate and the renderer read them, so
+  // one annotated array is what every surface reports (ENG-95862 item 5).
+  eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
   // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
@@ -2181,7 +2237,10 @@ export function runMigration(manifest, opts = {}) {
       methods: eff.methods.length, attributes: (eff.attributes || []).length,
       messages: (eff.messages || []).length, mixins: (eff.mixins || []).length,
       moduleDeps: (eff.moduleDeps || []).length,
-      warnings: eff.warnings,                 // op hit a missing item ⇒ schema order (F1) / seed (F2) wrong
+      // every warning carries `severity`: `correctness` (op hit a missing item / skeletal seed ⇒ schema order (F1)
+      // or seed (F2) wrong — BLOCKS the gate) or `fidelity` (the mapping is right, an effect is unrepresented —
+      // advisory, and clearable via `manifest.warningDispositions`).
+      warnings: eff.warnings,
       unresolvedParents: eff.unresolvedParents, // non-empty ⇒ base template not fully seeded (F2)
       seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton (#19)
       features: eff.features,                 // feature toggles gating runtime visibility (union, not one state)
@@ -2677,5 +2736,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
+  // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse
+  // diagnostics above, so demoting them out of the ⛔ banner does not make them invisible.
+  const fidelity = (result.effective?.warnings || []).filter((w) => w.severity === "fidelity" && !w.accepted);
+  if (fidelity.length)
+    process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ")}\n`);
   if (notReady) process.exit(2);
 }
