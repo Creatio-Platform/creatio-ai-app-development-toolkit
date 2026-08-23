@@ -1307,6 +1307,48 @@ function renderPlanBanners(result, opts) {
 // sites) and they differ too much to share a sentence, but a rename must not have to find them all.
 export const RECONCILE_REFERENCE = "./references/existing-freedom-reconcile.md";
 
+// The status a boundary row carries in `--checklist` and `--verify`. One constant, because the two renderers must
+// print the SAME words: a row that reads N/A in one artifact and `☐` in the other is a row someone goes and works.
+export const BOUNDARY_NA_REASON = "cross-section boundary (approved)";
+// One boundary child, as it appears in that row: entity, the detail it opens from, and the Classic page when a name
+// was recorded. Own fn for Sonar CC 15.
+function boundaryRowItem(c) {
+  const pg = boundaryClassicPage(c);
+  return "`" + esc(c.entity) + '` (detail "' + esc(c.via) + '"' + (pg ? ", opens `" + esc(pg) + "`" : "") + ")";
+}
+function boundaryRowLabel(boundaries) {
+  return `Cross-section boundaries (${boundaries.length}) — ${boundaries.map(boundaryRowItem).join(" · ")}. Each of these children belongs to another section: its Classic card stays Classic and the related list keeps opening it. **Nothing to build and nothing to verify here** — recorded so the boundary is visible, not so it is worked.`;
+}
+
+// ENG-95861 — THE SECTION BOUNDARY: the FOURTH child resolution. Migrating "this section" means this section's own
+// pages; a related list whose child entity OWNS ANOTHER SECTION is that other section's work. On Freedom that list
+// keeps opening the child's CLASSIC page and the platform handles it, so this is a deliberate, supported end state —
+// not a gap, and not the self-declared skip Contract rule 4 forbids (the USER draws that line, the agent records it).
+// Recorded on the detail's `detailSchemas` entry as `"opensClassicPage": "<ClassicPage>"` (the page the list keeps
+// opening) or `true` (the boundary is declared; the page name is whatever `editPage` read). Returns the recorded
+// value — a trimmed page name, `true`, or `null` when this child is not a boundary.
+// Defensive about shape on purpose: `childPages` records are built by hand too (goldens, direct API callers).
+export function boundaryChild(c) {
+  const v = c?.opensClassicPage;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return v === true ? true : null;
+}
+// The Classic page a boundary child keeps opening, or `null` when nobody recorded a name. NEVER derived from the
+// entity: `<Entity>Page` is a guess, and the rule `reuseClassicChildSentence` already states applies here too — a
+// name nobody read is not a name, least of all inside a claim about it. A recorded `opensClassicPage` string wins;
+// otherwise the detail body's own `getEditPageName` read (`editPage`).
+export function boundaryClassicPage(c) {
+  const v = boundaryChild(c);
+  if (typeof v === "string") return v;
+  return (typeof c?.editPage === "string" && c.editPage) ? c.editPage : null;
+}
+// How the plan names the section a boundary child belongs to. `ownSection` on the detail entry is OPTIONAL: when it
+// is not recorded the sentence says "another section" rather than inventing a section name.
+export function boundarySectionPhrase(c) {
+  const own = c?.ownSection;
+  return (typeof own === "string" && own.trim()) ? "the `" + esc(own.trim()) + "` section" : "another section";
+}
+
 // ENG-95850 (D) — `list-pages` ALONE cannot answer this for a TYPED entity. An entity whose records are typed
 // registers a per-type edit card in `SysModuleEdit` instead of one `<Entity>Page`, so a search for a single `*Page`
 // legitimately finds nothing while the entity has many. A real run recorded `editPage: false` for `InternalRequest`,
@@ -1317,9 +1359,12 @@ export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema t
   + 'entity FIRST: a TYPED entity registers per-type edit cards instead of one `<Entity>Page`, so `list-pages` '
   + 'finding no `*Page` is not the same as the entity having no Classic card; the CHILD entity already ships a `kind: freedom` '
   + 'form page (`list-entity-client-schemas`) → record `"reuseFreedomPage": "<Freedom form page>"` (the related '
-  + 'list opens THAT page and nothing is rebuilt here). `"editable": false` records that the list is read-only, '
-  + 'which is NOT an answer to whether a page exists — pair it with one of the three above. '
-  + 'No self-declared "out of scope".';
+  + 'list opens THAT page and nothing is rebuilt here); the child entity OWNS ANOTHER SECTION and the user drew that '
+  + 'boundary → record `"opensClassicPage": "<Classic page>"` (+ optional `"ownSection": "<Section>"`) — its Classic '
+  + 'card stays Classic, this related list keeps opening it, nothing here is folded or built. '
+  + '`"editable": false` records that the list is read-only, '
+  + 'which is NOT an answer to whether a page exists — pair it with one of the four above. '
+  + 'No self-declared "out of scope" — a SECTION BOUNDARY is the user\'s scope decision, not a skip you declare.';
 
 // What a REUSE says about the Classic child page, by what the manifest actually recorded — THREE states, tested
 // distinctly, because a truthiness test merges the last two and then asserts both that a page exists and that
@@ -1329,6 +1374,20 @@ function reuseClassicChildSentence(c) {
   if (typeof c.editPage === "string" && c.editPage) return `The Classic \`${esc(c.editPage)}\` is NOT migrated — it is superseded, not skipped.`;
   if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form. (A TYPED entity registers per-type cards rather than one `*Page`, so confirm `list-entity-client-schemas` reports no `editPages` either before reading this as none.)";
   return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
+}
+
+// ENG-95861 — the boundary child's own block in `### Child page mappings`. Own fn for Sonar CC 15: `renderChild`
+// already carries a seven-arm chain, and this arm is the only one that is a SCOPE statement rather than a mapping.
+// It says three things, because a reader who takes any one of them wrong re-opens a settled decision: what stays
+// Classic, that nothing here is a deliverable (so nothing about it can ever read MISSING), and how to reverse it.
+function boundaryChildLines(c) {
+  const pg = boundaryClassicPage(c);
+  const opens = pg ? "`" + esc(pg) + "`" : "the Classic page the detail already opens";
+  return [
+    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it: ${opens}. **Nothing here is folded, rebuilt or built** — the platform opens a Classic page from a Freedom related list, and that is the intended end state, not a gap. This resolution publishes NO deliverable: no \`--units\` build unit, no \`--verify\` row, so nothing about ${esc(c.entity)} can be reported MISSING.`,
+    ">",
+    `> **Migrating ${esc(c.entity)} is that section's own job.** If the user later widens the scope, drop \`opensClassicPage\` from this detail's manifest entry, supply the child page's schema in \`childPageSchemas\`, and re-run — the boundary is a scope decision recorded in \`decisions.md\`, reversible by re-planning, never a defect of this plan.`,
+  ];
 }
 
 function renderChildMappings(childs) {
@@ -1341,6 +1400,8 @@ function renderChildMappings(childs) {
       P.push(`> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${reuseClassicChildSentence(c)} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
         ">",
         `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`${RECONCILE_REFERENCE}\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`);
+    } else if (boundaryChild(c)) {
+      P.push(...boundaryChildLines(c));
     } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
     } else if (c.spec) {
@@ -1455,16 +1516,37 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   return rows;
 }
 
+// The `Rebuild (child)` row's target: the template the SHARED rule picks, so this AGREES with the per-child
+// recommendation banner. Unknown count (an unmapped real page) → generic. Own fn for Sonar CC 15.
+function rebuildChildTarget(c) {
+  const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
+  if (choice === "mini") return `Mini page (\`${CHILD_TEMPLATE_SCHEMA.mini}\`)`;
+  if (choice === "grid") return `Grid page (\`${CHILD_TEMPLATE_SCHEMA.grid}\`)`;
+  return "Freedom child page";
+}
+// The `Reuse (Classic)` row's target (ENG-95861). Names the page only when one was actually recorded — a target
+// cell is the one place a reader looks for "what opens instead", so a guessed name there is worse than none.
+function boundaryScopeTarget(c) {
+  const pg = boundaryClassicPage(c);
+  return `Classic ${pg ? "`" + esc(pg) + "`" : "card"} stays Classic — ${esc(c.entity)} belongs to ${boundarySectionPhrase(c)}`;
+}
+
 // Child edit pages belong in Main scope too — each related list's child entity opens its OWN form on add/edit.
 // Honest label by resolution state (mapped/real page → Rebuild; verified-none → Reuse; shipped Freedom form →
-// Reuse (Freedom); ancestor on this branch → Mapped above; else ⚠ resolve, view/attach-only ALONE included —
-// read-only tags the row, it does not answer whether a page exists).
+// Reuse (Freedom); an approved cross-section boundary → Reuse (Classic); ancestor on this branch → Mapped above;
+// else ⚠ resolve, view/attach-only ALONE included — read-only tags the row, it does not answer whether a page
+// exists).
 function buildChildScopeRows(childs) {
   return childs.map((c) => {
     let target, call, label;
     if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
       target = `existing Freedom form \`${esc(c.reuseFreedomPage)}\``;
       call = "Reuse (Freedom)"; label = esc(c.entity);
+    } else if (boundaryChild(c)) {
+      // ENG-95861 — the section boundary. Resolved exactly as the other three are (the structure gate agrees), and
+      // rendered as its OWN call: `Reuse` would read as "no page exists" and `Reuse (Freedom)` as "a Freedom form
+      // took over", and both are false here — the Classic card stays, and this list keeps opening it.
+      target = boundaryScopeTarget(c); call = "Reuse (Classic)"; label = esc(c.entity);
     } else if (c.cyclic) {
       // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
       // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
@@ -1473,10 +1555,7 @@ function buildChildScopeRows(childs) {
     } else if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
       // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
       // recommendation banner. Unknown count (unmapped real page) → generic.
-      const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
-      if (choice === "mini") target = `Mini page (\`${CHILD_TEMPLATE_SCHEMA.mini}\`)`;
-      else if (choice === "grid") target = `Grid page (\`${CHILD_TEMPLATE_SCHEMA.grid}\`)`;
-      else target = "Freedom child page";
+      target = rebuildChildTarget(c);
       call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
     } else if (c.editPage === false) {
       // Only a recorded "no *Page exists" is a Reuse — `editable:false` does NOT reach this arm. The scope table
@@ -1606,7 +1685,7 @@ export function renderPlan(result, opts = {}) {
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
   P.push(...buildChildScopeRows(childs), "");
-  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped). **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
+  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped). **`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
   // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
   // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
@@ -1776,6 +1855,14 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
     // never clear it; and the MAIN page's reconcile is ungated prose, so gating the child harder than the page it
     // is modelled on breaks the symmetry that justifies it. A vk-less row still renders "☐ confirm on-stand".
     { label: `Reused child pages reconciled (${reused.length}) — for each, apply the client's Classic customization delta to the reused Freedom form (or record the packages checked as carrying none), per \`${RECONCILE_REFERENCE}\`.` });
+  // ENG-95861 — the approved section boundaries, stated ONCE for the whole set. A boundary child publishes NO page
+  // key (see `publishUnfoldedChild`), so `--units` queues no build unit for it and `--verify` can never call it
+  // MISSING — which is exactly the point: it is not a deliverable of this plan. But "publishes nothing" must not
+  // mean "says nothing": the reader has to see WHICH related lists deliberately keep opening a Classic card, or the
+  // plan reads as if those children were forgotten. `na` (not a `vk`) so the row renders `N/A — …` in BOTH
+  // `--checklist` and `--verify` instead of a `☐` that invites someone to go and close it. There is nothing to close.
+  const boundaries = (result.childPages || []).filter((c) => boundaryChild(c));
+  if (boundaries.length) pages.push({ na: BOUNDARY_NA_REASON, label: boundaryRowLabel(boundaries) });
   // The navigable-section deliverable, gated on the DECIDED host mode. An approved `pages-only-no-menu` run
   // ships pages without a menu entry ON PURPOSE, so emitting the row there would demand evidence for something
   // the plan decided not to do — a permanent false red. It is replaced by an explicit dropped row rather than
@@ -2642,7 +2729,9 @@ export function renderChecklist(result, opts = {}) {
   let n = 0;
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence |", "| --- | --- | --- | --- |");
-    for (const r of g.rows) L.push(`| ${++n} | ${r.label} | ☐ pending | — |`);
+    // `na` rows are NOT pending work (ENG-95861: an approved cross-section boundary). A `☐ pending` there reads as
+    // "someone still owes this", and the whole point of the resolution is that nobody does.
+    for (const r of g.rows) L.push(`| ${++n} | ${r.label} | ${r.na ? `N/A — ${esc(r.na)}` : "☐ pending"} | ${r.na ? "not a deliverable of this plan" : "—"} |`);
   }
   return L.join("\n");
 }
@@ -3088,6 +3177,10 @@ const VK_ENTITY = new Set(["entity"]);
 const VK_CHILDPAGE = new Set(["childpage"]);
 const VK_EVIDENCE = new Set(["evidence"]);
 const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
+// A row that is deliberately NOT a deliverable (ENG-95861: an approved cross-section boundary). Resolved BEFORE any
+// `vk` lookup and tallied as `skip`, so it can never become MISSING or unverified — there is nothing to build. It
+// stays a visible row: a boundary the reader cannot see is a boundary the next round re-litigates.
+const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan — nothing to build, nothing to check", "skip"];
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
@@ -3282,7 +3375,7 @@ export function renderVerify(result, opts = {}, built = {}) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
       const key = r.pageKey || g.pageKey || "main";
-      const [mark, ev, outcome] = resolveVk(r.vk, ctxFor(key));
+      const [mark, ev, outcome] = r.na ? naRow(r) : resolveVk(r.vk, ctxFor(key));
       // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
       // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
       // one text, not a paraphrase of it.
