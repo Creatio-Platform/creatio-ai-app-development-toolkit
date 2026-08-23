@@ -135,24 +135,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
       }
       return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
     })(),
-    // section-level actions (bulk / section-toolbar) built in getSectionActions — a SEPARATE surface from
-    // the record page's getActions. Surface the handler tags / navigate hints (#8b).
-    sectionActions: (() => {
-      const body = extractFnBody(src, "getSectionActions");
-      if (!body) return [];
-      return [...new Set([
-        // classic STANDARD shape: actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "handler"} }))
-        // — the Click handler IS the action identity. Also the direct "Click": "handler" form. This is what the
-        // old Tag/navigate-only patterns missed (e.g. `createRegistry`), so real section actions were dropped.
-        // The key itself is UNQUOTED in most hand-written schemas (`Click: {bindTo: "setOwner"}`), so the quotes
-        // around Click / Tag must be optional — requiring them dropped every action written in that style, which is
-        // exactly the "section actions dropped" trap this pattern exists to prevent.
-        ...[...body.matchAll(/"?Click"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
-        // alternative/older shapes: menu-item handler Tags and navigate/run hints
-        ...[...body.matchAll(/"?Tag"?\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
-        ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
-      ])].filter((n) => n !== "callParent");
-    })(),
+    // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One
+    // entry per menu item with its metadata (#8b): a handler name alone cannot build a Freedom command-bar
+    // button, and an item ported without its `Enabled` condition ships always-enabled. Filled from the AST on
+    // the parse path that reaches a `methods:` object; empty here so every other path yields a list, not
+    // `undefined`.
+    sectionActions: [],
+    // menu helpers resolved in this schema.
+    sectionActionHelpers: [],
+    // menu helpers called but defined nowhere in this schema: the item set is short by an unknown number.
+    sectionActionUnresolved: [],
+    // seen and deliberately not read — a helper called by a helper. The items behind these are missing too, but
+    // the cause is this parse's one-hop rule, not a method nobody defines.
+    sectionActionNotFollowed: [],
     // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
     // it as data-driven (#2).
@@ -586,6 +581,7 @@ export function parseSchema(src, pkg) {
     // Body facts are read from the AST the parse already produced — a second, independent pass over the SAME
     // nodes, so a failure here degrades the same way the value pass does (below), never half-populated.
     return { ...buildSchemaResult(pkg, src, null, captured, amdDeps),
+      ...sectionActionsFromAst(retArg, scope, pkg),
       methodFacts: methodFactsFromAst(retArg, scope), astDiagnostics };
   } catch (e) {
     const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e?.message || e);
@@ -893,6 +889,240 @@ function fixedFilterObjects(body) {
     i++;
   }
   return objs;
+}
+
+// ---- getSectionActions items, read from the AST -----------------------------------------------------------------
+// Read from the nodes `parseSchema` already built, never from the source text: nesting, a helper's parameters and
+// a call's statement-vs-value position are structural facts here.
+const NON_MENU_METHODS = new Set(["getButtonMenuItem", "callParent", "get", "set"]);
+// The one heuristic. An action registered through neither a menu-item object nor a helper leaves no structural
+// trace, so a statement-position call reading as a navigate/run name yields a NAME-ONLY item; a real declaration
+// carries metadata and wins.
+const MENU_HINT_RX = /^(?:navigateTo|goTo|run|open|process)[A-Z]\w+$/;
+
+// `this.foo(…)` / `foo(…)` → "foo"; a longer path (`Terrasoft.utils.x`) → null, because only a method the schema
+// itself could define is a candidate carrier.
+function ownCallName(call) {
+  const path = calleePath(call?.callee);
+  if (!path) return null;
+  const parts = path.split(".");
+  if (parts.length === 1) return parts[0];
+  return parts.length === 2 && parts[0] === "this" ? parts[1] : null;
+}
+// A menu property's static string, in the three forms classic uses: `X: "v"`, `X: { bindTo: "v" }`, and
+// `X: $Resources.Images.V` (a member path, whose last segment is the name).
+function menuPropValue(node) {
+  if (node == null) return null;
+  if (node.type === "Literal") return typeof node.value === "string" ? node.value : null;
+  if (node.type === "ObjectExpression") {
+    const bind = node.properties.find((p) => staticPropKey(p) === "bindTo");
+    return bind ? menuPropValue(bind.value) : null;
+  }
+  const path = calleePath(node);
+  return path ? path.split(".").pop() : null;
+}
+const menuProp = (obj, key) => obj.properties.find((p) => staticPropKey(p) === key)?.value ?? null;
+const isSeparatorType = (v) => !!v && v.endsWith("MenuSeparator");
+// A menu node: item, separator, or handler-less submenu container. Keyed on the properties classic gives them,
+// not on the calling method, so every add shape is recognised without a callee list.
+function isMenuNode(node) {
+  if (node?.type !== "ObjectExpression") return false;
+  if (menuProp(node, "Click") || menuProp(node, "Tag")) return true;
+  if (isSeparatorType(menuPropValue(menuProp(node, "Type")))) return true;
+  return !!(menuProp(node, "Caption") && menuProp(node, "Items"));
+}
+// One menu node's fields, read from its OWN properties.
+function readMenuNode(obj) {
+  const caption = menuPropValue(menuProp(obj, "Caption"));
+  return {
+    name: menuPropValue(menuProp(obj, "Click")) ?? menuPropValue(menuProp(obj, "Tag")) ?? null,
+    caption: caption ? resourceKey(caption) : null,   // stored as the lookup key, not a qualified path
+    condition: menuPropValue(menuProp(obj, "Enabled")),
+    icon: menuPropValue(menuProp(obj, "ImageConfig")),
+    separator: isSeparatorType(menuPropValue(menuProp(obj, "Type"))),
+  };
+}
+// Ordered child nodes. Generic (every own value that is a node or array of nodes) so the walk stays complete as
+// the AST shape grows.
+function childNodesOf(node) {
+  const out = [];
+  for (const key of Object.keys(node)) {
+    if (WALK_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v)) { for (const el of v) if (el?.type) out.push(el); }
+    else if (v?.type) out.push(v);
+  }
+  return out;
+}
+// Menu nodes under `node`, in source order, tagged with nesting depth. A menu node's children are its submenu, so
+// depth increments only there. Bounded by the member-facts walk limits.
+function collectMenuNodes(node, depth, out, state) {
+  if (!node || typeof node !== "object") return;
+  if (++state.nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { state.truncated = true; return; }
+  const isMenu = isMenuNode(node);
+  if (isMenu) out.push({ obj: node, depth });
+  for (const child of childNodesOf(node)) collectMenuNodes(child, isMenu ? depth + 1 : depth, out, state);
+}
+// Calls in STATEMENT or RETURN position, braceless `if`/`else`/loop forms included. A carrier is called; a data
+// read sits in value position and never appears here.
+function statementCalls(fnNode) {
+  const out = [];
+  const visit = (st) => {
+    if (!st || typeof st !== "object") return;
+    const expr = loneExpression(st);
+    if (expr?.type === "CallExpression") out.push(expr);
+    for (const key of ["body", "consequent", "alternate", "block", "handler", "finalizer", "cases"]) {
+      const v = st[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v?.type) visit(v);
+    }
+  };
+  (fnNode.body?.body || []).forEach(visit);
+  return out;
+}
+// Every CallExpression in the body.
+function allCalls(fnNode, state) {
+  const out = [];
+  const visit = (n) => {
+    if (!n || typeof n !== "object" || ++state.nodes > MAX_WALK_NODES) return;
+    if (n.type === "CallExpression") out.push(n);
+    childNodesOf(n).forEach(visit);
+  };
+  visit(fnNode.body);
+  return out;
+}
+// The locals this method builds its menu in: assigned from `this.callParent(…)`, used with `<id>.addItem(`, or
+// handed back by `return`. Several are possible, and helper matching runs over all of them.
+// A local assigned from `this.callParent(…)`, or handed back by `return`.
+function collectionsFromStatements(fnNode) {
+  const out = [];
+  for (const st of fnNode.body?.body || []) {
+    if (st.type === "ReturnStatement" && st.argument?.type === "Identifier") out.push(st.argument.name);
+    if (st.type !== "VariableDeclaration") continue;
+    for (const d of st.declarations) {
+      const fromParent = d.init?.type === "CallExpression" && /(?:^|\.)callParent$/.test(calleePath(d.init.callee) || "");
+      if (d.id?.type === "Identifier" && fromParent) out.push(d.id.name);
+    }
+  }
+  return out;
+}
+// A local used as `<id>.addItem(…)`.
+function collectionsFromAddItem(calls) {
+  const out = [];
+  for (const call of calls) {
+    const c = call.callee;
+    if (c?.type === "MemberExpression" && c.property?.name === "addItem" && c.object?.type === "Identifier") out.push(c.object.name);
+  }
+  return out;
+}
+function menuCollections(fnNode, calls) {
+  const names = new Set([...collectionsFromStatements(fnNode), ...collectionsFromAddItem(calls)]);
+  if (!names.size) names.add("actionMenuItems");
+  return names;
+}
+// A helper HANDED the collection: `this.foo(actionMenuItems)`.
+function helpersHandedCollection(calls, colls) {
+  const out = [];
+  for (const call of calls) {
+    const name = ownCallName(call);
+    const handed = (call.arguments || []).some((a) => a.type === "Identifier" && colls.has(a.name));
+    if (name && handed && !NON_MENU_METHODS.has(name)) out.push(name);
+  }
+  return out;
+}
+// A helper whose returned item is ADDED: `actionMenuItems.addItem(this.foo())`.
+function helpersReturningItem(calls, colls) {
+  const out = [];
+  for (const call of calls) {
+    const c = call.callee;
+    if (c?.type !== "MemberExpression" || c.property?.name !== "addItem") continue;
+    if (c.object?.type !== "Identifier" || !colls.has(c.object.name)) continue;
+    for (const a of call.arguments || []) {
+      const n = a.type === "CallExpression" ? ownCallName(a) : null;
+      if (n && !NON_MENU_METHODS.has(n)) out.push(n);
+    }
+  }
+  return out;
+}
+const menuHelpers = (calls, colls) =>
+  [...new Set([...helpersHandedCollection(calls, colls), ...helpersReturningItem(calls, colls)])];
+// Identity, order and separator-delimited group. A separator is a group boundary, not an action. A node with no
+// handler is a submenu CONTAINER: not published, because a checklist row for it could never be built, but its
+// caption becomes the `parent` label its children carry.
+function shapeMenuNodes(nodes, pkg) {
+  const out = [];
+  const parents = [];
+  let group = 0;
+  for (const { obj, depth } of nodes) {
+    if (depth === 0) parents.length = 0;
+    const { separator, ...item } = readMenuNode(obj);
+    if (separator) { group++; continue; }
+    parents[depth] = item.name || item.caption || null;
+    if (!item.name || item.name === "callParent") continue;
+    out.push({ ...item, parent: depth > 0 ? (parents[depth - 1] ?? null) : null,
+      order: out.length, group, package: pkg });
+  }
+  return out;
+}
+// Resolve each menu helper against the schema's own methods and take the items it adds. ONE hop: a method a
+// helper delegates to is RECORDED, never followed — `notFollowed` when this schema defines it, `unresolved` when
+// nothing does.
+function scanHelperNodes(names, methodNodes, nodes, state) {
+  const helpers = [];
+  const unresolved = [];
+  const notFollowed = [];
+  for (const name of names) {
+    const fn = methodNodes.get(name);
+    if (!fn) { unresolved.push(name); continue; }
+    helpers.push(name);
+    collectMenuNodes(fn.body, 0, nodes, state);
+    const param = (fn.params || []).find((x) => x.type === "Identifier")?.name;
+    const calls = allCalls(fn, state);
+    const own = param ? menuHelpers(calls, new Set([param])) : statementCalls(fn).map(ownCallName)
+      .filter((n) => n && !NON_MENU_METHODS.has(n));
+    for (const callee of new Set(own)) (methodNodes.has(callee) ? notFollowed : unresolved).push(callee);
+  }
+  return { helpers, unresolved, notFollowed };
+}
+// Name-only hint items appended in place. Every value the parsed items already consumed is excluded, so a
+// condition or caption matching the pattern is not republished as an action.
+function appendHintItems(items, entry, pkg) {
+  const seen = new Set();
+  for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
+  for (const call of statementCalls(entry)) {
+    const name = ownCallName(call);
+    if (!name || seen.has(name) || !MENU_HINT_RX.test(name)) continue;
+    seen.add(name);
+    items.push({ name, caption: null, condition: null, icon: null, parent: null,
+      order: items.length, group: 0, package: pkg });
+  }
+}
+// `{ items, helpers, unresolved, notFollowed }` for one schema. Empty on any path that did not reach a `methods:`
+// object; the layer carries the parse error that explains it.
+function sectionActionsFromAst(retArg, scope, pkg) {
+  const empty = { sectionActions: [], sectionActionHelpers: [], sectionActionUnresolved: [], sectionActionNotFollowed: [] };
+  const obj = objectNodeOf(retArg, scope);
+  const mo = obj && objectNodeOf(obj.properties.find((p) => staticPropKey(p) === "methods")?.value, scope);
+  if (!mo) return empty;
+  const methodNodes = new Map(mo.properties
+    .filter((p) => staticPropKey(p) && isFnNode(p.value)).map((p) => [staticPropKey(p), p.value]));
+  const entry = methodNodes.get("getSectionActions");
+  if (!entry) return empty;
+  const state = { nodes: 0, truncated: false };
+  const nodes = [];
+  collectMenuNodes(entry.body, 0, nodes, state);
+  const calls = allCalls(entry, state);
+  const colls = menuCollections(entry, calls);
+  const { helpers, unresolved, notFollowed } = scanHelperNodes(menuHelpers(calls, colls), methodNodes, nodes, state);
+  const items = shapeMenuNodes(nodes, pkg);
+  if (state.truncated) notFollowed.push("a body too large or too deeply nested to walk fully");
+  appendHintItems(items, entry, pkg);
+  return {
+    sectionActions: items,
+    sectionActionHelpers: helpers,
+    sectionActionUnresolved: [...new Set(unresolved)],
+    sectionActionNotFollowed: [...new Set(notFollowed)].filter((n) => !helpers.includes(n)),
+  };
 }
 
 // One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a

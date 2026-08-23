@@ -219,7 +219,7 @@ The engine does read method bodies — for five specific names, each via `extrac
 |---|---|---|
 | `getActions` | navigate/goTo hints + action `Tag` values | `engine.mjs:28-35` |
 | `getAddRecordMiniPage` | returned mini-page schema name | `engine.mjs:57-66` |
-| `getSectionActions` | `Click` handler names, `Tag`s, navigate hints | `engine.mjs:69-81` |
+| `getSectionActions` | one item per menu entry — `{ name, caption, condition, icon, parent, order, group, package }`, helper-built items included (one hop) | `engine.mjs:894-1117` |
 | `getGridDataColumns` / `initColumnsConfig` | list column paths | `engine.mjs:85-89` |
 | `initFixedFiltersConfig` / `getFixedFiltersConfig` | quick-filter `{name, column, type}` | `engine.mjs:95-113` |
 

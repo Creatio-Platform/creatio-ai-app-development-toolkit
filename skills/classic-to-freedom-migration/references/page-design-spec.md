@@ -83,9 +83,9 @@ has an identity to match on the built page.
 > page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.
 
 #### Command-bar actions
-| Action | Source | Freedom target |
-| --- | --- | --- |
-| `<action>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
+| Action | Caption | Icon | Condition | Menu position | Source package | Source | Freedom target |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `<action>` | `<caption resource>` | `<icon>` | `<Enabled condition>` — carry as Freedom state | group `<n>` · under `<submenu parent>` | `<package>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
 > **Build note — column ids:** each grid column also needs a GUID `id`; the engine mints none, so the builder assigns it.
 
@@ -175,9 +175,9 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | 3 | Created on | `PDS_CreatedOn` | PDS.CreatedOn | DateTime (`dataValueType` 7) |
 
 #### Command-bar actions
-| Action | Source | Freedom target |
-| --- | --- | --- |
-| `runBulkAssign` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
+| Action | Caption | Icon | Condition | Menu position | Source package | Source | Freedom target |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `runBulkAssign` | ⚠ none read — confirm on-stand | — | ⚠ none declared — confirm on-stand | group 0 | HRApplicant | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
 > **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.
 
