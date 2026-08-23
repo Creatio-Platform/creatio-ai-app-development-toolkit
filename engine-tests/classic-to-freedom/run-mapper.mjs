@@ -2156,7 +2156,7 @@ const stubBody = `define("BaseStub",[],function(){return{entitySchemaName:"X",di
 const stubSeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(stubBody, "BaseStub")] });
 check("#Major1 stub-detect: a >=5-method seed whose methods are ALL empty stubs is looksSkeletal → BLOCKS (count alone would clear it)",
   stubSeed.seedQuality.seedMethods === 6 && stubSeed.seedQuality.seedRealMethods === 0
-  && stubSeed.seedQuality.looksSkeletal === true && stubSeed.warnings.some((w) => w.name === "skeletal-seed" && /EMPTY stubs/.test(w.message)),
+  && stubSeed.seedQuality.looksSkeletal === true && stubSeed.warnings.some((w) => w.name === "skeletal-seed" && /EMPTY stubs/.test(w.hint)),
   () => stubSeed.seedQuality);
 const realBody = `define("BaseReal",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){return 1;},onSaved:function(){this.x=1;},loadValues:function(){var a=2;},getActions:function(){return [];},setColumns:function(){this.y=3;},onRender:function(){return true;}}};});`;
 const realBodySeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(realBody, "BaseReal")] });
@@ -9735,6 +9735,64 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
       omitted.error === "unknown page" && omitted.complete === false,
       () => omitted);
   }
+}
+
+
+/* ================= ENG-95862: the gate blocks on CORRECTNESS warnings only =================
+   Before: `migrate.mjs` blocked the plan on ANY non-empty `eff.warnings` and appended one summary sentence — "op hit
+   a missing item / skeletal seed" — to all eight producers. On a real run that sentence described a condition that
+   was provably absent (clean seed, item present) while the actual cause was an unmodelled property key, and the ⛔
+   stood byte-identical for 12 hours. */
+{
+  const mkRun = (diff, extra = {}) => runMigration({ entity: "E", noParentTemplate: true,
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(diff)}};});` }],
+    ...extra }, { baseDir: FIX });
+
+  // FIDELITY: a remove naming a key the engine still does not model. The element is KEPT and the mapping is right.
+  const fidDiff = [
+    { operation: "insert", name: "Header", values: { itemType: 15 } },
+    { operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F" } },
+    { operation: "remove", name: "F", properties: ["wrapClass"] },
+  ];
+  const fid = mkRun(fidDiff);
+  const fidWarn = (fid.effective.warnings || []);
+  check("ENG-95862: a FIDELITY warning does NOT block the gate — the plan is approvable (this is the 12-hour ⛔ the ticket was filed for)",
+    fidWarn.length === 1 && fidWarn[0].severity === "fidelity"
+    && !(fid.gate.reasons || []).some((r) => /^warnings /.test(r)),
+    () => ({ warnings: fidWarn, reasons: fid.gate.reasons }));
+  check("ENG-95862: demoting it does NOT hide it — the plan renders a ⚠ fidelity advisory naming the op and quoting its own hint",
+    /fidelity note\(s\)/.test(fid.plan) && /KEPT \(correct\)/.test(fid.plan) && /warningDispositions/.test(fid.plan),
+    () => (fid.plan.match(/^>.*fidelity.*$/m) || ["(no advisory line)"])[0]);
+
+  // CORRECTNESS: a merge onto an item no lower schema defined. Still a hard block — and the reason now QUOTES the
+  // warning that actually fired instead of the one summary string that sent the remedy search to the wrong file.
+  const corr = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }]);
+  const corrReason = (corr.gate.reasons || []).find((r) => /^warnings /.test(r)) || "";
+  check("ENG-95862: a CORRECTNESS warning still blocks the gate",
+    corr.gate.blocked === true && /correctness/.test(corrReason), () => corr.gate.reasons);
+  check("ENG-95862: the gate reason QUOTES the warning that fired (op, element, schema, its own hint) and no longer pastes 'op hit a missing item / skeletal seed' onto every producer",
+    /merge 'Ghost' @P/.test(corrReason) && /no lower schema defined/.test(corrReason)
+    && !/op hit a missing item \/ skeletal seed/.test(corrReason), () => corrReason);
+
+  // The OPERATOR DISPOSITION (item 5) — a fidelity note that is understood can be recorded and closed.
+  const disp = mkRun(fidDiff, { warningDispositions: { "remove:F:P": { resolved: true, disposition: "accepted", note: "wrapClass is pure styling; the Freedom field needs no equivalent" } } });
+  const dispWarn = (disp.effective.warnings || [])[0];
+  check("ENG-95862 (item 5): a recorded `warningDispositions` answer CLOSES the fidelity note — and keeps it auditable rather than dropping it",
+    dispWarn.accepted === true && dispWarn.disposition === "accepted"
+    && /CLOSED by a recorded disposition/.test(disp.plan) && !/⚠ \*\*1 fidelity note/.test(disp.plan),
+    () => ({ warning: dispWarn, closed: /CLOSED by a recorded disposition/.test(disp.plan) }));
+  // Same validated-enum rule as `memberDispositions`: a typo'd disposition must NOT clear anything.
+  const typo = mkRun(fidDiff, { warningDispositions: { "remove:F:P": { resolved: true, disposition: "accpeted" } } });
+  check("ENG-95862 (item 5): a TYPO'd disposition clears nothing — the note stays open (a truthy `resolved` is not an answer)",
+    !(typo.effective.warnings || [])[0].accepted && /fidelity note\(s\)/.test(typo.plan),
+    () => (typo.effective.warnings || [])[0]);
+  // And the hatch is fidelity-ONLY: a correctness warning names a real missing item, which no operator can decide away.
+  const refused = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }],
+    { warningDispositions: { "merge:Ghost": { resolved: true, disposition: "accepted" } } });
+  check("ENG-95862 (item 5): a disposition aimed at a CORRECTNESS warning is REFUSED — the gate still blocks and the refusal is rendered, never silently honoured",
+    refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
+    && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
+    () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

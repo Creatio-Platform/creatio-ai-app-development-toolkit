@@ -1241,6 +1241,18 @@ const primitiveOrNull = (x) => (typeof x === "boolean" || typeof x === "number" 
 // caption resource key: `caption.bindTo`, else a bare string, else null.
 const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
 
+// The CONTROL LABEL's own caption (`labelConfig: { caption: … }`), modelled as its OWN field and never folded into
+// `caption` (ENG-95862). Folding them would make `remove properties: ["labelConfig"]` unrepresentable: there would be
+// no `labelConfig` slot left to clear, the op would pass the membership test and change nothing, and the lower
+// layer's custom label would survive a removal the runtime honours — a silent wrong answer in place of today's
+// warning. Precedence is resolved at PROJECTION time, mirroring the platform's own `getLabelCaption`
+// (`ViewGeneratorV2` L1675-1689, already documented at `mapping-table.mjs` TIP_LABEL): `config.caption`, then
+// `labelConfig.caption`, then the column's own title.
+const labelCaptionKey = (v) => {
+  const lc = plainObj(v.labelConfig);
+  return isStr(lc.caption?.bindTo) ? lc.caption.bindTo : strOrNull(lc.caption);
+};
+
 // field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
 function hintKey(v) {
   if (isStr(v.hint?.bindTo)) return v.hint.bindTo;
@@ -1263,6 +1275,7 @@ function visibility(v) {
 function normalizeDiffOp(op, i) {
   if (op == null || typeof op !== "object") return null;
   const v = plainObj(op.values);
+  const labelCaption = labelCaptionKey(v);   // computed once: both `hasCaption` and the field below read it
   const opIndex = numOrNull(op.index); // diff-op index fallback (RV5, used for `order` below)
   return {
     operation: isStr(op.operation) ? op.operation : "?",
@@ -1282,10 +1295,14 @@ function normalizeDiffOp(op, i) {
     // changes here is only that the recorded precedence is now the right way round.
     dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
-    hasCaption: !!(v.caption),
+    // `labelConfig.caption` counts here too: once it can supply the rendered label, reading only `v.caption` reports
+    // "this op states no caption" about an op that states one.
+    hasCaption: !!(v.caption || labelCaption),
     // caption resource key (tab/group/detail label) — carried so the real caption is shown for
     // cross-check instead of only a synthesized placeholder.
     caption: captionKey(v),
+    // the control label's own caption — a SEPARATE key from `caption`, see `labelCaptionKey`
+    labelCaption,
     // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
     // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
     order: isNum(v.order) ? v.order : opIndex,
@@ -1450,12 +1467,27 @@ function makeItem(op, seed, pkg) {
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
+    labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
     handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
 }
+
+// ⚠ SEVERITY — the axis `eff.warnings` lacked (ENG-95862). Two values, and the sentence that decides each is
+// written here so a NEW producer cannot be added without answering it:
+//   "correctness" — the op targeted something that DOES NOT EXIST (an item no lower schema defined), or the seed is
+//                   not a real fetched body. The engine's reading of the page is wrong or unsafe, and the remedy is
+//                   an act the operator CAN perform (fix schema order F1 / fetch the base seed F2) ⇒ the gate blocks.
+//   "fidelity"    — the mapping the engine produced is RIGHT; some EFFECT of the op is not represented in the item
+//                   model. There is nothing to fix in the body or the seed — only in this engine — so the gate's
+//                   remedy would be an instruction nobody can act on ⇒ advisory, never a block. Same reasoning the
+//                   `unknown-enum-member` exemption already uses (migrate.mjs `isStructuralDiag`).
+// `migrate.mjs` blocks on `correctness` only, and quotes each warning's OWN hint rather than pasting one summary
+// sentence ("op hit a missing item / skeletal seed") onto every producer — that string sent a 12-hour investigation
+// to the wrong file.
+const SEVERITY = { CORRECTNESS: "correctness", FIDELITY: "fidelity" };
 
 // diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
 // ALIASES. `saveAlias` (core `json-applier.js` L554-566) keys the table by the ALIAS's declared name and stores the
@@ -1518,7 +1550,7 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
     if (!op.valuesKeys?.has(k)) continue;
     if (op.aliasExcluded?.includes(k)) continue;   // the alias forbids this key (json-applier.js L583-591)
     if (k === "itemType" && cur.itemType != null && op.itemType == null) {
-      warnings.push({ op: opName, name: op.name, schema: pkg,
+      warnings.push({ op: opName, name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
         hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
     }
     cur[k] = op[k];
@@ -1540,7 +1572,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     const stub = makeItem(op, seed, pkg);
     stub.engineOnlyStub = true;
     items.set(op.name, stub);
-    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
+    warnings.push({ op: "merge", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
     return;
   }
   mergeIdentityProps(op, cur, pkg, warnings);
@@ -1552,6 +1584,10 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
     if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
   }
+  // `labelConfig` is ONE diff key modelled as the `labelCaption` field, so the presence test is on the DIFF key —
+  // a layer that restates `labelConfig` (the WorkInternalRequest custom-label idiom) must be able to overwrite a
+  // lower layer's label, and `caption` never appears in its `values` at all.
+  if (op.valuesKeys?.has("labelConfig") && !op.aliasExcluded?.includes("labelConfig")) cur.labelCaption = op.labelCaption;
   // Both `valueBindTo` and `optionValue` are derived from ONE diff key (`value`), so the presence test is on that
   // key and both fields move together: a layer that restates `value` as a binding must also clear a literal an
   // earlier layer set, and the reverse. Testing the derived fields separately would leave the loser behind.
@@ -1571,7 +1607,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
 // e.g. Product's IsArchive/"Inactive" checkbox).
 function replayMove(op, cur, { seed, pkg }, warnings) {
   if (!cur) {
-    warnings.push({ op: "move", name: op.name, schema: pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+    warnings.push({ op: "move", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
     return;
   }
   if (op.parentName) { cur.parent = op.parentName; }
@@ -1596,15 +1632,22 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
 function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
   items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
-  warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+  warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
 }
 
 // `remove` carrying a `properties` array: delete ONLY those keys, keep the element (core `json-applier.js`
 // L719-732, and it runs in a LATER group than plain removes at L304). The engine models a subset of a view item's
 // keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
 // alternative is telling the reader a property was cleared when nothing happened.
-const REMOVABLE_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
-  "layout", "tip", "hint", "generator", "visible", "caption", "value"]);
+// `labelConfig` and the HANDLER vocabulary joined the set in ENG-95862: an audit of what a real `remove … properties`
+// may name, against what the engine models on an item, found exactly those two families modelled-but-unclearable —
+// the worst of the three states, because the plan then reports a property the page no longer has. (The audit and how
+// to re-run it: `engine-internals.md` → "remove … properties key audit".)
+// `TOP_LEVEL_ITEM_PROPS` = the keys held as a FIELD on the item record (cleared with `cur[k] = null`), as opposed to
+// the two families modelled elsewhere: `value`/`labelConfig` (own named fields) and the handlers map.
+const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
+  "layout", "tip", "hint", "generator", "visible", "caption"]);
+const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = [];
   for (const k of op.properties) {
@@ -1614,6 +1657,15 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
     // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
     // here as well listed the same package twice on an element whose `value` a layer cleared.)
     if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
+    // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
+    // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
+    // what the runtime renders (`getLabelCaption`).
+    if (k === "labelConfig") { cur.labelCaption = null; continue; }
+    // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
+    // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
+    // silenced the trigger but left the static value would be half-applied.
+    if (HANDLER_PROPS.has(k) && cur.handlers) delete cur.handlers[k];
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // handler-only key: the map entry above was the whole effect
     // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
     // "absent vs unreadable" ambiguity this ticket removed elsewhere.
     cur[k] = null;
@@ -1622,7 +1674,7 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true;
   if (unmodelled.length) {
-    warnings.push({ op: "remove", name: op.name, schema: pkg,
+    warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
       hint: `this remove deletes propert(ies) the engine does not model on an item: ${unmodelled.join(", ")}. The element is KEPT (correct), but the effect of clearing those keys is not represented — read the classic body if the plan depends on them.` });
   }
 }
@@ -1638,7 +1690,7 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
 function replaySet(op, cur, items, { seed, pkg }, warnings) {
   if (!cur) {
     items.set(op.name, makeItem(op, seed, pkg));
-    warnings.push({ op: "set", name: op.name, schema: pkg, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
+    warnings.push({ op: "set", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
     return;
   }
   // Direct children are tombstoned here; `cascadeRemove` sweeps the deeper levels on its fixpoint pass, and marks
@@ -1665,7 +1717,7 @@ function replaySet(op, cur, items, { seed, pkg }, warnings) {
   // The child clause is named rather than nested inside the hint: one template per string, so the sentence stays
   // readable and the optional half is not a second template inside the first.
   const droppedNote = dropped ? `, and ${dropped} direct child(ren) were dropped with it` : "";
-  warnings.push({ op: "set", name: op.name, schema: pkg,
+  warnings.push({ op: "set", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
     hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${droppedNote}. If the classic page still shows content here, it must be restated in this op.` });
 }
 
@@ -1964,8 +2016,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     const allStub = seedMethodNames.size >= SEED_MIN_METHODS && seedNonEmptyMethods.size === 0;
     const detail = allStub ? "but ALL of them are EMPTY stubs (no bodies)" : `(below the ${SEED_MIN_METHODS}-method floor)`;
     warnings.push({
-      op: "seed", name: "skeletal-seed", schema: "(seed)",
-      message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+      op: "seed", name: "skeletal-seed", schema: "(seed)", severity: SEVERITY.CORRECTNESS,
+      // `hint` (not only `message`) because every consumer quotes `hint`: the gate's new per-warning quote, and the
+      // plan's advisory. A producer that names its text differently is a producer the reader renders as `undefined`.
+      hint: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
     });
   }
 
@@ -1984,7 +2038,12 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       engineOnlyStub: !!i.engineOnlyStub,
       contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
-      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
+      // EFFECTIVE caption, in the platform's own order: `config.caption`, then `labelConfig.caption`
+      // (`getLabelCaption`, ViewGeneratorV2 L1675-1689). `labelCaption` rides along so a reader can tell WHICH of
+      // the two supplied the text — a label a later layer may remove on its own (`remove properties:
+      // ["labelConfig"]`) is not the same fact as a caption stated on the control itself.
+      visible: i.visible ?? null, caption: i.caption || i.labelCaption || null, labelCaption: i.labelCaption || null,
+      provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.

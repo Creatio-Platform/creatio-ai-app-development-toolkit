@@ -1234,6 +1234,33 @@ function renderBehaviourIndexBanners(result) {
     ". The plan's worklist carries page rows only, so these answers render in no table — carry each behaviour (and its card) into the List-page part of the plan by hand, and verify it at the list-page checkpoint.", "");
   return P;
 }
+// FIDELITY warnings (ENG-95862) — the half of `eff.warnings` that says "the mapping is RIGHT, an effect of the op
+// is not represented in the item model". They no longer block the gate, so they must be RENDERED: a demotion with
+// no advisory is a warning deleted, not a warning downgraded. Same standing and same voice as the `possiblyPartial`
+// seed advisory below. An `accepted` one (a recorded `manifest.warningDispositions` answer) is listed as CLOSED
+// rather than dropped — a cleared warning stays auditable, exactly like a `memberDispositions` row.
+function renderFidelityWarnings(result) {
+  const warnings = result.effective?.warnings || [];
+  const all = warnings.filter((w) => w.severity === "fidelity");
+  // A REFUSED disposition sits on a CORRECTNESS warning by definition (that is why it was refused), so it is read
+  // off the whole array — filtering it out of the fidelity subset would make it unrenderable anywhere.
+  const refused = warnings.filter((w) => w.dispositionRefused);
+  if (!all.length && !refused.length) return [];
+  const P = [];
+  const open = all.filter((w) => !w.accepted);
+  if (open.length) {
+    P.push(`> ⚠ **${open.length} fidelity note(s) — the mapping is correct; an effect of the op is NOT represented.** Read each and decide whether the build must reproduce that effect by hand. This does NOT block the gate. To close one, record \`manifest.warningDispositions["<op>:<name>:<schema>"] = { "resolved": true, "disposition": "accepted"|"reproduced-manually"|"n/a", "note": "<why>" }\`:`);
+    for (const w of open) P.push(`> - \`${esc(w.op)}\` **${esc(w.name)}** @\`${esc(w.schema)}\` — ${esc(w.hint || w.message || "(no hint)")}`);
+    P.push("");
+  }
+  const closed = all.filter((w) => w.accepted);
+  if (closed.length) {
+    P.push(`> ℹ ${closed.length} fidelity note(s) CLOSED by a recorded disposition: ${closed.map((w) => `\`${esc(w.op)}:${esc(w.name)}\` → **${esc(w.disposition)}**${w.note ? ` (${esc(w.note)})` : ""}`).join(" · ")}`, "");
+  }
+  if (refused.length) P.push(`> ⛔ ${refused.length} disposition(s) were REFUSED — ${refused.map((w) => `\`${esc(w.op)}:${esc(w.name)}\``).join(", ")}: ${esc(refused[0].dispositionRefused)}`, "");
+  return P;
+}
+
 function renderPlanBanners(result, opts) {
   const P = [];
   const gate = result.gate || { blocked: false, reasons: [] };
@@ -1265,6 +1292,7 @@ function renderPlanBanners(result, opts) {
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
   // real chain has 150+). Surface it so a partial fetch isn't silently folded onto — the agent confirms the full chain.
+  P.push(...renderFidelityWarnings(result));
   const sq = result.effective?.seedQuality || result.seedQuality;
   if (sq?.possiblyPartial) P.push(`> ⚠ **Seed may be a PARTIAL fetch — confirm before relying on the base layout.** The parent-template \`seed\` defines only ${sq.seedMethods} method(s); a FULL base-template chain has 150+ (mini 152, record ≈347, section 428). Re-check that \`get-classic-page-sources\` captured the WHOLE parent-template chain (not a truncated grab) — building on a partial base silently produces a hollow fold. (Advisory only: it does not block the gate.)`, "");
   return P;
