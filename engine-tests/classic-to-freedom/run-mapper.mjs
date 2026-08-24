@@ -1576,6 +1576,31 @@ check("ENG-95218 GATE: with NO `DataTable` node at all the read falls back to th
     return lpListTally(v).unverified >= 1 && lpListTally(v).missing === 0
       && v.markdown.includes("matched outside") && v.markdown.includes("DataTable"); },
   () => lpVerify({ pages: { list: { viewConfig: { items: [{ name: "SomeOtherDetailGrid", type: "crt.DataGrid", columns: LP_ALL_COLS.map((code) => ({ code })) }] } } } }).markdown.slice(0, 700));
+// ENG-95470 (defect 3) — the list page's OWN template ("List template → `ListFreedomTemplate`") is now its own
+// machine-checked row (`vk: { type: "template", exp: pm.listTemplate }`, resolved by the SAME `resolveTemplateVk`
+// the Form-template row uses), instead of a plan/built mismatch surfacing only as free text inside a judge
+// rejection. A real run planned `ListFreedomTemplate` and built `ListPageV3Template`; nothing machine-checked it.
+const lpBuiltOnTemplate = (tpl) => ({ pages: { list: { viewConfig: { items: [
+  { name: "DataTable", type: "crt.DataGrid", columns: LP_ALL_COLS.map((code) => ({ code, caption: "#ResourceString(" + code + ")#" })) },
+  ...LP_FILTERS,
+] }, parentSchemaName: tpl } } });
+check("ENG-95470: a list page built on the PLANNED template (`ListFreedomTemplate`) closes the new List-template row ✅ Done — a machine row, not just judge prose (no open row for it, and it costs the page no MISSING)",
+  () => { const v = lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"));
+    return lpListTally(v).missing === 0
+      && !(lpListTally(v).openRows || []).some((r) => /List template/.test(r.deliverable)); },
+  () => lpListTally(lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"))));
+check("ENG-95470: a list page built on a DIFFERENT template than the plan recommended (measured: `ListPageV3Template` vs the planned `ListFreedomTemplate`) is its own machine-checked ⚠ row naming BOTH templates — not only free text inside a judge rejection",
+  () => { const v = lpVerify(lpBuiltOnTemplate("ListPageV3Template"));
+    const row = (lpListTally(v).openRows || []).find((r) => /List template/.test(r.deliverable));
+    return lpListTally(v).missing === 0 && row?.outcome === "unverified"
+      && row.evidence.includes("ListPageV3Template") && row.evidence.includes("ListFreedomTemplate")
+      && /built on .*but the plan recommended/.test(row.evidence); },
+  () => (lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV3Template"))).openRows || []).find((r) => /List template/.test(r.deliverable)));
+check("ENG-95470: with NO `parentSchemaName` reported for the list page, the template row is ⚠ not-checkable (D6) — never a false MISSING for a page nobody looked at",
+  () => { const v = lpVerify(LP_BUILT(LP_ALL_COLS, LP_FILTERS));   // LP_BUILT reports no parentSchemaName at all
+    return lpListTally(v).missing === 0 && lpListTally(v).unverified >= 1
+      && /parentSchemaName.*not provided/.test(v.markdown); },
+  () => lpVerify(LP_BUILT(LP_ALL_COLS, LP_FILTERS)).markdown.slice(0, 900));
 // An approved `pages-only-no-menu` plan registers no section, so no list page is minted: a queued list unit could
 // never close. Its rows degrade to ungated prose, and the `list` marker must go with the `vk` or the FORM unit
 // inherits the list vocabulary in its `expect`.
@@ -1641,6 +1666,11 @@ check("ENG-95218: with two same-column filters, ONE built element does NOT close
 const lpEmptySection = runMigration({ ...LP_MANIFEST, addRecordMiniPage: false,
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
 }, { baseDir: FIX });
+check("ENG-95470 (defect 3, guard): a plan with NOTHING else resolved for the list page (`lpEmptySection` — no columns/filters/actions) publishes NO list-template row and no gated `list` unit, even though `planMeta.listTemplate` is set — a template value alone must never flip an otherwise-ungated list page into an unclosable unit (ENG-95218's guarantee)",
+  () => { const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows);
+    return !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list")
+      && !rows.some((r) => r.pageKey === "list" && /List template/.test(r.label)); },
+  () => checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label));
 check("ENG-95218: with NOTHING gated for the list page (empty section, no `list` unit) its ⚠ Confirm items are still GATED — they ride on `main` as `main#confirm:list-*` and reach `--units.preflight`, because withholding a page nobody builds must not withhold the questions",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
@@ -7740,6 +7770,22 @@ check("ENG-95850 (B2): a malformed count (not an integer, negative, or a bare ar
     && allEq(marksFor(rcCount([1]).markdown, SECTION_RE), "⚠ verify"));
 check("ENG-95850 (B2): `count` is accepted as a synonym of `workplaces` — one shape change in the reader must not silently reopen every row",
   allEq(marksFor(rcCount({ count: 1 }).markdown, SECTION_RE), "✅ Done"));
+// ENG-95470 (defect 4 review) — a carried-forward count (Verify substituting the build unit's OWN claim because
+// its own independent on-stand check was skipped or missed this round) must NOT close the row the same way an
+// independently-confirmed count does: the whole point of the gate is that a self-report and a confirmation are
+// not the same evidence, so the structured `source` marker has to actually change the verdict, not just ride
+// along unread.
+const rcCarried = rcCount({ workplaces: 1, names: ["Recruiting"], source: "carried-forward" });
+check("ENG-95470 (defect 4 review): a matching count with `source: \"carried-forward\"` stays ⚠ verify, not ✅ Done — Verify substituted the builder's own claim and nobody independently confirmed it this round",
+  allEq(marksFor(rcCarried.markdown, SECTION_RE), "⚠ verify")
+    && /CARRIED FORWARD/.test(rcCarried.markdown)
+    && /re-run the on-stand check/.test(rcCarried.markdown),
+  () => rcCarried.markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+check("ENG-95470 (defect 4 review): the SAME count with `source: \"verified\"` (or no `source` at all — older payloads) still closes ✅ Done, so this marker only ever LOWERS trust, never fabricates it",
+  allEq(marksFor(rcCount({ workplaces: 1, names: ["Recruiting"], source: "verified" }).markdown, SECTION_RE), "✅ Done")
+    && allEq(marksFor(rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown, SECTION_RE), "✅ Done"));
+check("ENG-95470 (defect 4 review): a carried-forward count that does NOT match the expected number is still a hard ❌ MISSING, same as a verified mismatch — `source` only changes the exactly-one-workplace case",
+  allEq(marksFor(rcCount({ workplaces: 2, names: ["Recruiting", "My applications"], source: "carried-forward" }).markdown, SECTION_RE), "❌ MISSING"));
 check("ENG-95850 (B2): the OTHER wiring keys are untouched — `miniPageWired: true` still closes its row on the boolean path, so the count gate is scoped to the row that declares it",
   allEq(marksFor(renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: true } }).markdown, WIRED_RE), "✅ Done"));
 // …and the fallback is still a fallback: a NON-EMPTY `reachability` that simply says nothing about a key leaves
@@ -8554,6 +8600,25 @@ try {
   // and an input that exists only on some versions is exactly the 8.3.0-vs-8.3.3 `handleItemClick` case.
   const fakeRow = (target) => ({ match: { by: MATCH.ITEM_TYPE, itemType: 999 }, role: "mapped", tier: TIER.AUTO, ownedBy: OWNER.TABLE, target });
   const kindsOf = (r) => r.map((f) => f.kind).sort((a, b) => a.localeCompare(b));
+  // ---- ENG-95863: per-OUTPUT deprecation, on a REAL, currently-deprecated registry fact -----------------------
+  // `crt.DataGrid.selectedRowsChange` / `crt.ApprovalList.selectedRowsChange` are deprecated in the vendored
+  // registry ("Use `selectionStateChange` output instead."). A row naming one as an event must get an ADVISORY,
+  // never an error — the output still fires, and the row's author decides with the reason in front of them.
+  const deprecatedOutputRow = (componentType) => fakeRow({ componentType, slot: "items", propMap: {}, events: { selectedRowsChange: true } });
+  for (const ct of ["crt.DataGrid", "crt.ApprovalList"]) {
+    const findings = validateRow(deprecatedOutputRow(ct));
+    const dep = findings.find((f) => f.kind === "deprecated-output");
+    check(`ENG-95863: ${ct}.selectedRowsChange is reported as a \`deprecated-output\` ADVISORY naming the exact reason`,
+      !!dep && isAdvisory(dep) && dep.reason === "Use `selectionStateChange` output instead.",
+      () => findings);
+  }
+  // `crt.ComboBox.addRecord` is deprecated with NO `deprecationReason` published — a real registry fact, not a
+  // fabricated one. The advisory must still fire, with `reason: null` rather than the literal string "undefined".
+  const comboBoxFindings = validateRow(fakeRow({ componentType: "crt.ComboBox", slot: "items", propMap: {}, events: { addRecord: true } }));
+  const comboBoxDep = comboBoxFindings.find((f) => f.kind === "deprecated-output");
+  check("ENG-95863: crt.ComboBox.addRecord (deprecated, no reason published) still fires the ADVISORY, with reason: null",
+    !!comboBoxDep && isAdvisory(comboBoxDep) && comboBoxDep.reason === null,
+    () => comboBoxFindings);
   check("ENG-95543(neg): a fabricated componentType is an `unknown-component` error — the fabricated-type defect this check exists to prevent",
     kindsOf(validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} }))).includes("unknown-component"),
     () => validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} })));
@@ -8599,6 +8664,22 @@ try {
   check("ENG-95543: ranking is scoped to the target version — a component that exists only in the newest snapshot is not offered for the oldest",
     !newOnly || !rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }).some((c) => c.componentType === newOnly[0]),
     () => ({ newestOnly: newOnly?.[0], ranked: newOnly ? rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }) : null }));
+  // ---- ENG-95863: entity-coupling evidence, on a SYNTHETIC index for the `appliesToCustomEntities === false`
+  // branch. Real data is `true` on every one of the 8/205 components that publish the field (zero `false`
+  // observed), so this branch cannot be exercised against the vendored index — it needs a fabricated component.
+  const couplingIdx = { meta: { versions: ["v1"] }, baseInputs: {}, components: {
+    "crt.SyntheticCoupled": { v: 1, compositeOnly: false, taxonomy: { synonyms: ["widget"], appliesToCustomEntities: false, entityCouplingNote: "does not bind to a custom entity" }, inputs: {}, outputs: {} },
+    "crt.SyntheticNoNote": { v: 1, compositeOnly: false, taxonomy: { synonyms: ["widget"], appliesToCustomEntities: false }, inputs: {}, outputs: {} },
+  } };
+  const coupledRanked = rankCandidates(["widget"], { index: couplingIdx });
+  const coupled = coupledRanked.find((c) => c.componentType === "crt.SyntheticCoupled");
+  const noNote = coupledRanked.find((c) => c.componentType === "crt.SyntheticNoNote");
+  check("ENG-95863: a candidate with appliesToCustomEntities:false is NOT dropped, and the false value + note both survive as evidence — no `=== false` gate anywhere in rankCandidates",
+    !!coupled && coupled.appliesToCustomEntities === false && coupled.entityCouplingNote === "does not bind to a custom entity",
+    () => coupledRanked);
+  check("ENG-95863: entityCouplingNote does not have to co-occur with appliesToCustomEntities — a candidate missing the note still carries the false value, unset key omitted rather than defaulted",
+    !!noNote && noNote.appliesToCustomEntities === false && !("entityCouplingNote" in noNote),
+    () => noNote);
 
   // ---- ENG-95543: the RUN-TIME registry (the half that keeps this reachable without the clio change) ----------
   // Three sources, deliberately distinguished, because "checked against the stand", "checked against a pinned
@@ -8624,6 +8705,15 @@ try {
     exportIdx.meta.versions[0] === "8.3.5" && exportIdx.components["crt.Button"].inputs.caption.type === "string"
     && exportIdx.components["crt.Button"].outputs.clicked && exportIdx.baseInputs.name.type === "string",
     () => exportIdx);
+  // ENG-95863: a STAND's own export can carry a deprecated output too — without this, the deprecated-output
+  // advisory would only ever fire against the vendored index, never against a real stand-export run.
+  const exportJsonDeprecated = { resolvedTargetVersion: "8.3.5",
+    components: [{ componentType: "crt.DataGrid", inputs: {}, outputs: { selectedRowsChange: { deprecated: true, deprecationReason: "Use `selectionStateChange` output instead." } } }] };
+  const exportIdxDeprecated = indexFromRegistryExport(exportJsonDeprecated);
+  check("ENG-95863: indexFromRegistryExport carries an output's deprecated/deprecationReason through, same as it already does for inputs",
+    exportIdxDeprecated.components["crt.DataGrid"].outputs.selectedRowsChange.deprecated === true
+    && exportIdxDeprecated.components["crt.DataGrid"].outputs.selectedRowsChange.deprecationReason === "Use `selectionStateChange` output instead.",
+    () => exportIdxDeprecated);
   // A run is judged on what IT emits, not on the whole table: a check that reports rows the run never touched is a
   // check a reader learns to skip.
   const runCs = { tableElements: [{ classic: "B", classicKind: "BUTTON", componentType: "crt.Button" }],

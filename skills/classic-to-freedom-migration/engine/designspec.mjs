@@ -1943,6 +1943,17 @@ function buildListItems(pm, section, result, isMain) {
     const cond = ra.condition ? ` (conditional: \`${esc(ra.condition)}\`)` : "";
     items.push(listRow(`Row action — \`${esc(ra.name)}\`${cond}`, "rowaction", ra.name, 1, [ra.name]));
   }
+  // ENG-95470 (defect 3) — the list page's OWN template, mirroring the Form-template row above (`vk: { type:
+  // "template", ... }`, resolved by the shared `resolveTemplateVk`). Before this row a plan/built mismatch (e.g.
+  // `ListPageV2FreedomTemplate` planned, `ListPageV3Template` actually built) surfaced only as free-text inside a
+  // judge rejection — nothing machine-checked it. Added ONLY when the list page is ALREADY gated by another row
+  // (`items.some((r) => r.vk)`, computed above `--` never on `pm.listTemplate` alone): a plan with nothing else
+  // resolved for the list page must stay UNGATED (ENG-95218 — withholding a page nobody builds must not publish an
+  // unclosable `list` unit), and adding a template-only vk here would flip that decision by itself. This row lives
+  // in `listRows`, gated on `LIST_PAGE_KEY`, so `ctx.page` resolves to `built.pages["list"]`, never `main`'s.
+  if (pm.listTemplate && items.some((r) => r.vk)) {
+    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\``, vk: { type: "template", exp: pm.listTemplate } });
+  }
   return items;
 }
 // ONE checklist group, stamped with the page it belongs to. `pageKey` stays RAW on the group and on every row —
@@ -2996,6 +3007,15 @@ const onstandNames = (v) => {
   const names = Array.isArray(v?.names) ? v.names.filter((x) => typeof x === "string" && x.trim()) : [];
   return names.length ? ` (${names.map((x) => esc(x)).join(", ")})` : "";
 };
+// ENG-95470 (defect 4 review) — WHERE THE COUNT CAME FROM, as structure rather than prose. Verify may carry a
+// build unit's OWN claimed count forward into this field on a round where its own independent on-stand check is
+// skipped or missed — necessary so the row does not stay stuck at `reachability: {}` forever, but it means the
+// count in `n` is sometimes a self-report rather than something Verify itself confirmed. Absent `source` on an
+// older payload defaults to `"verified"` (this field did not exist before this ticket, and every payload written
+// before it came only from Verify's own count).
+function onstandSource(v) {
+  return v && typeof v === "object" && v.source === "carried-forward" ? "carried-forward" : "verified";
+}
 // The count-gated form of an `onstand` row. Its own fn so `resolveOnstandVk` stays under Sonar CC 15 and the boolean
 // path below is provably untouched for every row that declares no `expectCount`.
 // A bare `true` is NOT acceptance here, deliberately: it is exactly the answer that hid the second binding, so it
@@ -3010,7 +3030,12 @@ function resolveOnstandCountVk(vk, v) {
       ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
       : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
   }
-  if (n === want) return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  if (n === want) {
+    if (onstandSource(v) === "carried-forward") {
+      return ["⚠ verify", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)} — but this count is CARRIED FORWARD from the build unit's own claim, not independently confirmed by Verify this round; re-run the on-stand check to close this row for real`, "unverified"];
+    }
+    return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  }
   if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["❌ MISSING", `bound to ${n} workplaces${onstandNames(v)}, expected exactly ${want} — a registration only ADDS, so the previous binding is still there; unbind all but the intended one (this row REPORTS it, the build does not undo it on its own)`, "missing"];
 }

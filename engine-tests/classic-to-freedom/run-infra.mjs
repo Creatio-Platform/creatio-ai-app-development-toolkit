@@ -1372,7 +1372,16 @@ check("ENG-95471 review fix: the return obligation SURVIVES into the composed pr
 // wrapper reads run state and this host's fencer, neither of which the harness can supply.
 // The end marker is ORDINARY source text, so it lives in one constant that both slice sites read.
 const BP_END_MARKER = "// OPERATOR FINDINGS from an earlier checkpoint";
-const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER));
+// `buildPrompt` only DISPATCHES by `unit.kind` — the prose per kind (including the app/reach/page prose this
+// file's checks match on below) lives in these named pure functions instead. Sliced in alongside `buildPrompt`
+// itself so `buildPromptSrc` still carries every string these checks were written against.
+const sliceFn = (name) => {
+  const at = wfSrc.indexOf(`function ${name}(`);
+  return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
+};
+const KIND_BLOCK_FN_NAMES = ["appKindBlock", "appSectionHostNoMenuBlock", "appSectionHostMigrationBlock", "reachKindBlock", "pageKindBlock"];
+const buildPromptSrc = KIND_BLOCK_FN_NAMES.map(sliceFn).join("\n")
+  + "\n" + wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER));
 check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
   buildPromptSrc.length > 200
     && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
@@ -2811,6 +2820,12 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     markersOk, () => ({ bpStart, bpEnd, head: BP_HEAD, end: BP_END_MARKER }));
   if (markersOk) {
     const fnSrc = wfSrc.slice(bpStart, bpEnd).trimEnd();
+    // `buildPrompt` dispatches to these per-kind pure functions rather than inlining their template literals —
+    // sliced in FOR REAL alongside `buildPrompt` itself, same as `repairBlock` / `continuationBudgetBlock` below,
+    // so the render actually exercises the shipped prose instead of a stub that cannot throw. `sliceFn` /
+    // `KIND_BLOCK_FN_NAMES` are the same ones `buildPromptSrc` above is built from.
+    const pureFn = sliceFn;
+    const kindBlockFnsSrc = KIND_BLOCK_FN_NAMES.map(pureFn).join("\n");
     // Every free variable `buildPrompt` reads, as DECLARATIONS — they are prepended to the sliced function and the
     // whole thing is imported as a real module. No `new Function`, no eval: the same route the pure-helper block
     // above takes, and for the same reason.
@@ -2857,8 +2872,12 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
     // option, because the prompt prose carries literal braces. The render below covers the rest.
     const params = new Set(["unit", "st", "roundNo"]);
-    const locals = new Set([...fnSrc.matchAll(/(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]));
-    const roots = [...new Set([...fnSrc.matchAll(/\$\{([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]))];
+    // `buildPrompt` itself now only dispatches; the interpolations it used to carry inline live in the per-kind
+    // functions sliced above, so their source is scanned for free variables too, or a typo introduced in one of
+    // them would no longer be caught here.
+    const combinedSrc = `${fnSrc}\n${kindBlockFnsSrc}`;
+    const locals = new Set([...combinedSrc.matchAll(/(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]));
+    const roots = [...new Set([...combinedSrc.matchAll(/\$\{([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]))];
     const unstubbed = roots.filter((r) => !params.has(r) && !locals.has(r) && !stubbed.has(r));
     check("ENG-95472: every interpolation that OPENS with an identifier resolves to a param, a local or a stub here — a new free variable is added to the list, never auto-stubbed, or this check stops catching typos",
       unstubbed.length === 0, () => ({ unstubbed, roots }));
@@ -2871,11 +2890,7 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
       const modPath = path.join(tmpBp, "buildPrompt.mjs");
       // The two pure blocks `buildPrompt` composes are sliced in FOR REAL rather than stubbed: they carry the prompt
       // text the assertions below match on, so a stub would make the render pass while shipping nothing.
-      const pureFn = (name) => {
-        const at = wfSrc.indexOf(`function ${name}(`);
-        return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
-      };
-      writeFileSync(modPath, `${STUBS}\n${pureFn("unitNo")}\n${pureFn("readableUnitPart")}\n${pureFn("nonPageUnitStem")}\n${pureFn("unitStem")}\n${namesSrc}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${fnSrc}\nexport { buildPrompt };\n`);
+      writeFileSync(modPath, `${STUBS}\n${pureFn("unitNo")}\n${pureFn("readableUnitPart")}\n${pureFn("nonPageUnitStem")}\n${pureFn("unitStem")}\n${namesSrc}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${kindBlockFnsSrc}\n${fnSrc}\nexport { buildPrompt };\n`);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
