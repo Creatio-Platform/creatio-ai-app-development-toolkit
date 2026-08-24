@@ -33,6 +33,9 @@ export const meta = {
 //     customizations?: string,  // step 5.1's customizations.md — the behaviour cards an imperative row is ported from
 //     behaviourIndex?: string,  // step 5.1's behaviour-index.json, as merged into the manifest
 //     sectionSchema?: string,   // surface label for the prompts
+//     verificationSurface?: string, // 'automatic:2' | 'automatic:3' | 'manual' — the migration skill's
+//                            // verification-surface preflight answer for this section (ENG-95855); absent -> null,
+//                            // never guessed. Threaded into each page unit's render-check instruction.
 //     dryRun?:     boolean,  // PREVIEW: stop before the first stand WRITE and report what would be built
 //     mode?:       string,   // 'auto' (default) | 'checkpoints' | 'guided' — how often the run stops for a human
 //     checkpointAfter?: string[], // mode 'checkpoints': the PUBLISHED unit keys to stop after (unknown key ⇒ refuse)
@@ -189,6 +192,11 @@ const MAX_PREFLIGHT = Number(input.maxPreflightAgents) > 0 ? Number(input.maxPre
 // a proposal rather than an action. Building the page that carries the row and stopping before the NEXT unit
 // costs the operator the rest of that page's logic and buys a model that cannot lie about what is done.
 const MODE = buildMode(input.mode)
+// The migration skill's verification-surface preflight answer for THIS section (ENG-95855), handed over as an
+// explicit argument rather than left for each page unit to read from `decisions.md` — that file's prose does
+// not reach a fresh-context build agent. `null` when the caller omitted it (an older invocation, or a run this
+// field predates); the per-page recipe's render check treats that as "not told" and reports so, never a guess.
+const VERIFICATION_SURFACE = buildVerificationSurface(input.verificationSurface)
 const CHECKPOINT_AFTER = Array.isArray(input.checkpointAfter)
   ? input.checkpointAfter.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim())
   : []
@@ -1236,6 +1244,24 @@ function buildMode(raw) {
       '`auto` builds every unit without stopping · `checkpoints` stops after each unit named in `checkpointAfter` so the operator can check it on the stand · `guided` stops after every unit.')
   }
   return m
+}
+
+// THE VERIFICATION SURFACE the migration skill's preflight resolved for this section BEFORE the first stand
+// write (ENG-95855) — `automatic:2` (headless Playwright), `automatic:3` (real Chrome), or `manual` (no
+// automatic surface; `--verify` alone). Unlike `buildMode`, an ABSENT value is never guessed into one of the
+// three: a caller that omits it gets `null`, and the per-page recipe's render check treats `null` as "not told,
+// ask" rather than silently assuming a tier nobody resolved. An unrecognised NON-EMPTY value still throws, for
+// the same reason a typo'd mode must not fall back to a default — a mistyped tier is exactly the "preference
+// silently drifted from what was resolved" failure this ticket exists to close.
+function buildVerificationSurface(raw) {
+  const SURFACES = ['automatic:2', 'automatic:3', 'manual']
+  if (raw === undefined || raw === null || raw === '') return null
+  const s = String(raw).trim().toLowerCase()
+  if (!SURFACES.includes(s)) {
+    throw new Error(`freedom-build-executor: unknown verificationSurface ${JSON.stringify(raw)}. Use one of: ${SURFACES.join(', ')}. ` +
+      '`automatic:2` = headless Playwright · `automatic:3` = real Chrome · `manual` = no automatic surface, `--verify` alone.')
+  }
+  return s
 }
 
 // CHECKPOINT KEYS ARE PUBLISHED KEYS, never constructed ones — the same rule the whole run follows for page keys
@@ -2427,7 +2453,13 @@ ${unit.sectionHost === 'pages-only-no-menu'
     const schemaNote = known
       ? ` The queue records it as the Freedom schema \`${known}\` — work on THAT page.`
       : ' No Freedom schema is recorded for this key yet, so nothing downstream can fetch it. Resolving it is part of your job, and it has a WRITTEN PROCEDURE — read "Resolving a page key to an already-existing Freedom schema" in the per-page recipe named below and follow it (`list-pages` by package or app code, matched on `schema-name` / `packageName` / `parentSchemaName`, with an explicit answer for both no match and several matches). Do not guess a schema name.'
-    kindBlock = `YOUR UNIT is the page \`${unit.key}\`.${schemaNote} ${REF_BLOCK}
+    // The per-page recipe's render-check step reads this VALUE, never `decisions.md` — a fresh-context build
+    // agent has no other way to learn the section's resolved surface. `null` (the caller omitted it) is said
+    // outright rather than silently treated as any one tier.
+    const verificationSurfaceNote = VERIFICATION_SURFACE
+      ? ` VERIFICATION SURFACE FOR THIS BUILD: \`${VERIFICATION_SURFACE}\` — use it for this page's render check exactly as the per-page recipe's step 8 describes.`
+      : ' VERIFICATION SURFACE FOR THIS BUILD: none was handed to this run (`verificationSurface` was omitted). Do not guess a tier — say so in `blocked` if the per-page recipe\'s step 8 needs one to proceed.'
+    kindBlock = `YOUR UNIT is the page \`${unit.key}\`.${schemaNote}${verificationSurfaceNote} ${REF_BLOCK}
 
 ${sliceKeys.has(unit.key)
       ? `YOUR PAGE'S SLICE IS ALREADY CUT — read it, do not go looking: \`${specFile(unit.key)}\` (this page's design spec plus the plan's \`Adjustments\` list in full). Do NOT grep \`${input.planFile}\` for your block: the slice is the same content, and the plan is hundreds of kilobytes of other pages.`

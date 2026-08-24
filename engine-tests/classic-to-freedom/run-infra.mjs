@@ -140,7 +140,7 @@ const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
+  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
@@ -456,6 +456,19 @@ check("buildMode: the three modes are accepted, case- and whitespace-insensitive
   () => (wf.buildMode("auto") === "auto" && wf.buildMode(" Checkpoints ") === "checkpoints" && wf.buildMode("GUIDED") === "guided"));
 check("buildMode: an UNKNOWN mode THROWS — it must never fall back to `auto`, which would silently run unattended the one time the operator asked to watch",
   () => { try { wf.buildMode("semi"); return false; } catch (e) { return /unknown mode/i.test(e.message) && /checkpoints/.test(e.message); } });
+
+// ENG-95855 — the migration skill's verification-surface preflight, handed over as an explicit argument.
+// Unlike `buildMode`, absence is never guessed into one of the three tokens: a caller that omits the field
+// gets `null`, not a default tier, because guessing a tier nobody resolved is the exact "preference silently
+// drifted from what was resolved" failure this ticket exists to close.
+check("buildVerificationSurface: an absent value is `null` — never guessed into a tier",
+  () => (wf.buildVerificationSurface(undefined) === null && wf.buildVerificationSurface(null) === null && wf.buildVerificationSurface("") === null));
+check("buildVerificationSurface: the three tokens round-trip verbatim",
+  () => (wf.buildVerificationSurface("automatic:2") === "automatic:2" && wf.buildVerificationSurface("automatic:3") === "automatic:3" && wf.buildVerificationSurface("manual") === "manual"));
+check("buildVerificationSurface: accepted case- and whitespace-insensitively, matching buildMode's own normalization",
+  () => (wf.buildVerificationSurface(" Manual ") === "manual" && wf.buildVerificationSurface("AUTOMATIC:2") === "automatic:2"));
+check("buildVerificationSurface: an UNKNOWN token THROWS — a typo must not silently ship as a resolved tier",
+  () => { try { wf.buildVerificationSurface("automatic"); return false; } catch (e) { return /unknown verificationSurface/i.test(e.message) && /automatic:2/.test(e.message); } });
 
 check("unknownCheckpointKeys: a key `--units` does not publish is REPORTED — it matches no unit, so the run would never stop and the section would be built unwatched",
   () => (wf.unknownCheckpointKeys(["main", "child:Nope"], ["main", "child:Documents"]).join(",") === "child:Nope"));
@@ -984,6 +997,14 @@ check("workflow: the index is written LAST, so a half-built cache cannot read as
 check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
   /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
     && /Do not treat the missing file as a defect/.test(wfSrc));
+// ENG-95855 — the resolved verification surface has to reach the per-page prompt as literal text, or the
+// per-page recipe's "use the verificationSurface VALUE" instruction has nothing concrete to point at: a
+// documented hand-over that no prompt-building code actually threads is the exact defect a prior review round
+// caught in this ticket's own diff.
+check("workflow: VERIFICATION_SURFACE is threaded into the page unit's prompt, not left for the builder to read from decisions.md",
+  /const VERIFICATION_SURFACE = buildVerificationSurface\(input\.verificationSurface\)/.test(wfSrc)
+    && /VERIFICATION SURFACE FOR THIS BUILD:.*\$\{VERIFICATION_SURFACE\}/.test(wfSrc)
+    && /none was handed to this run \(.verificationSurface. was omitted\)/.test(wfSrc));
 check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
   /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
 check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",
@@ -2804,6 +2825,7 @@ const REF_BLOCK = "<refs>"
 const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
+const VERIFICATION_SURFACE = "automatic:2"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])

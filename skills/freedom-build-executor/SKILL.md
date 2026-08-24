@@ -473,7 +473,11 @@ which applies here in full and is stricter for a build than for an analysis.
    path** — the script ships beside this file:
    `Workflow({ scriptPath: "./freedom-build-executor.workflow.js", args: {
    manifest, environment, outDir, planFile, engine, customizations, behaviourIndex,
-   sectionSchema } })`, resolved to its absolute path in the plugin dir.
+   sectionSchema, verificationSurface } })`, resolved to its absolute path in the plugin dir.
+   `verificationSurface` (`automatic:2` | `automatic:3` | `manual`) is the migration skill's
+   verification-surface preflight answer for this section (ENG-95855) — omit it only on a run that
+   predates the field, never to skip resolving it; a page unit built without it is told plainly that
+   no surface was handed over rather than left to assume one.
    `name: "creatio-freedom-build-executor"` resolves only where the installer has mirrored it, which
    on Claude Code is usually nowhere, so do not spend a call probing it first (see "Named-workflow
    availability" below). Resolve
