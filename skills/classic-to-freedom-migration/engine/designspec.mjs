@@ -3174,9 +3174,11 @@ function resolveEvidenceJudgedPart(vk, ctx) {
   const why = ctx.root?.judge?.[vk.id]?.why;
   const need = `\`${esc(vk.id)}\``;
   if (rec === false) {
-    const contradiction = judged === true
-      ? ` — NOTE: the judge reviewed it and DISAGREES${why ? ` ("${esc(String(why)).slice(0, 240)}")` : ""}. One of the two is wrong about the built page.`
-      : "";
+    let contradiction = "";
+    if (judged === true) {
+      const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
+      contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page.`;
+    }
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
