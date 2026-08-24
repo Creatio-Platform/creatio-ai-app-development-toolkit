@@ -9093,6 +9093,31 @@ try {
     attrGap.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "FeatureOn" && /attribute 'FeatureOn'/.test(d.reason)),
     () => attrGap.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
 
+  // ENG-95412 reopening (2026-08-24 QA): a real Applicant run escalated CrtUIPlatform7x base-template attributes
+  // (SecurityOperationName, IsCardOpenedAttribute, IsMainHeaderVisibleAttribute) to a human `parse-gap` decision —
+  // members no CLIENT schema touched, so the ledger already counts them `context` (excluded by design), but
+  // `disposition()` ranks `decision` above `context` and the escalation silently promoted them out of it.
+  const tplGapBase = `define("Base",[],function(){return{attributes:{TplAttr:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapClient = `define("P",[],function(){return{entitySchemaName:"X",diff:[${nameOp}]};});`;
+  const tplGap = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: an unreadable default on an attribute NO CLIENT schema touched raises NO `parse-gap` — it is inherited base-template content, not a value the reader can act on",
+    !tplGap.changeSet.needsDecision.some((d) => d.item === "TplAttr"),
+    () => tplGap.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  check("ENG-95412 follow-up: that attribute's ledger row is `context` (auto-accounted, counted, never a gap) — not `unaccounted` and not `decision`",
+    tplGap.coverage?.rows.find((r) => r.kind === "attribute" && r.name === "TplAttr")?.disposition === "context",
+    () => tplGap.coverage?.rows.filter((r) => r.kind === "attribute"));
+  // Regression guard: the SAME shape, but the CLIENT schema also declares the attribute (schemaTouched) — the
+  // escalation must survive. Only an untouched, purely-inherited member gets suppressed.
+  const tplGapTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",attributes:{TplAttr:{value:true}},diff:[${nameOp}]};});`;
+  const tplGapTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapBase }],
+    schemas: [{ pkg: "P", body: tplGapTouchedClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the same attribute NAME still escalates when the CLIENT schema also declares it — suppression is keyed on `fromTemplate`, not on the name alone",
+    tplGapTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplAttr"),
+    () => tplGapTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+
   // Drift: unequal severities, by design.
   check("ENG-95412: drift — a value MISMATCH on a pinned member is reported (every element of that kind would be mis-identified)",
     enumDriftIssues({ ViewItemType: { DETAIL: 99 } }).mismatches.join("") === "ViewItemType.DETAIL: engine 2, stand 99",

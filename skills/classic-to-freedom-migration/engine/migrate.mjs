@@ -1125,8 +1125,25 @@ function diagnosticOwner(p, schema) {
     const item = el?.name || el?.bindTo || `diff[${seg[1]}]`;
     return { item, ownerNote: `element '${item}'` };
   }
-  if (DIAG_OWNER_ROOTS[seg[0]] && seg[1]) return { item: seg[1], ownerNote: `${DIAG_OWNER_ROOTS[seg[0]]} '${seg[1]}'` };
+  if (DIAG_OWNER_ROOTS[seg[0]] && seg[1])
+    return { item: seg[1], ownerNote: `${DIAG_OWNER_ROOTS[seg[0]]} '${seg[1]}'`, ownerKind: DIAG_OWNER_ROOTS[seg[0]] };
   return { item: p || "(root)", ownerNote: `\`${p || "(root)"}\`` };
+}
+// Member kinds whose ledger disposition already tracks `fromTemplate` (mirrors `buildCoverage`'s SOURCES table).
+// `module` reads `eff.moduleDeps`; every other key reads the `eff.<kind>s` array of the same name.
+const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", mixin: "mixins",
+  detail: "details", module: "moduleDeps" };
+// The set of member NAMES, per ownerKind, that no CLIENT schema touched (`fromTemplate`) — built once per run
+// from `eff`, the same source `buildCoverage` reads. A name in this set already gets ledger disposition `context`
+// (ENG-95412 follow-up: `disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
+// these to `needsDecision` would silently promote it out of `context` — asking a human to resolve a value that
+// belongs to the platform's own template, not to anything the client wrote).
+function templateOwnedNames(eff) {
+  const out = {};
+  for (const [kind, listKey] of Object.entries(TEMPLATE_OWNED_LIST_KEY)) {
+    out[kind] = new Set((eff[listKey] || []).filter((m) => m.fromTemplate).map((m) => m.name ?? m.key));
+  }
+  return out;
 }
 // Already reported in full by another surface: the mapping-property reporter above, or a named gate reason.
 // The structural arm MIRRORS the gate's own filter (`computeGate`: `d.role !== "section" && isStructuralDiag(d)`).
@@ -1183,13 +1200,18 @@ function markOwnerRowWithGap(changeSet, owner, gapPath) {
   }
 }
 
-function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
+function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, templateOwned) {
   const seen = new Set();                                        // one row per owner+kind+path+LAYER
   for (const d of parseDiagnostics) {
     const p = String(d.path || "");
     if (reportedElsewhere(d, p)) continue;
     const tag = diagTag(d.pkg, d.role);
-    const { item, ownerNote } = diagnosticOwner(p, schemaByTag.get(tag));
+    const { item, ownerNote, ownerKind } = diagnosticOwner(p, schemaByTag.get(tag));
+    // A member no CLIENT schema touched is inherited base-template content — the coverage ledger already counts
+    // it `context` (excluded by design, never a gap). Escalating its parse ambiguity to `needsDecision` would rank
+    // it `decision` instead (disposition() ranks decision above context) and hand a human a platform-owned value
+    // that isn't theirs to resolve and carries no new information — the exact defect ENG-95412's reopening found.
+    if (ownerKind && templateOwned?.[ownerKind]?.has(item)) continue;
     // The layer is part of the key, not just the text: two genuinely different occurrences at the same path in
     // different packages are two gaps, and collapsing them hides the base-layer one behind the client layer.
     const key = `${item}|${d.kind}|${p}|${tag}`;
@@ -2113,7 +2135,7 @@ export function runMigration(manifest, opts = {}) {
     ...Object.entries(profileSchemas).map(([name, p]) => [diagTag(`profile:${name}`), p]),
     ...sectionSchemas.map((l) => [diagTag(l.pkg, "section"), l]),
   ]);
-  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet);
+  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet, templateOwnedNames(eff));
   // ENUM DRIFT, advisory arm. `computeGate` consumes `mismatches` (the arm that BLOCKS); this is the other severity
   // the drift guard is specified to have: a member only the STAND carries. It must NOT block — blocking would stop
   // every migration the day a platform release adds a member — but it must reach the plan, because it is the only
