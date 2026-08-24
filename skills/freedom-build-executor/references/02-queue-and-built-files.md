@@ -11,6 +11,16 @@ Keyed on `kind` + `item` (the published `id` also works; its `pageKey` half move
 the ENGINE — `--units --resolutions` publishes each answer on the queue item that asked it — never parsed by an
 agent. Absent means nobody has answered yet, which is the normal first run. **It closes no `--verify` row:** an
 answer is an input to the build, and the evidence record is still filed and still judged.
+
+The file must exist BEFORE the executor is launched. `--units` reads it at the head of every round and publishes
+`resolutionsRead` / `resolutionsMatched` — writing it after the run's `--units` invocation leaves every item with
+`resolution: null` and nothing to say why, which is what a real run did by 79 minutes.
+
+An answer that a build agent WAS handed is tracked to a build action or to a stated refusal. The builder returns
+`resolutionsApplied` (`{ id, applied, how?, why? }`, one per answer it was given, `required` on those dispatches);
+the read-only verifier returns `resolutionChecks` saying whether the page it fetched actually shows each answer's
+effect; and anything left over is returned in `unconsumedResolutions` and **blocks `complete`**. None of this writes
+`built.evidence` or closes a row — the direction is one way, toward stricter.
 They exist because a run is interrupted routinely — a usage limit, a session end, a new
 agent picking the work up in the same folder tomorrow. Nothing about "where we are" may live
 only in an agent's context.

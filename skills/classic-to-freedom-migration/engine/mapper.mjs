@@ -1796,6 +1796,13 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   }
 }
 
+// ENG-95503 — the lookup-GUID ⚠ Confirm item's two constants. `LOOKUP_VALUE_ITEM` is EXPORTED because it is half the
+// key a recorded answer matches on: a test that re-typed it would still pass while the engine raised something else,
+// which is the exact failure mode the fixed-literal rule exists to prevent. The pattern stays module-local — no
+// caller needs it, and `.test()` on a non-global regex keeps no state between calls.
+const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+export const LOOKUP_VALUE_ITEM = "lookup-record GUIDs in business-rule conditions";
+
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
 function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
@@ -1816,6 +1823,17 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
+  // ENG-95503 — THE LOOKUP-GUID QUESTION IS A REAL ⚠ CONFIRM ITEM, not a line the spec renderer appended. It used to
+  // be pushed straight into the rendered worklist, which meant it had no `needsDecision` entry, hence no evidence id,
+  // hence no `--units.preflight` row — a question an operator was asked and had nowhere to answer. A real run's
+  // answer to it landed in `resolutionsUnmatched`, which is the same as not answering. Raised here, where the rules
+  // it is about are built, it gets an id like every other kind and the answers channel can key on it.
+  // The `item` is a FIXED LITERAL, exactly as `list-columns` learned to be: `item` is half the key an answer matches
+  // on, so deriving it from the GUIDs found would give the same question a different key on every stand.
+  if (LOOKUP_GUID.test(JSON.stringify(pageBusinessRules)) || LOOKUP_GUID.test(JSON.stringify(entityBusinessRules))) {
+    needsDecision.push({ kind: "lookup-value", item: LOOKUP_VALUE_ITEM,
+      reason: "business-rule conditions compare against lookup-record GUIDs (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly" });
+  }
   return { pageBusinessRules, entityBusinessRules, needsDecision };
 
   // FOLD incomplete FILTRATIONs (dynamic / column-reference lookup filters, no static constant) into ONE concrete

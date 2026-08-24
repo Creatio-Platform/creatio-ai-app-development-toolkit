@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
-  LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+  LIST_DECISION_KINDS, LOOKUP_VALUE_ITEM } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
@@ -1885,6 +1885,84 @@ check("ENG-95503: `matchResolution` prefers the `kind`+`item` pair over the id, 
       && matchResolution(i, { kind: "other", item: "z" }) === null
       && matchResolution(null, { kind: KIND_LIST_COLUMNS, item: "cols" }) === null; },
   () => "see matchResolution precedence");
+/* ---- ENG-95503 — WHY THE SLICE NEEDS NO `list-*` ROUTING OF ITS OWN. `pageUnitsSlice` narrows `preflight` on
+   `p.pageKey === pageKey`, while the executor routes a `list-*` ANSWER to the unit that builds the grid. Those look
+   like they can disagree — a list decision riding on `main` while the `list` unit is the one that must build it —
+   and an attempted fix here was dead code: `listConfirmOnMain` is emptied in exactly the branch that publishes the
+   `list` page group, so the two cases are mutually exclusive. This pins that correlation. If it ever comes apart,
+   the `list` builder's slice file silently stops carrying its own questions, which is invisible at runtime. ---- */
+const lpSliceUnits = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+const listKeyedElsewhere = (u) => (u.preflight || [])
+  .filter((p) => LIST_DECISION_KINDS.includes(p.kind) && p.pageKey !== "list");
+check("ENG-95503: a `list-*` question rides on a key OTHER than `list` only on a run that publishes NO `list` unit — so the slice narrowing cannot strand a question away from the unit that must build it",
+  () => { const withheld = lpSliceUnits;                                  // empty section: no `list` key
+    const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE }); // a real section: `list` published
+    const withheldHasListUnit = (withheld.pages || []).some((p) => p.key === "list");
+    const publishedHasListUnit = (published.pages || []).some((p) => p.key === "list");
+    // The invariant, both directions: items ride elsewhere ⇒ no list unit; a list unit exists ⇒ nothing rides elsewhere.
+    return listKeyedElsewhere(withheld).length > 0 && !withheldHasListUnit
+      && publishedHasListUnit && listKeyedElsewhere(published).length === 0
+      && pageUnitsSlice(withheld, "list") === null; },
+  () => ({ withheldElsewhere: listKeyedElsewhere(lpSliceUnits).map((p) => p.pageKey + " " + p.kind),
+    withheldListSlice: pageUnitsSlice(lpSliceUnits, "list"),
+    publishedElsewhere: listKeyedElsewhere(pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE })).map((p) => p.pageKey) }));
+check("ENG-95503: when the `list` unit IS published its slice carries its own ⚠ Confirm questions, answers included — the narrowing is correct for the case that actually has a list builder to read it",
+  () => { const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE });
+    const slice = pageUnitsSlice(published, "list");
+    return !!slice && (slice.preflight || []).length > 0
+      && (slice.preflight || []).every((p) => p.pageKey === "list"); },
+  () => (pageUnitsSlice(pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE }), "list")?.preflight || [])
+    .map((p) => ({ id: p.id, kind: p.kind })));
+/* ---- ENG-95503 — "WAS THERE AN ANSWERS FILE AT ALL?". A real run wrote `resolutions.json` 79 minutes AFTER its
+   only `--units` invocation. Every published item carried `resolution: null` and `resolutionsUnmatched` was empty —
+   which is exactly what a run where the operator answered nothing looks like. The two are now distinguishable. ---- */
+check("ENG-95503: `--units` publishes whether the answers file was READ, so a run whose answers arrived too late is not indistinguishable from a run with no answers — `resolutionsUnmatched` cannot see this case, because an answer nobody read matches nothing and misses nothing",
+  () => { const withFile = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+    const without = pageUnits(lpEmptySection, lpOpts);
+    return withFile.resolutionsRead === true && without.resolutionsRead === false
+      && without.resolutionsUnmatched.length === 0; },
+  () => ({ withFile: pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsRead,
+    without: pageUnits(lpEmptySection, lpOpts).resolutionsRead }));
+check("ENG-95503: `resolutionsMatched` counts the questions that actually got an answer — a file that was read but matched nothing reports 0, which is the shape a mistyped key produces",
+  () => { const matched = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsMatched;
+    const readButMissed = pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [
+      { kind: KIND_LIST_COLUMNS, item: "a key that matches nothing here", answer: "x" }] } });
+    return matched >= 1 && readButMissed.resolutionsRead === true && readButMissed.resolutionsMatched === 0
+      && readButMissed.resolutionsUnmatched.length === 1
+      && matched === pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.filter((p) => p.resolution).length; },
+  () => ({ matched: pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsMatched }));
+/* ---- ENG-95503 — THE `lookup-value` QUESTION NOW HAS AN ID. It used to be pushed straight into the RENDERED
+   worklist by `renderConfirmWorklist`, bypassing `needsDecision` entirely — so it had no evidence id, no
+   `--units.preflight` row, and no key an answer could bind to. On the run this ticket was verified against, the
+   operator's answer to it went into `resolutionsUnmatched`, which is the same as not answering. ---- */
+// Its own fixture rather than the `guidCs` the C2 test builds far below: that one is declared later in the file and
+// reading it here would be a temporal-dead-zone throw, not a test failure.
+const guidRuleSchema = (attr, guid) => ({ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"${attr}"},rightExpression:{type:0,value:"${guid}",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` });
+const resGuidCs = runMigration({ entity: "X", schemas: [guidRuleSchema("Stage", "c28f7c8f-1234-4abc-9def-000000000001")] }, { baseDir: FIX });
+const lookupValueOf = (cs) => (cs.needsDecision || []).filter((n) => n.kind === "lookup-value");
+check("ENG-95503: a business rule comparing against a lookup-record GUID raises a real `lookup-value` DECISION, not a line the spec renderer appends — a question with no `needsDecision` entry has no id, and an answer to it can only ever land in `resolutionsUnmatched`",
+  () => { const raised = lookupValueOf(resGuidCs.changeSet || {});
+    return raised.length === 1 && raised[0].item === LOOKUP_VALUE_ITEM && /resolve each GUID/.test(raised[0].reason); },
+  () => (resGuidCs.changeSet?.needsDecision || []).map((n) => ({ kind: n.kind, item: n.item })));
+check("ENG-95503: the `lookup-value` item is a FIXED literal — like `list-columns` learned to be, because `item` is half the key an answer matches on and a key derived from the GUIDs found would differ on every stand",
+  () => { const other = runMigration({ entity: "X", schemas: [guidRuleSchema("Source", "ffffffff-9999-4aaa-8bbb-000000000009")] }, { baseDir: FIX });
+    const a = lookupValueOf(resGuidCs.changeSet || {})[0], b = lookupValueOf(other.changeSet || {})[0];
+    return !!a && !!b && a.item === b.item && a.item === LOOKUP_VALUE_ITEM; },
+  () => ({ first: lookupValueOf(resGuidCs.changeSet || {})[0]?.item }));
+check("ENG-95503: a page whose rules compare no GUID raises NO `lookup-value` question — the new id is raised by the condition it is about, never by every page that happens to have a rule",
+  () => lookupValueOf(lpEmptySection.changeSet || {}).length === 0
+    && lookupValueOf(lpRun.changeSet || {}).length === 0,
+  () => ({ empty: lookupValueOf(lpEmptySection.changeSet || {}), run: lookupValueOf(lpRun.changeSet || {}) }));
+check("ENG-95503: the `lookup-value` question is PUBLISHED in `--units.preflight` and an answer keyed on it matches — the end of the round trip the reopen found broken, asserted through the real key form an operator writes",
+  () => { const u = pageUnits(resGuidCs, checklistOpts({}));
+    const asked = u.preflight.find((p) => p.kind === "lookup-value");
+    if (!asked) return false;
+    const answered = pageUnits(resGuidCs, { ...checklistOpts({}), resolutions: { resolutions: [
+      { kind: "lookup-value", item: LOOKUP_VALUE_ITEM, answer: "InProgress = 10938891-…, OnDistribution = 36401ec5-…" }] } });
+    const hit = answered.preflight.find((p) => p.kind === "lookup-value");
+    return hit?.resolution?.answer?.startsWith("InProgress")
+      && answered.resolutionsUnmatched.length === 0 && answered.resolutionsConflicts.length === 0; },
+  () => pageUnits(resGuidCs, checklistOpts({})).preflight.map((p) => ({ id: p.id, kind: p.kind, item: p.item })));
 check("ENG-95218: under `pages-only-no-menu` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
   () => { const spec = renderDesignSpec(lpRun, lpNoMenuOpts);
     const at = spec.indexOf("### List page");

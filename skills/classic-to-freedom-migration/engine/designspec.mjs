@@ -669,11 +669,10 @@ function renderConfirmWorklist(cs) {
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
   const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
-  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
-  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
-  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
-    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
+  // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
+  // now raised by `mapRules` as a `lookup-value` `needsDecision` entry (ENG-95503) and arrives through `nd` above
+  // like every other kind, so it has an evidence id, a `--units.preflight` row, and a key an answer can bind to.
+  // Do not re-add a render-time push: a question the renderer invents is a question with nowhere to record an answer.
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
 }
@@ -2657,6 +2656,13 @@ export function pageUnits(result, opts = {}) {
     resolutionsConflicts: resolutionConflicts(resIndex, preflight),
     // Answers matching no question this plan asks — published so the CLI reports them rather than dropping them.
     resolutionsUnmatched: unmatchedResolutions(resIndex, preflight),
+    // ENG-95503 — WAS THERE AN ANSWERS FILE AT ALL, and how much of it landed. `resolutionsUnmatched` reports answers
+    // that missed a question; these two report the case it cannot see — a run where NO answers were read, which is
+    // indistinguishable in every other field from a run where the operator answered nothing. A real run wrote its
+    // `resolutions.json` 79 minutes AFTER the only `--units` invocation, so every item published `resolution: null`
+    // and nothing said why. `false` here is that fact, machine-readable, on the artifact the executor transcribes.
+    resolutionsRead: opts.resolutions != null,
+    resolutionsMatched: preflight.filter((p) => p.resolution).length,
     evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
     // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
     // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
@@ -2690,6 +2696,12 @@ const pageReachKeys = (units, pageKey) =>
 // An unknown key returns `null`: a caller that asked for one page must never be handed the whole queue.
 // `parent` is copied only when `parents` carries the key, because an absent edge and a `null` edge are different
 // answers: `null` is a root page, absent is a page whose place in the tree is unknown.
+// ENG-95503 — WHY `preflight` IS NARROWED ON `pageKey` ALONE, and why routing `list-*` items into the `list` slice
+// the way the executor routes them into the build PROMPT would be dead code. The two conditions are mutually
+// exclusive by construction: `listConfirmOnMain` is emptied in exactly the branch that publishes the `list` page
+// group, so a list decision rides on `main` ONLY on a run that has no `list` key — and such a run has no `list`
+// slice to route anything into. A widening here would never fire. An engine test pins that correlation, so if the
+// two ever come apart this comment stops being true out loud instead of quietly.
 export function pageUnitsSlice(units, pageKey) {
   const page = (units.pages || []).find((p) => p.key === pageKey);
   if (!page) return null;

@@ -145,12 +145,16 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
+  // ENG-95503 — the CONSUMPTION half of the answers channel: what the builder owes, what it did not build, and
+  // where its claim disagrees with the verifier's read of the page.
+  "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
+  "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
-const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
+const BLOCK_CONSTS = ["GUIDELINES_RETURN", "RESOLUTIONS_RETURN"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -598,7 +602,7 @@ check("ENG-95471 review fix: the schema is selected by whether the unit OWES the
   () => ({ page: wf.buildSchemaKind(gUnit, gIds), child: wf.buildSchemaKind({ key: "child:U1", kind: "page" }, gIds) }));
 check("ENG-95471 review fix: every schema label maps to a declared schema, and only the `page` one requires `guidelines`",
   /const BUILD_SCHEMAS = \{ app: BUILD_SCHEMA_APP, page: BUILD_SCHEMA_PAGE, 'page-no-guidelines': BUILD_SCHEMA_PAGE_NO_GUIDELINES, reach: BUILD_SCHEMA_REACH \}/.test(wfSrc)
-    && /schema: BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\]/.test(wfSrc)
+    && /schema: buildSchemaWithResolutions\(BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\], routed\.length\)/.test(wfSrc)
     && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'selfCheck'\]/.test(wfSrc));
 // PR review round-4 (RC-16): the in-context gate prompt (`inContextGateBlock`) fires for EVERY `unit.kind === 'page'`
 // regardless of schema kind, so a `page-no-guidelines` unit that could omit `selfCheck` would reopen the "closes on
@@ -949,7 +953,11 @@ check("plan version: EVERY file-backed manifest input contributes its CONTENT, n
     && /\(k === "file" \|\| k === "body"\)/.test(mgSrc));
 check("findings: a reopened unit gets ONE repair attempt — the constant key set made `auto` mode rebuild a machine-green page forever, and it is exempt from parking by design",
   /const findingsPending = new Set\(FINDING_KEYS\)/.test(wfSrc)
-    && /isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, findingsPending/.test(wfSrc)
+    // ENG-95503 widened the openness argument from `findingsPending` alone to the UNION of the two re-open channels.
+    // Both halves are pinned: the union must still CONTAIN `findingsPending` (a rename that dropped it would leave a
+    // reported defect unscheduled and this check green), and the per-invocation consumption must still happen.
+    && /isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, reopenKeys\(\)/.test(wfSrc)
+    && /const reopenKeys = \(\) => new Set\(\[\.\.\.findingsPending, \.\.\.resolutionsPending\]\)/.test(wfSrc)
     && /findingsPending\.delete\(unit\.key\)/.test(wfSrc));
 check("findings: a key naming no published unit REFUSES the run — nothing schedules it, so the run would close green with the reported defect untouched",
   /stopped: 'unknown-finding-key'/.test(wfSrc) && /unknownCheckpointKeys\(\[\.\.\.FINDING_KEYS\]/.test(wfSrc));
@@ -1285,6 +1293,142 @@ check("ENG-95503 AC4 (fallback): the same answer is NOT also handed to `main` wh
   () => wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])).length === 0
     && wf.resolutionsBlockText(wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])), ac4Fence) === "",
   () => wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])).map((x) => x.id));
+/* ---- ENG-95503 (reopened, 3rd verification) — THE CONSUMPTION HALF. The channel delivered: `resolutions.json` was
+   written, typed, and rendered verbatim into the build prompt. The answer still produced NOTHING. A fully specified
+   `entity-filter` resolution sat in the file, the builder moved on, and `built.json` carried zero occurrences of any
+   filter — the verify row stayed ❌ MISSING across two repair rounds and was closed as an operator-accepted
+   follow-up. Nothing in the run could say "this answer was handed over and went nowhere", because nothing asked.
+   These assert the three things that now do ask: the builder must ACCOUNT for every answer it was handed, the
+   verifier's read of the page is checked against that account, and an answer that went nowhere is never silent. ---- */
+const ACC_ID_A = "list#confirm:list-columns:fallback list column set";
+const ACC_ID_B = "main#confirm:entity-filter:(1 lookup)";
+const accRouted = [
+  { id: ACC_ID_A, pageKey: "list", kind: KIND_LIST_COLS, item: "fallback list column set", resolution: { answer: AC4_COLUMNS } },
+  { id: ACC_ID_B, pageKey: "main", kind: "entity-filter", item: "(1 lookup)", resolution: { answer: "restrict to Status IN {InProgress, OnDistribution}" } },
+];
+const accOk = { resolutionsApplied: [
+  { id: ACC_ID_A, applied: true, how: "six PDS columns in the DataTable" },
+  { id: ACC_ID_B, applied: true, how: "lookupListConfig filter on the InternalRequest lookup" }] };
+check("ENG-95503 accounting: a unit handed NO answers is held to nothing — the obligation exists only where there is something to account for, so the common page pays no cost for it",
+  () => wf.resolutionAccountingMiss([], { }) === null && wf.resolutionAccountingMiss(undefined, undefined) === null,
+  () => "empty routed set must return null");
+check("ENG-95503 accounting: a builder handed answers that returns NO `resolutionsApplied` at all is a MISS — this is the exact silence the reopened run hit, where a specified answer reached the prompt and nothing recorded what became of it",
+  () => { const miss = wf.resolutionAccountingMiss(accRouted, { claimedBuilt: ["crt.Input"] });
+    return typeof miss === "string" && /no `resolutionsApplied` returned/.test(miss) && /2 /.test(miss); },
+  () => wf.resolutionAccountingMiss(accRouted, { claimedBuilt: [] }));
+check("ENG-95503 accounting: a report that answers SOME of the questions names the ones it left out — a partial account is the shape that would otherwise read as a complete one",
+  () => { const miss = wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [{ id: ACC_ID_A, applied: true, how: "columns" }] });
+    return typeof miss === "string" && miss.includes(ACC_ID_B) && !miss.includes(ACC_ID_A); },
+  () => wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [{ id: ACC_ID_A, applied: true, how: "columns" }] }));
+check("ENG-95503 accounting: `applied: false` is a VALID answer when it carries `why`, and a MISS when it does not — declining to build an answer is a decision the run can report, declining silently is not",
+  () => { const withWhy = wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [
+      { id: ACC_ID_A, applied: true, how: "columns" }, { id: ACC_ID_B, applied: false, why: "the object has no such lookup" }] });
+    const without = wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [
+      { id: ACC_ID_A, applied: true, how: "columns" }, { id: ACC_ID_B, applied: false }] });
+    return withWhy === null && typeof without === "string" && /no `why`/.test(without) && without.includes(ACC_ID_B); },
+  () => ({ withWhy: wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [{ id: ACC_ID_A, applied: true, how: "c" }, { id: ACC_ID_B, applied: false, why: "no lookup" }] }) }));
+check("ENG-95503 accounting: `applied: true` with no `how` is a MISS — a claim of \"built\" that names nothing built is the same non-report as saying nothing, one field along",
+  () => { const miss = wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [
+      { id: ACC_ID_A, applied: true, how: "columns" }, { id: ACC_ID_B, applied: true }] });
+    return typeof miss === "string" && /no `how`/.test(miss) && miss.includes(ACC_ID_B); },
+  () => wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [{ id: ACC_ID_A, applied: true, how: "c" }, { id: ACC_ID_B, applied: true }] }));
+check("ENG-95503 accounting: a COMPLETE, well-formed account passes — the gate must have a green path, or it is a gate that fails every build rather than one that catches a dropped answer",
+  () => wf.resolutionAccountingMiss(accRouted, accOk) === null,
+  () => wf.resolutionAccountingMiss(accRouted, accOk));
+check("ENG-95503 unconsumed: an answer the builder declined is recorded WITH the operator's text and the builder's reason — the report has to name the decision that went nowhere, not just an id a reader must go look up",
+  () => { const gone = wf.unconsumedResolutions(accRouted, { resolutionsApplied: [
+      { id: ACC_ID_A, applied: true, how: "columns" }, { id: ACC_ID_B, applied: false, why: "no such lookup on this object" }] }, "main");
+    return gone.length === 1 && gone[0].id === ACC_ID_B && gone[0].unit === "main"
+      && gone[0].kind === "entity-filter" && /InProgress/.test(gone[0].answer) && /no such lookup/.test(gone[0].why); },
+  () => wf.unconsumedResolutions(accRouted, { resolutionsApplied: [{ id: ACC_ID_B, applied: false, why: "x" }] }, "main"));
+check("ENG-95503 unconsumed: when the report is UNUSABLE, EVERY routed answer counts as unconsumed — an answer nobody accounted for is exactly as lost as one that was declined, and treating the two differently would let the worse case report better",
+  () => { const gone = wf.unconsumedResolutions(accRouted, null, "main");
+    return gone.length === 2 && gone.every((g) => /reported nothing/.test(g.why)); },
+  () => wf.unconsumedResolutions(accRouted, null, "main"));
+check("ENG-95503 unconsumed: a fully applied account leaves NOTHING unconsumed — the run can reach `complete`, which it must be able to do or the channel blocks every migration that uses it",
+  () => wf.unconsumedResolutions(accRouted, accOk, "main").length === 0,
+  () => wf.unconsumedResolutions(accRouted, accOk, "main"));
+/* THE INDEPENDENT CHECK. `applied: true` is the builder's own word about its own work — the same class of claim as
+   `claimedBuilt`, and this run already knows not to trust that one. The read-only verifier fetches the page and says
+   whether it shows the answer's effect; a claim it contradicts is the Applicant `entity-filter` case exactly. */
+const accClaims = [{ unit: "main", resolutionClaims: wf.resolutionClaimRows(accRouted, accOk) }];
+check("ENG-95503 claim rows: every routed answer becomes a row pairing the question with what the builder says it did — the verifier is handed the pair, not an id it would have to resolve against a file it does not read",
+  () => { const rows = wf.resolutionClaimRows(accRouted, accOk);
+    return rows.length === 2 && rows[0].id === ACC_ID_A && rows[0].applied === true
+      && /six PDS columns/.test(rows[0].how) && /InProgress/.test(rows[1].answer); },
+  () => wf.resolutionClaimRows(accRouted, accOk));
+check("ENG-95503 claim rows: an answer with no row in the report reads as NOT applied — absence is never taken for a claim of success, which is the direction this whole ticket keeps having to fix",
+  () => { const rows = wf.resolutionClaimRows(accRouted, { resolutionsApplied: [] });
+    return rows.length === 2 && rows.every((r) => r.applied === false && r.how === null); },
+  () => wf.resolutionClaimRows(accRouted, { resolutionsApplied: [] }));
+check("ENG-95503 contradiction: a builder claiming APPLIED on a page the verifier reads as NOT showing it is recorded — this is the reopened run's `entity-filter`, where the answer was specified, claimed, and absent from `built.json`",
+  () => { const bad = wf.resolutionContradictions(accClaims, [
+      { unit: "main", id: ACC_ID_A, shows: true },
+      { unit: "main", id: ACC_ID_B, shows: false, found: "no lookupListConfig anywhere in viewConfig" }]);
+    return bad.length === 1 && bad[0].id === ACC_ID_B && /lookupListConfig/.test(bad[0].found); },
+  () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_B, shows: false, found: "absent" }]));
+check("ENG-95503 contradiction: a verifier that confirms the page shows it, and a verifier that reported NO row for it, both produce no contradiction — an unchecked answer is not a refuted one, and a check the verifier could not run must not read as a defect",
+  () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_A, shows: true }, { unit: "main", id: ACC_ID_B, shows: true }]).length === 0
+    && wf.resolutionContradictions(accClaims, []).length === 0
+    && wf.resolutionContradictions(accClaims, undefined).length === 0,
+  () => "confirmed and unchecked must both be silent");
+check("ENG-95503 contradiction: a check row for ANOTHER unit's id does not refute this unit's claim — the pair is matched on unit AND id, because one confirm id can be routed to a unit that is not its `pageKey`",
+  () => wf.resolutionContradictions(accClaims, [{ unit: "list", id: ACC_ID_B, shows: false, found: "not here" }]).length === 0,
+  () => wf.resolutionContradictions(accClaims, [{ unit: "list", id: ACC_ID_B, shows: false }]));
+check("ENG-95503 contradiction: a builder that already reported NOT applied is not ALSO contradicted — it is reported unconsumed once, and double-reporting one answer would hold a run short twice for a single fact",
+  () => { const declined = [{ unit: "main", resolutionClaims: wf.resolutionClaimRows(accRouted, { resolutionsApplied: [
+      { id: ACC_ID_B, applied: false, why: "no lookup" }] }) }];
+    return wf.resolutionContradictions(declined, [{ unit: "main", id: ACC_ID_B, shows: false, found: "absent" }]).length === 0; },
+  () => "an already-declined answer is not a contradiction");
+check("ENG-95503 verifier block: the answers a unit was built from are rendered for the verifier with the QUESTION fenced and the answer quoted — and nothing is rendered for a unit that was handed none",
+  () => { const text = wf.resolutionClaimsLine(wf.resolutionClaimRows(accRouted, accOk), ac4Fence);
+    return text.includes(ACC_ID_B) && /check each against the page/.test(text)
+      && wf.resolutionClaimsLine([], ac4Fence) === "" && wf.resolutionClaimsLine(undefined, ac4Fence) === ""; },
+  () => wf.resolutionClaimsLine(wf.resolutionClaimRows(accRouted, accOk), ac4Fence).slice(0, 240));
+check("ENG-95503 schema: `resolutionsApplied` is REQUIRED of a unit handed answers and NOT of one handed none — the obligation is added per dispatch, and the shared schema object is never mutated by the unit that triggered it",
+  () => { const base = { type: "object", required: ["unit", "claimedBuilt"], properties: {} };
+    const owed = wf.buildSchemaWithResolutions(base, 2);
+    const none = wf.buildSchemaWithResolutions(base, 0);
+    return owed.required.includes("resolutionsApplied") && owed !== base
+      && none === base && !base.required.includes("resolutionsApplied"); },
+  () => ({ owed: wf.buildSchemaWithResolutions({ type: "object", required: ["unit"], properties: {} }, 1).required }));
+check("ENG-95503 prompt: the rendered answers block CARRIES the return obligation — the schema makes the field required, and this is what tells the agent what to put in it",
+  () => { const text = wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
+    return text.includes("resolutionsApplied") && /applied: false/.test(text) && /UNCONSUMED/.test(text)
+      && wf.RESOLUTIONS_RETURN.includes("never composed"); },
+  () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(-500));
+
+/* The wiring that connects the executed decisions above to the run. Pinned on the shipped source because each site
+   reads run state the harness cannot supply — but every pin names a fact that has a failure mode, not a spelling. */
+check("ENG-95503 wiring: the ANSWERS ROUTED TO A UNIT are computed at dispatch from the same call the prompt uses, and drive BOTH the schema obligation and the accounting — a second, differently-derived list would let the two disagree about which questions this build was asked",
+  /const routed = resolutionsForUnit\(state\.preflightItems, unit\.key, new Set\(state\.unitKeys \|\| \[\]\)\)/.test(wfSrc)
+    && /schema: buildSchemaWithResolutions\(BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\], routed\.length\)/.test(wfSrc)
+    && /reportResolutionAccounting\(unit, routed, res\)/.test(wfSrc));
+check("ENG-95503 wiring: a builder that returned NOTHING still has its answers accounted for — that path used to record an absent claim and move on, and an unanswered dispatch loses answers exactly like a silent one does",
+  /log\(`build agent returned nothing for \$\{unit\.key\} — it stays open`\)[\s\S]{0,400}?reportResolutionAccounting\(unit, routed, null\)/.test(wfSrc));
+check("ENG-95503 wiring: an unconsumed answer keeps the run from reporting COMPLETE — the gate can be green and the page genuinely built while an answer the operator gave went nowhere, which is the whole failure this ticket is about",
+  /const complete = state\.verify\?\.complete === true && parked\.length === 0 && unconsumed\.length === 0/.test(wfSrc)
+    && /complete: state\.verify\?\.complete === true && !parked\.length && !unconsumed\.length/.test(wfSrc));
+check("ENG-95503 wiring: `unconsumedResolutions` is on EVERY return, beside `resolutionsUnmatched` — the two are the same silence from opposite ends (never reached a builder / reached one and died there), and a caller reads one field for each",
+  /unconsumedResolutions: unconsumed,/.test(wfSrc)
+    && /resolutionsUnmatched: state\?\.resolutionsUnmatched \|\| \[\],/.test(wfSrc));
+check("ENG-95503 wiring: the per-unit report REPLACES that unit's entries rather than appending — it runs every round the unit builds, and an entry that survived its own repair would hold the run incomplete on a question that is now answered",
+  /function reportResolutionAccounting\(unit, routed, res\)[\s\S]{0,300}?unconsumed = unconsumed\.filter\(\(u\) => u\.unit !== unit\.key\)/.test(wfSrc));
+check("ENG-95503 wiring: an unaccounted answer buys its unit ONE repair round and no more — the same bound the findings channel has, and without it a builder that keeps refusing the contract would loop forever in `auto` mode",
+  /if \(resolutionsReopened\.has\(unit\.key\)\) return/.test(wfSrc)
+    && /resolutionsReopened\.add\(unit\.key\)[\s\S]{0,80}resolutionsPending\.add\(unit\.key\)/.test(wfSrc)
+    && /if \(resolutionsPending\.delete\(unit\.key\)\)/.test(wfSrc));
+check("ENG-95503 wiring: the two re-open channels stay SEPARATE at the source — `findings` is the operator re-opening a unit the gate called complete, and overloading it as the answers channel is the workaround this ticket exists to end",
+  /const resolutionsPending = new Set\(\)/.test(wfSrc)
+    && /const findingsPending = new Set\(FINDING_KEYS\)/.test(wfSrc)
+    && !/findingsPending\.add\(/.test(wfSrc));
+check("ENG-95503 wiring: the VERIFIER is asked for `resolutionChecks` and the round tail compares them against the claims — a builder's `applied: true` is its own word until the agent that did not build the page looks at it",
+  /resolutionChecks: \{[\s\S]{0,400}?required: \['unit', 'id', 'shows'\]/.test(wfSrc)
+    && /resolutionContradictions\(claims, lastVerifier\?\.resolutionChecks\)/.test(wfSrc)
+    && /kind: 'resolution-not-applied'/.test(wfSrc));
+check("ENG-95503 wiring: the verifier is told an answer closes NO row and files NO evidence — the invariant this ticket must not break in the other direction, stated where the agent that files records reads it",
+  /You file NO evidence record for these and you close NO row with them/.test(wfSrc));
+
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
    deciding WHICH batches receive it is executable logic — and as an inline expression nothing referenced it, so a

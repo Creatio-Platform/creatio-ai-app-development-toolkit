@@ -316,6 +316,27 @@ questions a human already settled, never a precondition for the rest.
 this plan asks: a mistyped `item`, or a regenerated manifest shifting an item's text) and `resolutionsConflicts` (one
 question answered by both an `id` entry and a `kind`+`item` entry — the pair is applied, the `id` one is discarded).
 Both name the `resolutions.json` path, and both are re-reported when a later Reconcile replaces the run state.
+`--units` also publishes `resolutionsRead` and `resolutionsMatched`, which report the case those two cannot see: a
+run where NO answers file existed at the moment `--units` ran. An answer nobody read matches nothing and misses
+nothing, so without these it is indistinguishable from a plan whose questions the operator simply left open — the
+shape a real run produced by writing `resolutions.json` 79 minutes after its only `--units` invocation.
+
+**And an answer that REACHED a builder must produce something, or say why not.** Delivery is not consumption: on a
+real run a fully specified `entity-filter` answer sat in `resolutions.json`, was rendered verbatim into the build
+prompt, and the page came back with no filter on it anywhere — nothing in the run could say the answer had gone
+nowhere, because nothing asked. So:
+- a build agent handed answers MUST return `resolutionsApplied` — one `{ id, applied, how?, why? }` per answer it was
+  given. The field is `required` on exactly those dispatches, so an omission is a schema failure the agent retries,
+  not a silence discovered a phase later. `applied: false` with a `why` is a valid answer; leaving a row out is not.
+- the read-only VERIFIER returns `resolutionChecks` — whether the page it just fetched actually shows what each
+  answer asked for. A builder's `applied: true` that the verifier contradicts is recorded as a `discrepancy` and the
+  answer counts as unconsumed: `applied: true` is the builder's own word about its own work, the same class of claim
+  as `claimedBuilt`.
+- an unconsumed answer is returned in `unconsumedResolutions`, buys its unit ONE repair round, and **blocks
+  `complete`**. The gate can be green and the page genuinely built while an answer the operator gave went nowhere;
+  a run that called itself finished holding one would be exactly the silence this channel exists to end.
+This never softens the invariant above, only tightens it: the verifier files NO evidence record for an answer and
+closes NO row with one. An answer is still an input to a build, never proof that one happened.
 
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand

@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
 MIGRATION_DOCS = ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md"
+EXECUTOR_SKILL = ROOT / "skills/freedom-build-executor/SKILL.md"
+EXECUTOR_FILES_DOC = ROOT / "skills/freedom-build-executor/references/02-queue-and-built-files.md"
 
 
 def read_text(path):
@@ -38,7 +40,7 @@ def missing_markers(text, markers):
 class ResolutionsChannelDocTests(unittest.TestCase):
     def test_pinned_docs_are_present_and_non_empty(self):
         # The negative pin below passes vacuously on empty text, so it rests on this guard.
-        for path in (MIGRATION_SKILL, MIGRATION_DOCS):
+        for path in (MIGRATION_SKILL, MIGRATION_DOCS, EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
             self.assertTrue(read_text(path).strip(), f"{path} is empty")
 
     def test_answer_recording_step_names_the_machine_channel(self):
@@ -97,6 +99,59 @@ class ResolutionsChannelDocTests(unittest.TestCase):
             content = flat(read_text(path))
             self.assertIn("--units.preflight", content, path)
             self.assertIn("`pageKey` half moves between runs", content, path)
+
+
+class ConsumptionContractDocTests(unittest.TestCase):
+    """The CONSUMPTION half (reopened 3rd verification).
+
+    Delivery worked and the answer still produced nothing: a specified `entity-filter`
+    resolution was rendered verbatim into a build prompt and the page came back with no filter
+    on it. The contract that closes it is agent-facing — what a builder must return, what the
+    verifier must check, and that an unconsumed answer blocks `complete` — so it lives in prose
+    the agents read and is invisible to every engine test.
+    """
+
+    def test_builder_owes_an_account_of_every_answer(self):
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "MUST return `resolutionsApplied`",
+                "`applied: false` with a `why` is a valid answer",
+                "leaving a row out is not",
+            ],
+        )
+        self.assertFalse(missing, f"the builder's obligation must be stated; missing {missing}")
+
+    def test_the_claim_is_checked_against_the_page(self):
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "verifier",
+                "returns `resolutionChecks`",
+                "the same class of claim as",
+            ],
+        )
+        self.assertFalse(missing, f"the independent check must be stated; missing {missing}")
+
+    def test_an_unconsumed_answer_blocks_complete_and_never_closes_a_row(self):
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            content = flat(read_text(path))
+            self.assertIn("`unconsumedResolutions`", content, path)
+            self.assertIn("blocks", content, path)
+        # The invariant must not be broken in the other direction while closing this gap: the
+        # whole fix is monotone, and a doc that stopped saying so is how it stops being true.
+        self.assertIn(
+            "closes NO row with one",
+            flat(read_text(EXECUTOR_SKILL)),
+        )
+
+    def test_the_file_must_exist_before_the_run_reads_it(self):
+        # The 79-minute gap: written after the only `--units` invocation, so nothing consumed it.
+        content = flat(read_text(EXECUTOR_FILES_DOC))
+        self.assertIn("must exist BEFORE the executor is launched", content)
+        self.assertIn("`resolutionsRead`", content)
 
 
 if __name__ == "__main__":
