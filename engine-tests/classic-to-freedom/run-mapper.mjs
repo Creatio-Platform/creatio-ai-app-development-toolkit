@@ -9331,7 +9331,7 @@ try {
   const closed = qgRun({ [qgId]: { referencePage: "AccountPage", components: ["crt.Input"] } },
     { [qgId]: { convincing: true, why: "prop-level diff against AccountPage" } });
   check("ENG-95471: a complete record PLUS a judge verdict is the only thing that closes the quality-gates row — no false positive on the honest path",
-    () => /✅/.test(qgRow(closed)) && !/❌|⚠/.test(qgRow(closed)),
+    () => /✅/.test(qgRow(closed)) && !/[❌⚠]/.test(qgRow(closed)),
     () => qgRow(closed));
 
   // ENG-95471 reopen — a page diffed and found ALREADY compliant (0 edits) could not file ANY record: `components`
@@ -9340,7 +9340,7 @@ try {
   const noDiffClosed = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [], noChangesReason: "diffed QuickFilter, ButtonToggleGroup and the four command buttons against ContactsListPage — identical props, no drift" } },
     { [qgId]: { convincing: true, why: "reason names the specific components compared and they genuinely match the reference" } });
   check("ENG-95471 reopen: `components: []` WITH a non-blank `noChangesReason` closes the row — a page reviewed and found already compliant is a legitimate pass, not a permanent MISSING",
-    () => /✅/.test(qgRow(noDiffClosed)) && !/❌|⚠/.test(qgRow(noDiffClosed)),
+    () => /✅/.test(qgRow(noDiffClosed)) && !/[❌⚠]/.test(qgRow(noDiffClosed)),
     () => qgRow(noDiffClosed));
 
   const noDiffNoReason = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [] } }, { [qgId]: { convincing: true, why: "looks fine" } });
