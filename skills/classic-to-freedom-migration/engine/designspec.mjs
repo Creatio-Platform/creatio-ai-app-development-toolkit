@@ -3007,6 +3007,15 @@ const onstandNames = (v) => {
   const names = Array.isArray(v?.names) ? v.names.filter((x) => typeof x === "string" && x.trim()) : [];
   return names.length ? ` (${names.map((x) => esc(x)).join(", ")})` : "";
 };
+// ENG-95470 (defect 4 review) — WHERE THE COUNT CAME FROM, as structure rather than prose. Verify may carry a
+// build unit's OWN claimed count forward into this field on a round where its own independent on-stand check is
+// skipped or missed — necessary so the row does not stay stuck at `reachability: {}` forever, but it means the
+// count in `n` is sometimes a self-report rather than something Verify itself confirmed. Absent `source` on an
+// older payload defaults to `"verified"` (this field did not exist before this ticket, and every payload written
+// before it came only from Verify's own count).
+function onstandSource(v) {
+  return v && typeof v === "object" && v.source === "carried-forward" ? "carried-forward" : "verified";
+}
 // The count-gated form of an `onstand` row. Its own fn so `resolveOnstandVk` stays under Sonar CC 15 and the boolean
 // path below is provably untouched for every row that declares no `expectCount`.
 // A bare `true` is NOT acceptance here, deliberately: it is exactly the answer that hid the second binding, so it
@@ -3021,7 +3030,12 @@ function resolveOnstandCountVk(vk, v) {
       ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
       : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
   }
-  if (n === want) return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  if (n === want) {
+    if (onstandSource(v) === "carried-forward") {
+      return ["⚠ verify", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)} — but this count is CARRIED FORWARD from the build unit's own claim, not independently confirmed by Verify this round; re-run the on-stand check to close this row for real`, "unverified"];
+    }
+    return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  }
   if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["❌ MISSING", `bound to ${n} workplaces${onstandNames(v)}, expected exactly ${want} — a registration only ADDS, so the previous binding is still there; unbind all but the intended one (this row REPORTS it, the build does not undo it on its own)`, "missing"];
 }

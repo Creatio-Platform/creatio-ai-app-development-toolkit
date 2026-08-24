@@ -7770,6 +7770,22 @@ check("ENG-95850 (B2): a malformed count (not an integer, negative, or a bare ar
     && allEq(marksFor(rcCount([1]).markdown, SECTION_RE), "⚠ verify"));
 check("ENG-95850 (B2): `count` is accepted as a synonym of `workplaces` — one shape change in the reader must not silently reopen every row",
   allEq(marksFor(rcCount({ count: 1 }).markdown, SECTION_RE), "✅ Done"));
+// ENG-95470 (defect 4 review) — a carried-forward count (Verify substituting the build unit's OWN claim because
+// its own independent on-stand check was skipped or missed this round) must NOT close the row the same way an
+// independently-confirmed count does: the whole point of the gate is that a self-report and a confirmation are
+// not the same evidence, so the structured `source` marker has to actually change the verdict, not just ride
+// along unread.
+const rcCarried = rcCount({ workplaces: 1, names: ["Recruiting"], source: "carried-forward" });
+check("ENG-95470 (defect 4 review): a matching count with `source: \"carried-forward\"` stays ⚠ verify, not ✅ Done — Verify substituted the builder's own claim and nobody independently confirmed it this round",
+  allEq(marksFor(rcCarried.markdown, SECTION_RE), "⚠ verify")
+    && /CARRIED FORWARD/.test(rcCarried.markdown)
+    && /re-run the on-stand check/.test(rcCarried.markdown),
+  () => rcCarried.markdown.split("\n").filter((l) => SECTION_RE.test(l)).join("\n"));
+check("ENG-95470 (defect 4 review): the SAME count with `source: \"verified\"` (or no `source` at all — older payloads) still closes ✅ Done, so this marker only ever LOWERS trust, never fabricates it",
+  allEq(marksFor(rcCount({ workplaces: 1, names: ["Recruiting"], source: "verified" }).markdown, SECTION_RE), "✅ Done")
+    && allEq(marksFor(rcCount({ workplaces: 1, names: ["Recruiting"] }).markdown, SECTION_RE), "✅ Done"));
+check("ENG-95470 (defect 4 review): a carried-forward count that does NOT match the expected number is still a hard ❌ MISSING, same as a verified mismatch — `source` only changes the exactly-one-workplace case",
+  allEq(marksFor(rcCount({ workplaces: 2, names: ["Recruiting", "My applications"], source: "carried-forward" }).markdown, SECTION_RE), "❌ MISSING"));
 check("ENG-95850 (B2): the OTHER wiring keys are untouched — `miniPageWired: true` still closes its row on the boolean path, so the count gate is scoped to the row that declares it",
   allEq(marksFor(renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: true } }).markdown, WIRED_RE), "✅ Done"));
 // …and the fallback is still a fallback: a NON-EMPTY `reachability` that simply says nothing about a key leaves
