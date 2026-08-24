@@ -146,7 +146,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
-  "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
+  "selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
@@ -292,7 +292,9 @@ check("ENG-95469: the build phase relaxes 'a builder does not run --verify' ONLY
   && wfSrc.includes("IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE"));
 check("ENG-95469: a still-short-after-one-fix selfCheck is collected in buildRound (via `selfCheckStillShort`) and parked via applyInContextParks BEFORE the round-budget applyParks",
   /selfCheckStillShort\(sc\)/.test(wfSrc)
-  && /sc\.ran === true && sc\.complete === false && sc\.fixAttempted === true/.test(wfSrc)
+  // ENG-95901: the in-context PARK decision reads `buildComplete` (missing-only, via the legacy-shape-tolerant
+  // `selfCheckBuildComplete` derivation), not the combined `complete`.
+  && /sc\.ran === true && selfCheckBuildComplete\(sc\) === false && sc\.fixAttempted === true/.test(wfSrc)
   && /const inContextParked = applyInContextParks\(selfCheckShort\)/.test(wfSrc)
   && wfSrc.indexOf("applyInContextParks(selfCheckShort)") < wfSrc.indexOf("const newlyParked = applyParks()"));
 // Supplementary source pin (the double-guard itself is EXECUTED in the `inContextParkableKeys` cases below):
@@ -307,14 +309,43 @@ check("ENG-95469: applyInContextParks decides through the pure `inContextParkabl
 // ATTEMPTED self-check is a park candidate; a shortfall whose one bounded fix is NOT yet attempted is NOT collected
 // — the unit keeps its fix budget instead of being queued/parked prematurely. Proven distinct from the fixAttempted
 // case that IS collected.
-check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
-  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: true }) === true);
-check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
-  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: false }) === false);
-check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
-  () => wf.selfCheckStillShort({ ran: true, complete: true, fixAttempted: true }) === false
-    && wf.selfCheckStillShort({ ran: false, complete: false, fixAttempted: true }) === false
+check("ENG-95469/ENG-95901 T3: selfCheckStillShort {ran:true, buildComplete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: false, fixAttempted: true }) === true);
+check("ENG-95469/ENG-95901 T3: selfCheckStillShort {ran:true, buildComplete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: false, fixAttempted: false }) === false);
+check("ENG-95469/ENG-95901 T3: a BUILD-COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: true, fixAttempted: true }) === false
+    && wf.selfCheckStillShort({ ran: false, buildComplete: false, fixAttempted: true }) === false
     && wf.selfCheckStillShort(undefined) === false);
+check("ENG-95901 T3: selfCheckStillShort does NOT collect a page whose only open rows are unfiled evidence — `buildComplete:true` with the OLD conflated `complete:false` still present must never park the unit or ask it to repair a row it cannot legitimately file",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: true, complete: false, fixAttempted: true }) === false);
+// `buildComplete` is OPTIONAL in the selfCheck schema (only `ran` is required) — a builder that reports the OLDER
+// shape (`complete`/`missing`, no `buildComplete`) must not silently lose the fast in-context park it would have
+// gotten before this axis split existed. `derivedBuildComplete` (shared by `selfCheckBuildComplete` and
+// `verifierBuildComplete`) derives the axis from whatever the object actually carries: the new
+// field first; when absent, `missing` — the engine's DIRECT count — BEFORE the old conflated `complete` (which
+// folds in `unverified` too, so preferring it over `missing` would read a build-complete/evidence-unfiled shape,
+// `{complete:false, missing:0}`, as NOT build-complete — the exact ENG-95901 regression); `complete` is the LAST
+// resort, only when `missing` itself is absent. Never a self-graded claim, always arithmetic over the object's OWN
+// fields.
+check("ENG-95901: selfCheckBuildComplete prefers the NEW field when present, even over a conflicting old one",
+  () => wf.selfCheckBuildComplete({ buildComplete: true, complete: false }) === true
+    && wf.selfCheckBuildComplete({ buildComplete: false, complete: true }) === false);
+check("ENG-95901: selfCheckBuildComplete FALLS BACK to `missing === 0` — NOT the old conflated `complete` — when `buildComplete` is absent but `missing` is present (the build-complete/evidence-unfiled shape: {complete:false, missing:0} must read as build-complete, not short)",
+  () => wf.selfCheckBuildComplete({ complete: false, missing: 0 }) === true
+    && wf.selfCheckBuildComplete({ complete: true, missing: 2 }) === false);
+check("ENG-95901: selfCheckBuildComplete FALLS BACK to the old `complete` field only when `missing` itself is ALSO absent",
+  () => wf.selfCheckBuildComplete({ complete: false }) === false && wf.selfCheckBuildComplete({ complete: true }) === true);
+check("ENG-95901: selfCheckBuildComplete is `undefined` (unknown, never a false 'complete') when NONE of the three fields are present, or the self-check itself is absent",
+  () => wf.selfCheckBuildComplete({ ran: true }) === undefined && wf.selfCheckBuildComplete(undefined) === undefined);
+check("ENG-95901: selfCheckStillShort STILL fast-parks a genuinely short LEGACY-shaped self-report ({ran:true, complete:false, missing:3, fixAttempted:true}, no `buildComplete`) — the axis split must not regress a builder that has not adopted the new field name",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, missing: 3, fixAttempted: true }) === true);
+check("ENG-95901: selfCheckStillShort does NOT fast-park the DISCRIMINATING legacy shape ({ran:true, complete:false, missing:0, fixAttempted:true} — build done, only evidence unfiled, no `buildComplete`) — this is the exact case a wrong fallback order (complete before missing) would have regressed",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, missing: 0, fixAttempted: true }) === false);
+check("ENG-95901: derivedBuildComplete is the ONE shared derivation behind selfCheckBuildComplete and verifierBuildComplete's page-state reading — pin it directly so the two callers cannot drift onto different fallback orders again",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0 }) === true
+    && wf.derivedBuildComplete({ buildComplete: false, missing: 0 }) === false
+    && wf.derivedBuildComplete(undefined) === undefined);
 
 // --- ENG-95469 (PR review T2): the in-context park's DOUBLE-GUARD, EXECUTED (not just source-pinned). The self-check
 // is the engine's own scoped arithmetic reported THROUGH the builder; a self-report of "still short" is parked ONLY
@@ -358,20 +389,50 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
     /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, parkedSet\)/.test(wfSrc));
 }
 
+// ENG-95901 item 7 — a DELIBERATE scope cut, pinned so it cannot be silently reversed. An earlier version of this
+// ticket excluded a `buildComplete: true` page (build done, only unfiled evidence open) from the round-budget
+// park; that exclusion was reverted because `parkableKeys` is the ONLY mechanism bounding the outer round loop
+// (there is no separate global round ceiling) — excluding such a page would trade a bounded-but-imperfect park for
+// a run that never terminates if a separate verifier/judge round never confirms the evidence. This golden proves
+// the REVERTED state, not the fix: a `buildComplete: true` / `complete: false` page IS STILL round-budget
+// parkable today, on the SAME terms as any other open unit. A future change that reintroduces the exclusion
+// (silently "fixing" what looks like a bug) must fail THIS check, not slip through untested.
+{
+  const K = "child:A";
+  const unitK = [{ key: K, kind: "page" }];
+  const budgetSpentAgain = { [K]: 3 };
+  const evidenceOnlyOpenAgain = { pages: { [K]: { complete: false, buildComplete: true } } };
+  check("ENG-95901 item 7 (deliberately reverted): a page with `buildComplete: true` (build done, only evidence unfiled) IS round-budget parkable once its budget is spent — parkableKeys applies the SAME rule to every open unit, with no build-axis exclusion",
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, new Set()).join(",") === K,
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, new Set()));
+}
+
 // --- ENG-95469 (PR review T5): the INDEPENDENT-SIGNAL cross-check, EXECUTED. A builder's `selfCheck` is its own word
 // that the scoped gate ran and passed; `selfCheckMismatches` reconciles each page unit's self-report against the
 // independent post-hoc verifier and names the two ways they can disagree, for a unit the verifier finds still OPEN.
 {
   const unitFor = (k) => ({ key: k, kind: "page" });
-  const openVerify = { pages: { "child:A": { complete: false } } };   // the independent verifier finds child:A OPEN
-  const greenVerify = { pages: { "child:A": { complete: true } } };   // …and here it finds it COMPLETE
-  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, complete: true } }];
+  // ENG-95901: the outer "is this unit still open" filter stays on the COMBINED `complete` (unchanged, AC7/AC8 — a
+  // unit open only on unfiled evidence still belongs in this audit sweep); the MISMATCH branch itself now compares
+  // `buildComplete` to `buildComplete`, so each fixture below carries both fields deliberately.
+  const openVerify = { pages: { "child:A": { complete: false, buildComplete: false } } };   // verifier: OPEN, and a genuine MISSING deliverable
+  const openOnEvidenceOnly = { pages: { "child:A": { complete: false, buildComplete: true } } }; // verifier: OPEN, but build is done — only unfiled evidence
+  const greenVerify = { pages: { "child:A": { complete: true, buildComplete: true } } };   // …and here it finds it fully COMPLETE
+  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
   const notRun = [{ key: "child:A", sc: { ran: false, notRunWhy: "could not get-page" } }];
-  const honestComplete = [{ key: "child:A", sc: { ran: true, complete: true } }];
-  check("ENG-95469 T5: a builder that self-reports the gate PASSED on a page the INDEPENDENT verifier finds OPEN is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on complete:false), so the cross-check is the only independent signal",
+  const honestComplete = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
+  check("ENG-95901 T5: a builder that self-reports the BUILD axis PASSED on a page the INDEPENDENT verifier's OWN build axis is NOT true (a genuine MISSING deliverable) is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on buildComplete:false), so the cross-check is the only independent signal",
     () => { const m = wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].key === "child:A" && m[0].kind === "reported-complete-but-verifier-open"; },
     () => wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined));
+  check("ENG-95901 T5: a builder that HONESTLY self-reports `buildComplete:true` on a page still OPEN per the full sweep ONLY because of unfiled evidence (verifier's own buildComplete IS true) raises NO mismatch — the builder cannot legitimately file that evidence itself, so this must never be flagged (the exact case ENG-95901 exists to fix)",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, openOnEvidenceOnly, {}, undefined).length === 0);
+  // `verifierBuildComplete`'s own `missing === 0` fallback branch, exercised through the PUBLIC selfCheckMismatches
+  // API: a LEGACY verify page-state with no `buildComplete` but `missing: 0` must be read as build-complete on the
+  // verifier side too, so the same honest self-report raises no mismatch against it either.
+  const legacyOpenOnEvidenceOnly = { pages: { "child:A": { complete: false, missing: 0, unverified: 3 } } };
+  check("ENG-95901 T5: the SAME honest self-report raises NO mismatch against a LEGACY verify page-state (no `buildComplete`, `missing: 0`) — the verifier-side fallback must read `missing`, not default an absent field to 'still open'",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, legacyOpenOnEvidenceOnly, {}, undefined).length === 0);
   check("ENG-95469 T5: a `ran:false` self-check on a page the verifier finds OPEN is flagged `gate-not-run` — a builder cannot silently bypass the scoped gate; the skipped-and-still-open unit is surfaced",
     () => { const m = wf.selfCheckMismatches(notRun, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].kind === "gate-not-run"; },
@@ -382,18 +443,19 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
   check("ENG-95469 T5: no self-checks at all is an empty mismatch list, not a throw",
     () => wf.selfCheckMismatches([], unitFor, openVerify, {}, undefined).length === 0
       && wf.selfCheckMismatches(undefined, unitFor, openVerify, {}, undefined).length === 0);
-  // PR review RC-12: a schema-valid self-report of `{ran:true}` with `complete` ABSENT (the schema requires only
-  // `ran` inside selfCheck) escapes both `selfCheckStillShort` (needs complete===false) and the two branches above
-  // (complete is neither true nor false), so without a dedicated branch such a unit reaches NEITHER the fast park
-  // NOR the audit trail on a still-open unit. It must be flagged `ran-without-verdict`, and must NOT collide with
-  // the honest short case `{ran:true, complete:false}`, which stays a non-mismatch (builder and verifier agree).
+  // PR review RC-12 (extended by ENG-95901 to the new axis): a schema-valid self-report of `{ran:true}` with
+  // `buildComplete` ABSENT (the schema requires only `ran` inside selfCheck) escapes both `selfCheckStillShort`
+  // (needs buildComplete===false) and the two branches above (buildComplete is neither true nor false), so without a
+  // dedicated branch such a unit reaches NEITHER the fast park NOR the audit trail on a still-open unit. It must be
+  // flagged `ran-without-verdict`, and must NOT collide with the honest short case `{ran:true, buildComplete:false}`,
+  // which stays a non-mismatch (builder and verifier agree).
   const ranNoVerdict = [{ key: "child:A", sc: { ran: true } }];
-  const honestShort = [{ key: "child:A", sc: { ran: true, complete: false } }];
-  check("ENG-95469 T5 (RC-12): `{ran:true, complete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
+  const honestShort = [{ key: "child:A", sc: { ran: true, buildComplete: false } }];
+  check("ENG-95469/ENG-95901 T5 (RC-12): `{ran:true, buildComplete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
     () => { const m = wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].key === "child:A" && m[0].kind === "ran-without-verdict"; },
     () => wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined));
-  check("ENG-95469 T5 (RC-12): the honest short case `{ran:true, complete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
+  check("ENG-95469/ENG-95901 T5 (RC-12): the honest short case `{ran:true, buildComplete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
     () => wf.selfCheckMismatches(honestShort, unitFor, openVerify, {}, undefined).length === 0);
 }
 // The T5 cross-check WIRING, pinned at the source level (the round loop drives live agents): buildRound returns the
@@ -433,6 +495,13 @@ check("ENG-95469 T5: the self-report is COLLECTED per page unit — `recordPageS
       const notRun = wf.selfCheckDiscrepancyText("gate-not-run");
       return /no boolean verdict/i.test(t.claim) && !/did NOT run/i.test(t.claim) && t.claim !== notRun.claim && t.label !== notRun.label; },
     () => ({ ranNoVerdict: wf.selfCheckDiscrepancyText("ran-without-verdict"), gateNotRun: wf.selfCheckDiscrepancyText("gate-not-run") }));
+  // ENG-95901: the branch this text describes tests `sc.buildComplete`, not `sc.complete` — pin the LITERAL field
+  // name in the claim text too, so a future field rename cannot leave this operator-facing string stale again
+  // (exactly the drift a code review caught: the predicate moved to `buildComplete` but the wording still said
+  // "complete absent").
+  check("ENG-95901: `ran-without-verdict`'s claim text names the field it ACTUALLY checks (`buildComplete`), not the retired `complete`",
+    () => /buildComplete absent/.test(wf.selfCheckDiscrepancyText("ran-without-verdict").claim),
+    () => wf.selfCheckDiscrepancyText("ran-without-verdict"));
   check("ENG-95469 RC-17: an UNRECOGNIZED kind throws loudly — a future kind added to `selfCheckMismatches` without a matching text entry cannot silently inherit stale wording",
     () => { try { wf.selfCheckDiscrepancyText("some-new-kind"); return false; } catch (e) { return /unknown selfCheck discrepancy kind/.test(e.message); } });
   // Every kind `selfCheckMismatches` can emit MUST have a text entry — the two lists cannot drift apart.
@@ -566,6 +635,11 @@ const reqOf = (re) => { const m = re.exec(wfSrc); return m ? m[1].split(",").map
 const missingReq = (obj, req) => (req || []).filter((k) => !(k in obj));
 const PAGE_REQ = reqOf(/const BUILD_SCHEMA_PAGE = \{[^}]*?required:\s*\[([^\]]*)\]/);
 const SC_REQ = reqOf(/selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\[([^\]]*)\]/);
+// ENG-95901 — the SAME schema-drift gate as VERIFY_RESULT's, for the `selfCheck` property block: a bounded window
+// after `selfCheck: { type: 'object', ... }`'s opening proves `buildComplete: { type: 'boolean' }` is declared
+// inside THIS block specifically, not merely present somewhere else in the file.
+check("ENG-95901: the `selfCheck` structured-output schema DECLARES `buildComplete: { type: 'boolean' }` — a builder's structured answer will not reproduce an undeclared field, so its absence here silently drops `buildComplete` from every self-report before `selfCheckStillShort`/`selfCheckMismatches` ever see it",
+  /selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\['ran'\],\s*properties:\s*\{[\s\S]{0,80}buildComplete:\s*\{\s*type:\s*'boolean'\s*\}/.test(wfSrc));
 // The pre-PR 4-field page-unit shape (no `selfCheck`), and the current 5-field shape whose `selfCheck` uses the
 // documented `ran:false` + `notRunWhy` escape hatch the breaking-change argument leans on.
 const prePrPageResult = { unit: "main", claimedBuilt: ["crt.Input"], schemaName: "UsrMainPage",
@@ -621,6 +695,22 @@ check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list 
     && /reportGuidelinesMiss\(unit\.key, r\.claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
 check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
   !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
+// ENG-95901 — the REAL `inContextGateBlock` prompt text, pinned at the source level (the same convention this file
+// already applies to every other builder-facing prompt line, e.g. the T5/RC-16 checks above). This is the literal
+// instruction a LIVE build agent reads to decide what it may and may not touch; a silent regression here (reverting
+// to `complete`, or dropping the missing-only restriction) would ship undetected without this check, since the
+// local stub used elsewhere in this file (for an unrelated buildPrompt-wiring test) is a one-line marker, not the
+// real function's content.
+{
+  const gateBlockSlice = wfSrc.slice(wfSrc.indexOf("function inContextGateBlock(unit)"), wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"));
+  check("ENG-95901: inContextGateBlock names `buildComplete` as the axis the gate's exit code reads, and states that an unconfirmed-evidence-only page exits 0",
+    /buildComplete/.test(gateBlockSlice) && /exits 0/.test(gateBlockSlice));
+  check("ENG-95901: inContextGateBlock restricts the one bounded fix to rows whose `outcome` is `\"missing\"` and explicitly forbids touching an `\"unverified\"` row",
+    gateBlockSlice.includes('act ONLY on the rows whose \\`outcome\\` is \\`"missing"\\`')
+    && gateBlockSlice.includes('NEVER attempt to "fix" a row whose \\`outcome\\` is \\`"unverified"\\`'));
+  check("ENG-95901: inContextGateBlock's `selfCheck` reporting instructions include `buildComplete` in the copied-verbatim field list",
+    /Report \\`selfCheck\\` copying the verdict VERBATIM:[\s\S]{0,160}buildComplete/.test(gateBlockSlice));
+}
 check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
   /guidelines: res\.guidelines \|\| null/.test(wfSrc)
     && !/guidelinesRun: res\.guidelinesRun/.test(wfSrc) && !/guidelinesRun: \{ type/.test(wfSrc));
@@ -1165,9 +1255,25 @@ try {
   tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
   const modPath = path.join(tmpSchema, "schema.mjs");
   const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
-  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA };\n`);
+  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT };\n`);
   const mod = await import(pathToFileURL(modPath).href);
   reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
+  // ENG-95901 — the SCHEMA-DRIFT GATE. Every golden above constructs `{buildComplete: ...}` fixtures BY HAND and
+  // feeds them straight into the pure functions, bypassing the structured-output schema entirely — none of them
+  // would fail if `buildComplete` were silently dropped from VERIFY_RESULT (the exact regression a code review
+  // caught: an LLM constrained to an undeclared-field schema will not reproduce it, so the live agent-mediated path
+  // would lose the field even though every unit test still passes). Load the REAL schema object — not a copy — and
+  // assert the property is actually declared, the same way the byte-budget check above proves this schema's real
+  // shape rather than trusting a comment about it.
+  check("ENG-95901: VERIFY_RESULT's per-page schema DECLARES `buildComplete: { type: 'boolean' }` — an LLM transcribing `--verify-json` into `state.verify` will not reproduce an undeclared field, so its absence here silently drops `buildComplete` on the ONE path that feeds live runtime state",
+    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.buildComplete?.type === 'boolean',
+    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties);
+  // Declaring the property is not enough — only `required` forces an LLM to actually POPULATE it. Without this,
+  // the agent-mediated path could still legally transcribe a page as `{complete:false, unverified:3}` with
+  // `buildComplete` omitted, and `derivedBuildComplete` would silently fall back to the combined `complete`.
+  check("ENG-95901: VERIFY_RESULT's per-page schema also REQUIRES `buildComplete` (not merely typed) — a declared-but-optional field does not stop an LLM from omitting it",
+    (mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required || []).includes('buildComplete'),
+    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required);
 } catch (e) {
   check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
 } finally {

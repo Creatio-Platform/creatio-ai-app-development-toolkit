@@ -126,12 +126,17 @@ the verifier files that page's contents as this unit's evidence.
     rules — an absent slot reads ⚠ not-checkable, never a false ❌). Then run the SCOPED gate:
     `migrate.mjs <manifest> --verify --built <self-built.json> --page <yourKey> --verify-json
     <self-verdict.json>`. It reconciles what your slice declared against what you built, for THIS
-    page only, and exits 2 when short. If NOT `complete`, you get **exactly one bounded fix attempt**
-    in this same context: read the verdict's `openRows` (each Evidence cell IS the repair), fix only
-    those, `get-page` again, and re-run the gate **once**. Do not loop. Return `selfCheck`
-    (`ran` / `complete` / `missing` / `unverified` / `fixAttempted` / `stillShortRows`), copying the
-    verdict verbatim. Still short after the one attempt is a valid outcome — the unit **parks**
-    (`./03-failure-and-park-policy.md`, the one-bounded-fix→park), it does not loop.
+    page only, and exits 2 when short — `buildComplete` (ENG-95901: the `missing`-only axis) is what
+    the exit code reads, so a page whose only open rows are unfiled evidence exits 0. If NOT
+    `buildComplete`, you get **exactly one bounded fix attempt** in this same context: read the
+    verdict's `openRows`, but act ONLY on rows whose `outcome` is `"missing"` (each such row's
+    Evidence cell IS the repair) — NEVER a row whose `outcome` is `"unverified"`, that is an
+    evidence/reachability record a separate agent files, not yours to close. Fix only the missing
+    rows, `get-page` again, and re-run the gate **once**. Do not loop. Return `selfCheck`
+    (`ran` / `buildComplete` / `complete` / `missing` / `unverified` / `fixAttempted` /
+    `stillShortRows`), copying the verdict verbatim. Still `buildComplete: false` after the one
+    attempt is a valid outcome — the unit **parks** (`./03-failure-and-park-policy.md`, the
+    one-bounded-fix→park), it does not loop.
 11. **Append to the worklog and update the roadmap** — as part of closing THIS unit, not as a step
     at the end of the run. An interrupted run must not lose the history of what was built.
 
@@ -207,6 +212,7 @@ Structured, and it is a CLAIM, not evidence:
     "componentsDiffed": ["crt.ExpansionPanel", "crt.Input"] },
   "selfCheck": {
     "ran": true,
+    "buildComplete": true,
     "complete": true,
     "missing": 0,
     "unverified": 0,

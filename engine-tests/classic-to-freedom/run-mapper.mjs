@@ -2554,6 +2554,73 @@ try {
 } finally {
   fs.rmSync(builtPath, { force: true });
 }
+// (f) ENG-95901 — THE ACTUAL CLI-BOUNDARY PROOF the two axes diverge, on a BARE manifest built so that ONLY
+// evidence/confirm rows stay open (0 MISSING, 3 unverified: field-control, field-labels, quality-gates — all
+// evidence the builder is contractually forbidden to file itself). Runs the SAME built.json through BOTH CLI
+// entrypoints: the in-context single-unit gate (`--page main --verify-json`) must exit 0 (`buildComplete: true`),
+// while the SAME payload through the unscoped, whole-tree `--verify` (no `--page`) must still exit 2 (`complete:
+// false`, AC7/AC8 unchanged — an unconfirmed row still blocks the human-facing "done" verdict). A regression at the
+// CLI wiring layer (wrong field read, a dropped `buildComplete` in serialization) would break ONE of these two
+// without necessarily breaking the direct verifyUnit()/renderVerify() unit tests above.
+{
+  const bareManifest = JSON.stringify({
+    entity: "Bare",
+    entityColumns: { Name: { dataValueType: 1, caption: "Name" } },
+    schemas: [{ pkg: "Bare", body: 'define("Bare",[],function(){return{entitySchemaName:"Bare",diff:[{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:0,colSpan:12},bindTo:"Name",contentType:0,caption:"Name"}}]};});' }],
+    seed: CLEAN_SEED,
+    detailSchemas: {},
+    planMeta: { scope: "single-section", environment: "test", package: "X → Y", approach: "Parallel rebuild", whatItDoes: "bare test.", sectionSchema: "BareSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" },
+    signals: FULL_SIGNALS,
+  });
+  const bareBuiltPath = path.join(os.tmpdir(), `c2f_bare_built_${process.pid}.json`);
+  const bareUnitVerdictPath = path.join(os.tmpdir(), `c2f_bare_unit_verdict_${process.pid}.json`);
+  const bareFullVerdictPath = path.join(os.tmpdir(), `c2f_bare_full_verdict_${process.pid}.json`);
+  try {
+    fs.writeFileSync(bareBuiltPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+    }));
+    const vScoped = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
+    const scopedVerdict = JSON.parse(fs.readFileSync(bareUnitVerdictPath, "utf8"));
+    check("ENG-95901: the SCOPED in-context gate on a 0-MISSING/evidence-only page exits 0 (`buildComplete: true` drives the CLI exit code, not the combined `complete`)",
+      vScoped.status === 0 && scopedVerdict.missing === 0 && scopedVerdict.unverified > 0 && scopedVerdict.buildComplete === true && scopedVerdict.complete === false,
+      () => ({ status: vScoped.status, scopedVerdict }));
+    const vFull = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath, "--verify-json", bareFullVerdictPath], { input: bareManifest, encoding: "utf8" });
+    const fullVerdict = JSON.parse(fs.readFileSync(bareFullVerdictPath, "utf8"));
+    check("ENG-95901: the SAME built.json through the UNSCOPED, whole-tree `--verify` still exits 2 — AC7/AC8: the post-hoc CLI verdict is UNCHANGED and an unconfirmed row still blocks 'done'",
+      vFull.status === 2 && fullVerdict.missing === 0 && fullVerdict.unverified > 0 && fullVerdict.complete === false && fullVerdict.pages.main.buildComplete === true,
+      () => ({ status: vFull.status, fullVerdict }));
+    // ENG-95901 — a page with BOTH a genuine MISSING deliverable AND unfiled evidence: the scoped stderr diagnostic
+    // must talk ONLY about `missing` — no "unconfirmed" count, no "file the on-stand evidence" advice — so an LLM
+    // builder reading this exit-2 line is never handed a row it cannot legitimately close itself.
+    const bareBuiltShortPath = path.join(os.tmpdir(), `c2f_bare_built_short_${process.pid}.json`);
+    fs.writeFileSync(bareBuiltShortPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+    }));
+    try {
+      const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
+      check("ENG-95901: the SCOPED stderr diagnostic on a page with BOTH a genuine MISSING deliverable and unfiled evidence names ONLY `missing` — no 'unconfirmed' count, no 'file the on-stand evidence' advice, exit 2",
+        vScopedShort.status === 2
+        && /\d+ MISSING deliverable\(s\)/.test(vScopedShort.stderr || "")
+        && !/unconfirmed/.test(vScopedShort.stderr || "")
+        && !/file the on-stand evidence/.test(vScopedShort.stderr || ""),
+        () => ({ status: vScopedShort.status, stderr: vScopedShort.stderr }));
+    } finally {
+      fs.rmSync(bareBuiltShortPath, { force: true });
+    }
+  } finally {
+    fs.rmSync(bareBuiltPath, { force: true });
+    fs.rmSync(bareUnitVerdictPath, { force: true });
+    fs.rmSync(bareFullVerdictPath, { force: true });
+  }
+}
 // review (PR#58 Minor 4) — detectAddMode text-scans a detail's body over the UNION of its replacing chain, so a
 // large body must NOT trigger catastrophic backtracking (engine.mjs documents a prior ~32s/700KB regex regression
 // fixed with bounded quantifiers). ~700KB of ADVERSARIAL near-matches (many `getAddRecordButtonVisible` heads that
@@ -7986,6 +8053,28 @@ check("digest: a COMPLETE page drops its openRows and keeps its counters — nob
   () => { const done = Object.entries(dgDigest.pages).filter(([, p]) => p.complete === true);
     return done.length >= 1 && done.every(([, p]) => !('openRows' in p) && typeof p.missing === 'number'); },
   () => JSON.stringify(dgDigest.pages));
+// ENG-95901 — the COMPLETE-page compaction branch is a HAND-WRITTEN object literal (unlike the open-page branch,
+// which forwards the whole object for free), so every field it needs has to be listed explicitly. This is the
+// exact literal a workflow's Reconcile agent transcribes into `state.verify`: if `buildComplete` were ever
+// dropped from it, every COMPLETE page reaching the build executor via the digest path would read
+// `buildComplete: undefined`, reopening ENG-95901 in reverse (the round-budget park exclusion and the
+// selfCheckMismatches cross-check both stop trusting a finished page). Pin it directly, and pin that the
+// COMPACTION does not silently COLLAPSE the two axes into one (a complete:false/buildComplete:true page — the
+// axis-split case itself — must still forward buildComplete faithfully via the un-compacted branch).
+check("digest: the COMPLETE-page compaction literal carries `buildComplete` (not just `complete`/`missing`/`unverified`) — it is a hand-written object, so a dropped field here silently reaches the build executor as `undefined`",
+  () => { const done = Object.entries(dgDigest.pages).filter(([, p]) => p.complete === true);
+    return done.length >= 1 && done.every(([, p]) => p.buildComplete === true); },
+  () => JSON.stringify(dgDigest.pages));
+check("digest: an OPEN page with `buildComplete: true` (missing:0, unverified>0 — the axis-split case) forwards `buildComplete` unchanged through the un-compacted branch",
+  () => { const v = renderVerify(dgRun, dgOpts, m12Built(m12Page(M12_NAMED)));
+    // Force this page's ONLY shortfall to be unverified (drop the QG evidence the base fixture supplies) so
+    // complete:false while missing stays 0.
+    const built = m12Built(m12Page(M12_NAMED)); delete built.evidence; delete built.judge;
+    const vSplit = renderVerify(dgRun, dgOpts, built);
+    const d = verifyDigest(dgRun, vSplit);
+    return d.pages.main.complete === false && d.pages.main.missing === 0 && d.pages.main.buildComplete === true; },
+  () => { const built = m12Built(m12Page(M12_NAMED)); delete built.evidence; delete built.judge;
+    return JSON.stringify(verifyDigest(dgRun, renderVerify(dgRun, dgOpts, built)).pages); });
 
 // A GRANDCHILD is a published, scheduled build unit — `--units` recurses. The slice lookup did NOT: it scanned only
 // the immediate childPages/typedPages/miniPage, so every page below depth 1 was a unit whose spec the CLI reported
@@ -9787,8 +9876,8 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   // deliverables, so the in-context gate triggers NO fix attempt on a page the baseline confirmed complete.
   {
     const { unit, agree } = parity(a3Complete);
-    check("ENG-95469 T4 (R8): the baseline-complete Applicant unit passes the in-context gate — complete, 0 MISSING, 0 unverified, no open row (so no fix attempt is triggered)",
-      unit.complete === true && unit.missing === 0 && unit.unverified === 0 && (unit.openRows || []).length === 0,
+    check("ENG-95469 T4 (R8): the baseline-complete Applicant unit passes the in-context gate — complete, buildComplete, 0 MISSING, 0 unverified, no open row (so no fix attempt is triggered)",
+      unit.complete === true && unit.buildComplete === true && unit.missing === 0 && unit.unverified === 0 && (unit.openRows || []).length === 0,
       () => unit);
     check("ENG-95469 T4/R5: verifyUnit is the SAME detector as the post-hoc sweep — its verdict equals renderVerify(...).pages.main byte-for-byte (one module, two call sites)",
       agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, a3Complete).pages.main }));
@@ -9800,8 +9889,8 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   {
     const builtNoGrid = { pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE };
     const { unit, agree } = parity(builtNoGrid);
-    check("ENG-95469 T1 (R2): a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged incomplete by the in-context gate — not skip, not pass",
-      unit.complete === false && unit.missing >= 1
+    check("ENG-95469 T1 (R2): a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged incomplete by the in-context gate — not skip, not pass — on BOTH axes (a genuine MISSING deliverable is never masked by the buildComplete split)",
+      unit.complete === false && unit.buildComplete === false && unit.missing >= 1
         && (unit.openRows || []).some((r) => /Related lists/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)),
       () => unit.openRows);
     check("ENG-95469 T1/R5: the datasource-short verdict matches the post-hoc sweep exactly",
@@ -9869,12 +9958,16 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95469 (review T4): verifyUnit on a key the plan does NOT carry returns a LOUD error verdict (error:'unknown page', complete:false) — never a false complete-empty green that masks a broken gate",
       u.error === "unknown page" && u.complete === false && u.missing === 0 && u.unverified === 0 && (u.openRows || []).length === 0,
       () => u);
+    check("ENG-95901: the SAME unknown-page LOUD error verdict also reports `buildComplete: false` — a broken gate must never read as build-complete either, on EITHER axis",
+      u.buildComplete === false, () => u);
     // The distinction must NOT false-positive on a real page of this plan: `main` is a known page, so it is verdict'd
     // for real (never the unknown-page error), whether it is complete or short.
     const known = verifyUnit(applicantR1, {}, a3Complete, "main");
     check("ENG-95469 (review T4): a KNOWN page of the plan (`main`) is verdict'd for real and is NEVER flagged unknown — the loud path fires only for an unplanned key",
       known.error === undefined && known.complete === true,
       () => known);
+    check("ENG-95901: the SAME known/complete-empty page also reports `buildComplete: true`",
+      known.buildComplete === true, () => known);
     // PR review RC-11: `pageKey` has NO default. A call that OMITS the argument must fail the same LOUD way an
     // unknown key does — never silently resolve to `main` and hand back a confident verdict for the wrong page
     // (the exact silent-wrong-page mode the T4 loud-unknown fix above was added to close).
@@ -9882,6 +9975,33 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95469 (review RC-11): verifyUnit called with pageKey OMITTED is LOUD (error:'unknown page', complete:false) — no default 'main', so a missing arg cannot silently green a wrong page",
       omitted.error === "unknown page" && omitted.complete === false,
       () => omitted);
+    check("ENG-95901: the SAME omitted-pageKey LOUD error verdict also reports `buildComplete: false`",
+      omitted.buildComplete === false, () => omitted);
+  }
+
+  // ===== ENG-95901 — split the conflated `complete` axis: missing=0, unverified>0 ⇒ buildComplete:true ==========
+  // T4 (R8) above pins the no-false-positive boundary using a payload that supplies BOTH `evidence` AND a convincing
+  // `judge` verdict for the quality-gates row — exactly what the in-context gate's own call site can NEVER have (the
+  // builder is contractually forbidden to file that evidence itself; a separate read-only verifier/judge does). A
+  // golden that only ever exercises the QG_EVIDENCE-supplied case re-certifies ENG-95901's bug instead of catching
+  // it. This fixture is otherwise IDENTICAL to `a3Complete` (baseline-complete build: all 4 grids bound, the
+  // component present, every rule present) but DROPS `...QG_EVIDENCE` entirely, so the quality-gates row has no
+  // evidence and no judge verdict — per `./01-evidence-records.md`'s own table an INCOMPLETE record reads
+  // `⚠ unverified`, never `❌ MISSING`. The illustrative count here is ONE unfiled row (quality-gates); the exact
+  // "15" from the second Applicant run (ENG-95471) is not reproduced — the axis split this pins is count-agnostic.
+  {
+    const builtNoEvidence = { pages: { main: { viewConfig: a3Body(4), businessRules: a3Rules } } };
+    const unit = verifyUnit(applicantR1, {}, builtNoEvidence, "main");
+    check("ENG-95901: a build with 0 MISSING deliverables and only an UNFILED quality-gates row is buildComplete:true — the build axis must not fire on evidence the builder cannot legitimately file itself",
+      unit.missing === 0 && unit.unverified > 0 && unit.buildComplete === true,
+      () => unit);
+    check("ENG-95901: the OLD conflated `complete` field is UNCHANGED (still missing||unverified) — the post-hoc `--verify` CLI verdict (AC7/AC8) keeps calling an unconfirmed page not-done",
+      unit.complete === false,
+      () => unit);
+    const sweepPage = renderVerify(applicantR1, {}, builtNoEvidence).pages.main;
+    check("ENG-95901: `buildComplete` is exposed on the post-hoc sweep's per-page tally too (renderVerify(...).pages.main) — one detector, two call sites, and now two axes, still byte-for-byte identical between them",
+      sweepPage.buildComplete === true && sweepPage.missing === 0 && sweepPage.unverified > 0,
+      () => sweepPage);
   }
 }
 

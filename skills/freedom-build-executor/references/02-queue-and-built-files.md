@@ -226,14 +226,22 @@ report, `verify.json` is the verdict.
   "complete": false, "missing": 1, "unverified": 4,
   "planGaps": ["structure INCOMPLETE (2 missing input(s))"],
   "pages": {
-    "main": { "missing": 0, "unverified": 0, "complete": true, "openRows": [] },
-    "child:Education": { "missing": 1, "unverified": 2, "complete": false,
+    "main": { "missing": 0, "unverified": 0, "complete": true, "buildComplete": true, "openRows": [] },
+    "child:Education": { "missing": 1, "unverified": 2, "complete": false, "buildComplete": false,
       "openRows": [ { "n": 31, "deliverable": "Fields — 7 expected", "status": "⚠ verify",
                       "evidence": "5/7 expected fields present — missing: Amount, Owner",
                       "outcome": "unverified" } ] }
   }
 }
 ```
+
+ENG-95901 — every page entry ALSO carries `buildComplete`: the `missing`-only axis, `true` even
+while `unverified` rows sit unfiled (evidence a separate read-only verifier/judge files, never the
+builder). `complete` (shown above) stays the COMBINED signal — `missing === 0 && unverified === 0`
+— for the round-scheduling / post-hoc "is this unit done" reads below; `buildComplete` is what the
+in-context single-unit gate (`--verify --page <key> --verify-json <file>`) and the builder's own
+`selfCheck` report gate on, so a page whose only open rows are unfiled evidence is not told its
+build is short.
 
 Read this file — never the table — for anything you compute on: which units are open, how many
 rounds are left, what a repair round is handed. The table has no per-page counts at all, and the
