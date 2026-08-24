@@ -1943,6 +1943,17 @@ function buildListItems(pm, section, result, isMain) {
     const cond = ra.condition ? ` (conditional: \`${esc(ra.condition)}\`)` : "";
     items.push(listRow(`Row action — \`${esc(ra.name)}\`${cond}`, "rowaction", ra.name, 1, [ra.name]));
   }
+  // ENG-95470 (defect 3) — the list page's OWN template, mirroring the Form-template row above (`vk: { type:
+  // "template", ... }`, resolved by the shared `resolveTemplateVk`). Before this row a plan/built mismatch (e.g.
+  // `ListPageV2FreedomTemplate` planned, `ListPageV3Template` actually built) surfaced only as free-text inside a
+  // judge rejection — nothing machine-checked it. Added ONLY when the list page is ALREADY gated by another row
+  // (`items.some((r) => r.vk)`, computed above `--` never on `pm.listTemplate` alone): a plan with nothing else
+  // resolved for the list page must stay UNGATED (ENG-95218 — withholding a page nobody builds must not publish an
+  // unclosable `list` unit), and adding a template-only vk here would flip that decision by itself. This row lives
+  // in `listRows`, gated on `LIST_PAGE_KEY`, so `ctx.page` resolves to `built.pages["list"]`, never `main`'s.
+  if (pm.listTemplate && items.some((r) => r.vk)) {
+    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\``, vk: { type: "template", exp: pm.listTemplate } });
+  }
   return items;
 }
 // ONE checklist group, stamped with the page it belongs to. `pageKey` stays RAW on the group and on every row —

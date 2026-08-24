@@ -1576,6 +1576,31 @@ check("ENG-95218 GATE: with NO `DataTable` node at all the read falls back to th
     return lpListTally(v).unverified >= 1 && lpListTally(v).missing === 0
       && v.markdown.includes("matched outside") && v.markdown.includes("DataTable"); },
   () => lpVerify({ pages: { list: { viewConfig: { items: [{ name: "SomeOtherDetailGrid", type: "crt.DataGrid", columns: LP_ALL_COLS.map((code) => ({ code })) }] } } } }).markdown.slice(0, 700));
+// ENG-95470 (defect 3) — the list page's OWN template ("List template → `ListFreedomTemplate`") is now its own
+// machine-checked row (`vk: { type: "template", exp: pm.listTemplate }`, resolved by the SAME `resolveTemplateVk`
+// the Form-template row uses), instead of a plan/built mismatch surfacing only as free text inside a judge
+// rejection. A real run planned `ListFreedomTemplate` and built `ListPageV3Template`; nothing machine-checked it.
+const lpBuiltOnTemplate = (tpl) => ({ pages: { list: { viewConfig: { items: [
+  { name: "DataTable", type: "crt.DataGrid", columns: LP_ALL_COLS.map((code) => ({ code, caption: "#ResourceString(" + code + ")#" })) },
+  ...LP_FILTERS,
+] }, parentSchemaName: tpl } } });
+check("ENG-95470: a list page built on the PLANNED template (`ListFreedomTemplate`) closes the new List-template row ✅ Done — a machine row, not just judge prose (no open row for it, and it costs the page no MISSING)",
+  () => { const v = lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"));
+    return lpListTally(v).missing === 0
+      && !(lpListTally(v).openRows || []).some((r) => /List template/.test(r.deliverable)); },
+  () => lpListTally(lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"))));
+check("ENG-95470: a list page built on a DIFFERENT template than the plan recommended (measured: `ListPageV3Template` vs the planned `ListFreedomTemplate`) is its own machine-checked ⚠ row naming BOTH templates — not only free text inside a judge rejection",
+  () => { const v = lpVerify(lpBuiltOnTemplate("ListPageV3Template"));
+    const row = (lpListTally(v).openRows || []).find((r) => /List template/.test(r.deliverable));
+    return lpListTally(v).missing === 0 && row?.outcome === "unverified"
+      && row.evidence.includes("ListPageV3Template") && row.evidence.includes("ListFreedomTemplate")
+      && /built on .*but the plan recommended/.test(row.evidence); },
+  () => (lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV3Template"))).openRows || []).find((r) => /List template/.test(r.deliverable)));
+check("ENG-95470: with NO `parentSchemaName` reported for the list page, the template row is ⚠ not-checkable (D6) — never a false MISSING for a page nobody looked at",
+  () => { const v = lpVerify(LP_BUILT(LP_ALL_COLS, LP_FILTERS));   // LP_BUILT reports no parentSchemaName at all
+    return lpListTally(v).missing === 0 && lpListTally(v).unverified >= 1
+      && /parentSchemaName.*not provided/.test(v.markdown); },
+  () => lpVerify(LP_BUILT(LP_ALL_COLS, LP_FILTERS)).markdown.slice(0, 900));
 // An approved `pages-only-no-menu` plan registers no section, so no list page is minted: a queued list unit could
 // never close. Its rows degrade to ungated prose, and the `list` marker must go with the `vk` or the FORM unit
 // inherits the list vocabulary in its `expect`.
@@ -1641,6 +1666,11 @@ check("ENG-95218: with two same-column filters, ONE built element does NOT close
 const lpEmptySection = runMigration({ ...LP_MANIFEST, addRecordMiniPage: false,
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
 }, { baseDir: FIX });
+check("ENG-95470 (defect 3, guard): a plan with NOTHING else resolved for the list page (`lpEmptySection` — no columns/filters/actions) publishes NO list-template row and no gated `list` unit, even though `planMeta.listTemplate` is set — a template value alone must never flip an otherwise-ungated list page into an unclosable unit (ENG-95218's guarantee)",
+  () => { const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows);
+    return !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list")
+      && !rows.some((r) => r.pageKey === "list" && /List template/.test(r.label)); },
+  () => checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label));
 check("ENG-95218: with NOTHING gated for the list page (empty section, no `list` unit) its ⚠ Confirm items are still GATED — they ride on `main` as `main#confirm:list-*` and reach `--units.preflight`, because withholding a page nobody builds must not withhold the questions",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
