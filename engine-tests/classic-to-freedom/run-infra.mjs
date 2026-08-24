@@ -139,6 +139,22 @@ const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
 const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
+// ENG-95503 / PR #128 review — the design literals the pure block reads, lifted from the SHIPPED source rather
+// than re-typed: `shows` is a three-value vocabulary a live verifier echoes back, and `UNCONSUMED_FROM_VERIFIER`
+// decides which entries a later dispatch may clear. A re-typed copy would let this suite pass while the run
+// compared against a different string, which is the exact failure the fixed-literal rule exists to prevent.
+const literalOf = (name) => {
+  const m = new RegExp(`const ${name} = '([^']*)'`).exec(wfSrc);
+  return m ? m[1] : null;
+};
+const SHOWS_NAMES = ["SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER"];
+const SHOWS = Object.fromEntries(SHOWS_NAMES.map((n) => [n, literalOf(n)]));
+check("ENG-95503 review fix: the `shows` vocabulary and the unconsumed-source tag are declared as single literals in the shipped source — a live verifier echoes these strings back, so a re-typed copy in this suite could drift from the one the run compares against",
+  () => SHOWS_NAMES.every((n) => typeof SHOWS[n] === "string" && SHOWS[n].length > 0)
+    && new Set(Object.values(SHOWS)).size === SHOWS_NAMES.length,
+  () => SHOWS);
+const INJECTED = SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`).join("\n");
+
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
@@ -148,6 +164,8 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   // ENG-95503 — the CONSUMPTION half of the answers channel: what the builder owes, what it did not build, and
   // where its claim disagrees with the verifier's read of the page.
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
+  // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
+  "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
@@ -164,10 +182,14 @@ let tmpWf;
 try {
   tmpWf = mkdtempSync(path.join(os.tmpdir(), "wf-helpers-"));
   const modPath = path.join(tmpWf, "helpers.mjs");
-  writeFileSync(modPath, `const MAX_ROUNDS = 3;\n${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
+  // The block closes over the run's DESIGN LITERALS and nothing else. Injected here at their shipped values, the
+  // same contract `MAX_ROUNDS` has always had: the `shows` vocabulary and the entry-source tag are compared against
+  // by the pure helpers and echoed back by a live agent, so a copy re-typed in this file could drift from the one
+  // the run actually uses. `SHOWS_NAMES` below pins that these values ARE the shipped ones.
+  writeFileSync(modPath, `const MAX_ROUNDS = 3;\n${INJECTED}\n${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
   wf = await import(pathToFileURL(modPath).href);
 } catch (e) {
-  check("workflow: the pure-helper block loads as a standalone module (it closes over nothing but MAX_ROUNDS)", false, e.message);
+  check("workflow: the pure-helper block loads as a standalone module (it closes over nothing but MAX_ROUNDS and the design literals)", false, e.message);
 } finally {
   if (tmpWf) rmSync(tmpWf, { recursive: true, force: true });
 }
@@ -1363,22 +1385,23 @@ check("ENG-95503 claim rows: an answer with no row in the report reads as NOT ap
   () => wf.resolutionClaimRows(accRouted, { resolutionsApplied: [] }));
 check("ENG-95503 contradiction: a builder claiming APPLIED on a page the verifier reads as NOT showing it is recorded — this is the reopened run's `entity-filter`, where the answer was specified, claimed, and absent from `built.json`",
   () => { const bad = wf.resolutionContradictions(accClaims, [
-      { unit: "main", id: ACC_ID_A, shows: true },
-      { unit: "main", id: ACC_ID_B, shows: false, found: "no lookupListConfig anywhere in viewConfig" }]);
-    return bad.length === 1 && bad[0].id === ACC_ID_B && /lookupListConfig/.test(bad[0].found); },
+      { unit: "main", id: ACC_ID_A, shows: SHOWS.SHOWS_YES },
+      { unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: "no lookupListConfig anywhere in viewConfig" }]);
+    return bad.length === 1 && bad[0].id === ACC_ID_B && /lookupListConfig/.test(bad[0].found)
+      && bad[0].source === SHOWS.UNCONSUMED_FROM_VERIFIER; },
   () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_B, shows: false, found: "absent" }]));
 check("ENG-95503 contradiction: a verifier that confirms the page shows it, and a verifier that reported NO row for it, both produce no contradiction — an unchecked answer is not a refuted one, and a check the verifier could not run must not read as a defect",
-  () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_A, shows: true }, { unit: "main", id: ACC_ID_B, shows: true }]).length === 0
+  () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_A, shows: SHOWS.SHOWS_YES }, { unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_YES }]).length === 0
     && wf.resolutionContradictions(accClaims, []).length === 0
     && wf.resolutionContradictions(accClaims, undefined).length === 0,
   () => "confirmed and unchecked must both be silent");
 check("ENG-95503 contradiction: a check row for ANOTHER unit's id does not refute this unit's claim — the pair is matched on unit AND id, because one confirm id can be routed to a unit that is not its `pageKey`",
-  () => wf.resolutionContradictions(accClaims, [{ unit: "list", id: ACC_ID_B, shows: false, found: "not here" }]).length === 0,
-  () => wf.resolutionContradictions(accClaims, [{ unit: "list", id: ACC_ID_B, shows: false }]));
+  () => wf.resolutionContradictions(accClaims, [{ unit: "list", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: "not here" }]).length === 0,
+  () => wf.resolutionContradictions(accClaims, [{ unit: "list", id: ACC_ID_B, shows: SHOWS.SHOWS_NO }]));
 check("ENG-95503 contradiction: a builder that already reported NOT applied is not ALSO contradicted — it is reported unconsumed once, and double-reporting one answer would hold a run short twice for a single fact",
   () => { const declined = [{ unit: "main", resolutionClaims: wf.resolutionClaimRows(accRouted, { resolutionsApplied: [
       { id: ACC_ID_B, applied: false, why: "no lookup" }] }) }];
-    return wf.resolutionContradictions(declined, [{ unit: "main", id: ACC_ID_B, shows: false, found: "absent" }]).length === 0; },
+    return wf.resolutionContradictions(declined, [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: "absent" }]).length === 0; },
   () => "an already-declined answer is not a contradiction");
 check("ENG-95503 verifier block: the answers a unit was built from are rendered for the verifier with the QUESTION fenced and the answer quoted — and nothing is rendered for a unit that was handed none",
   () => { const text = wf.resolutionClaimsLine(wf.resolutionClaimRows(accRouted, accOk), ac4Fence);
@@ -1413,7 +1436,17 @@ check("ENG-95503 wiring: `unconsumedResolutions` is on EVERY return, beside `res
   /unconsumedResolutions: unconsumed,/.test(wfSrc)
     && /resolutionsUnmatched: state\?\.resolutionsUnmatched \|\| \[\],/.test(wfSrc));
 check("ENG-95503 wiring: the per-unit report REPLACES that unit's entries rather than appending — it runs every round the unit builds, and an entry that survived its own repair would hold the run incomplete on a question that is now answered",
-  /function reportResolutionAccounting\(unit, routed, res\)[\s\S]{0,300}?unconsumed = unconsumed\.filter\(\(u\) => u\.unit !== unit\.key\)/.test(wfSrc));
+  /function reportResolutionAccounting\(unit, routed, res\)[\s\S]{0,1400}?unconsumed = unconsumed\.filter\(/.test(wfSrc));
+// PR #128 review (RC-2a / RC-2b) — THE ORDER, asserted rather than incidental. The clear must run BEFORE the
+// `routed`-empty guard: the only condition that empties `routed` is the condition under which a stale entry needs
+// clearing (a withdrawn answer, a re-routed `list-*` item, an id a re-plan shifted), so a guard-first ordering makes
+// exactly those entries immortal and `complete` unreachable for the folder. The previous pin used a span regex that
+// matched either ordering, so hoisting or un-hoisting the line was invisible to this suite.
+check("ENG-95503 review fix: the per-unit clear runs ABOVE the `routed`-empty early return — the ONE case that empties `routed` is the case a stale entry has to be cleared in, so a guard-first ordering makes that entry immortal",
+  /function reportResolutionAccounting\(unit, routed, res\)[\s\S]{0,1400}?unconsumed = unconsumed\.filter\([\s\S]{0,120}?if \(!\(routed \|\| \[\]\)\.length\) return/.test(wfSrc));
+// The other half of RC-6b: the clear is SCOPED, so the next dispatch cannot erase a verifier-confirmed row.
+check("ENG-95503 review fix: the per-unit clear is scoped to DISPATCH-sourced rows — a verifier-confirmed contradiction must survive the next build, or an untrusted `applied: true` erases the record that exists to disbelieve it",
+  /unconsumed = unconsumed\.filter\(\(u\) => !\(u\.unit === unit\.key && u\.source !== UNCONSUMED_FROM_VERIFIER\)\)/.test(wfSrc));
 check("ENG-95503 wiring: an unaccounted answer buys its unit ONE repair round and no more — the same bound the findings channel has, and without it a builder that keeps refusing the contract would loop forever in `auto` mode",
   /if \(resolutionsReopened\.has\(unit\.key\)\) return/.test(wfSrc)
     && /resolutionsReopened\.add\(unit\.key\)[\s\S]{0,80}resolutionsPending\.add\(unit\.key\)/.test(wfSrc)
@@ -1428,6 +1461,101 @@ check("ENG-95503 wiring: the VERIFIER is asked for `resolutionChecks` and the ro
     && /kind: 'resolution-not-applied'/.test(wfSrc));
 check("ENG-95503 wiring: the verifier is told an answer closes NO row and files NO evidence — the invariant this ticket must not break in the other direction, stated where the agent that files records reads it",
   /You file NO evidence record for these and you close NO row with them/.test(wfSrc));
+
+
+/* ===================================================================================================
+   PR #128 REVIEW — THE CONSUMPTION RECORD SURVIVES ITS PROCESS, AND ONLY THE RIGHT THINGS CLEAR IT.
+
+   Three defects were fixed here and each one is asserted in BOTH directions below, because each was
+   invisible to this suite before: `unconsumed` was never persisted (so AC5 held for exactly one
+   session), the per-unit clear sat below the `routed`-empty guard (so a withdrawn answer's entry was
+   immortal), and a later dispatch could erase a verifier-confirmed row (so the untrusted claim
+   deleted the record that exists to disbelieve it).
+   =================================================================================================== */
+
+const RC_A = "main#confirm:list-columns:no list columns resolved";
+const RC_B = "main#confirm:lookup-value:lookup-record GUIDs in business-rule conditions";
+const rcItems = [
+  { id: RC_A, pageKey: "main", kind: KIND_LIST_COLS, item: "no list columns resolved",
+    resolution: { answer: "Name, Stage", decidedBy: "operator", date: "2026-08-24" } },
+  { id: RC_B, pageKey: "main", kind: "lookup-value", item: "lookup-record GUIDs in business-rule conditions",
+    resolution: { answer: "InProgress = 1093…", decidedBy: "operator", date: "2026-08-24" } },
+];
+const rcOwed = () => wf.owedResolutionPairs(rcItems, ["main"]);
+const rcEntry = (id, source) => ({ unit: "main", id, kind: "x", item: "y", answer: "z", why: "w", source });
+
+check("PR #128 review: `pairKey` separates unit from id with a byte that CANNOT occur in either — the two halves are matched as a pair, and a separator a key could contain would let one pair impersonate another",
+  () => wf.pairKey("main", "a") !== wf.pairKey("mai", "na") && wf.pairKey("main", "a").includes("\u0000"),
+  () => JSON.stringify(wf.pairKey("main", "a")));
+// THE REGRESSION GUARD FOR THE REVIEW'S OWN BLIND SPOT. Two raw NUL bytes in this file's source made GitHub serve
+// it as BINARY: the API returned `patch: null` for this file alone, so the diff of the mechanism the whole ticket is
+// about was invisible in review, and a review that could not read it approved the PR while recording the missing
+// patch as a coverage gap. The delimiter is unchanged at runtime; only the SOURCE spelling is pinned.
+check("PR #128 review: the shipped workflow source contains NO raw NUL byte — a literal NUL is invisible in every editor and diff view AND makes GitHub classify the file as binary, which is how this file's diff went unreviewed",
+  () => !wfSrc.includes("\u0000"),
+  () => `raw NUL count: ${[...wfSrc].filter((c) => c === "\u0000").length}`);
+
+check("PR #128 review: `owedResolutionPairs` derives the still-owed set from the SAME routing call the prompt uses — a separately-derived list would let the obligation and the question disagree about which answers a unit was asked",
+  () => { const owed = rcOwed();
+    return owed.size === 2 && owed.has(wf.pairKey("main", RC_A)) && owed.has(wf.pairKey("main", RC_B)); },
+  () => [...rcOwed()]);
+check("PR #128 review: an UNANSWERED item is owed by nobody — `owedResolutionPairs` routes on the same answered-only filter, so a question with no answer cannot hold a run open",
+  () => wf.owedResolutionPairs([{ id: RC_A, pageKey: "main", kind: KIND_LIST_COLS, item: "i", resolution: null }], ["main"]).size === 0,
+  () => "an unanswered item is not owed");
+
+check("PR #128 review: `confirmedResolutionPairs` counts ONLY an explicit `yes` — `unknown` is the verifier saying it could not tell, which must never clear a record, and treating it as a confirmation would silently drop the answer",
+  () => { const c = wf.confirmedResolutionPairs([
+      { unit: "main", id: RC_A, shows: SHOWS.SHOWS_YES },
+      { unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "rules are not in the page body" }]);
+    return c.size === 1 && c.has(wf.pairKey("main", RC_A)) && !c.has(wf.pairKey("main", RC_B)); },
+  () => [...wf.confirmedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }])]);
+
+check("PR #128 review: an entry whose question is NO LONGER OWED is dropped — the operator withdrew the answer, or a re-plan shifted the id; before the reconcile existed such an entry was immortal and `complete` was unreachable for the folder",
+  () => { const kept = wf.reconcileUnconsumed([rcEntry(RC_A, "dispatch")], rcOwed(), new Set());
+    const gone = wf.reconcileUnconsumed([rcEntry("main#confirm:list-columns:WITHDRAWN", "dispatch")], rcOwed(), new Set());
+    return kept.length === 1 && gone.length === 0; },
+  () => wf.reconcileUnconsumed([rcEntry("main#confirm:gone", "dispatch")], rcOwed(), new Set()));
+check("PR #128 review: a VERIFIER-sourced entry is cleared by the verifier that CONFIRMS the effect, and by nothing else — the independent read is what recorded it, so only an independent read retracts it",
+  () => { const confirmed = new Set([wf.pairKey("main", RC_B)]);
+    return wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), confirmed).length === 0
+      && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), new Set()).length === 1; },
+  () => "a verifier-confirmed pair clears its own entry and an unconfirmed one does not");
+check("PR #128 review: a verifier reporting `unknown` does NOT clear a verifier-sourced entry — 'I cannot tell' is not a retraction, and letting it clear would turn the honest answer into a silent drop",
+  () => wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(),
+    wf.confirmedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }])).length === 1,
+  () => "unknown retracts nothing");
+check("PR #128 review: `reconcileUnconsumed` tolerates the empty and absent shapes — a first round has nothing to reconcile and must not throw on the run's own startup path",
+  () => wf.reconcileUnconsumed([], rcOwed(), new Set()).length === 0
+    && wf.reconcileUnconsumed(undefined, rcOwed(), new Set()).length === 0
+    && wf.reconcileUnconsumed(null, new Set(), new Set()).length === 0,
+  () => "empty and absent are both []");
+
+/* --- The wiring. Pinned on source because each site reads run state the harness cannot supply, but every pin
+   names a fact with a failure mode: delete the line and the check goes red. --- */
+check("PR #128 review: `unconsumed` RIDES IN THE CARRY, so the record survives the process that found it — a well-formed `applied: false` leaves no `blocked` row and no `discrepancies` row, so without this it was the ONE outcome with no persisted trace at all",
+  /const carryNow = \(\) => \(\{[^}]*standWrites, unconsumed \}\)/.test(wfSrc));
+check("PR #128 review: the carry block instructs the writer to persist `unconsumedResolutions` EVEN WHEN EMPTY — an emptied list is how a resumed run learns the answer was finally built, and a conditional write would leave a stale list holding a finished folder open for ever",
+  /UNCONSUMED OPERATOR ANSWERS[\s\S]{0,200}?unconsumedResolutions[\s\S]{0,200}?EVEN WHEN IT IS/.test(wfSrc)
+    && /out\.push\(`\\nUNCONSUMED OPERATOR ANSWERS/.test(wfSrc));
+check("PR #128 review: Reconcile can REPORT the record back — a field the schema does not carry cannot round-trip, so the seeding below would read `undefined` on every resume no matter what the writer wrote",
+  /unconsumedResolutions: \{[\s\S]{0,400}?required: \['unit', 'id'\]/.test(wfSrc)
+    && /source: \{ type: 'string' \}/.test(wfSrc));
+check("PR #128 review: the seed RECONCILES what it rehydrates instead of trusting it — a persisted entry whose question has since been withdrawn or re-keyed must not come back from the dead and hold a finished folder open",
+  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\)\)/.test(wfSrc));
+check("PR #128 review: the round tail reconciles the WHOLE set once, AFTER the verifier — the per-dispatch clear could reach neither a stale entry nor a verifier-confirmed one, which is why both defects were invisible to a per-unit pin",
+  /unconsumed = reconcileUnconsumed\(unconsumed,\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*\n?\s*confirmedResolutionPairs\(lastVerifier\?\.resolutionChecks\)\)/.test(wfSrc));
+
+/* --- RC-4: "cannot tell" is a state of its own, in the schema AND in the words the verifier reads. --- */
+check("PR #128 review: the verifier's `shows` field is the THREE-value vocabulary and not a boolean — with two values an effect the page cannot show had to be reported as a refutation, so a false contradiction was the EXPECTED outcome for this ticket's own new `lookup-value` id",
+  /shows: \{ type: 'string', enum: \[SHOWS_YES, SHOWS_NO, SHOWS_UNKNOWN\] \}/.test(wfSrc));
+check("PR #128 review: the verifier is TOLD all three values, told never to use `no` for a check it could not run, and sent to `read-page-business-rules` for a rule-shaped answer — the surface where a `lookup-value` effect actually lives, since rules are invisible to `viewConfig`",
+  /Never use \\`"no"\\` for this/.test(wfSrc)
+    && /read-page-business-rules/.test(wfSrc)
+    && /BusinessRule_\*\\` schema and is invisible to \\`viewConfig\\`/.test(wfSrc));
+check("PR #128 review: an `unknown` check produces NO contradiction and NO unconsumed entry — executed end to end, because this is the exact false positive that cost a full build round and still ended the run NOT COMPLETE",
+  () => wf.resolutionContradictions(accClaims, [
+    { unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_UNKNOWN, found: "business rules are not in the page body" }]).length === 0,
+  () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_UNKNOWN }]));
 
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
@@ -2419,7 +2547,7 @@ check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistP
     && !/if \(persisted\?\.written\) \{ markParksPersisted\(\); carryPersisted = carryNowFp \}/.test(wfSrc));
 check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by Verify/Reconcile on the normal path and by fallback persistence only when needed — a kill still cannot come back with the budget reset",
   /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites\]\)/.test(wfSrc)
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed\]\)/.test(wfSrc)
     && /markCarryPersisted\(\)/.test(wfSrc)
     && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",
