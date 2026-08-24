@@ -1977,7 +1977,8 @@ function pageGroup(pageKey, title, rows) {
 // under. `requires` is the UI gate for "this record is complete" and rides on the row so `--units` can publish it.
 export const EVIDENCE_REQUIRES = ["referencePage", "components"];
 function evidenceRow(id, label, extra = {}) {
-  return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES } };
+  const { vkExtra, ...rest } = extra;
+  return { label, id, ...rest, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES, ...vkExtra } };
 }
 // The ⚠ Confirm worklist — the same items as the Confirm section (kinds without a section of their own). Removals are not
 // decisions. Own fn so `checklistGroups` gains no branch of its own (Sonar CC 15).
@@ -1995,7 +1996,10 @@ function confirmWorklistRows(pageKey, cs) {
 // style parity is inherent" waved it through. It is now an EVIDENCE row: it closes only on a filed record naming
 // the reference page + the components checked AND a judge that found that record convincing.
 function qualityGateRows(pageKey) {
-  return [evidenceRow(`${pageKey}#quality-gates`, "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above.")];
+  // `allowNoDiff` (ENG-95471): the ONLY evidence kind where "diffed and found nothing to fix" is a real outcome —
+  // a `#confirm`/`#childpage`/list-page record proves something was BUILT, which an empty answer never can, so
+  // the concession stays scoped to this row and is not spread onto `EVIDENCE_REQUIRES` generally.
+  return [evidenceRow(`${pageKey}#quality-gates`, "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". A page diffed and found ALREADY compliant is a valid pass too — file it with an empty `components` list and a `noChangesReason` naming what was compared, never with a vague `components` list padded to look non-empty. NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above.", { vkExtra: { allowNoDiff: true } })];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -3093,8 +3097,8 @@ function resolveEvidenceVk(vk, ctx) {
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
-  if (evidenceComplete(rec, vk.requires) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
-  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
+  if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
+  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
   return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
 }
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
@@ -3104,14 +3108,21 @@ function resolveEvidenceVk(vk, ctx) {
 // (⇒ ⚠ unverified, never a silent pass). Extracted so `resolveEvidenceVk` stays under Sonar CC 15.
 const nonBlankString = (v) => typeof v === "string" && v.trim() !== "";
 const nonEmptyStringList = (v) => Array.isArray(v) && v.length > 0 && v.every(nonBlankString);
+// ENG-95471 — an evidence row that allows it (today, only `#quality-gates`) accepts an EMPTY `components` list
+// as complete, but ONLY paired with a non-blank `noChangesReason` on the same record: the empty list alone still
+// proves nothing (that is exactly the silence this shape used to let through), the reason is what earns the pass.
+// A row that does NOT set `allowNoDiff` never reaches this branch — `nonEmptyStringList` still gates it alone.
+const componentsFieldOk = (v, rec, allowNoDiff) =>
+  nonEmptyStringList(v) || (allowNoDiff === true && Array.isArray(v) && v.length === 0 && nonBlankString(rec?.noChangesReason));
 // Per-field shape for the fields the engine itself requires. A `requires` entry with no entry here falls back to
 // the STRICT generic shape (a non-blank string, or a non-empty list of non-blank strings) — deliberately not an
 // "unknown field ⇒ accept" escape, which would reintroduce the same hole under another name.
-const EVIDENCE_FIELD_SHAPE = { referencePage: nonBlankString, components: nonEmptyStringList };
-const evidenceFieldOk = (k, v) => (EVIDENCE_FIELD_SHAPE[k] || ((x) => nonBlankString(x) || nonEmptyStringList(x)))(v);
-function evidenceComplete(rec, requires) {
+const EVIDENCE_FIELD_SHAPE = { referencePage: nonBlankString, components: componentsFieldOk };
+const evidenceFieldOk = (k, v, rec, allowNoDiff) =>
+  (EVIDENCE_FIELD_SHAPE[k] || ((x) => nonBlankString(x) || nonEmptyStringList(x)))(v, rec, allowNoDiff);
+function evidenceComplete(rec, requires, allowNoDiff) {
   if (!rec || typeof rec !== "object" || Array.isArray(rec)) return false;
-  return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k]));
+  return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k], rec, allowNoDiff));
 }
 // LIST-PAGE deliverables, MEASURED off the built page. A column set and a filter bar are IN the page body, so they
 // are the same class of check as a form field and get the same treatment: match the expected identities against what

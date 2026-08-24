@@ -232,8 +232,11 @@ no schema, so only `unit` and `claimedBuilt` are required.
 
 - `evidenceId` — your page's id, **copied from `--units.evidenceRows`**. Never composed from your page
   key: an id nothing published matches no row and reads as silence.
-- `ran: true` — then `referencePage` (the shipped page you diffed) and `componentsDiffed` (the ones you
-  prop-diffed) are both required. `componentsDiffed` is **not** `claimedBuilt`: built is not diffed.
+- `ran: true` — then `referencePage` (the shipped page you diffed) is required, and then EITHER
+  `componentsDiffed` (the ones you prop-diffed — **not** `claimedBuilt`: built is not diffed) OR, when
+  the diff found nothing worth fixing, `noChangesNeeded: true` plus a `noChangesReason` naming what you
+  actually compared (ENG-95471). An empty `componentsDiffed` with neither is not a pass — it is the same
+  silence as an omitted field.
 - `ran: false` — then `notRunWhy`. This is a valid ANSWER, not a pass: the record is filed as `false`,
   which is a hard `❌ MISSING`, and your unit stays open. Report it honestly anyway — a `false` says
   "checked, not done" and routes a different repair than silence does.
