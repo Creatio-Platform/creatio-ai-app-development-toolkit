@@ -186,6 +186,22 @@ python -m unittest discover -s tests -t .
 
 ## Acceptance baseline (Applicant migration run)
 
+> **Pre-fix figures — not comparable to a current run.** The table below was
+> produced before ENG-95856 was fixed: `aggregate_transcript` charged the same
+> API message once per JSONL record it was split across (thinking / text /
+> tool_use), instead of once. Measured on a different, smaller export
+> (`classic-behaviour-analysis`, 5 agents, one workflow) the inflation this
+> caused ranged ×1.65–2.15 per measure and ×1.81 on the weighted total; across
+> six exports the weighted factor ranged ×1.74–4.08 and is not uniform, so
+> shares, rankings and `--compare` deltas below are not safe to read as exact.
+> Regenerating this table requires the *original* Applicant baseline export
+> that produced these specific numbers (1,191 tool calls / 50 agents /
+> `Applicant_FormPage`) — that export is not currently available on this
+> machine. `counter_version` is a new field: the code that produced this table
+> predates it and printed no version at all. Any report showing
+> `counter_version: 2` was measured after this fix; do not diff a report that
+> carries no `counter_version` against one that does.
+
 Against the preserved Applicant baseline export the tool reproduces the
 published numbers:
 

@@ -28,7 +28,7 @@ from pathlib import Path
 
 import export as export_mod
 import metrics
-from report import Report
+from report import COUNTER_VERSION, Report
 
 # The shared path-resolution boundary lives with the rest of the repository's
 # Python runtime, not in this tool: `mcp_client.py` and `installer/install.py`
@@ -157,6 +157,7 @@ def _config_payload(report: Report) -> dict:
         "cache_write_1h_weight": cfg.cache_write_1h_weight,
         "effective_cache_write_weight": round(report.effective_w, 3),
         "effective_from_fallback": from_fallback,
+        "counter_version": COUNTER_VERSION,
     }
 
 
@@ -195,6 +196,9 @@ def _normalization_payload(report: Report) -> dict:
     return {
         "built_pages": sorted(report.built_pages),
         "page_count": pages,
+        # See summary()["page_count_defaulted"]: True means no built page was
+        # discovered and `pages` fell back to 1 rather than a real count.
+        "page_count_defaulted": report.pages_override is None and not report.built_pages,
         "weighted_total": weighted,
         "weighted_per_page": weighted / pages,
     }
@@ -288,6 +292,7 @@ def render_markdown(report: Report, section: str) -> str:
         parts.append(_summary_markdown(report))
     if section == "all":
         cfg = _config_payload(report)
+        parts.append(f"_counter version: {cfg['counter_version']}_")
         parts.append(
             "**Weighted-cost config** (Anthropic list-price ratios, relative to 1 "
             "input token; model-tier independent):\n\n"
@@ -342,6 +347,8 @@ def _summary_markdown(report: Report) -> str:
     return "\n".join([
         "### Summary",
         "",
+        f"_counter version: {s['counter_version']}_",
+        "",
         "| measure | value |",
         "| :-- | --: |",
         f"| section (built pages) | {pages} |",
@@ -359,6 +366,7 @@ def _print_summary(report: Report) -> None:
     s = report.summary()
     pages = _pages_label(s["page_count"], s["built_pages"])
     print("summary:")
+    print(f"    counter version              : {s['counter_version']}")
     print(f"    section (built pages)        : {pages}")
     print(f"    weighted cost per built page : {s['weighted_per_page'] / 1e6:,.2f}M input-equiv tokens")
     print(f"    weighted cost (total)        : {s['weighted_total'] / 1e6:,.2f}M")
@@ -382,7 +390,27 @@ def _compare_rows(base: dict, cand: dict) -> list:
     return rows
 
 
+def _version_note(base: dict, cand: dict) -> str:
+    """State which side was measured with which counter version.
+
+    Both sides are always recomputed by this same running binary, so today the
+    two versions can never actually differ -- but the note still names them
+    explicitly (rather than assuming), so a future caller that feeds in a
+    pre-computed summary (e.g. a number pasted from an older Jira comment)
+    inherits the same-version guard for free instead of silently diffing
+    across the counting-rule change from ENG-95856.
+    """
+    bv, cv = base["counter_version"], cand["counter_version"]
+    if bv != cv:
+        return (f"REFUSED -- baseline measured with counter version {bv}, "
+                 f"candidate with version {cv}; regenerate both with the same "
+                 f"counter before comparing.")
+    return f"both sides measured with counter version {bv}"
+
+
 def _compare_verdict(base: dict, cand: dict, same_section: bool) -> str:
+    if base["counter_version"] != cand["counter_version"]:
+        return _version_note(base, cand)
     bv, cv = base["weighted_per_page"], cand["weighted_per_page"]
     if not bv:
         core = "baseline cost is zero -- cannot compute a ratio"
@@ -422,6 +450,7 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
         print(json.dumps({
             "baseline": base, "candidate": cand,
             "same_section": same_section, "deltas": rows, "verdict": verdict,
+            "version_note": _version_note(base, cand),
         }, indent=2, ensure_ascii=False))
     elif fmt == "md":
         print(_compare_markdown(base, cand, same_section, rows, verdict))
@@ -433,6 +462,7 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
 def _compare_markdown(base: dict, cand: dict, same_section: bool,
                       rows: list, verdict: str) -> str:
     lines = ["### Cost comparison (baseline vs candidate)", ""]
+    lines.append(f"- {_version_note(base, cand)}")
     lines.append(f"- baseline section: {base['built_pages'] or '(none)'}")
     lines.append(f"- candidate section: {cand['built_pages'] or '(none)'}"
                  + ("  · ✓ same section" if same_section
@@ -457,6 +487,7 @@ def _compare_text(base: dict, cand: dict, same_section: bool,
     mark = "same section" if same_section else "SECTIONS DIFFER -- comparison void"
     lines = [
         "cost comparison (baseline -> candidate):",
+        f"    {_version_note(base, cand)}",
         f"    baseline section : {b_sec}",
         f"    candidate section: {c_sec}   [{mark}]",
         "",
@@ -489,6 +520,7 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
         return 0
 
     if section in ("all",):
+        print(f"counter version: {COUNTER_VERSION}")
         total = report.totals
         from_fallback = (total.ephemeral_5m + total.ephemeral_1h) == 0
         for line in cfg.as_lines(report.effective_w, effective_from_fallback=from_fallback):
