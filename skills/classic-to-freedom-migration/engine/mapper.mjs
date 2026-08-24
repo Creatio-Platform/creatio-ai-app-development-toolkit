@@ -282,7 +282,11 @@ export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
 // wording reaches the plan verbatim, so it is deliberately not reworded on the way through.
 function featureView(r) {
   return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
-    templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null };
+    templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null,
+    // ENG-95683 — the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
+    // package/feature prerequisite BY KIND instead of parsing it out of `note`/`freedom`. null when the row gates
+    // nothing (a plain component).
+    gate: r.gate || null };
 }
 // Freedom grid model (the confirmed target convention): the left profile island is a SINGLE-column grid;
 // tab/group containers are TWO columns. Classic pages use a 24-column grid, so classic field coordinates are
@@ -462,6 +466,9 @@ export function mapToFreedom(eff, opts = {}) {
   const { widgets, chromeWidgets } = _w;
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
+
+  // ---- Moment 4b: the on-save duplicate check — invisible in the page body, so driven by the on-stand signal ----
+  mapDedupOnSave({ signals: opts.signals, ownSignals: opts.ownSignals, isChildPage }).forEach(d => needsDecision.push(d));
 
   // ---- image / photo components → a REAL crt.ImageInput element (view+viewModel+model diffs) ----
   const _img = mapImages(eff, ctx, F);
@@ -2085,6 +2092,63 @@ function mapWidgets(eff, opts = {}) {
   return { widgets, chromeWidgets, needsDecision, accountedFor };
 }
 
+// Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
+// Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
+// `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
+// `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
+// classifies it as `context`. There is no member to map and no element to gate on — so a plan can only know about
+// it from a resolved on-stand fact. The RULES themselves live on the ENTITY (`DuplicatesRule`, columns `IsActive` /
+// `UseAtSave`), not on the page, so they survive a page migration untouched; what does not survive is the check.
+// MEASURED 2026-08-21 on a stand newer than 8.3.4 (core 10.1.496): Classic posts
+// `DeduplicationService/FindDuplicatesOnSave` and shows its duplicates screen, while the Freedom form page issues
+// only `InsertQuery` and saves the duplicate silently. The platform DOES ship a Freedom implementation —
+// `crt.ValidateDuplicatesOnSaveHandler` registered on `crt.SaveDataRequest`, scoped to `BasePageTemplate` /
+// `BaseMiniPageTemplate` (entity-generic), plus the `DuplicateNotificationPage` dialog — but it fired nothing,
+// and that stand had `DeduplicationWebApiUrl` empty with `ESDeduplication`/`BulkESDeduplication` off. Classic needs
+// no service because its `asyncValidate` falls back to the rule's SQL procedure.
+// Hence the wording rule this row must keep: it is a CHECK, never the claim "Freedom cannot do this". On a stand
+// where the deduplication service IS configured the Freedom flow is expected to work, and this row must not turn
+// into a lie the day it does.
+function mapDedupOnSave(opts = {}) {
+  // `opts.signals` is the RUN-level answer set, in which a bundle's OWN `manifest.signals` key already won the
+  // merge (see runMigration/checklistOpts). `opts.ownSignals` is that bundle's own keys alone — the only way to
+  // tell "this page's operator answered for THIS entity" from "inherited from the parent".
+  const s = opts.signals?.deduplication;
+  if (s?.resolved !== true) return [];
+  // A CHILD edit page migrates a DIFFERENT entity, so the PARENT's answer states a fact about the wrong entity —
+  // but silence is the very failure this row exists to prevent (the child's own on-save check would disappear
+  // just as quietly). So without an answer of its own the child carries a child-scoped INSTRUCTION instead of a
+  // verdict, exactly like processActionNote / printActionNote do for the section-level Process / Print menus. It
+  // is gated on `resolved` only, never on the parent's `present`: "the parent entity has no rule" says nothing at
+  // all about this child's entity. Record `signals.deduplication` on the CHILD bundle and the instruction is
+  // replaced by the real verdict below — an operator who runs the query must have a way to close this row.
+  if (opts.isChildPage && opts.ownSignals?.deduplication?.resolved !== true) {
+    return [{ kind: "dedup-on-save", item: "on-save duplicate check (child entity)",
+      reason: "Child edit page — the answer recorded for the parent describes the PARENT's entity. Run the DuplicatesRule query (IsActive AND UseAtSave, filtered to THIS child's entity) for this page's own entity and record it as signals.deduplication on this child's own bundle; if a rule exists, the on-save check follows the same service rule as the parent's, so state whether it survives the migration." }];
+  }
+  if (!s.present) return [];
+  const named = (x) => (typeof x === "string" ? x : (x?.name || x?.caption) || "");
+  // `names` is the CANONICAL key for this signal (SKILL.md + references/classic-to-freedom-mapping.md pin it); `items` is
+  // accepted only because the sibling signals use it. `Array.isArray` because a hand-authored single rule is
+  // plausibly written as a bare string, and `.map` on a string would abort the whole --plan run.
+  const rawRules = s.names || s.items;
+  const rules = (Array.isArray(rawRules) ? rawRules : []).map(named).filter(Boolean);
+  const ruleList = rules.length ? ` (rule(s): ${rules.join(", ")})` : "";
+  // WORDING RULE for these tails: plain prose, NO backticks. `renderConfirmWorklist` escapes the whole `reason`
+  // with `esc` (deliberately — it interpolates stand-derived rule names via ${ruleList}), and `esc` maps every
+  // backtick to U+02CB, so a backticked identifier here renders as ˋlike thisˋ in the plan. Code identifiers
+  // belong in `item`, per the convention comment at designspec.mjs:615-640.
+  let tail;
+  if (s.serviceConfigured === true) {
+    tail = "The stand's deduplication service IS configured, so the platform's Freedom handler is expected to run — VERIFY it on the built page: save a known duplicate and confirm the Potential duplicates found dialog appears (Merge / Save anyway / Edit record).";
+  } else if (s.serviceConfigured === false) {
+    tail = "The stand's deduplication service is NOT configured (DeduplicationWebApiUrl empty and/or ESDeduplication / BulkESDeduplication off) and the Freedom flow runs only through it, so after this migration the check STOPS HAPPENING — silently, with duplicates saved as if clean. Classic keeps working because its asyncValidate falls back to the rule's SQL procedure. Decide one: configure the deduplication service on the target stand; keep the Classic page for this entity; install the Deduplication Freedom UI enhancements marketplace app; or accept the loss and say so.";
+  } else {
+    tail = "Record whether the target stand's deduplication service is configured — DeduplicationWebApiUrl populated AND ESDeduplication / BulkESDeduplication enabled — as signals.deduplication.serviceConfigured. The Freedom flow runs only through that service, so without it this check silently stops happening after the migration.";
+  }
+  return [{ kind: "dedup-on-save", item: "on-save duplicate check", reason: `Classic runs an on-save duplicate check for this entity${ruleList}. ${tail}` }];
+}
+
 // kind → category, ORDERED: the first match wins, so the more specific behaviour sits ahead of the more general
 // one (a method that opens a query AND builds filters is a query).
 // `save` sits BELOW publish / refresh / lookup on purpose, and the rule is stated here because no measurement can
@@ -2275,15 +2339,48 @@ export const LIST_DECISION_KIND = {
   process: "list-process",
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
+// THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
+// answer. TWO shapes ask it, and the second was the ENG-95503 chain break: an EMPTY set was gated, while a FALLBACK
+// set — the section declared no columns, so the resolver returned the entity's single display column — was rendered
+// as ⚠ prose in the design spec and raised no decision at all. So the question reached the operator while their
+// ANSWER had no published id to be recorded against, on exactly the shape this channel exists for.
+// A `schema-default` set deliberately asks NOTHING: the Classic section declared those columns, so they already are
+// the answer, and gating every parsed list would put an unanswerable row on every migration's queue. A REJECTED
+// on-stand read over a chain parse resolves to `schema-default` too, and that was CONSIDERED here rather than
+// missed: the parse is real evidence, the rejection is already named as a structure issue with its own remedy, and
+// a question whose answer the run already holds is a row an operator cannot usefully answer. It stays silent.
+function listColumnsDecision(section, columns) {
+  if (!columns.length) {
+    return { kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
+      reason: "the Freedom grid would ship empty — confirm the column set the list should show" };
+  }
+  // The ITEM is a fixed literal, NOT the fallback column's name: it is half the key an operator's recorded answer
+  // matches on, and a key that moved with the entity's display column would send a real answer to
+  // `resolutionsUnmatched` — an answer reported as belonging to no question is an answer that reaches no builder.
+  if (section?.listColumnSource === "entity-default") {
+    return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
+      reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
+  }
+  // ENG-95850 (D) — A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
+  // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
+  // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
+  // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
+  // profile can be SCOPED, so adopting one silently would migrate whatever scope happened to be read as the
+  // section's default for everyone. So: use it, and ask once. Fixed literal `item`, same reason as the fallback
+  // branch — it is half the key an operator's recorded answer matches on, so it must not move with the columns.
+  if (section?.listColumnSource === "profile") {
+    return { kind: LIST_DECISION_KIND.columns, item: "profile-sourced list column set",
+      reason: "these columns come from the saved grid PROFILE the Classic list actually renders, not from the section's static declaration — a profile can be scoped, so confirm this is the set every user should get in Freedom" };
+  }
+  return null;
+}
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
 function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
   const out = [];
-  if (!columns.length) {
-    out.push({ kind: LIST_DECISION_KIND.columns, item: "no list columns resolved",
-      reason: "the Freedom grid would ship empty — confirm the column set the list should show" });
-  }
+  const columnSet = listColumnsDecision(section, columns);
+  if (columnSet) out.push(columnSet);
   for (const c of columns.filter((x) => x.dataValueType == null)) {
     out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
       reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });
@@ -2310,8 +2407,19 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
   // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
   if (section) {
     const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
+    // Two further ways the list can be short, each stated as what it is. `unresolved` = the method is defined
+    // nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
+    // claiming nobody defines it would be false.
+    const tick = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
+    const gapClause = (names, why) => {
+      if (!names.length) return "";
+      const behind = names.length > 1 ? "them" : "it";
+      return `; and ${names.map(tick).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
+    };
+    const helperGap = gapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
+      + gapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
     out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
-      reason: "only `getSectionActions()` items are read; a button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar" });
+      reason: `only \`getSectionActions()\` items are read; a button the section adds through its view \`diff\` (and a \`DataGridActiveRow…\` row action) is not folded at all, so neither reaches this ChangeSet${helperGap} — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar` });
   }
   for (const ra of rowActions) {
     const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
@@ -2335,7 +2443,11 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
   const columns = (section.listColumns || []).map((c) => listColumnSpec(c, entityColumns));
   const takenFilterNames = new Set();
   const filters = (section.quickFilters || []).map((qf, i) => listFilterSpec(qf, i, entityColumns, takenFilterNames));
-  const actions = (section.sectionActions || []).map((a) => ({ name: a, source: "getSectionActions" }));
+  // Actions arrive from the chain fold carrying their metadata; `source` names the classic surface they came from.
+  // No string tolerance here on purpose: `mergeSectionActions` drops a nameless entry, so a bare string cannot
+  // reach this function through the only caller that builds `section` — a fallback for it would be unreachable
+  // code that no test could exercise through the pipeline.
+  const actions = (section.sectionActions || []).map((a) => ({ ...a, source: "getSectionActions" }));
   const rowActions = (section.rowActions || []).map(listRowActionSpec);
   return {
     entity: boundEntity,

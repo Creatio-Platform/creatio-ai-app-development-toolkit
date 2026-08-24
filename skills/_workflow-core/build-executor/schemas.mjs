@@ -113,6 +113,40 @@ export const RECONCILE_SCHEMA = {
     // over an existing app is not a no-op) nor as "it is there" (which puts every unit back in the loop that
     // wasted the run). It stops the run and says which check was inconclusive.
     packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
+    // ENG-95850 (A2) — THE ONE STAND WRITE THIS RUN'S OWN STATE FILE CARRIES ACROSS ROUTES AND SESSIONS: the
+    // application/package the app unit created, read off `build-queue.json`.`standWrites.packageCreated`. It is what
+    // lets the `new-app` placement stop tell a package SOMEONE ELSE owns (a plan-vs-stand mismatch, still a stop) from
+    // the package THIS migration created (a resume, which continues). `null`/absent on a folder written before the
+    // field, which keeps the old behaviour exactly — a stop — so absence is never read as ownership.
+    // NOT REQUIRED, deliberately: an agent that cannot read the file must be able to say nothing rather than guess,
+    // and the safe side of "nothing" here is the stop.
+    packageCreatedByRun: {
+      type: ['object', 'null'],
+      required: ['package', 'appUnitComplete'],
+      properties: {
+        package: { type: 'string' },
+        appUnitComplete: { type: 'boolean' },
+        planVersion: { type: ['string', 'null'] },
+        sectionPage: { type: ['string', 'null'] },
+      },
+    },
+    // ENG-95850 (B4/C3) — the orphans an EARLIER run or the other route recorded, read off
+    // `build-queue.json`.`standWrites.orphanedPages`. Required for the record to do the job it exists for: the
+    // incident it comes from was a LATER diagnosis reading a dead page, so a list this run writes but never reads
+    // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
+    // session found is still an orphan), never overwritten by it.
+    orphanedPagesOnFile: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['schema'],
+        properties: {
+          schema: { type: 'string' },
+          orphanedBy: { type: ['string', 'null'] },
+          at: { type: ['string', 'null'] },
+        },
+      },
+    },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -253,6 +287,7 @@ export const RECONCILE_SCHEMA = {
     // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
     planGaps: { type: 'array', items: { type: 'string' } },
     roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
+    continuationOf: { type: 'object', additionalProperties: { type: 'integer' } },
     verifyTablePath: { type: 'string' },
     notes: { type: 'string' },
   },
@@ -287,20 +322,6 @@ export const PREFLIGHT_SCHEMA = {
   },
 }
 
-// The one sequential writer that folds the parallel preflight files into `built.json`. It exists because the
-// fan-out must not share a write target, and this script has no filesystem of its own to do the fold with.
-export const PREFLIGHT_MERGE_SCHEMA = {
-  type: 'object',
-  required: ['written'],
-  properties: {
-    written: { type: 'boolean' },
-    builtFile: { type: 'string' },
-    evidenceWritten: { type: 'array', items: { type: 'string' } },  // ids actually merged into `evidence`
-    filesMissing: { type: 'array', items: { type: 'string' } },     // per-agent files that were absent/unreadable
-    notes: { type: 'string' },
-  },
-}
-
 export const BUILD_PROPERTIES = {
   unit: { type: 'string' },
   // The FREEDOM schema this unit's page now resolves to — what a later `get-page` must be given.
@@ -315,6 +336,19 @@ export const BUILD_PROPERTIES = {
   // the script logs any disagreement rather than smoothing it over.
   claimedBuilt: { type: 'array', items: { type: 'string' } },
   reboundFrom: { type: 'string' },
+  // ENG-95850 (B2) — WHAT THE `sectionRegistered` UNIT COUNTED. A workplace registration only ADDS, so the unit's
+  // own report has to carry the NUMBER of bindings, not the fact that it registered one: on a real run the section
+  // ended up in two workplaces and looked right in the one that was opened. The count travels to the verifier, which
+  // writes it into `built.reachability.sectionRegistered` and lets the gate close the row at exactly one. Reporting
+  // is the whole job — the unit never unbinds, because removing a workplace binding is a stand deletion.
+  workplaceBindings: {
+    type: 'object',
+    required: ['count'],
+    properties: {
+      count: { type: 'integer' },
+      names: { type: 'array', items: { type: 'string' } },
+    },
+  },
   // The UI-guidelines pass, as the record the verifier files from. REQUIRED on a page unit: an absent answer
   // is not a valid outcome, `ran: false` with `notRunWhy` is. `evidenceId` is COPIED from this unit's published
   // ids, never composed — an invented id matches no row. `componentsDiffed` is the prop-diffed set, which is
@@ -327,6 +361,37 @@ export const BUILD_PROPERTIES = {
       ran: { type: 'boolean' },
       referencePage: { type: 'string' },
       componentsDiffed: { type: 'array', items: { type: 'string' } },
+      notRunWhy: { type: 'string' },
+    },
+  },
+  // Not a failure and not a repair. The builder reached a safe boundary and asks the orchestrator to verify what
+  // changed, persist the state, and dispatch the same unit again in fresh context if it still has open rows.
+  continuationRequested: { type: 'boolean' },
+  continuationReason: { type: 'string' },
+  safeContinuationPoint: { type: 'string' },
+  // THE IN-CONTEXT COMPLETENESS GATE'S RESULT (ENG-95469). The builder runs the scoped single-unit `--verify` over
+  // its OWN page before reporting the unit complete, gets one bounded fix if short, re-checks, and files the outcome
+  // here. `ran: false` with `notRunWhy` is a valid outcome (a page the builder genuinely could not get-page);
+  // `stillShortRows` is the scoped verdict's `openRows` AFTER the one fix — what the run composes the park reason
+  // from when a unit is still short. `complete`/`missing`/`unverified` are copied VERBATIM from the engine's
+  // single-unit verdict file, never a self-graded claim: the number is the engine's arithmetic, transcribed.
+  selfCheck: {
+    type: 'object',
+    required: ['ran'],
+    properties: {
+      ran: { type: 'boolean' },
+      complete: { type: 'boolean' },
+      missing: { type: 'integer' },
+      unverified: { type: 'integer' },
+      fixAttempted: { type: 'boolean' },
+      stillShortRows: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['deliverable', 'status', 'evidence'],
+          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' } },
+        },
+      },
       notRunWhy: { type: 'string' },
     },
   },
@@ -368,10 +433,13 @@ export const BUILD_PROPERTIES = {
 // must come back with `schemaName` — that is the one fact only the builder holds, and the whole rest of the run
 // (verify, judge, resume in a later session) is unreachable without it. A REACHABILITY unit is a configuration
 // record with no page body, so demanding a schema name there would reject a correct answer.
-export const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines'], properties: BUILD_PROPERTIES }
+export const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'], properties: BUILD_PROPERTIES }
 // The same page obligations MINUS `guidelines`, for a published page key that carries no quality-gates row (an
-// unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable.
-export const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
+// unfolded or a reuse child). `schemaName` is still required: the page still has to be verifiable. `selfCheck` is
+// required too: the guidelines exemption is about the missing quality-gates id, NOT about the in-context gate —
+// `inContextGateBlock` fires for EVERY `unit.kind === 'page'` regardless of schema kind, and these units still have
+// a real, checkable page body, so omitting `selfCheck` here would reopen the "closes on silence" hole for this class.
+export const BUILD_SCHEMA_PAGE_NO_GUIDELINES = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName', 'selfCheck'], properties: BUILD_PROPERTIES }
 export const BUILD_SCHEMA_REACH = { type: 'object', required: ['unit', 'claimedBuilt'], properties: BUILD_PROPERTIES }
 // The APP unit must come back with the package it actually produced — the one fact the rest of the run schedules
 // on. `packageName` is REQUIRED and is compared against the plan's target by the script, not by the agent: clio
@@ -410,6 +478,7 @@ export const VERIFIER_SCHEMA = {
   required: ['pagesWritten', 'builtFile'],
   properties: {
     builtFile: { type: 'string' },
+    queueWritten: { type: 'boolean' },
     pagesWritten: { type: 'array', items: { type: 'string' } },      // keys given a `pages` entry this round
     pagesRecordedFalse: { type: 'array', items: { type: 'string' } },// keys deliberately recorded absent
     // Keys this phase could NOT fetch because no Freedom schema is known for them. An explicit
@@ -445,20 +514,22 @@ export const JUDGE_SCHEMA = {
         properties: { id: { type: 'string' }, convincing: { type: 'boolean' }, why: { type: 'string' } },
       },
     },
+    // Preflight evidence ids this agent MERGED into the built file. Judging is not filing: without this the workflow
+    // has no signal that the transcription happened, and a valid-looking verdict list would settle records nobody wrote.
+    evidenceWritten: { type: 'array', items: { type: 'string' } },
     notes: { type: 'string' },
   },
 }
 
-// The Close-time persistence pass. It exists because a park is DECIDED after the round's reconcile has
-// already written the queue file, so the last round's parks would otherwise live only in this process —
-// and contract rule 7 is that everything that matters is in a file.
+// The fallback persistence pass. Normal successful rounds write the same carry through Verify/Reconcile, so this
+// agent is only a recovery writer for stops where the combined phase did not confirm the queue update.
 export const PERSIST_SCHEMA = {
   type: 'object',
   required: ['written'],
   properties: {
     written: { type: 'boolean' },
-    queueFile: { type: 'string' },
     parkedKeys: { type: 'array', items: { type: 'string' } },
+    evidenceWritten: { type: 'array', items: { type: 'string' } },   // preflight evidence ids merged into the built file
     notes: { type: 'string' },
   },
 }

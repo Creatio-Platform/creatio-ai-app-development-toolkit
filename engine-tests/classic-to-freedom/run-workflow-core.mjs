@@ -38,7 +38,9 @@ import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
 import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
 import * as bex from "../../skills/_workflow-core/build-executor/core.mjs";
 import { makeContext, makePaths } from "../../skills/_workflow-core/build-executor/context.mjs";
-import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys } from "../../skills/_workflow-core/build-executor/helpers.mjs";
+import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
+  packagePreconditionStop, selfCheckStillShort, inContextParkableKeys, selfCheckMismatches,
+} from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
 import { CLAUDE_HOST, makeExecute, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
 import { codexHost, codexSingleAgentHost } from "../../skills/_workflow-core/adapters/codex.mjs";
@@ -849,6 +851,66 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
   check("build-executor paths: an ABSENT key list gets its own refusal, distinct from a key that is not in the list — the two are different diagnoses",
     () => { const p2 = makePaths(ctx, () => []);
       try { p2.specFile("main"); return false } catch (e) { return /no published key list in run state yet/.test(e.message) } });
+  // ENG-95543 — a NON-PAGE unit is named by its KEY, never by a position it does not have. `scheduleUnits` schedules
+  // the `app` unit and every applicable reachability key, and neither is in `unitKeys`: naming one by position threw
+  // and killed any run whose plan needs a menu entry, AFTER the pages were already built.
+  check("build-executor paths: a NON-PAGE unit's file is named by its KEY, not by a published position — `unitNo` has none to give and used to throw on it",
+    paths.worklogFile("sectionRegistered", "reach") === "/mig/worklog/reach-sectionRegistered.md"
+      && paths.worklogFile("app", "app") === "/mig/worklog/app.md"
+      && paths.worklogFile("main", "page") === "/mig/worklog/main-1.md",
+    () => JSON.stringify([paths.worklogFile("sectionRegistered", "reach"), paths.worklogFile("app", "app"), paths.worklogFile("main", "page")]));
+  check("build-executor helpers: `unitStem` is the ONE rule and it never asks a non-page unit for a number — the injected numberer is not even called",
+    unitStem({ key: "sectionRegistered", kind: "reach" }, () => { throw new Error("numbered a non-page unit") }) === "reach-sectionRegistered"
+      && unitStem({ key: "child:Docs", kind: "page" }, () => 3) === "child:Docs-3");
+  // ENG-95469 — the in-context completeness gate's own files and the ONE `--verify` a builder may run.
+  check("build-executor paths: the in-context gate has its OWN slice files, distinct from the read-only verifier's `built-*` evidence",
+    paths.selfBuiltFile("main") === "/mig/slices/self-built-1.json"
+      && paths.selfVerdictFile("list") === "/mig/slices/self-verdict-2.json"
+      && paths.cliSelfCheck("main").includes("--verify --built '/mig/slices/self-built-1.json' --page 'main' --verify-json '/mig/slices/self-verdict-1.json'"),
+    () => paths.cliSelfCheck("main"));
+  check("build-executor helpers: the in-context park fires ONLY after the ONE bounded fix was spent — a shortfall still owed its attempt is deliberately NOT collected",
+    selfCheckStillShort({ ran: true, complete: false, fixAttempted: true })
+      && !selfCheckStillShort({ ran: true, complete: false, fixAttempted: false })
+      && !selfCheckStillShort({ ran: true, complete: true, fixAttempted: true })
+      && !selfCheckStillShort({ ran: false })
+      && !selfCheckStillShort(undefined));
+  check("build-executor helpers: the in-context park is DOUBLE-guarded — the independent post-hoc verifier has to agree the unit is open, so a mis-reported `still short` on a green page parks nothing",
+    inContextParkableKeys([{ key: "main", shortRows: [] }], () => ({ key: "main", kind: "page" }),
+      { pages: { main: { complete: false } } }, {}, null, new Set()).join(",") === "main"
+      && inContextParkableKeys([{ key: "main", shortRows: [] }], () => ({ key: "main", kind: "page" }),
+        { pages: { main: { complete: true } } }, {}, null, new Set()).length === 0
+      && inContextParkableKeys([{ key: "main", shortRows: [] }], () => ({ key: "main", kind: "page" }),
+        { pages: { main: { complete: false } } }, {}, null, new Set(["main"])).length === 0);
+  check("build-executor helpers: a unit the in-context park already claimed is EXCLUDED from the round-budget park — one unit, one park, one reason",
+    parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 3, new Set(["main"])).length === 0
+      && parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 3, new Set()).join(",") === "main");
+  check("build-executor helpers: each of the THREE self-report/verifier disagreements gets its OWN kind — folding `ran-without-verdict` into `gate-not-run` would name the wrong repair",
+    selfCheckMismatches([
+      { key: "a", sc: { ran: true, complete: true } },
+      { key: "b", sc: { ran: true } },
+      { key: "c", sc: { ran: false } },
+      { key: "d", sc: { ran: true, complete: false } },
+    ], (k) => ({ key: k, kind: "page" }), { pages: {} }, {}, null)
+      .map((m) => `${m.key}:${m.kind}`).join(" | ")
+      === "a:reported-complete-but-verifier-open | b:ran-without-verdict | c:gate-not-run",
+    () => JSON.stringify(selfCheckMismatches([{ key: "b", sc: { ran: true } }], (k) => ({ key: k, kind: "page" }), { pages: {} }, {}, null)));
+  // ENG-95474 — the continuation cap is the continuation path's ONLY termination guarantee, so it is EXECUTED here
+  // rather than matched against the constant in the source.
+  check("build-executor helpers: the continuation ceiling terminates — spent < cap is honoured, spent === cap is refused, and cap 0 refuses every ask (never read as `no limit`)",
+    continuationAllowed(0, 2) && continuationAllowed(1, 2) && !continuationAllowed(2, 2)
+      && !continuationAllowed(0, 0) && !continuationAllowed(0, Number.POSITIVE_INFINITY));
+  // ENG-95850 (A2) — `packageState: 'exists'` is the same stand fact for a stranger's package and for the one this
+  // migration created. Only the state file tells them apart, and only a COMPLETE app unit makes it a resume.
+  check("build-executor helpers: under `new-app` a package THIS migration created and finished is a RESUME, not a stop — without this the app unit's own success killed the very next Reconcile",
+    packagePreconditionStop("Pkg", "exists", "new-app", { package: "Pkg", appUnitComplete: true }) === null);
+  check("build-executor helpers: a HALF-finished app unit stays a stop, and its `next` names the hand-finish — nothing here may infer a section nobody created",
+    () => { const stop = packagePreconditionStop("Pkg", "exists", "new-app", { package: "Pkg", appUnitComplete: false });
+      return stop?.stopped === "new-app-over-existing-package" && /THIS migration created it/.test(stop.next) });
+  check("build-executor helpers: a record naming ANOTHER package, or no record at all, is still the stranger's-package stop — absence is never read as ownership",
+    () => { const other = packagePreconditionStop("Pkg", "exists", "new-app", { package: "Elsewhere", appUnitComplete: true });
+      const none = packagePreconditionStop("Pkg", "exists", "new-app", null);
+      return other?.stopped === "new-app-over-existing-package" && none?.stopped === "new-app-over-existing-package"
+        && /no state file records this migration creating it/.test(none.next) });
 }
 {
   // The whole run, through the CLI, on the Codex adapter — and then the capability stop.

@@ -37,8 +37,8 @@ Every structural category is wired into that model. Imperative logic is wired in
 | `childPageSchemas` | yes — `SKILL.md:144-145` | via `detail-editpage` in the child table |
 | `typedPages` / `typedPageSchemas` | yes — `SKILL.md:143` | n/a (gate) |
 | `addRecordMiniPage` / `miniPageSchemas` | yes — `SKILL.md:141` | n/a (gate) |
-| `signals` (DCM / processes / printables) | yes — `SKILL.md:142`, `migrate.mjs:566-569` | rendered under `### On-stand signals` |
-| `planMeta` | yes — `migrate.mjs:556-559` | n/a (gate) |
+| `signals` (every key in `SIGNAL_KEYS`) | yes — `SKILL.md` "on-stand signals", `migrate.mjs` `SIGNAL_KEYS` / `signalUnresolved` | rendered under `### On-stand signals` |
+| `planMeta` | yes — `migrate.mjs` `REQUIRED_PLANMETA` | n/a (gate) |
 | **`methods` (imperative logic)** | **no** | **no** — excluded at `designspec.mjs:382` |
 | **`attributes`** | **no** | **no** — never reaches the effective model at all |
 | **`messages` / `mixins`** | **no** | **no** — not modelled anywhere |
@@ -219,7 +219,7 @@ The engine does read method bodies — for five specific names, each via `extrac
 |---|---|---|
 | `getActions` | navigate/goTo hints + action `Tag` values | `engine.mjs:28-35` |
 | `getAddRecordMiniPage` | returned mini-page schema name | `engine.mjs:57-66` |
-| `getSectionActions` | `Click` handler names, `Tag`s, navigate hints | `engine.mjs:69-81` |
+| `getSectionActions` | one item per menu entry — `{ name, caption, condition, icon, parent, order, group, package }`, helper-built items included (one hop) | `engine.mjs:894-1117` |
 | `getGridDataColumns` / `initColumnsConfig` | list column paths | `engine.mjs:85-89` |
 | `initFixedFiltersConfig` / `getFixedFiltersConfig` | quick-filter `{name, column, type}` | `engine.mjs:95-113` |
 

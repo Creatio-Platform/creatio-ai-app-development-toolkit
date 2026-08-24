@@ -632,5 +632,111 @@ const mvTop = parseSchema('define("Top", [], function() { return { entitySchemaN
 const mvA = mergeHierarchy([mvBase, mvTop]).items.find((i) => i.name === "A");
 check("move op applies the new order/index (A repositioned to 9, not stuck at 0)", !!mvA && mvA.order === 9);
 
+
+/* ================= ENG-95862: severity axis on eff.warnings + `labelConfig`/handler modelling =================
+   The defect: the correctness gate blocked on ANY non-empty `eff.warnings`, including one whose own text says
+   "The element is KEPT (correct)". Warnings now carry `severity`, and the two families are asserted per producer —
+   a new producer that forgets to declare one is caught by the "every warning has a severity" check below. */
+console.log("\n===== ENG-95862: warning severity + labelConfig =====");
+
+const bodyOf = (pkg, diff, extra = "") =>
+  `define("${pkg}",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(diff)}${extra}};});`;
+const ps = (pkg, diff, extra) => parseSchema(bodyOf(pkg, diff, extra), pkg);
+
+// The exact Classic construct from the ticket: base seeds the lookup, a middle layer gives it a CUSTOM LABEL via
+// `labelConfig`, the top layer removes that label so the caption falls back to the column's own title.
+const lcBase = ps("Base", [{ operation: "insert", name: "Requester", parentName: "Profile", propertyName: "items", values: { bindTo: "Requester", itemType: 4 } }]);
+const lcMid = ps("WorkInternalRequest", [{ operation: "merge", name: "Requester", values: { labelConfig: { caption: { bindTo: "Resources.Strings.RequesterLabel" } } } }]);
+const lcTop = ps("WorkInternalProcess", [{ operation: "remove", name: "Requester", properties: ["labelConfig"] }]);
+
+const lcMidOnly = mergeHierarchy([lcBase, lcMid]);
+const lcMidItem = lcMidOnly.items.find((i) => i.name === "Requester");
+check("ENG-95862: a `labelConfig.caption` layer supplies the item's caption (platform precedence: config.caption → labelConfig.caption → column)",
+  !!lcMidItem && lcMidItem.caption === "Resources.Strings.RequesterLabel" && lcMidItem.labelCaption === "Resources.Strings.RequesterLabel",
+  () => lcMidItem);
+
+const lcFull = mergeHierarchy([lcBase, lcMid, lcTop]);
+const lcItem = lcFull.items.find((i) => i.name === "Requester");
+check("ENG-95862: `remove properties:['labelConfig']` CLEARS the custom label (caption falls back to the column's own title) and the element is kept",
+  !!lcItem && lcItem.caption === null && lcItem.labelCaption === null && !lcFull.removed.some((r) => r.name === "Requester"),
+  () => ({ item: lcItem, removed: lcFull.removed.map((r) => r.name) }));
+check("ENG-95862: that op raises NO warning at all — the key is modelled now, so there is nothing to demote",
+  lcFull.warnings.length === 0, () => lcFull.warnings);
+
+// The OVER-CLEARING case: a layer that states BOTH must keep `config.caption` when only `labelConfig` is removed.
+const lcBoth = ps("Both", [{ operation: "merge", name: "Requester", values: { caption: { bindTo: "Resources.Strings.OwnCaption" }, labelConfig: { caption: { bindTo: "Resources.Strings.RequesterLabel" } } } }]);
+const lcBothItem = mergeHierarchy([lcBase, lcBoth, lcTop]).items.find((i) => i.name === "Requester");
+check("ENG-95862: removing `labelConfig` does NOT over-clear — a `caption` stated on the control itself survives",
+  !!lcBothItem && lcBothItem.caption === "Resources.Strings.OwnCaption" && lcBothItem.labelCaption === null,
+  () => lcBothItem);
+
+// HANDLER family — the second gap the key audit found. `click` lives in the `handlers` map, not as a field.
+const hBase = ps("HBase", [{ operation: "insert", name: "Btn", parentName: "Header", propertyName: "items", values: { itemType: 5, click: { bindTo: "onBtnClick" }, visible: false } }]);
+const hTop = ps("HTop", [{ operation: "remove", name: "Btn", properties: ["click"] }]);
+const hItem = mergeHierarchy([hBase, hTop]).items.find((i) => i.name === "Btn");
+check("ENG-95862 (key audit): `remove properties:['click']` clears the handler binding and raises no warning",
+  !!hItem && !hItem.handlers.click && mergeHierarchy([hBase, hTop]).warnings.length === 0,
+  () => hItem);
+// `visible` is in BOTH vocabularies: a removal must clear the static value AND the dynamic trigger, not one of them.
+const hVis = ps("HVis", [{ operation: "remove", name: "Btn", properties: ["visible"] }]);
+const hVisBase = ps("HVisBase", [{ operation: "insert", name: "Btn", parentName: "Header", propertyName: "items", values: { itemType: 5, visible: { bindTo: "isBtnVisible" } } }]);
+const hVisItem = mergeHierarchy([hVisBase, hVis]).items.find((i) => i.name === "Btn");
+check("ENG-95862 (key audit): `visible` is in BOTH vocabularies — removing it clears the field AND the handler entry, never half of it",
+  !!hVisItem && hVisItem.visible === null && !hVisItem.handlers.visible, () => hVisItem);
+
+// The four AMBIGUOUS keys (`enabled`, `visible`, `readonly`, `required`) appear in a classic body both as a handler
+// (`{bindTo:"m"}`, modelled in `handlers`) and as a static literal (`enabled: false`, which `handlerBindings` skips
+// and no field holds). Removing the modelled form is fully represented; removing the static form changes nothing,
+// and a silent no-op there is the drop this whole function exists to prevent. So each of the three that has NO
+// second slot must warn on the literal and stay quiet on the handler — `visible` is asserted above, it has one.
+for (const key of ["enabled", "readonly", "required"]) {
+  const litBase = ps("LitB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: false } }]);
+  const litTop = ps("LitT", [{ operation: "remove", name: "F", properties: [key] }]);
+  const lit = mergeHierarchy([litBase, litTop]);
+  check(`ENG-95862 (key audit): a STATIC \`${key}: false\` removal is an unmodelled effect — it warns (fidelity) instead of silently doing nothing`,
+    lit.warnings.length === 1 && lit.warnings[0].severity === "fidelity" && new RegExp(key).test(lit.warnings[0].hint),
+    () => lit.warnings);
+  const dynBase = ps("DynB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: { bindTo: "m" } } }]);
+  const dyn = mergeHierarchy([dynBase, litTop]);
+  const dynItem = dyn.items.find((i) => i.name === "F");
+  check(`ENG-95862 (key audit): the HANDLER form of \`${key}\` is modelled, so removing it clears the map entry and raises nothing`,
+    dyn.warnings.length === 0 && !!dynItem && !dynItem.handlers?.[key],
+    () => ({ warnings: dyn.warnings, handlers: dynItem?.handlers }));
+}
+
+// A genuinely unmodelled key stays a warning — but a FIDELITY one, which no longer blocks.
+const unBase = ps("UBase", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F" } }]);
+const unTop = ps("UTop", [{ operation: "remove", name: "F", properties: ["wrapClass"] }]);
+const unRun = mergeHierarchy([unBase, unTop]);
+check("ENG-95862: a still-unmodelled remove key is a FIDELITY warning (advisory), not a correctness one",
+  unRun.warnings.length === 1 && unRun.warnings[0].severity === "fidelity" && /KEPT \(correct\)/.test(unRun.warnings[0].hint),
+  () => unRun.warnings);
+
+// The CORRECTNESS half — each of the five producers, asserted by severity rather than by trust.
+const ghostMerge = mergeHierarchy([ps("G", [{ operation: "merge", name: "Ghost", values: { caption: "x" } }])]);
+const ghostMove = mergeHierarchy([ps("G", [{ operation: "move", name: "Ghost", parentName: "Header" }])]);
+const ghostRemove = mergeHierarchy([ps("G", [{ operation: "remove", name: "Ghost" }])]);
+const ghostSet = mergeHierarchy([ps("G", [{ operation: "set", name: "Ghost", values: { bindTo: "Ghost" } }])]);
+check("ENG-95862: merge/move/remove/set onto an item no lower schema defined are all CORRECTNESS warnings (the gate must still block)",
+  [ghostMerge, ghostMove, ghostRemove, ghostSet].every((r) => r.warnings.length === 1 && r.warnings[0].severity === "correctness"),
+  () => [ghostMerge, ghostMove, ghostRemove, ghostSet].map((r) => r.warnings.map((w) => w.severity)));
+
+// `set` REPLACING a real element is a fidelity note: the engine's reading is right, the wholesale replacement is
+// what the reader must be told about.
+const g862SetBase = ps("SBase", [{ operation: "insert", name: "Grp", parentName: "Header", propertyName: "items", values: { itemType: 15 } }]);
+const g862SetTop = ps("STop", [{ operation: "set", name: "Grp", values: { itemType: 15 } }]);
+const g862SetRun = mergeHierarchy([g862SetBase, g862SetTop]);
+check("ENG-95862: `set` replacing an EXISTING element is a FIDELITY note (the mapping is right; the wholesale replacement is the fact to report)",
+  g862SetRun.warnings.length === 1 && g862SetRun.warnings[0].severity === "fidelity", () => g862SetRun.warnings);
+
+// The structural guarantee: no producer may ship without declaring a severity, and none may invent a third value.
+const everyWarning = [lcFull, unRun, ghostMerge, ghostMove, ghostRemove, ghostSet, g862SetRun].flatMap((r) => r.warnings);
+check("ENG-95862: EVERY warning declares a severity, and only the two legal values exist",
+  everyWarning.length > 0 && everyWarning.every((w) => w.severity === "correctness" || w.severity === "fidelity"),
+  () => everyWarning.map((w) => ({ op: w.op, name: w.name, severity: w.severity })));
+check("ENG-95862: every warning also carries a `hint` — the gate quotes it, so a producer that names its text differently renders as `undefined`",
+  everyWarning.every((w) => typeof w.hint === "string" && w.hint.length > 0),
+  () => everyWarning.map((w) => ({ op: w.op, name: w.name, hint: w.hint })));
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

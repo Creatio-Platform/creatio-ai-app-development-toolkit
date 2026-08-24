@@ -83,9 +83,9 @@ has an identity to match on the built page.
 > page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.
 
 #### Command-bar actions
-| Action | Source | Freedom target |
-| --- | --- | --- |
-| `<action>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
+| Action | Caption | Icon | Condition | Menu position | Source package | Source | Freedom target |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `<action>` | `<caption resource>` | `<icon>` | `<Enabled condition>` — carry as Freedom state | group `<n>` · under `<submenu parent>` | `<package>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
 > **Build note — column ids:** each grid column also needs a GUID `id`; the engine mints none, so the builder assigns it.
 
@@ -99,8 +99,12 @@ it reaches `--units.preflight` and cannot be read past. The list page raises its
 
 #### ⚠ Confirm before I build (<n>)
 All eight kinds the list page can raise — the set is closed, so a kind absent from a run's plan means the run had
-nothing to ask, never that the question went unasked:
+nothing to ask, never that the question went unasked. Nine bullets, eight kinds: `list-columns` is listed twice
+because it asks about an EMPTY set and about a FALLBACK one, and the two are answered separately:
 - **[list-columns]** no list columns resolved — the grid would be built empty …
+- **[list-columns]** fallback list column set — the Classic section declares no list columns, so the grid would
+  ship with a single fallback column … (the SAME kind, second item: a fallback set is an unanswered question
+  too, and it carries an id so the operator's answer has somewhere to be recorded)
 - **[list-column-type]** `<column>` — classic type `<T>` has no confirmed Freedom `dataValueType` …
 - **[list-column-path]** `<column>.<display>` — a display path, bound as the lookup column `<column>` …
 - **[list-filter-type]** `<FilterName>` — its Classic `dataValueType` maps to no known `quickFilterType` …
@@ -171,9 +175,9 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | 3 | Created on | `PDS_CreatedOn` | PDS.CreatedOn | DateTime (`dataValueType` 7) |
 
 #### Command-bar actions
-| Action | Source | Freedom target |
-| --- | --- | --- |
-| `runBulkAssign` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
+| Action | Caption | Icon | Condition | Menu position | Source package | Source | Freedom target |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `runBulkAssign` | ⚠ none read — confirm on-stand | — | ⚠ none declared — confirm on-stand | group 0 | HRApplicant | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
 > **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.
 

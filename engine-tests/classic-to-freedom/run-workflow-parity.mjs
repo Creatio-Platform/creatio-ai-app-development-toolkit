@@ -46,15 +46,41 @@ const note = (name, cond, detail) => {
   if (detail !== undefined) console.log("      ↳ " + (typeof detail === "function" ? detail() : detail));
 };
 
+// A BOUNDED excerpt of a run's log lines, the same way every other diagnostic here is bounded. A run whose
+// termination bound is broken emits hundreds of lines per side, and an unbounded dump both buries the difference and
+// floods stdout — which is how the summary line came to be truncated at exit. The full count is always stated, so a
+// reader knows an excerpt is what they are looking at.
+const LOG_EXCERPT = 12;
+function logExcerpt(logs) {
+  if (logs.length <= LOG_EXCERPT * 2) return logs.join("\n        ");
+  const head = logs.slice(0, LOG_EXCERPT), tail = logs.slice(-LOG_EXCERPT);
+  return [...head, `… ${logs.length - LOG_EXCERPT * 2} line(s) elided …`, ...tail].join("\n        ");
+}
+
 // Evaluate a workflow script the way the host does. The body becomes a real ES module under the OS temp dir and is
 // imported — no `new Function`, no eval, matching the sibling runners' decision to keep these files free of a
 // dynamic-code construct a reviewer then has to reason about.
+// A RUNAWAY CEILING on the dispatch count, so a script that does not TERMINATE fails as a divergence instead of
+// hanging the suite. Every termination guarantee this workflow has — the round budget, the park arithmetic, the
+// continuation cap — is a bound on how many agents a run may ask for, and the failure mode when one is removed is an
+// infinite loop, not a wrong answer. A hang is the worst possible signal: it is indistinguishable from a slow machine
+// and it names no scenario. Hitting the ceiling throws, the throw is reported as this run's `error`, and the
+// comparison already requires the two sides' errors to match — so the correct baseline finishing normally against a
+// mutated script that runs away is a NAMED failure on the scenario that provoked it.
+// MEASURED, not guessed: the widest legitimate scenario in this file dispatches 30 work items, so this is 10x
+// headroom. It is a backstop for a broken bound, never a limit a real run should approach — raise it only alongside
+// a scenario that legitimately needs more, and never to make a runaway pass.
+const MAX_DISPATCHES = 300;
+
 async function runScript(src, args, answer) {
   const body = src.replace(/^export const meta = \{[\s\S]*?\n\}\n/, "");
   const phases = [], calls = [], logs = [];
   const agent = async (prompt, opts = {}) => {
     const req = opts.schema?.required ? [...opts.schema.required].sort((a, b) => a.localeCompare(b)) : null;
     calls.push({ phase: opts.phase || null, label: opts.label || null, agentType: opts.agentType || null, required: req, prompt: String(prompt ?? "") });
+    if (calls.length > MAX_DISPATCHES) {
+      throw new Error(`runaway: more than ${MAX_DISPATCHES} work items dispatched (last: ${opts.phase}/${opts.label}) — a termination bound (round budget, park arithmetic or the continuation cap) is not holding`);
+    }
     return answer({ phase: opts.phase, label: opts.label, prompt, schema: opts.schema, nth: calls.length });
   };
   // FAITHFUL to the documented `parallel()` contract, which is NOT `Promise.all`: a thunk that throws (or whose
@@ -186,7 +212,7 @@ function behaviourScenarios() {
       args: { ...ARGS, rowsPerAgent: 2, maxDescribeAgents: 3 },
       answer: byPhase({ Context: CTX, Describe: FULL, Critique: CRIT, Merge: MERGED }),
     },
-    { name: "missing required args — fails loudly before any agent", args: { manifest: "m.json" }, answer: byPhase({}) },
+    { name: "missing required args — fails loudly before any agent", args: { manifest: "m.json" }, expectError: true, answer: byPhase({}) },
   ];
 }
 
@@ -238,12 +264,14 @@ function buildScenarios() {
 
   // One scripted host per scenario. `seq` lets a scenario answer the Nth reconcile differently.
   const host = (cfg) => () => makeHost(cfg);
-  const makeHost = ({ reconciles, build = BUILT, verifyRes = VERIFIED, judge = JUDGED, refs = REFS, persist = PERSISTED, preflight, merge }) => {
+  const makeHost = ({ reconciles, build = BUILT, verifyRes = VERIFIED, judge = JUDGED, refs = REFS, persist = PERSISTED, preflight }) => {
     let r = 0;
     return ({ phase, label, prompt }) => {
       if (phase === "Reconcile") { const a = reconciles[Math.min(r, reconciles.length - 1)]; r++; return typeof a === "function" ? a() : a }
       if (phase === "Refs") return refs;
-      if (phase === "Preflight") return label === "preflight:merge" ? (merge ?? { written: true, evidenceWritten: [], filesMissing: [], notes: "" }) : (preflight ?? { resolved: [], unresolved: [] });
+      // Preflight is now the FAN-OUT and nothing else: the dedicated `preflight:merge` writer is gone (ENG-95474) —
+      // agents return structured records and the existing Judge/Reconcile sequence performs the single write.
+      if (phase === "Preflight") return preflight ?? { resolved: [], unresolved: [] };
       if (phase === "Build") {
         const unit = /^build:(.*)$/.exec(label || "")?.[1] || "";
         return typeof build === "function" ? build(unit, prompt) : build;
@@ -275,7 +303,7 @@ function buildScenarios() {
     { name: "an answered ⚠ Confirm item reaches the builder", args: ARGS, answer: host({ reconciles: [RECONCILE({ preflightItems: [{ id: "#confirm:list-columns:Deal", pageKey: "main", kind: "list-columns", item: "which columns", resolution: { answer: "Name, Amount", decidedBy: "alex", date: "2026-08-01" } }] }), GREEN, GREEN] }) },
     { name: "checkpoint pause after the first unit", args: { ...ARGS, mode: "checkpoints", checkpointAfter: ["child:Documents"] }, answer: host({ reconciles: [RECONCILE(), RECONCILE()] }) },
     { name: "guided mode pauses after every unit", args: { ...ARGS, mode: "guided" }, answer: host({ reconciles: [RECONCILE(), RECONCILE()] }) },
-    { name: "an unknown mode throws before any agent", args: { ...ARGS, mode: "semi" }, answer: host({ reconciles: [RECONCILE()] }) },
+    { name: "an unknown mode throws before any agent", args: { ...ARGS, mode: "semi" }, expectError: true, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "the verifier does not answer — stale verdict, stop", args: ARGS, answer: host({ reconciles: [RECONCILE()], verifyRes: null }) },
     { name: "the reconcile after a round does not answer — stop", args: ARGS, answer: host({ reconciles: [RECONCILE(), null] }) },
     { name: "the baseline reconcile returns nothing", args: ARGS, answer: host({ reconciles: [null] }) },
@@ -288,7 +316,7 @@ function buildScenarios() {
     { name: "a guidelines record that is not fileable is reported, not filed", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], build: (unit) => ({ ...BUILT(unit), guidelines: { evidenceId: `${unit}#quality-gates`, ran: true, referencePage: "", componentsDiffed: [] } }) }) },
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },
-    { name: "missing required args — fails loudly before any agent", args: { manifest: "/mig/manifest.json" }, answer: host({ reconciles: [RECONCILE()] }) },
+    { name: "missing required args — fails loudly before any agent", args: { manifest: "/mig/manifest.json" }, expectError: true, answer: host({ reconciles: [RECONCILE()] }) },
     // --- three branches whose PROMPT TEXT no scenario above reaches -----------------------------------------
     // `pages-only-no-menu`: the app unit is told NOT to create a section, which is the OTHER arm of the step-4
     // text. Every scenario above carries `existing-app`, so that arm had never been compared against the baseline.
@@ -296,10 +324,11 @@ function buildScenarios() {
       name: "the app unit under `pages-only-no-menu` — the step-4 text that says create NO section",
       args: ARGS,
       answer: host({
-        // `app` is in `unitKeys` here ONLY so the prompt can be compared at all: `unitNoOf` refuses a scheduled
-        // unit the key list does not carry, and `--units` never publishes the synthetic `app` unit — so in real
-        // life this prompt throws before it is dispatched, in the baseline and in the generated script alike (a
-        // PRE-EXISTING defect, reported separately). This fixture steps around it to compare the TEXT.
+        // `app` is in `unitKeys` here as a historical fixture shape: naming a file for a scheduled unit the key
+        // list does not carry used to throw in `unitNo`, so this was once the only way to compare the prompt at
+        // all. ENG-95543 named non-page units by KIND + KEY instead, so the workaround is no longer needed — it
+        // is kept because it changes nothing (a non-page unit never asks for a position) and removing it would
+        // move a fixture this suite's other assertions read.
         reconciles: [RECONCILE({ packageState: "absent", sectionHost: "pages-only-no-menu", applicationCode: null, unitKeys: ["child:Documents", "list", "main", "app"] }), GREEN],
         build: (unit) => (unit === "app"
           ? { unit: "app", packageName: "DealPkg", appName: "Deals", claimedBuilt: [], blocked: [], proposals: [] }
@@ -312,7 +341,7 @@ function buildScenarios() {
       name: "the app unit produced the package and NOTHING else — the partial-deliverable blocker text",
       args: ARGS,
       answer: host({
-        // Same fixture shape, same reason as above: `app` in `unitKeys` so the unit is dispatchable at all.
+        // Same fixture shape, same history as above: `app` in `unitKeys`, which ENG-95543 made unnecessary.
         reconciles: [RECONCILE({ packageState: "absent", unitKeys: ["child:Documents", "list", "main", "app"] }),
                      RECONCILE({ packageState: "absent", unitKeys: ["child:Documents", "list", "main", "app"] })],
         build: (unit) => (unit === "app"
@@ -338,6 +367,179 @@ function buildScenarios() {
       args: ARGS,
       answer: host({
         reconciles: [RECONCILE({ unitKeys: ["child:Documents", "list", "main", "sectionRegistered"], applicationCode: null }), GREEN],
+      }),
+    },
+    // --- the branches ENG-95469 / ENG-95474 / ENG-95543 / ENG-95850 added -----------------------------------
+    // Each of these drives a builder answer NO scenario above produces, so the new decision paths are compared
+    // against the baseline rather than merely present in both. Without them a green parity run says nothing about
+    // them: every fixture above returns a builder result that takes the old path through every one.
+    //
+    // A NON-PAGE unit whose key is NOT in `unitKeys` (ENG-95543). This used to throw in `unitNo` while naming the
+    // unit's worklog file — after the pages had already been built — which is why the two fixtures above put the
+    // key in `unitKeys` to be comparable at all. Named by its KIND + KEY now, so it needs no position.
+    {
+      name: "a reachability unit absent from `unitKeys` is dispatchable — its files are named by key, not by position",
+      args: ARGS,
+      answer: host({ reconciles: [RECONCILE(), GREEN] }),
+    },
+    // A CONTINUATION (ENG-95474): the builder stops at a safe boundary and the SAME unit comes back next round with
+    // no repair round charged. This fixture covers the ACCOUNTING — the continuation counter moves, the round counter
+    // does not — and it continues `main`, the LAST unit in the schedule.
+    {
+      name: "a builder asks for a continuation — the round carries on and no repair round is charged",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE(), RECONCILE(), GREEN],
+        build: (unit) => (unit === "main"
+          ? { ...BUILT(unit), continuationRequested: true, continuationReason: "the Logic tab is half ported", safeContinuationPoint: "after the Fields group was saved" }
+          : BUILT(unit)),
+      }),
+    },
+    // …AND THE OTHER HALF OF THAT GUARANTEE, which the fixture above cannot observe. "A continuation does not
+    // terminate the round" is only VISIBLE when there is something left to terminate, and only when a pause is
+    // possible at all:
+    //   · `mode: auto` makes `shouldPauseAfter` return false for every unit, so dropping the `!continuation` guard
+    //     changes nothing an agent or a return value can show — the whole branch is inert;
+    //   · continuing the LAST unit in the schedule leaves no later unit to defer.
+    // So this fixture continues the FIRST scheduled unit (`child:Documents`) under `checkpoints` naming that same
+    // unit, with `main` and `sectionRegistered` still open behind it. On the correct core the continuation SUPPRESSES
+    // the checkpoint — the round builds all three and carries on. Reintroduce the defect (`!continuation` dropped
+    // from the pause decision) and the run pauses after the first unit, defers the other two and returns
+    // `paused-at-checkpoint`: a different agent sequence AND a different return value. Verified by mutation, not by
+    // reading the source — this is the behavioural counterpart of the two source-level pins in `run-infra.mjs`.
+    {
+      name: "a continuation on the FIRST unit does not terminate the round — the two units behind it still build, and the checkpoint is suppressed",
+      args: { ...ARGS, mode: "checkpoints", checkpointAfter: ["child:Documents"] },
+      answer: host({
+        reconciles: [RECONCILE(), RECONCILE()],
+        build: (unit) => (unit === "child:Documents"
+          ? { ...BUILT(unit), continuationRequested: true, continuationReason: "the Coverage group is half ported", safeContinuationPoint: "after the first field group was saved" }
+          : BUILT(unit)),
+      }),
+    },
+    // The continuation CEILING: a unit that asks every round is refused past the cap and charged as an ordinary
+    // repair round instead, so `MAX_ROUNDS` parks it. `maxContinuations: 1` reaches the refusal in two rounds.
+    {
+      name: "a unit that asks to continue every round is refused past the cap and parks on its round budget",
+      args: { ...ARGS, maxRounds: 2, maxContinuations: 1 },
+      answer: host({
+        reconciles: [RECONCILE(), RECONCILE(), RECONCILE(), RECONCILE()],
+        build: (unit) => ({ ...BUILT(unit), continuationRequested: true, continuationReason: "still going" }),
+      }),
+    },
+    // The BUILD TURN BUDGET at 0 disables the mechanism, which changes the build prompt: an agent never told to
+    // stop cannot ask to, so the continuation block is absent from the text.
+    {
+      name: "buildTurnBudget 0 removes the continuation block from every build prompt",
+      args: { ...ARGS, buildTurnBudget: 0 },
+      answer: host({ reconciles: [RECONCILE(), GREEN] }),
+    },
+    // THE IN-CONTEXT COMPLETENESS GATE, still short after its ONE bounded fix (ENG-95469) — the unit parks after
+    // ONE round with its own gate's open rows as the reason, confirmed against the post-hoc verifier.
+    {
+      name: "the in-context gate is still short after its one bounded fix — the unit parks after ONE round",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE(), RECONCILE()],
+        build: (unit) => ({ ...BUILT(unit), selfCheck: { ran: true, complete: false, missing: 2, unverified: 0, fixAttempted: true,
+          stillShortRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "missing: Amount, Stage" }] } }),
+      }),
+    },
+    // The THREE ways a self-report and the independent verifier can disagree, in one round: a claimed-green gate on
+    // an open unit, a gate that RAN but returned no verdict, and a gate that did not run. Each gets its own text.
+    {
+      name: "every self-report the independent verifier contradicts is named as its own kind of discrepancy",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE(), RECONCILE()],
+        build: (unit) => {
+          const sc = { main: { ran: true, complete: true }, list: { ran: true }, "child:Documents": { ran: false, notRunWhy: "get-page timed out" } }[unit];
+          return { ...BUILT(unit), ...(sc ? { selfCheck: sc } : {}) };
+        },
+      }),
+    },
+    // A RE-BIND that leaves a page behind (ENG-95850 B4/C3): the orphan is recorded, named to the verifier in its
+    // own prompt block, reported as a blocker, and NEVER deleted.
+    {
+      name: "a re-bind leaves an orphan — it is recorded, named to the verifier and reported, never deleted",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE(), GREEN],
+        build: (unit) => ({ ...BUILT(unit), reboundFrom: unit === "main" ? "DealPkg_FormPage" : "" }),
+      }),
+    },
+    // An orphan an EARLIER session recorded, read back off the queue file at the BASELINE — the resumed run is
+    // exactly when a dead page is about to be read as a live one.
+    {
+      name: "an orphan recorded by an earlier session is carried over at the baseline",
+      args: ARGS,
+      answer: host({ reconciles: [RECONCILE({ orphanedPagesOnFile: [{ schema: "DealPkg_FormPage", orphanedBy: "main", at: "plan-old" }] }), GREEN] }),
+    },
+    // THE WORKPLACE BINDING COUNT (ENG-95850 B2): a registration only ADDS, so two bindings look correct in the
+    // one an operator opened. Reported as a blocker naming every workplace; never unbound.
+    {
+      name: "the sectionRegistered unit reports TWO workplace bindings — surfaced as a blocker, never unbound",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE(), GREEN],
+        build: (unit) => (unit === "sectionRegistered"
+          ? { unit, claimedBuilt: [], blocked: [], proposals: [], workplaceBindings: { count: 2, names: ["Recruiting", "My applications"] } }
+          : BUILT(unit)),
+      }),
+    },
+    // THE PACKAGE PROVENANCE RESUME (ENG-95850 A2). `new-app` + `packageState: 'exists'` is a hard stop unless the
+    // state file records THIS migration creating it and finishing the app unit — then it is a resume.
+    {
+      name: "new-app over a package THIS migration created and finished — a resume, not a stop",
+      args: ARGS,
+      answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", packageCreatedByRun: { package: "DealPkg", appUnitComplete: true, planVersion: "plan-abc123", sectionPage: "DealFormPage" } }), GREEN] }),
+    },
+    {
+      name: "new-app over a package this migration created but did NOT finish — still a stop, naming the hand-finish",
+      args: ARGS,
+      answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", packageCreatedByRun: { package: "DealPkg", appUnitComplete: false, planVersion: "plan-abc123", sectionPage: null } })] }),
+    },
+    // The app unit's stand write is persisted MID-ROUND, and the record makes the very next Reconcile's `new-app`
+    // gate read the package as ours instead of stopping the run on its own success.
+    {
+      name: "the app unit creates the package under `new-app` — the run survives its own success",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE({ packageState: "absent", sectionHost: "new-app" }), GREEN],
+        build: (unit) => (unit === "app"
+          ? { unit: "app", packageName: "DealPkg", appName: "Deals", starterFormPage: "DealFormPage", starterListPage: "DealListPage", claimedBuilt: [], blocked: [], proposals: [] }
+          : BUILT(unit)),
+      }),
+    },
+    // VERIFY IS THE QUEUE WRITER NOW (ENG-95474). Every fixture above leaves `queueWritten` unset, which is the
+    // FALLBACK path — this one confirms the write, so the dedicated persistence agent is not dispatched at all.
+    {
+      name: "Verify confirms the queue carry write — no fallback persistence agent is dispatched",
+      args: ARGS,
+      answer: host({ reconciles: [RECONCILE(), GREEN], verifyRes: { ...VERIFIED, queueWritten: true } }),
+    },
+    // THE RECONCILE RETRY (ENG-95850 A3). The first attempt returns nothing and the SAME call is re-issued once;
+    // exhausting both attempts is still the honest `reconcile-failed` stop.
+    {
+      name: "the baseline Reconcile flakes once and the retry succeeds",
+      args: ARGS,
+      answer: host({ reconciles: [null, RECONCILE(), GREEN] }),
+    },
+    // PREFLIGHT RETURNS RECORDS, and the Judge is the sequential writer that files them (ENG-95474) — the
+    // `preflight:merge` agent is gone, and the evidence travels through the Judge's own prompt.
+    {
+      name: "preflight evidence is filed by the Judge, not by a merge agent",
+      args: ARGS,
+      answer: host({
+        reconciles: [RECONCILE({ preflightItems: [
+          { id: "#confirm:dcm:Deal", pageKey: "main", kind: "dcm", item: "DCM on Deal", resolution: null },
+          { id: "#confirm:printables:Deal", pageKey: "main", kind: "printables", item: "printables on Deal", resolution: null },
+        ] }), GREEN, GREEN],
+        preflight: { resolved: [
+          { id: "#confirm:dcm:Deal", answer: "DCM present", referencePage: "P", components: ["crt.Label"] },
+          { id: "#confirm:printables:Deal", answer: "none", filedAsFalse: true },
+        ], unresolved: [] },
+        judge: { verdicts: [{ id: "#confirm:dcm:Deal", convincing: true, why: "queried" }], evidenceWritten: ["#confirm:dcm:Deal"], notes: "" },
       }),
     },
   ];
@@ -397,9 +599,15 @@ for (const pair of PAIRS) {
     check(`${sc.name} — every PROMPT is identical byte for byte, apart from the declared divergences`, pd === null, () => pd?.why);
     check(`${sc.name} — the RETURN VALUE is identical`, fa.result === fb.result && fa.error === fb.error,
       () => firstJsonDiff(a.result, b.result) + (fa.error !== fb.error ? `\n      error: baseline=${fa.error} shipped=${fb.error}` : ""));
+    // NON-VACUITY. Every check above compares the two runs against EACH OTHER, so two scripts that both throw at
+    // the same line agree perfectly and prove nothing — which is exactly what a half-applied port looks like from
+    // here. A scenario that does not declare `expectError` must therefore have RUN to a return value on both sides.
+    check(`${sc.name} — both scripts actually ran to a return value (the comparison above is not two identical crashes)`,
+      sc.expectError ? (a.error !== null && b.error !== null) : (a.error === null && b.error === null && a.result !== null && b.result !== null),
+      () => `expectError=${!!sc.expectError} · baseline error=${a.error} result=${a.result === null ? "null" : "present"} · shipped error=${b.error} result=${b.result === null ? "null" : "present"}`);
     note(`${sc.name} — the log lines are identical (wording may improve; not a contract)`,
       a.logs.join("\n") === b.logs.join("\n"),
-      () => `baseline (${a.logs.length}):\n        ${a.logs.join("\n        ")}\n      shipped (${b.logs.length}):\n        ${b.logs.join("\n        ")}`);
+      () => `baseline (${a.logs.length}):\n        ${logExcerpt(a.logs)}\n      shipped (${b.logs.length}):\n        ${logExcerpt(b.logs)}`);
   }
 }
 
@@ -417,4 +625,7 @@ function firstJsonDiff(a, b, at = "result") {
 
 const warnNote = warn ? `, ${warn} log-only warning(s)` : "";
 console.log(`\nPARITY GOLDEN: ${pass} passed, ${fail} failed${warnNote}`);
-if (fail) process.exit(1);
+// `process.exitCode`, NOT `process.exit()`: stdout to a pipe is asynchronous, so exiting immediately DISCARDS
+// whatever is still buffered — and on a big failing run that is the summary line itself, which is exactly what a CI
+// log or a reader looks for first. Setting the code lets Node flush and exit on its own.
+if (fail) process.exitCode = 1;

@@ -15,6 +15,10 @@
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
+//        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
+//        // + optional `"ownSection": "<Section>"` (ENG-95861 — the child entity owns ANOTHER SECTION: its Classic card stays
+//        // Classic, this related list keeps opening it, the page is NEVER folded and publishes no deliverable)
 //     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
@@ -69,10 +73,12 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
+import { GATE_KIND } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
-  pageUnitsSlice, builtSlice, IMPERATIVE_MEMBER_KINDS } from "./designspec.mjs";
+  pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
+  boundaryChild } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -92,6 +98,13 @@ function childPageIssue(c) {
   // Positive evidence required: the agent supplies the Freedom page NAME, verified with list-entity-client-schemas
   // (a `kind: "freedom"` section/edit page for the CHILD entity) — the absence of a working fold is NOT a reason.
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return null;
+  // THE SECTION BOUNDARY (ENG-95861). The child entity owns ANOTHER SECTION, and the user drew that line: on Freedom
+  // this related list keeps opening the child's CLASSIC card, which the platform handles, so the child is RESOLVED —
+  // not a gap, and not the self-declared skip the rule above forbids (that rule stops an AGENT dropping a child
+  // because it looks big or shared; a boundary is the USER's scope decision, recorded in the manifest).
+  // This is the resolution that keeps the fold from happening at all (`foldOneChildPage` returns early), so a warning
+  // inside a page NOBODY IS MIGRATING can no longer block the parent's gate — the whole cost of the run this fixes.
+  if (boundaryChild(c)) return null;
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
     : null;
@@ -142,7 +155,12 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // carries no `targetPackage`, so at depth >= 2 the placement row silently vanished and `--units` published
     // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
     // one run has exactly one target package, so it cannot vary between two folds of the same key).
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, ...extra });
+    // `inheritedSignals` rides along for the same reason and with the same memo rule: the on-stand answers are
+    // recorded ONCE on the ROOT manifest, so a child bundle (which has none) used to see `{}` and every
+    // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
+    // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
+    // between two folds of the same key and must not enter the memo key.
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -172,13 +190,66 @@ function isStructuralDiag(d) {
   return IDENTITY_FIELDS.has(seg[2]);
 }
 
+// ENG-95862 — the SEVERITY axis on `eff.warnings`, and the operator's escape hatch for the advisory half.
+//
+// `engine.mjs` now tags every warning `correctness` (the op targeted an item no lower schema defined, or the seed is
+// not a real body) or `fidelity` (the mapping is RIGHT; an effect of the op is not represented in the item model).
+// Only the first kind can block: a fidelity note's remedy lives in this engine, not in the body or the seed, so
+// blocking on it produced a ⛔ nobody could clear — measured once as 12 h on one `remove properties:
+// ["labelConfig"]`. Exactly the reasoning `isStructuralDiag` already applies to `unknown-enum-member`.
+//
+// A warning with NO severity is treated as `correctness`: a producer that forgot to declare one must fail loud,
+// never quietly demote itself to an advisory.
+const isCorrectnessWarning = (w) => (w?.severity ?? "correctness") === "correctness";
+
+// The only dispositions `manifest.warningDispositions` may carry — same validated-enum rule as
+// `MEMBER_DISPOSITIONS`, and for the same reason: a truthy `resolved` with a typo'd disposition would clear a
+// warning with no valid answer behind it.
+//   accepted            — read, understood, and the unrepresented effect does not change the Freedom mapping
+//   reproduced-manually — it DOES change it, and the build reproduces that effect by hand (the note says how)
+//   n/a                 — the element this warning is about is not being migrated
+const WARNING_DISPOSITIONS = new Set(["accepted", "reproduced-manually", "n/a"]);
+
+// The key a disposition is written under: `"<op>:<name>:<schema>"`, with `"<op>:<name>"` accepted as a bare
+// fallback — the same scoped-or-bare rule `memberDispositions` uses. The schema is part of the primary key because
+// the same op on the same element in a DIFFERENT layer is a different fact and must be answered separately.
+const warningKeys = (w) => [`${w.op}:${w.name}:${w.schema}`, `${w.op}:${w.name}`];
+
+// Annotate each warning with the operator's recorded answer, in place of nothing. Returns a NEW array (the engine's
+// own array is not mutated) where a dispositioned FIDELITY warning carries `{ accepted: true, disposition, note }`.
+// A disposition aimed at a CORRECTNESS warning is REFUSED and reported as `dispositionRefused`: those name a real
+// missing item, and an operator cannot decide a page readable that the engine could not read.
+function applyWarningDispositions(warnings, manifest) {
+  const declared = plainObject(manifest?.warningDispositions);
+  if (!Object.keys(declared).length) return (warnings || []).map((w) => ({ ...w }));
+  return (warnings || []).map((w) => {
+    const dec = plainObject(warningKeys(w).map((k) => declared[k]).find((v) => v != null));
+    const valid = dec.resolved === true && WARNING_DISPOSITIONS.has(dec.disposition);
+    if (!valid) return { ...w };
+    if (isCorrectnessWarning(w)) return { ...w, dispositionRefused: "a correctness warning cannot be dispositioned — it names an item no lower schema defined; fix the schema order (F1) or the base seed (F2)" };
+    return { ...w, accepted: true, disposition: dec.disposition, note: typeof dec.note === "string" ? dec.note : null };
+  });
+}
+
+// The gate's warning reason, or null. Quotes each blocking warning's OWN hint: the single summary string this line
+// used to append to all eight producers ("op hit a missing item / skeletal seed") described a condition that was
+// provably absent on the run it blocked, and sent the remedy search to the wrong file for 12 hours.
+function warningsReason(warnings) {
+  const blocking = (warnings || []).filter(isCorrectnessWarning);
+  if (!blocking.length) return null;
+  const quoted = blocking.slice(0, 6).map((w) => `${w.op} '${w.name}' @${w.schema}: ${w.hint || w.message || "(no hint)"}`);
+  const more = blocking.length > quoted.length ? ` (+${blocking.length - quoted.length} more — see \`effective.warnings\`)` : "";
+  return `warnings (${blocking.length}, correctness): ${quoted.join(" | ")}${more}`;
+}
+
 // ⛔ HARD GATE (RV1) — the correctness signals, computed ONCE so the CLI, renderer and callers share one verdict.
 // Pure (no throw): returns { blocked, reasons }. Extracted from runMigration to keep it under Sonar CC 15 (S3776).
 function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage }) {
   const reasons = [];
   if (parseErrors.length) reasons.push(`parseErrors (${parseErrors.length}): ${parseErrors.map((e) => e.pkg).join(", ")} — a schema body failed to parse`);
   if ((eff.unresolvedParents || []).length) reasons.push(`unresolvedParents: ${eff.unresolvedParents.join(", ")} — base-template seed incomplete (F2) or schemas out of order (F1)`);
-  if ((eff.warnings || []).length) reasons.push(`warnings (${eff.warnings.length}): ${[...new Set(eff.warnings.map((w) => w.name || w.op))].join(", ")} — op hit a missing item / skeletal seed`);
+  const warnReason = warningsReason(eff.warnings);
+  if (warnReason) reasons.push(warnReason);
   if (eff.seedQuality?.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
   if (eff.seedQuality && !eff.seedQuality.seeded && !manifest.noParentTemplate)
     reasons.push("no parent-template seed — a Classic page extends a base template (BaseModulePageV2/BasePageV2/…); building without its fetched body drops inherited base actions + container layout (F2). Fetch the parent-template schemas and pass them as `seed`, or set `noParentTemplate: true` ONLY if you have VERIFIED on-stand that this page has no parent template.");
@@ -358,6 +429,11 @@ function enumerateChildPages(changeSet, detailSchemas) {
       editable: ds ? ds.editable : null,
       // agent-verified: the child entity already has a shipped Freedom form page → Reuse, nothing to rebuild
       reuseFreedomPage: ds ? (ds.reuseFreedomPage ?? null) : null,
+      // USER-approved section boundary (ENG-95861): the child entity owns another section, so its Classic card stays
+      // Classic and this list keeps opening it. Carried here as well as parsed on the detail record — a key present
+      // in only one of the two places reaches no gate and no renderer, and fails silently.
+      opensClassicPage: ds ? (ds.opensClassicPage ?? null) : null,
+      ownSection: ds ? (ds.ownSection ?? null) : null,
     };
   }).filter((c) => c.entity);
 }
@@ -641,7 +717,31 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
 // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
 // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-const SIGNAL_KEYS = ["dcm", "processes", "printables"];
+// `deduplication` (ENG-94274) joins them for exactly the same reason: the on-save duplicate check is an
+// `asyncValidate` override on `CrtDeduplication.BaseEntityPage`, so it arrives via the base seed chain, counts as
+// `fromTemplate`, and is classified as ledger `context` — the page body NEVER shows it, and a migration therefore
+// dropped it in total silence. Its answer carries one extra field beyond present/absent:
+//   "deduplication": { "resolved": true, "present": true, "names": ["Contact duplicates. Contact name"],
+//                      "serviceConfigured": false }
+// `present` = this entity HAS an active rule marked use-on-save; `serviceConfigured` = the target stand can
+// actually run the Freedom flow. Both are needed because they fail differently: no rule means nothing to lose,
+// while a rule + no service means the check silently stops at migration (measured — see mapDedupOnSave).
+const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication"];
+// Is signal `k` still UNRESOLVED? The generic rule is "absent, not an object, or resolved !== true". `deduplication`
+// adds ONE field-aware clause, because the key carries two facts and the gate must not pass on half of them: a rule
+// IS present but `serviceConfigured` was never recorded is precisely the likely real-world half-answer (an operator
+// who ran only the DuplicatesRule query), and letting it exit 0 would ship an approvable plan whose own text says
+// "cannot say whether the check survives migration". `present:false` needs no service answer — nothing to lose —
+// so the nine `{resolved:true, present:false}` answers stay valid. Own fn so the filter stays a one-liner (Sonar CC).
+function signalUnresolved(k, signals) {
+  const s = signals[k];
+  if (!s || typeof s !== "object" || s.resolved !== true) return true;
+  // `s.present` by TRUTHINESS, not `=== true`: a hand-authored `"present": "yes"` must not slip past the
+  // service requirement into the mapper's "serviceConfigured unrecorded" branch — that is the same half-answered
+  // plan this clause exists to block. The mapper reads `present` the same way.
+  if (k === "deduplication" && s.present && typeof s.serviceConfigured !== "boolean") return true;
+  return false;
+}
 // PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
 // built five pages, and only then discovered that `create-app-section` cannot run at all: the owning app was an
 // install-time wrapper with NO primary package, its one package was locked, and the editable target package was
@@ -711,14 +811,18 @@ export function placementIssues(manifest) {
 export function checklistOpts(manifest, opts = {}) {
   const pm = manifest.planMeta || {};
   const blank = (v) => v == null || String(v).trim() === "";
-  const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
+  // A nested run's manifest is the CHILD bundle, which carries no `signals` of its own — the on-stand answers are
+  // supplied ONCE on the root manifest (one stand check covers the whole surface), exactly like `behaviourIndex`
+  // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
+  // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
+  const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: manifest.planMeta,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
-    signalsMissing: SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true),
+    signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
     placementBlockers: placementIssues(manifest),
     // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
@@ -785,10 +889,11 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
 }
 // A child that is NOT rebuilt here still publishes its page key when it owes a deliverable — with a GATED row.
 // A reuse child owes the RelatedPage binding; a child whose Classic page exists (or was never verified) owes the
-// whole page. A child verified to have NO separate page, one already mapped higher on this branch (cycle) and one
-// whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at all and
-// keep only the parent's identity row — a gated row there would be a permanent false red, and the two latter are
-// PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
+// whole page. A child verified to have NO separate page, one behind an approved SECTION BOUNDARY (ENG-95861 — its
+// Classic card stays Classic, so this plan builds nothing for it), one already mapped higher on this branch (cycle)
+// and one whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at
+// all and keep only the parent's identity row — a gated row there would be a permanent false red, and the last two
+// are PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
 function publishUnfoldedChild(c, pageKey) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
     publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c));
@@ -803,6 +908,16 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
   // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
+  // THE SECTION BOUNDARY, and the reason this ticket exists: the child's page is NOT FOLDED. No recursive
+  // sub-migration, so no sub-run gate, so no `c.childBlocked` — and `migrate.mjs`'s `filter(c => c.childBlocked)`
+  // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card used to be mandatory, and
+  // ONE of that card's own merge warnings was enough to ⛔ the parent plan for work nobody had asked for.
+  // Checked AFTER `reuseFreedomPage` on purpose: if the child already ships a Freedom form, reuse is the better
+  // answer (the related list opens Freedom rather than staying on Classic), and it owes a binding row this does not.
+  // Routed through `publishUnfoldedChild`, which publishes NOTHING here — `childPageIssue` resolves the boundary, so
+  // it falls out with no page key, exactly like a verified `editPage: false`. No units, no checklist gate, no verify
+  // row: nothing about this child can be reported MISSING, because nothing about it is a deliverable.
+  if (boundaryChild(c)) return publishUnfoldedChild(c, pageKey);
   const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
   if (!key) return publishUnfoldedChild(c, pageKey);
   const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
@@ -1094,7 +1209,15 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
 // `char.IsLetter`/`char.IsLetterOrDigit`, which are Unicode-aware — an ASCII-only `[A-Za-z][\w.]*` rejects output
 // clio legitimately returns, so the class is spelled with Unicode properties to match the producing contract.
 const RESOLVED_COLUMN_PATH = /^\p{L}[\p{L}\p{N}_.]*$/u;
-const RESOLVED_COLUMN_SOURCES = ["schema-default", "entity-default", "none"];
+// ENG-95850 (D) — `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
+// profile the section ACTUALLY renders, and its own contract says a product section usually resolves to exactly that
+// ("A product section usually resolves to profile: its code declares far fewer columns than the list shows").
+// Leaving it out of this list rejected the tool's most common and most accurate answer as MALFORMED, and the run then
+// had to re-read with `ignore-profile=true` — which returns the STATICALLY declared set, i.e. deliberately fewer
+// columns than the list shows. Measured on the Applicant run: one wasted round-trip and a worse column set.
+// Accepting it is not the same as trusting it blindly: a profile can be scoped, so a profile-sourced set RAISES a
+// ⚠ Confirm decision (see `listColumnsDecision`) instead of being silently adopted as the section's default.
+const RESOLVED_COLUMN_SOURCES = ["profile", "schema-default", "entity-default", "none"];
 
 // Validate + normalize a `get-classic-list-columns` response supplied as `manifest.section.listColumns`.
 // RECOVERABLE failures return `{ error }` — the caller routes them into the STRUCTURE gate so the run still
@@ -1258,6 +1381,31 @@ function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns
   return notes;
 }
 
+// `sectionActions` folded across the chain, deduped by name. Layers arrive base->top; the TOP declaration wins,
+// matching `addRecordMiniPage` below. First-seen position is kept. `group` is renumbered across the merged list,
+// because every layer numbers its own groups from 0. Exported as the seam those three rules are asserted through.
+export function mergeSectionActions(fromLayers = []) {
+  const byName = new Map();
+  for (const a of fromLayers) {
+    // The name keys the ChangeSet row, the checklist row and the evidence id, so a blank one is not a deliverable.
+    const name = typeof a?.name === "string" ? a.name.trim() : "";
+    if (!name) continue;
+    const prev = byName.get(name);
+    // Merge FIELD BY FIELD. A top layer need not repeat every field, and an item carries every key with `null`
+    // when absent, so replacing the object (or a plain spread) blanks a value only the base layer declared.
+    byName.set(name, prev
+      ? { ...prev, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)), name, order: prev.order }
+      : { ...a, name, order: byName.size });
+  }
+  const merged = [...byName.values()].sort((x, y) => x.order - y.order);
+  const groups = new Map();
+  return merged.map((a, i) => {
+    const key = `${a.package ?? ""}#${a.group ?? 0}`;
+    if (!groups.has(key)) groups.set(key, groups.size);
+    return { ...a, order: i, group: groups.get(key) };
+  });
+}
+
 // Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
 // section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
 // EXPORTED because the layer arm is unreachable until the section view `diff` is folded — without a seam here the
@@ -1294,7 +1442,17 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     schemaGathered: sectionSchemas.length > 0,
     listColumnReadRejected,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
-    sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
+    sectionActions: mergeSectionActions(sectionSchemas.flatMap((l) => l.sectionActions || [])),
+    // Menu helpers no layer in the chain defines. Collected across layers, then cleared by any layer that resolved
+    // one: a layer's parse sees only its own src, so the chain resolves what a single src cannot. What survives is a
+    // completeness gap and rides into the command-bar decision.
+    sectionActionUnresolved: (() => {
+      const resolved = new Set(sectionSchemas.flatMap((l) => l.sectionActionHelpers || []));
+      return [...new Set(sectionSchemas.flatMap((l) => l.sectionActionUnresolved || []))].filter((n) => !resolved.has(n));
+    })(),
+    // Helpers and nesting the parser saw but did not read. Not cleared by another layer defining the method: the
+    // limit is this parser's one-hop/depth rule, so the items behind it stay missing however the chain resolves.
+    sectionActionNotFollowed: [...new Set(sectionSchemas.flatMap((l) => l.sectionActionNotFollowed || []))],
     listColumns: useResolved ? resolvedListColumns.columns : chainColumns,
     listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,
@@ -1385,6 +1543,14 @@ function detailBodySignals(scanText, p) {
   };
 }
 
+// `opensClassicPage` → `string | true | null`. Anything else (a number, `false`, an empty string) is NOT a recorded
+// boundary and must not read as one: `false` in particular means "no, this is not a boundary", so it has to fall to
+// `null` rather than to a truthy sentinel. Own fn so both readers share one normalization.
+function normalizeBoundary(v) {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return v === true ? true : null;
+}
+
 // ONE detail-schema entry → its record, always the same shape so callers never type-check the return (the
 // counterpart to `profileSchemaRecord`). Per field, a SUPPLIED answer beats a body-derived one: the manifest
 // entry is what the agent verified, the scan is only a heuristic.
@@ -1400,6 +1566,15 @@ function detailSchemaRecord(e, scanText, p) {
     // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
     // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
     reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
+    // USER-approved SECTION BOUNDARY (ENG-95861): this child entity owns another section, so its Classic edit page
+    // stays Classic and the Freedom related list keeps opening it. A STRING names that page (the honest form — the
+    // plan can then print it); `true` declares the boundary and leaves the name to the body's own `editPage` read.
+    // Normalized to `string | true | null` here so every reader tests one shape. NOT body-derivable: no detail body
+    // states which section its child entity belongs to — that is a stand fact plus a user decision.
+    opensClassicPage: normalizeBoundary(eObj.opensClassicPage),
+    // Optional, and only ever supplied: the section that child entity belongs to, for the plan's wording. Never
+    // inferred — an invented section name in a sentence the user is asked to approve is worse than no name.
+    ownSection: (typeof eObj.ownSection === "string" && eObj.ownSection.trim()) ? eObj.ownSection.trim() : null,
     addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
     error: p.error || null,
     astDiagnostics: p.astDiagnostics || [],
@@ -1758,6 +1933,35 @@ function computePlanVersion(manifest, readBody) {
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
+// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE (ENG-95683). A missing component used to get one
+// blanket "settle the target before building" whether it was a real component an install could recover or a name no
+// action short of a re-plan can fix. The finding now carries the row's structured `{kind,id}` gate, so the guidance
+// can say the actionable thing:
+//   • a VERSION-scoped miss (`component-absent-in-version`) — the component IS registered, just not carried by the
+//     target platform version, so no package install can add it; target a version that carries it (or re-plan). This
+//     branch is checked FIRST, by KIND: a gate-only branch would wrongly tell an operator to install a package for a
+//     gated composite that is absent in a version, when the plan/version is the real lever.
+//   • a gated COMPOSITE (a `gate.id` package, sometimes a `gate.feature`) — install/enable it and re-run the BUILD;
+//     the plan is correct, so this is explicitly NOT a re-plan.
+//   • anything else (no row gates the type — a fabricated `crt.*`, or a real component simply absent on the target)
+//     — fix the mapping or the plan and re-run `--plan --out`, because no package install makes it appear.
+// Pure and exported so the branch is unit-testable without driving a whole migration (mirrors placementIssues).
+export function registrySettleGuidance(finding) {
+  if (finding?.kind === "component-absent-in-version") {
+    return "this is not a package-install away — the component is registered but absent in this platform version; target a version that carries it, or re-plan, before building.";
+  }
+  const g = finding?.gate;
+  // Branch on the gate's KIND, not on `id` truthiness: `composite` is what selects the install/enable text, and an
+  // unrecognized kind must NOT (a gate whose taxonomy the guidance does not read cannot be turned into an
+  // instruction). `id` is still required because it IS the instruction — `gateShapeIssues` makes both a hard table
+  // error, so a malformed gate fails the table check instead of silently degrading to the re-plan branch here.
+  if (g?.kind === GATE_KIND.COMPOSITE && typeof g.id === "string" && g.id) {
+    const feat = g.feature ? ` and enable the \`${g.feature}\` feature` : "";
+    return `install the \`${g.id}\` package${feat} on the stand, then re-run the BUILD — the plan is correct, so no re-plan is needed.`;
+  }
+  return "this is not a package-install away — fix the mapping or the plan and re-run `--plan --out` before building.";
+}
+
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
 // that function's nesting weight.
@@ -1803,8 +2007,10 @@ function reportRegistryFindings(changeSet, manifest, baseDir) {
     const verdict = f.kind === "unknown-component"
       ? "the component registry carries NO component of that name"
       : `it is ABSENT in ${f.version}`;
-    changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType,
-      reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so settle the target before building.` });
+    // ENG-95683 — carry the row's structured gate on the item (so a consumer branches by kind, not by string), and
+    // let the SETTLE clause say the actionable fix for THIS cause instead of one blanket sentence for every miss.
+    changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
+      reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
   }
 }
 
@@ -1841,6 +2047,9 @@ export function runMigration(manifest, opts = {}) {
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // ENG-93928 — the embedded profile schemas a profile card renders (profiled entity + displayed columns).
   const profileSchemas = parseProfileSchemas(manifest, bodyOf);
+  // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
+  // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
+  const runSignals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
@@ -1849,7 +2058,8 @@ export function runMigration(manifest, opts = {}) {
     profileSchemas,                           // ENG-93928 — parsed embedded-profile bodies (entity + displayed columns)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
-    signals: manifest.signals || {},          // on-stand signals (dcm/…) — gate DCM widget emission on the resolved case
+    signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
+    ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
   });
   attachDetailAddModes(changeSet, detailSchemas);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
@@ -1970,7 +2180,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -2015,6 +2225,9 @@ export function runMigration(manifest, opts = {}) {
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
   // turns `blocked` into a loud banner + non-zero exit, and the renderer prints the banner into the artifact.
+  // The operator's recorded answers on FIDELITY warnings, folded in BEFORE the gate and the renderer read them, so
+  // one annotated array is what every surface reports (ENG-95862 item 5).
+  eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
   // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
@@ -2069,7 +2282,10 @@ export function runMigration(manifest, opts = {}) {
       methods: eff.methods.length, attributes: (eff.attributes || []).length,
       messages: (eff.messages || []).length, mixins: (eff.mixins || []).length,
       moduleDeps: (eff.moduleDeps || []).length,
-      warnings: eff.warnings,                 // op hit a missing item ⇒ schema order (F1) / seed (F2) wrong
+      // every warning carries `severity`: `correctness` (op hit a missing item / skeletal seed ⇒ schema order (F1)
+      // or seed (F2) wrong — BLOCKS the gate) or `fidelity` (the mapping is right, an effect is unrepresented —
+      // advisory, and clearable via `manifest.warningDispositions`).
+      warnings: eff.warnings,
       unresolvedParents: eff.unresolvedParents, // non-empty ⇒ base template not fully seeded (F2)
       seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton (#19)
       features: eff.features,                 // feature toggles gating runtime visibility (union, not one state)
@@ -2116,7 +2332,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at `--units` because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
@@ -2467,7 +2683,27 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The PER-PAGE slices, written BEFORE the verdict files below so a bad `--slices` exits 1 with nothing
     // written at all. They are written on exit 2 as well: a run with open rows is when a builder needs its row.
     if (slicesDir) writePageSlices(slicesDir, "built", builtUnits, (k) => builtSlice(builtUnits, built, k), fail);
-    if (pageArg) {
+    if (pageArg && verifyJsonFile) {
+      // THE IN-CONTEXT SINGLE-UNIT GATE (ENG-95469, A3). `--verify --page <key> --verify-json <file>` is no longer a
+      // pure read: it runs the SAME detector the full sweep does, SCOPED to one page, so a build agent can gate its
+      // own unit in its own context BEFORE reporting complete. `verifyUnit` supplies the machine verdict (the page's
+      // slice of the reconciliation — `{ complete, missing, unverified, openRows, planGaps }`), and the human table
+      // is the SCOPED `renderVerify` (this page's rows only). The exit gates on THIS page: incomplete ⇒ exit 2, the
+      // same hard done-gate the full `--verify` applies, so the builder's bounded self-check fails loudly rather than
+      // closing a short unit. Without `--verify-json` the `--page` path stays the pure built-slice read (below).
+      const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
+      // `--page` is already guarded by `requirePublishedKey` above, so this normally cannot fire — but a `verifyUnit`
+      // that returns an explicit `error` (an unknown/mismatched page key, PR review T4) must fail LOUDLY and
+      // distinctly here rather than be written to the verdict file as a false green, in case the two key notions ever
+      // diverge. A broken gate is an exit-1 diagnosis, never a complete verdict.
+      if (unitVerdict.error) fail(`--verify --page '${pageArg}': ${unitVerdict.error} — this key is not a page this plan reconciles. Run \`--units\` on this manifest for the exact page keys.`);
+      try { fs.writeFileSync(verifyJsonFile, JSON.stringify(unitVerdict, null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
+      verifyRes = renderVerify(result, { ...checklistOpts(manifest), scopePageKey: pageArg }, built);
+      output = verifyRes.markdown + "\n";
+      verifyIncomplete = !unitVerdict.complete;
+    }
+    else if (pageArg) {
       output = JSON.stringify(builtSlice(builtUnits, built, pageArg), null, 2) + "\n";
     }
     else {
@@ -2541,9 +2777,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
-  if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
+  if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
+  // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse
+  // diagnostics above, so demoting them out of the ⛔ banner does not make them invisible.
+  const fidelity = (result.effective?.warnings || []).filter((w) => w.severity === "fidelity" && !w.accepted);
+  if (fidelity.length)
+    process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ")}\n`);
   if (notReady) process.exit(2);
 }

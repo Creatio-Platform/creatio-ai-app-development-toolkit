@@ -135,24 +135,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
       }
       return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
     })(),
-    // section-level actions (bulk / section-toolbar) built in getSectionActions — a SEPARATE surface from
-    // the record page's getActions. Surface the handler tags / navigate hints (#8b).
-    sectionActions: (() => {
-      const body = extractFnBody(src, "getSectionActions");
-      if (!body) return [];
-      return [...new Set([
-        // classic STANDARD shape: actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "handler"} }))
-        // — the Click handler IS the action identity. Also the direct "Click": "handler" form. This is what the
-        // old Tag/navigate-only patterns missed (e.g. `createRegistry`), so real section actions were dropped.
-        // The key itself is UNQUOTED in most hand-written schemas (`Click: {bindTo: "setOwner"}`), so the quotes
-        // around Click / Tag must be optional — requiring them dropped every action written in that style, which is
-        // exactly the "section actions dropped" trap this pattern exists to prevent.
-        ...[...body.matchAll(/"?Click"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
-        // alternative/older shapes: menu-item handler Tags and navigate/run hints
-        ...[...body.matchAll(/"?Tag"?\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
-        ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
-      ])].filter((n) => n !== "callParent");
-    })(),
+    // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One
+    // entry per menu item with its metadata (#8b): a handler name alone cannot build a Freedom command-bar
+    // button, and an item ported without its `Enabled` condition ships always-enabled. Filled from the AST on
+    // the parse path that reaches a `methods:` object; empty here so every other path yields a list, not
+    // `undefined`.
+    sectionActions: [],
+    // menu helpers resolved in this schema.
+    sectionActionHelpers: [],
+    // menu helpers called but defined nowhere in this schema: the item set is short by an unknown number.
+    sectionActionUnresolved: [],
+    // seen and deliberately not read — a helper called by a helper. The items behind these are missing too, but
+    // the cause is this parse's one-hop rule, not a method nobody defines.
+    sectionActionNotFollowed: [],
     // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
     // it as data-driven (#2).
@@ -586,6 +581,7 @@ export function parseSchema(src, pkg) {
     // Body facts are read from the AST the parse already produced — a second, independent pass over the SAME
     // nodes, so a failure here degrades the same way the value pass does (below), never half-populated.
     return { ...buildSchemaResult(pkg, src, null, captured, amdDeps),
+      ...sectionActionsFromAst(retArg, scope, pkg),
       methodFacts: methodFactsFromAst(retArg, scope), astDiagnostics };
   } catch (e) {
     const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e?.message || e);
@@ -895,6 +891,240 @@ function fixedFilterObjects(body) {
   return objs;
 }
 
+// ---- getSectionActions items, read from the AST -----------------------------------------------------------------
+// Read from the nodes `parseSchema` already built, never from the source text: nesting, a helper's parameters and
+// a call's statement-vs-value position are structural facts here.
+const NON_MENU_METHODS = new Set(["getButtonMenuItem", "callParent", "get", "set"]);
+// The one heuristic. An action registered through neither a menu-item object nor a helper leaves no structural
+// trace, so a statement-position call reading as a navigate/run name yields a NAME-ONLY item; a real declaration
+// carries metadata and wins.
+const MENU_HINT_RX = /^(?:navigateTo|goTo|run|open|process)[A-Z]\w+$/;
+
+// `this.foo(…)` / `foo(…)` → "foo"; a longer path (`Terrasoft.utils.x`) → null, because only a method the schema
+// itself could define is a candidate carrier.
+function ownCallName(call) {
+  const path = calleePath(call?.callee);
+  if (!path) return null;
+  const parts = path.split(".");
+  if (parts.length === 1) return parts[0];
+  return parts.length === 2 && parts[0] === "this" ? parts[1] : null;
+}
+// A menu property's static string, in the three forms classic uses: `X: "v"`, `X: { bindTo: "v" }`, and
+// `X: $Resources.Images.V` (a member path, whose last segment is the name).
+function menuPropValue(node) {
+  if (node == null) return null;
+  if (node.type === "Literal") return typeof node.value === "string" ? node.value : null;
+  if (node.type === "ObjectExpression") {
+    const bind = node.properties.find((p) => staticPropKey(p) === "bindTo");
+    return bind ? menuPropValue(bind.value) : null;
+  }
+  const path = calleePath(node);
+  return path ? path.split(".").pop() : null;
+}
+const menuProp = (obj, key) => obj.properties.find((p) => staticPropKey(p) === key)?.value ?? null;
+const isSeparatorType = (v) => !!v && v.endsWith("MenuSeparator");
+// A menu node: item, separator, or handler-less submenu container. Keyed on the properties classic gives them,
+// not on the calling method, so every add shape is recognised without a callee list.
+function isMenuNode(node) {
+  if (node?.type !== "ObjectExpression") return false;
+  if (menuProp(node, "Click") || menuProp(node, "Tag")) return true;
+  if (isSeparatorType(menuPropValue(menuProp(node, "Type")))) return true;
+  return !!(menuProp(node, "Caption") && menuProp(node, "Items"));
+}
+// One menu node's fields, read from its OWN properties.
+function readMenuNode(obj) {
+  const caption = menuPropValue(menuProp(obj, "Caption"));
+  return {
+    name: menuPropValue(menuProp(obj, "Click")) ?? menuPropValue(menuProp(obj, "Tag")) ?? null,
+    caption: caption ? resourceKey(caption) : null,   // stored as the lookup key, not a qualified path
+    condition: menuPropValue(menuProp(obj, "Enabled")),
+    icon: menuPropValue(menuProp(obj, "ImageConfig")),
+    separator: isSeparatorType(menuPropValue(menuProp(obj, "Type"))),
+  };
+}
+// Ordered child nodes. Generic (every own value that is a node or array of nodes) so the walk stays complete as
+// the AST shape grows.
+function childNodesOf(node) {
+  const out = [];
+  for (const key of Object.keys(node)) {
+    if (WALK_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v)) { for (const el of v) if (el?.type) out.push(el); }
+    else if (v?.type) out.push(v);
+  }
+  return out;
+}
+// Menu nodes under `node`, in source order, tagged with nesting depth. A menu node's children are its submenu, so
+// depth increments only there. Bounded by the member-facts walk limits.
+function collectMenuNodes(node, depth, out, state) {
+  if (!node || typeof node !== "object") return;
+  if (++state.nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { state.truncated = true; return; }
+  const isMenu = isMenuNode(node);
+  if (isMenu) out.push({ obj: node, depth });
+  for (const child of childNodesOf(node)) collectMenuNodes(child, isMenu ? depth + 1 : depth, out, state);
+}
+// Calls in STATEMENT or RETURN position, braceless `if`/`else`/loop forms included. A carrier is called; a data
+// read sits in value position and never appears here.
+function statementCalls(fnNode) {
+  const out = [];
+  const visit = (st) => {
+    if (!st || typeof st !== "object") return;
+    const expr = loneExpression(st);
+    if (expr?.type === "CallExpression") out.push(expr);
+    for (const key of ["body", "consequent", "alternate", "block", "handler", "finalizer", "cases"]) {
+      const v = st[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v?.type) visit(v);
+    }
+  };
+  (fnNode.body?.body || []).forEach(visit);
+  return out;
+}
+// Every CallExpression in the body.
+function allCalls(fnNode, state) {
+  const out = [];
+  const visit = (n) => {
+    if (!n || typeof n !== "object" || ++state.nodes > MAX_WALK_NODES) return;
+    if (n.type === "CallExpression") out.push(n);
+    childNodesOf(n).forEach(visit);
+  };
+  visit(fnNode.body);
+  return out;
+}
+// The locals this method builds its menu in: assigned from `this.callParent(…)`, used with `<id>.addItem(`, or
+// handed back by `return`. Several are possible, and helper matching runs over all of them.
+// A local assigned from `this.callParent(…)`, or handed back by `return`.
+function collectionsFromStatements(fnNode) {
+  const out = [];
+  for (const st of fnNode.body?.body || []) {
+    if (st.type === "ReturnStatement" && st.argument?.type === "Identifier") out.push(st.argument.name);
+    if (st.type !== "VariableDeclaration") continue;
+    for (const d of st.declarations) {
+      const fromParent = d.init?.type === "CallExpression" && /(?:^|\.)callParent$/.test(calleePath(d.init.callee) || "");
+      if (d.id?.type === "Identifier" && fromParent) out.push(d.id.name);
+    }
+  }
+  return out;
+}
+// A local used as `<id>.addItem(…)`.
+function collectionsFromAddItem(calls) {
+  const out = [];
+  for (const call of calls) {
+    const c = call.callee;
+    if (c?.type === "MemberExpression" && c.property?.name === "addItem" && c.object?.type === "Identifier") out.push(c.object.name);
+  }
+  return out;
+}
+function menuCollections(fnNode, calls) {
+  const names = new Set([...collectionsFromStatements(fnNode), ...collectionsFromAddItem(calls)]);
+  if (!names.size) names.add("actionMenuItems");
+  return names;
+}
+// A helper HANDED the collection: `this.foo(actionMenuItems)`.
+function helpersHandedCollection(calls, colls) {
+  const out = [];
+  for (const call of calls) {
+    const name = ownCallName(call);
+    const handed = (call.arguments || []).some((a) => a.type === "Identifier" && colls.has(a.name));
+    if (name && handed && !NON_MENU_METHODS.has(name)) out.push(name);
+  }
+  return out;
+}
+// A helper whose returned item is ADDED: `actionMenuItems.addItem(this.foo())`.
+function helpersReturningItem(calls, colls) {
+  const out = [];
+  for (const call of calls) {
+    const c = call.callee;
+    if (c?.type !== "MemberExpression" || c.property?.name !== "addItem") continue;
+    if (c.object?.type !== "Identifier" || !colls.has(c.object.name)) continue;
+    for (const a of call.arguments || []) {
+      const n = a.type === "CallExpression" ? ownCallName(a) : null;
+      if (n && !NON_MENU_METHODS.has(n)) out.push(n);
+    }
+  }
+  return out;
+}
+const menuHelpers = (calls, colls) =>
+  [...new Set([...helpersHandedCollection(calls, colls), ...helpersReturningItem(calls, colls)])];
+// Identity, order and separator-delimited group. A separator is a group boundary, not an action. A node with no
+// handler is a submenu CONTAINER: not published, because a checklist row for it could never be built, but its
+// caption becomes the `parent` label its children carry.
+function shapeMenuNodes(nodes, pkg) {
+  const out = [];
+  const parents = [];
+  let group = 0;
+  for (const { obj, depth } of nodes) {
+    if (depth === 0) parents.length = 0;
+    const { separator, ...item } = readMenuNode(obj);
+    if (separator) { group++; continue; }
+    parents[depth] = item.name || item.caption || null;
+    if (!item.name || item.name === "callParent") continue;
+    out.push({ ...item, parent: depth > 0 ? (parents[depth - 1] ?? null) : null,
+      order: out.length, group, package: pkg });
+  }
+  return out;
+}
+// Resolve each menu helper against the schema's own methods and take the items it adds. ONE hop: a method a
+// helper delegates to is RECORDED, never followed — `notFollowed` when this schema defines it, `unresolved` when
+// nothing does.
+function scanHelperNodes(names, methodNodes, nodes, state) {
+  const helpers = [];
+  const unresolved = [];
+  const notFollowed = [];
+  for (const name of names) {
+    const fn = methodNodes.get(name);
+    if (!fn) { unresolved.push(name); continue; }
+    helpers.push(name);
+    collectMenuNodes(fn.body, 0, nodes, state);
+    const param = (fn.params || []).find((x) => x.type === "Identifier")?.name;
+    const calls = allCalls(fn, state);
+    const own = param ? menuHelpers(calls, new Set([param])) : statementCalls(fn).map(ownCallName)
+      .filter((n) => n && !NON_MENU_METHODS.has(n));
+    for (const callee of new Set(own)) (methodNodes.has(callee) ? notFollowed : unresolved).push(callee);
+  }
+  return { helpers, unresolved, notFollowed };
+}
+// Name-only hint items appended in place. Every value the parsed items already consumed is excluded, so a
+// condition or caption matching the pattern is not republished as an action.
+function appendHintItems(items, entry, pkg) {
+  const seen = new Set();
+  for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
+  for (const call of statementCalls(entry)) {
+    const name = ownCallName(call);
+    if (!name || seen.has(name) || !MENU_HINT_RX.test(name)) continue;
+    seen.add(name);
+    items.push({ name, caption: null, condition: null, icon: null, parent: null,
+      order: items.length, group: 0, package: pkg });
+  }
+}
+// `{ items, helpers, unresolved, notFollowed }` for one schema. Empty on any path that did not reach a `methods:`
+// object; the layer carries the parse error that explains it.
+function sectionActionsFromAst(retArg, scope, pkg) {
+  const empty = { sectionActions: [], sectionActionHelpers: [], sectionActionUnresolved: [], sectionActionNotFollowed: [] };
+  const obj = objectNodeOf(retArg, scope);
+  const mo = obj && objectNodeOf(obj.properties.find((p) => staticPropKey(p) === "methods")?.value, scope);
+  if (!mo) return empty;
+  const methodNodes = new Map(mo.properties
+    .filter((p) => staticPropKey(p) && isFnNode(p.value)).map((p) => [staticPropKey(p), p.value]));
+  const entry = methodNodes.get("getSectionActions");
+  if (!entry) return empty;
+  const state = { nodes: 0, truncated: false };
+  const nodes = [];
+  collectMenuNodes(entry.body, 0, nodes, state);
+  const calls = allCalls(entry, state);
+  const colls = menuCollections(entry, calls);
+  const { helpers, unresolved, notFollowed } = scanHelperNodes(menuHelpers(calls, colls), methodNodes, nodes, state);
+  const items = shapeMenuNodes(nodes, pkg);
+  if (state.truncated) notFollowed.push("a body too large or too deeply nested to walk fully");
+  appendHintItems(items, entry, pkg);
+  return {
+    sectionActions: items,
+    sectionActionHelpers: helpers,
+    sectionActionUnresolved: [...new Set(unresolved)],
+    sectionActionNotFollowed: [...new Set(notFollowed)].filter((n) => !helpers.includes(n)),
+  };
+}
+
 // One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a
 // brace returning to depth 0 closes an entry — its source text is pushed to `objs`.
 function trackFilterDepth(c, i, depth, body, objs) {
@@ -1011,6 +1241,18 @@ const primitiveOrNull = (x) => (typeof x === "boolean" || typeof x === "number" 
 // caption resource key: `caption.bindTo`, else a bare string, else null.
 const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
 
+// The CONTROL LABEL's own caption (`labelConfig: { caption: … }`), modelled as its OWN field and never folded into
+// `caption` (ENG-95862). Folding them would make `remove properties: ["labelConfig"]` unrepresentable: there would be
+// no `labelConfig` slot left to clear, the op would pass the membership test and change nothing, and the lower
+// layer's custom label would survive a removal the runtime honours — a silent wrong answer in place of today's
+// warning. Precedence is resolved at PROJECTION time, mirroring the platform's own `getLabelCaption`
+// (`ViewGeneratorV2` L1675-1689, already documented at `mapping-table.mjs` TIP_LABEL): `config.caption`, then
+// `labelConfig.caption`, then the column's own title.
+const labelCaptionKey = (v) => {
+  const lc = plainObj(v.labelConfig);
+  return isStr(lc.caption?.bindTo) ? lc.caption.bindTo : strOrNull(lc.caption);
+};
+
 // field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
 function hintKey(v) {
   if (isStr(v.hint?.bindTo)) return v.hint.bindTo;
@@ -1033,6 +1275,7 @@ function visibility(v) {
 function normalizeDiffOp(op, i) {
   if (op == null || typeof op !== "object") return null;
   const v = plainObj(op.values);
+  const labelCaption = labelCaptionKey(v);   // computed once: both `hasCaption` and the field below read it
   const opIndex = numOrNull(op.index); // diff-op index fallback (RV5, used for `order` below)
   return {
     operation: isStr(op.operation) ? op.operation : "?",
@@ -1052,10 +1295,14 @@ function normalizeDiffOp(op, i) {
     // changes here is only that the recorded precedence is now the right way round.
     dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
-    hasCaption: !!(v.caption),
+    // `labelConfig.caption` counts here too: once it can supply the rendered label, reading only `v.caption` reports
+    // "this op states no caption" about an op that states one.
+    hasCaption: !!(v.caption || labelCaption),
     // caption resource key (tab/group/detail label) — carried so the real caption is shown for
     // cross-check instead of only a synthesized placeholder.
     caption: captionKey(v),
+    // the control label's own caption — a SEPARATE key from `caption`, see `labelCaptionKey`
+    labelCaption,
     // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
     // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
     order: isNum(v.order) ? v.order : opIndex,
@@ -1220,12 +1467,31 @@ function makeItem(op, seed, pkg) {
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
-    handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
+    labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
+    // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
+    // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
+    // then saw a handler that the first run had removed. Harmless while nothing read the map, load-bearing now
+    // that an absent entry is what distinguishes a modelled handler from an unmodelled static literal.
+    handlers: { ...(op.handlers || {}) }, // control→method bindings; the CONTROL end of a method's trigger
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
 }
+
+// ⚠ SEVERITY — the axis `eff.warnings` lacked (ENG-95862). Two values, and the sentence that decides each is
+// written here so a NEW producer cannot be added without answering it:
+//   "correctness" — the op targeted something that DOES NOT EXIST (an item no lower schema defined), or the seed is
+//                   not a real fetched body. The engine's reading of the page is wrong or unsafe, and the remedy is
+//                   an act the operator CAN perform (fix schema order F1 / fetch the base seed F2) ⇒ the gate blocks.
+//   "fidelity"    — the mapping the engine produced is RIGHT; some EFFECT of the op is not represented in the item
+//                   model. There is nothing to fix in the body or the seed — only in this engine — so the gate's
+//                   remedy would be an instruction nobody can act on ⇒ advisory, never a block. Same reasoning the
+//                   `unknown-enum-member` exemption already uses (migrate.mjs `isStructuralDiag`).
+// `migrate.mjs` blocks on `correctness` only, and quotes each warning's OWN hint rather than pasting one summary
+// sentence ("op hit a missing item / skeletal seed") onto every producer — that string sent a 12-hour investigation
+// to the wrong file.
+const SEVERITY = { CORRECTNESS: "correctness", FIDELITY: "fidelity" };
 
 // diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
 // ALIASES. `saveAlias` (core `json-applier.js` L554-566) keys the table by the ALIAS's declared name and stores the
@@ -1288,7 +1554,7 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
     if (!op.valuesKeys?.has(k)) continue;
     if (op.aliasExcluded?.includes(k)) continue;   // the alias forbids this key (json-applier.js L583-591)
     if (k === "itemType" && cur.itemType != null && op.itemType == null) {
-      warnings.push({ op: opName, name: op.name, schema: pkg,
+      warnings.push({ op: opName, name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
         hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
     }
     cur[k] = op[k];
@@ -1310,7 +1576,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     const stub = makeItem(op, seed, pkg);
     stub.engineOnlyStub = true;
     items.set(op.name, stub);
-    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
+    warnings.push({ op: "merge", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
     return;
   }
   mergeIdentityProps(op, cur, pkg, warnings);
@@ -1322,6 +1588,10 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
     if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
   }
+  // `labelConfig` is ONE diff key modelled as the `labelCaption` field, so the presence test is on the DIFF key —
+  // a layer that restates `labelConfig` (the WorkInternalRequest custom-label idiom) must be able to overwrite a
+  // lower layer's label, and `caption` never appears in its `values` at all.
+  if (op.valuesKeys?.has("labelConfig") && !op.aliasExcluded?.includes("labelConfig")) cur.labelCaption = op.labelCaption;
   // Both `valueBindTo` and `optionValue` are derived from ONE diff key (`value`), so the presence test is on that
   // key and both fields move together: a layer that restates `value` as a binding must also clear a literal an
   // earlier layer set, and the reverse. Testing the derived fields separately would leave the loser behind.
@@ -1341,7 +1611,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
 // e.g. Product's IsArchive/"Inactive" checkbox).
 function replayMove(op, cur, { seed, pkg }, warnings) {
   if (!cur) {
-    warnings.push({ op: "move", name: op.name, schema: pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+    warnings.push({ op: "move", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
     return;
   }
   if (op.parentName) { cur.parent = op.parentName; }
@@ -1366,15 +1636,22 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
 function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
   items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
-  warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+  warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
 }
 
 // `remove` carrying a `properties` array: delete ONLY those keys, keep the element (core `json-applier.js`
 // L719-732, and it runs in a LATER group than plain removes at L304). The engine models a subset of a view item's
 // keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
 // alternative is telling the reader a property was cleared when nothing happened.
-const REMOVABLE_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
-  "layout", "tip", "hint", "generator", "visible", "caption", "value"]);
+// `labelConfig` and the HANDLER vocabulary joined the set in ENG-95862: an audit of what a real `remove … properties`
+// may name, against what the engine models on an item, found exactly those two families modelled-but-unclearable —
+// the worst of the three states, because the plan then reports a property the page no longer has. (The audit and how
+// to re-run it: `engine-internals.md` → "remove … properties key audit".)
+// `TOP_LEVEL_ITEM_PROPS` = the keys held as a FIELD on the item record (cleared with `cur[k] = null`), as opposed to
+// the two families modelled elsewhere: `value`/`labelConfig` (own named fields) and the handlers map.
+const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
+  "layout", "tip", "hint", "generator", "visible", "caption"]);
+const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = [];
   for (const k of op.properties) {
@@ -1384,6 +1661,28 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
     // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
     // here as well listed the same package twice on an element whose `value` a layer cleared.)
     if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
+    // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
+    // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
+    // what the runtime renders (`getLabelCaption`).
+    if (k === "labelConfig") { cur.labelCaption = null; continue; }
+    // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
+    // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
+    // silenced the trigger but left the static value would be half-applied.
+    if (HANDLER_PROPS.has(k)) {
+      // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
+      // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
+      // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
+      // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
+      // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
+      // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+      const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
+      if (wasModelled) delete cur.handlers[k];
+      if (!TOP_LEVEL_ITEM_PROPS.has(k)) {   // handler-only key: the map entry was the whole effect it could have
+        if (!wasModelled) unmodelled.push(k);
+        continue;
+      }
+    }
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // not a handler and not a field: nothing modelled to clear
     // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
     // "absent vs unreadable" ambiguity this ticket removed elsewhere.
     cur[k] = null;
@@ -1392,7 +1691,7 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true;
   if (unmodelled.length) {
-    warnings.push({ op: "remove", name: op.name, schema: pkg,
+    warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
       hint: `this remove deletes propert(ies) the engine does not model on an item: ${unmodelled.join(", ")}. The element is KEPT (correct), but the effect of clearing those keys is not represented — read the classic body if the plan depends on them.` });
   }
 }
@@ -1408,7 +1707,7 @@ function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
 function replaySet(op, cur, items, { seed, pkg }, warnings) {
   if (!cur) {
     items.set(op.name, makeItem(op, seed, pkg));
-    warnings.push({ op: "set", name: op.name, schema: pkg, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
+    warnings.push({ op: "set", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
     return;
   }
   // Direct children are tombstoned here; `cascadeRemove` sweeps the deeper levels on its fixpoint pass, and marks
@@ -1435,7 +1734,7 @@ function replaySet(op, cur, items, { seed, pkg }, warnings) {
   // The child clause is named rather than nested inside the hint: one template per string, so the sentence stays
   // readable and the optional half is not a second template inside the first.
   const droppedNote = dropped ? `, and ${dropped} direct child(ren) were dropped with it` : "";
-  warnings.push({ op: "set", name: op.name, schema: pkg,
+  warnings.push({ op: "set", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
     hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${droppedNote}. If the classic page still shows content here, it must be restated in this op.` });
 }
 
@@ -1734,8 +2033,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     const allStub = seedMethodNames.size >= SEED_MIN_METHODS && seedNonEmptyMethods.size === 0;
     const detail = allStub ? "but ALL of them are EMPTY stubs (no bodies)" : `(below the ${SEED_MIN_METHODS}-method floor)`;
     warnings.push({
-      op: "seed", name: "skeletal-seed", schema: "(seed)",
-      message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+      op: "seed", name: "skeletal-seed", schema: "(seed)", severity: SEVERITY.CORRECTNESS,
+      // `hint` (not only `message`) because every consumer quotes `hint`: the gate's new per-warning quote, and the
+      // plan's advisory. A producer that names its text differently is a producer the reader renders as `undefined`.
+      hint: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
     });
   }
 
@@ -1754,7 +2055,12 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       engineOnlyStub: !!i.engineOnlyStub,
       contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
-      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
+      // EFFECTIVE caption, in the platform's own order: `config.caption`, then `labelConfig.caption`
+      // (`getLabelCaption`, ViewGeneratorV2 L1675-1689). `labelCaption` rides along so a reader can tell WHICH of
+      // the two supplied the text — a label a later layer may remove on its own (`remove properties:
+      // ["labelConfig"]`) is not the same fact as a caption stated on the control itself.
+      visible: i.visible ?? null, caption: i.caption || i.labelCaption || null, labelCaption: i.labelCaption || null,
+      provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.

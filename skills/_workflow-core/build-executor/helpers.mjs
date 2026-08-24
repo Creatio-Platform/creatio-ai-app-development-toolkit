@@ -24,6 +24,35 @@ export function unitNo(unitKeys, key) {
   }
   return i + 1;
 }
+// A unit key, reduced to what a filename can hold. One sanitiser for the whole run: the readable half of a page
+// file and a non-page unit's whole stem are the same transformation, and two copies of it would drift.
+export function readableUnitPart(key) {
+  return String(key).replace(/[^A-Za-z0-9_.:@-]+/g, '_');
+}
+// A NON-PAGE unit's file stem. `scheduleUnits` schedules the `app` unit and every applicable REACHABILITY key
+// alongside the pages, but `unitKeys` is `--units.pages[].key` VERBATIM — so neither is in it, and `unitNo` threw
+// on the first attempt to name a file for one. That killed any run whose plan needs a menu entry, after the pages
+// were already built.
+// The fix is a rule of its own rather than a wider key list: the engine numbers its slice files by position in
+// `pages[]`, so putting a reach key into `unitKeys` would shift every page's number away from the file the engine
+// wrote, and every other consumer reads that list as "the page keys".
+// NAMED BY THE KEY, not by a position. These keys are the engine's own fixed identifiers (`app`,
+// `sectionRegistered`, …) — never a customer-derived caption — so a filename built from one is unique, and it is
+// STABLE across rounds and sessions, which a schedule position is not (a park, or an app unit the run does not
+// need, shifts it). The kind namespaces it, so a page stem (`<readable>-<n>`) and a non-page stem cannot collide.
+export function nonPageUnitStem(key, kind) {
+  const readable = readableUnitPart(key);
+  return kind === key ? readable : `${kind}-${readable}`;
+}
+// THE per-unit file stem, for a unit of ANY kind. `pageNo` is injected — the caller's bound numberer — so this
+// function owns the RULE and the run owns the key list; a page stem therefore still ends in exactly the number the
+// engine wrote that page's slices under, and a non-page unit never asks for one.
+export function unitStem(unit, pageNo) {
+  const key = unit?.key;
+  const kind = unit?.kind;
+  if (kind && kind !== 'page') return nonPageUnitStem(key, kind);
+  return `${readableUnitPart(key)}-${pageNo(key)}`;
+}
 export const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:
@@ -119,8 +148,105 @@ export const isUnitOpen = (unit, verify, reachState, packageState) => {
 // blocked set, so `main` stops being schedulable and the loop can break with `main` never built; `complete`
 // becomes false on a green gate; and `parkWhy` composes a question with no answerable content ("0 MISSING + 0
 // unconfirmed row(s)"). A closed unit is not a stuck unit.
-export const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState, maxRounds = DEFAULT_MAX_ROUNDS) =>
+// `alreadyParked` is EXCLUDED (PR review T2b): the in-context park (`applyInContextParks`) runs FIRST this round and
+// adds its keys to `parkedSet`, so a unit eligible for BOTH the in-context path and this round-budget path is parked
+// exactly ONCE — here the dedup is a PURE input (same shape and role as `inContextParkableKeys`'s `alreadyParked`),
+// so the "parked once, one reason" interaction of the two paths is unit-testable rather than resting on the impure
+// `parkedSet.has` guard in `applyParks` alone.
+export const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState, maxRounds = DEFAULT_MAX_ROUNDS, alreadyParked = null) =>
   parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key), maxRounds)
+    .filter((k) => !(alreadyParked && alreadyParked.has(k)))
+
+// ENG-95469 — the ONE self-check outcome that PARKS a page IN-CONTEXT, as a predicate `buildRound` can test (PR
+// review T3): the builder ran its scoped gate (`ran: true`), the engine's single-unit verdict is still NOT complete
+// (`complete: false`), AND the builder has already spent its ONE bounded fix (`fixAttempted: true`). A shortfall
+// whose bounded fix is NOT YET attempted (`fixAttempted: false`) is deliberately NOT collected — the unit still has
+// its one attempt owed to it, so parking it now would skip the very fix the gate promises; it stays open for that
+// attempt instead. A gate that could not run (`ran: false`) and a complete gate collect nothing. Pinned as its own
+// function so a case that must NOT park (`fixAttempted: false`) is proven distinct from the one that does.
+export function selfCheckStillShort(sc) {
+  return !!sc && sc.ran === true && sc.complete === false && sc.fixAttempted === true
+}
+
+// ENG-95469 — WHICH self-check-short units this round actually parks IN-CONTEXT (PR review T2): the builder reported
+// the unit still short after its one bounded fix (`selfCheckShort`), the INDEPENDENT post-hoc verifier (`verify`,
+// just refreshed by the read-only agent that did NOT build the page) ALSO finds the unit open, AND it is not already
+// parked. The verifier guard is the whole point of the double-guard — the self-check is the engine's own scoped
+// arithmetic reported THROUGH the builder, so a builder that mis-reported "still short" on a page the independent
+// verifier finds GREEN is NOT parked here. Same shape and openness predicate as `parkableKeys`, so the two park
+// paths cannot disagree about what "open" means. Pure: `unitFor` maps a key to its unit (the impure `schedule`
+// lookup is injected), and `alreadyParked` is handed in, so the whole decision is unit-testable without run state.
+export const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachState, packageState, alreadyParked) =>
+  (selfCheckShort || [])
+    .filter((s) => s && s.key && !(alreadyParked && alreadyParked.has(s.key)))
+    .filter((s) => isUnitOpen(unitFor(s.key), verify, reachState, packageState))
+    .map((s) => s.key)
+
+// ENG-95469 — the INDEPENDENT-SIGNAL cross-check on the in-context gate (PR review T5). The gate's `selfCheck` is the
+// builder's OWN report that it ran the scoped `--verify --page` gate; nothing in the builder's WORD proves the gate
+// actually ran or that its verdict is honest — enforcement was prompt-compliance only. This reconciles each page
+// unit's self-report against the INDEPENDENT post-hoc verifier (`verify`, produced by the read-only agent that did
+// NOT build the page — the run's authoritative oracle) and names the two ways a self-report and the independent
+// detector can disagree, for a unit the verifier finds still OPEN:
+//   · `reported-complete-but-verifier-open` — the builder reported the gate PASSED (`ran` + `complete`) but the
+//     independent verifier finds the unit still open. The in-context park never catches this (it fires only on
+//     `complete: false`), so a fabricated / mis-run green would otherwise pass silently; surfaced here it is not
+//     trusted and the post-hoc verifier governs.
+//   · `gate-not-run` — the builder returned `ran: false` (the documented escape hatch) on a unit the verifier finds
+//     open: legitimate, but surfaced (never silently accepted) so an operator can see which open units bypassed the
+//     scoped gate. A unit the verifier confirms complete needs no such note.
+//   · `ran-without-verdict` — the builder reported `ran: true` but NO boolean `complete` (PR review RC-12): the
+//     schema requires only `ran` inside `selfCheck`, so a self-report with `complete` absent is a valid page shape,
+//     yet `complete`/`missing`/`unverified` are meant to be COPIED VERBATIM from the engine's single-unit verdict —
+//     an absent `complete` on a gate that claims to have run is an inconclusive/malformed self-report. It also
+//     escapes `selfCheckStillShort` (which needs `complete === false`) and the two branches above, so without this
+//     branch such a unit reaches neither the fast park nor the audit trail on a still-open unit. Named here so it
+//     is surfaced, not silently dropped.
+// Pure: the verdict and the self-reports are handed in; `unitFor` injects the schedule lookup. It changes NO verdict
+// — it only names a discrepancy for the run's audit trail; the post-hoc verifier remains the authoritative evidence.
+export const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageState) =>
+  (selfChecks || [])
+    .filter((c) => c && c.key && isUnitOpen(unitFor(c.key), verify, reachState, packageState))
+    .map((c) => {
+      const sc = c.sc
+      if (sc && sc.ran === true && sc.complete === true) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
+      if (sc && sc.ran === true && sc.complete !== true && sc.complete !== false) return { key: c.key, kind: 'ran-without-verdict' }
+      if (!sc || sc.ran === false) return { key: c.key, kind: 'gate-not-run' }
+      return null
+    })
+    .filter(Boolean)
+
+// THE THREE DISCREPANCY KINDS `selfCheckMismatches` can return, each with its OWN claim text (what the self-report
+// said) and log label. A map, not a ternary: the consumer (round loop) must render all three distinctly — folding
+// `ran-without-verdict` into the `gate-not-run` wording would tell an operator "builder skipped the gate" when the
+// builder actually ran it and returned an inconclusive verdict, two different repairs. `label` heads the log line;
+// `claim` is copied into the `discrepancies` audit row verbatim. Pure and exported so a golden can pin it.
+export const SELF_CHECK_DISCREPANCY_TEXT = {
+  'reported-complete-but-verifier-open': { label: 'MISMATCH', claim: 'selfCheck reported the in-context completeness gate PASSED (ran + complete)' },
+  'ran-without-verdict': { label: 'INCONCLUSIVE', claim: 'selfCheck reported the gate RAN but returned NO boolean verdict (ran:true, complete absent)' },
+  'gate-not-run': { label: 'NOT RUN', claim: 'selfCheck reported the in-context completeness gate did NOT run (ran:false)' },
+}
+// Resolve one kind to its { label, claim }. FAIL LOUD on an unrecognized kind — a new kind added to
+// `selfCheckMismatches` without a matching entry here would otherwise inherit stale wording silently.
+export function selfCheckDiscrepancyText(kind) {
+  const text = SELF_CHECK_DISCREPANCY_TEXT[kind]
+  if (!text) throw new Error(`unknown selfCheck discrepancy kind '${kind}' — add it to SELF_CHECK_DISCREPANCY_TEXT`)
+  return text
+}
+
+// WHY a unit parked from the IN-CONTEXT gate (ENG-95469) — distinct from `parkWhy`'s "still short after N round(s)".
+// The in-context completeness gate gives a unit EXACTLY ONE bounded fix in its own build context; still short after
+// that, the unit parks HERE, after one round, without spending the `MAX_ROUNDS`-round post-hoc budget. Pure: the
+// still-short rows are HANDED in (the builder's own scoped `--verify --page` verdict, copied verbatim), never read
+// off run state — so this composes the same Deliverable — Status — Evidence line the post-hoc park uses, with the
+// ONE bounded attempt named in place of a round count. Never blank: a park with no reason is a question nobody can
+// answer.
+export function inContextParkWhy(shortRows) {
+  const rows = (shortRows || []).filter((r) => r && r.deliverable).map((r) => `${r.deliverable} — ${r.status} — ${r.evidence}`)
+  const head = 'still short after ONE in-context fix attempt (the unit\'s own completeness gate, run before it could report complete)'
+  if (rows.length) return `${head} — the gate's open rows: ${rows.join(' · ')}`
+  return `${head} — the gate reported the unit incomplete but named no open row; re-verify this unit`
+}
 
 // Which units a park BLOCKS. With the parent edge published, a parked page blocks its ancestors
 // and nothing else; without it, the honest fallback is that it blocks `main` only — and the
@@ -231,20 +357,70 @@ export function shouldPauseAfter(mode, checkpointSet, unitKey) {
   return false
 }
 
+// Is a builder's continuation ask honoured? Pure and named so a test EXECUTES the ceiling rather than matching the
+// constant in the source — the cap is the continuation path's only termination guarantee. `cap === 0` refuses every
+// ask and is never read as "no limit".
+export function continuationAllowed(spent, cap) {
+  if (!Number.isFinite(cap) || cap <= 0) return false
+  return (Number.isFinite(spent) ? spent : 0) < cap
+}
+
+// THE BUILDER'S HALF OF THE CONTINUATION CONTRACT. Empty at budget `0`, which is what disables the mechanism: an
+// agent never told to stop cannot ask to. Pure, and out of `buildPrompt`, so the prompt function carries no branch
+// for it (Sonar S3776).
+export function continuationBudgetBlock(budget) {
+  if (!Number.isFinite(budget) || budget <= 0) return ''
+  return `\nBUILD CONTINUATION BUDGET: if this unit is approaching about ${budget} assistant turns or the context is getting tight, STOP ONLY AT A SAFE BOUNDARY and return \`continuationRequested: true\`. A safe boundary means no half-written page body, no in-flight browser action, no unresolved create/update call, and all facts you learned are either on the stand, in this unit's worklog file, or in this structured result. Return \`safeContinuationPoint\` naming the boundary and \`continuationReason\` naming what remains. Do NOT call this a blocker and do NOT spend time summarising the whole run. The orchestrator will verify/reconcile what exists, will not charge this as a repair round, and will send this SAME unit to a fresh BUILD agent if it is still open.\n`
+}
+
+// THE REPAIR PREAMBLE, for round 2 and later. Pure and out of `buildPrompt` for the same reason. A round with no open
+// row named still says so rather than rendering an empty list, which reads as "nothing to fix".
+export function repairBlock(roundNo, shortRows, maxRounds, verifyTable) {
+  if (roundNo <= 1) return ''
+  const rows = shortRows || `  - (the verdict named no open row for this unit; re-read ${verifyTable})`
+  return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and these rows are NOT closed — as the engine published them in the machine verdict:\n${rows}\nFix exactly those. The status text already says WHICH repair each needs: a field absent BY NAME, a component type absent, a wrong package, or a record filed but not judged. Do not rebuild what is already ✅.\n`
+}
+
 // THE PACKAGE PRECONDITION. Only the cases the run cannot act on are stops — an ABSENT package with a name is not
 // one of them, because the app unit now creates it. What cannot be recovered from is not knowing: an 'unknown'
 // state means the stand checks were inconclusive, and both readings of it are expensive. Guessing "absent" runs
 // `create-app` over what may be an existing application; guessing "exists" puts every page unit back into the loop
 // that spent 12 agents and 1.9M tokens discovering the same blocker four times. And a package that is absent with
 // no NAME published cannot be created at all — there is nothing to pass to `create-app`.
-export function packagePreconditionStop(targetPackage, packageState, sectionHost) {
+// ENG-95850 (A2) — WHOSE PACKAGE IS IT. The stop below asks "does the planned package already exist", and until this
+// helper existed that question had exactly one answer for two very different facts: a package SOMEONE ELSE owns (a
+// real plan-vs-stand mismatch) and the package THIS MIGRATION'S OWN app unit created (a resume). Only the first is a
+// blocker. The record comes from the ONE state file both routes write (`build-queue.json`.`standWrites.packageCreated`,
+// reported by Reconcile as `packageCreatedByRun`, and overridden by whatever THIS process created), so a run moved
+// from the Agent route to the Workflow route reads its predecessor's stand write instead of rediscovering it as a
+// stranger's. Matched on the package NAME: a record naming another package says nothing about this plan's target,
+// and the run must not carry a stand write it cannot tie to the package in front of it.
+// `appUnitComplete` is the app unit's FULL deliverable (the planned package AND a section on the migrated object AND
+// no stub left behind) — the same bar `applyAppUnitResult` closes the unit on. A half-finished app unit stays a stop:
+// nothing here may infer a section that was never created.
+export const ownPackageRecord = (rec, targetPackage) => {
+  const name = String(rec?.package ?? '').trim()
+  const planned = String(targetPackage ?? '').trim()
+  if (!name || !planned || name !== planned) return null
+  return { package: name, appUnitComplete: rec.appUnitComplete === true, planVersion: rec.planVersion ?? null, sectionPage: rec.sectionPage ?? null }
+}
+export function packagePreconditionStop(targetPackage, packageState, sectionHost, packageCreatedByRun) {
   // `new-app` over a package that ALREADY exists is unsatisfiable by construction, so it is a stop rather than a
   // unit. `create-app` mints its OWN package, and the app unit's acceptance criterion is an exact equality with
   // the planned package name — no `create-app` can produce a package that is already there. The only route to an
   // application owning an existing package is attaching it and flipping the primary flag: a mutation of which
   // package owns the app's identity, which is a user decision, never something a build round does on its own.
+  // …UNLESS this migration created it itself. Then there is nothing for `create-app` to do and nothing for an
+  // operator to decide: the app unit already closed on its full deliverable, so this is a RESUME and the run
+  // continues. Without this branch a `new-app` plan could not survive its own success — the app unit sets
+  // `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
   if (sectionHost === 'new-app' && packageState === 'exists') {
-    return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\`, but the target package \`${targetPackage || '(unnamed)'}\` is ALREADY on the stand — \`create-app\` always mints its own package, so it cannot produce one that exists, and the app unit would fail its name-equality check. Two ways out, both yours to pick: (a) re-plan against a package that does NOT exist yet, and this run's app unit creates the application, the package and the section in one go; or (b) attach the existing package to an application and make it primary BY HAND, then re-plan with \`sectionHost: existing-app\`. Nothing has been built` }
+    const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+    if (own && own.appUnitComplete) return null
+    if (own) {
+      return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\` and the target package \`${targetPackage || '(unnamed)'}\` is on the stand because THIS migration created it — but the state file records its app unit as INCOMPLETE (the package exists; the section on the migrated object and/or the removal of the stub \`create-app\` mints did not finish). \`create-app\` cannot be re-run over a package that is already there, and this run will not infer a section nobody confirmed. Two ways out, both yours to pick: (a) finish the app unit BY HAND — \`create-app-section --entity-schema-name <the migrated object>\` in that application, then \`delete-app-section\` for the stub — and re-run this build, which then resumes without a re-plan and without a second approval; or (b) re-plan with \`sectionHost: existing-app\` against the package that now exists. Nothing further has been built` }
+    }
+    return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\`, but the target package \`${targetPackage || '(unnamed)'}\` is ALREADY on the stand and no state file records this migration creating it — \`create-app\` always mints its own package, so it cannot produce one that exists, and the app unit would fail its name-equality check. Two ways out, both yours to pick: (a) re-plan against a package that does NOT exist yet, and this run's app unit creates the application, the package and the section in one go; or (b) attach the existing package to an application and make it primary BY HAND, then re-plan with \`sectionHost: existing-app\`. Nothing has been built` }
   }
   // Anything that is not one of the three published states — absent, empty, misspelled — is UNKNOWN. The schema
   // requires the field; this is what makes a result that slipped through anyway stop the run instead of being read
@@ -387,7 +563,11 @@ export const GUIDELINES_RETURN = `
 
 // `guidelinesReturn` is EMPTY for the app and reachability kinds: they own no page, carry no `#quality-gates` id,
 // and their schemas do not require the field. Only a page unit is held by it.
-export function composeBuildPrompt({ rules, behaviour, worklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '' }) {
+// `sharedWorklogPath` has NO default: every agent-facing path in this run is absolute, because a sub-agent starts in
+// an unknown working directory and a relative path resolves against nothing. A relative default would be a silent
+// write to the wrong file; an omitting caller instead renders `undefined`, which the suite's no-`undefined` assertion
+// over every composed prompt catches.
+export function composeBuildPrompt({ rules, behaviour, worklogPath, sharedWorklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '', gate = '' }) {
   return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
 
 ${rules}
@@ -400,10 +580,10 @@ MANDATORY WHILE BUILDING:
 - Invoke the \`creatio-ui-guidelines\` skill BEFORE authoring the page body, and run its review AFTER saving — the review is tool-based: open a SHIPPED reference page on the same template and diff concrete props (\`color\`/\`padding\`/\`borderRadius\`/\`gap\`, panel \`toggleType\`, \`caption\` not raw \`title\`, \`labelPosition\`, column count) with \`get-component-info\` per component you added. A screenshot glance is not the gate.${guidelinesReturn}
 - Build the plan EXACTLY: every profile island is its own container, every tab and group exists, and BOTH halves of a two-part component (Approvals = the approval module above the island AND \`crt.ApprovalList\`; DCM = the progress bar in \`MainContainer\` AND the Next steps tab). If you think the plan is wrong, put it in \`proposals\` AND BUILD THE PLAN. Never simplify silently.
 - When you create a page on a non-default template, RE-BIND the object to it and drop the old binding. A page built but not re-bound is an orphan and is not migrated.
-- Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogPath}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. An interrupted run must not lose the history. Do NOT read or append to the shared \`worklog.md\`: the Close phase assembles it from these per-unit files, and reading a growing shared log just to append to it cost 37 reads on one run.
+- Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogPath}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. Then APPEND the SAME entry once to \`${sharedWorklogPath}\`, under today's date and this surface, with an append-only write (shell \`>>\`). **Do NOT read that file first, and do not rewrite it.** It grows by one entry per unit, so reading it to append costs every later unit more than the last. Your per-unit file above is the audit trail; the shared log is the human-readable roll-up. Build units run sequentially, so an append has no writer race. An interrupted run must not lose the history.
 - Touch NO other unit's page. The stand is shared and units run one at a time for that reason.
-
-WHAT YOU DO NOT DO: you do not file the evidence record, you do not write \`--built\`, and you do not run \`--verify\`. A separate read-only agent fetches the stand and files what it finds; a third agent judges. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
+${gate}
+WHAT YOU DO NOT DO: you do not file the evidence record, and you do not write the run's shared \`--built\` file. A separate read-only agent fetches the stand and files what it finds; a third agent judges — that separation is what keeps the EVIDENCE honest, and it is untouched. The ONE \`--verify\` you may run is the SCOPED in-context completeness gate over your OWN page described above (ENG-95469): it is arithmetic over the engine's own numbers, not a self-graded claim, and the read-only verifier still re-reads your page afterwards as the authoritative record. Run NO other \`--verify\`, and never over another unit's page. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
 ${resolutions}${findings}${checkFirst}
 Return the schema. Anything you could not do goes in \`blocked\` with why — a stated blocker is worth more than a quiet omission.`
 }

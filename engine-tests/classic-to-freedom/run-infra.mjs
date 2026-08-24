@@ -141,34 +141,44 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun", "componentTypeMismatches",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
-  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo"];
-// Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
-// rather than a copy of it in this file.
-const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
+  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
+  "readableUnitPart", "nonPageUnitStem", "unitStem",
+  "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
+// Non-function members of the same block. Exported so a prompt fragment — and the round budget's own DESIGN VALUE —
+// is asserted against the SHIPPED text rather than a copy of it in this file. `DEFAULT_MAX_ROUNDS` is exported for
+// exactly that reason: the park assertions below build their `localRounds` fixtures from it, and hard-coding a 3 here
+// would make them pass against a block whose default had drifted.
+const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
-// construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
-// over, injected here at the design value.
+// construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
+// read off the host scope is a PARAMETER of every helper that needs it (`parkedKeys`/`parkableKeys`), which is what
+// lets the same helpers be imported directly by the core's own module suite.
 let wf = {};
 let tmpWf;
 try {
   tmpWf = mkdtempSync(path.join(os.tmpdir(), "wf-helpers-"));
   const modPath = path.join(tmpWf, "helpers.mjs");
-  writeFileSync(modPath, `const MAX_ROUNDS = 3;\n${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
+  writeFileSync(modPath, `${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
   wf = await import(pathToFileURL(modPath).href);
 } catch (e) {
-  check("workflow: the pure-helper block loads as a standalone module (it closes over nothing but MAX_ROUNDS)", false, e.message);
+  check("workflow: the pure-helper block loads as a standalone module (it closes over NOTHING — the round budget is a parameter)", false, e.message);
 } finally {
   if (tmpWf) rmSync(tmpWf, { recursive: true, force: true });
 }
 check("workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
   HELPERS.every((h) => typeof wf[h] === "function"), () => HELPERS.filter((h) => typeof wf[h] !== "function").join(", "));
-check("workflow: every block CONSTANT this suite asserts against is inside the markers too",
-  BLOCK_CONSTS.every((c) => typeof wf[c] === "string" && wf[c].length > 0),
-  () => BLOCK_CONSTS.filter((c) => typeof wf[c] !== "string").join(", "));
+// Present AND carrying a real value, per kind: an exported-but-empty constant would satisfy a bare `!== undefined`
+// while telling every assertion below nothing. The list holds a prompt fragment (a non-empty string) and the round
+// budget's design value (a positive finite number), so both kinds are checked rather than the union loosened.
+const blockConstIsReal = (v) => (typeof v === "string" ? v.length > 0 : Number.isFinite(v) && v > 0);
+check("workflow: every block CONSTANT this suite asserts against is inside the markers too, and carries a real value",
+  BLOCK_CONSTS.every((c) => blockConstIsReal(wf[c])),
+  () => BLOCK_CONSTS.filter((c) => !blockConstIsReal(wf[c])).map((c) => `${c}=${JSON.stringify(wf[c])}`).join(", "));
 
 // --- isOpenPage: the tri-state. Only an explicit `complete: true` closes a unit. ---
 check("isOpenPage: `complete: true` is the ONLY thing that closes a unit",
@@ -266,6 +276,193 @@ check("workflow: `applyParks` parks through `parkableKeys` (budget spent AND sti
   wfSrc.includes("function applyParks()") && /parkableKeys\(/.test(applyParksSrc)
   && !/parkedKeys\([^)]*schedule\.map/.test(applyParksSrc),
   () => applyParksSrc.split("\n").filter((l) => /park(able|ed)Keys/.test(l)).join("\n"));
+
+// --- ENG-95469 in-context completeness gate: the ONE-BOUNDED-FIX → PARK reason, distinct from the round-budget one.
+check("inContextParkWhy: composes the reason from the HANDED-IN short rows (Deliverable — Status — Evidence), names the ONE bounded attempt, and is never blank",
+  () => { const w = wf.inContextParkWhy([{ deliverable: "Related lists — 4 expected", status: "❌ MISSING", evidence: "no crt.DataGrid built" }]);
+    return /ONE in-context fix attempt/.test(w) && /Related lists — 4 expected — ❌ MISSING — no crt\.DataGrid built/.test(w); },
+  () => wf.inContextParkWhy([{ deliverable: "Related lists — 4 expected", status: "❌ MISSING", evidence: "no crt.DataGrid built" }]));
+check("inContextParkWhy: DISTINCT from the round-budget `parkWhy` — it names a bounded fix attempt, not a round count",
+  () => { const w = wf.inContextParkWhy([{ deliverable: "X", status: "⚠ verify", evidence: "y" }]);
+    return /ONE in-context fix attempt/.test(w) && !/still short after \d+ round/.test(w); });
+check("inContextParkWhy: no rows still yields a non-blank reason (a park with no reason is a question nobody can answer)",
+  () => { const w = wf.inContextParkWhy([]); return typeof w === "string" && w.trim().length > 0 && /re-verify/.test(w); });
+check("inContextParkWhy: junk/blank rows are dropped, not rendered as ` —  — `",
+  () => { const w = wf.inContextParkWhy([null, { status: "x" }, { deliverable: "Real", status: "❌", evidence: "gone" }]);
+    return /Real — ❌ — gone/.test(w) && !/ —  — /.test(w); });
+
+// The in-context gate WIRING, pinned at the source level (the round loop drives live agents, so it is verified by
+// the Applicant replay, not a golden — these seams keep a revert from silently removing the one-bounded-fix→park).
+check("ENG-95469: the build phase relaxes 'a builder does not run --verify' ONLY for the scoped in-context gate — the shared built file and the evidence record stay off-limits",
+  wfSrc.includes("you do not write the run's shared")
+  && wfSrc.includes("you may run is the SCOPED in-context completeness gate")
+  && wfSrc.includes("IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE"));
+check("ENG-95469: a still-short-after-one-fix selfCheck is collected in buildRound (via `selfCheckStillShort`) and parked via applyInContextParks BEFORE the round-budget applyParks",
+  /selfCheckStillShort\(sc\)/.test(wfSrc)
+  && /sc\.ran === true && sc\.complete === false && sc\.fixAttempted === true/.test(wfSrc)
+  && /const inContextParked = applyInContextParks\(selfCheckShort\)/.test(wfSrc)
+  && wfSrc.indexOf("applyInContextParks(selfCheckShort)") < wfSrc.indexOf("const newlyParked = applyParks()"));
+// Supplementary source pin (the double-guard itself is EXECUTED in the `inContextParkableKeys` cases below):
+// applyInContextParks now decides through the pure helper, which confirms the unit is still OPEN on the post-hoc
+// verdict before parking — the self-check is engine arithmetic reported through the builder, never its word on trust.
+check("ENG-95469: applyInContextParks decides through the pure `inContextParkableKeys` (double-guard), then only turns the chosen keys into park records",
+  /function applyInContextParks\(selfCheckShort\)[\s\S]{0,600}inContextParkableKeys\(selfCheckShort, unitOf, state\.verify/.test(wfSrc)
+  && /isUnitOpen\(unitFor\(s\.key\), verify, reachState, packageState\)/.test(wfSrc)
+  && /parkRecord\(k, inContextParkWhy\(shortByKey\.get\(k\)\.shortRows\)/.test(wfSrc));
+
+// --- ENG-95469 (PR review T3): the buildRound COLLECTION predicate, EXECUTED. Only a ran + still-short + fix-
+// ATTEMPTED self-check is a park candidate; a shortfall whose one bounded fix is NOT yet attempted is NOT collected
+// — the unit keeps its fix budget instead of being queued/parked prematurely. Proven distinct from the fixAttempted
+// case that IS collected.
+check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: true }) === true);
+check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: false }) === false);
+check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
+  () => wf.selfCheckStillShort({ ran: true, complete: true, fixAttempted: true }) === false
+    && wf.selfCheckStillShort({ ran: false, complete: false, fixAttempted: true }) === false
+    && wf.selfCheckStillShort(undefined) === false);
+
+// --- ENG-95469 (PR review T2): the in-context park's DOUBLE-GUARD, EXECUTED (not just source-pinned). The self-check
+// is the engine's own scoped arithmetic reported THROUGH the builder; a self-report of "still short" is parked ONLY
+// when the INDEPENDENT post-hoc verifier ALSO finds the unit open. A page the verifier finds COMPLETE is never parked
+// on the builder's word alone — so no park record and no `inContextParkWhy` reason is produced for it.
+{
+  const scShort = [{ key: "child:A", shortRows: [{ deliverable: "Related lists — 4 expected", status: "❌ MISSING", evidence: "no crt.DataGrid built" }] }];
+  const unitForA = (k) => ({ key: k, kind: "page" });
+  check("ENG-95469 T2: a self-check-short unit the INDEPENDENT verifier finds COMPLETE is NOT parked in-context — the verifier guard overrides the builder's word (no key returned ⇒ no park record, no inContextParkWhy)",
+    () => wf.inContextParkableKeys(scShort, unitForA, { pages: { "child:A": { complete: true } } }, {}, undefined, new Set()).length === 0,
+    () => wf.inContextParkableKeys(scShort, unitForA, { pages: { "child:A": { complete: true } } }, {}, undefined, new Set()));
+  check("ENG-95469 T2: the SAME self-check-short unit IS parked when the verifier also finds it open (short AND independently open ⇒ park)",
+    () => wf.inContextParkableKeys(scShort, unitForA, { pages: { "child:A": { complete: false } } }, {}, undefined, new Set()).join(",") === "child:A");
+  check("ENG-95469 T2: a unit ALREADY parked this round is not parked again (dedup), even when short and open",
+    () => wf.inContextParkableKeys(scShort, unitForA, { pages: { "child:A": { complete: false } } }, {}, undefined, new Set(["child:A"])).length === 0);
+  check("ENG-95469 T2: an ABSENT verdict entry is OPEN (same tri-state as the round-budget park), so short + no-verdict-yet still parks — a green page is the only thing that blocks the in-context park",
+    () => wf.inContextParkableKeys(scShort, unitForA, { pages: {} }, {}, undefined, new Set()).join(",") === "child:A");
+}
+
+// --- ENG-95469 (PR review T2b): the TWO park paths cannot DOUBLE-PARK one unit, EXECUTED (not only source-pinned).
+// A unit that is BOTH self-check-short-and-open (the in-context path) AND budget-spent-and-open (the round-budget
+// path) in the SAME round must park exactly ONCE, with one reason and no duplicate entry. `applyInContextParks` runs
+// first and adds its keys to `parkedSet`; `parkableKeys` now takes that set as `alreadyParked` and excludes it — so
+// the "parked once" property is a PURE composition of the two predicates, provable here rather than resting on the
+// impure `!parkedSet.has` guard inside `applyParks` alone.
+//
+// `alreadyParked` is the LAST parameter, AFTER `maxRounds`: the helpers module is imported directly now, so there is
+// no host scope to inherit the round budget from and every call site passes it. The budget is therefore stated
+// EXPLICITLY in each call below — handing a `Set` into the `maxRounds` slot makes `roundsRun(…) >= maxRounds` compare
+// a number against an object, which is always false, so the exclusion assertion would pass while excluding nothing.
+{
+  const K = "child:A";
+  const unitK = [{ key: K, kind: "page" }];
+  const openVerify = { pages: {} };                    // absent verdict entry ⇒ OPEN, for BOTH predicates
+  const BUDGET = wf.DEFAULT_MAX_ROUNDS;                // the design value the run passes as `MAX_ROUNDS`
+  const budgetSpent = { [K]: BUDGET };                 // localRounds ⇒ roundsRun === MAX_ROUNDS ⇒ budget spent
+  const scShortK = [{ key: K, shortRows: [] }];
+  const budgetParks = (already) => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, BUDGET, already);
+  const inContext = wf.inContextParkableKeys(scShortK, (k) => ({ key: k, kind: "page" }), openVerify, {}, undefined, new Set());
+  check("ENG-95469 T2b: a unit eligible for BOTH park paths is selected by each in isolation — in-context (short AND independently open) and round-budget (budget spent AND still open)",
+    () => inContext.join(",") === K && budgetParks(new Set()).join(",") === K,
+    () => ({ inContext, budget: budgetParks(new Set()) }));
+  check("ENG-95469 T2b: once the in-context park has CLAIMED the unit (its key added to the parked set), the round-budget `parkableKeys` EXCLUDES it — the two paths park the unit exactly once, no duplicate record",
+    // Guarded against a vacuous pass: the SAME call with an empty set must still select the unit (asserted above),
+    // so a zero here is the exclusion doing its job and not the budget silently failing to apply.
+    () => budgetParks(new Set(inContext)).length === 0 && budgetParks(new Set()).length === 1,
+    () => ({ excluded: budgetParks(new Set(inContext)), notExcluded: budgetParks(new Set()) }));
+  check("ENG-95469 T2b: `applyParks` HANDS `parkedSet` to `parkableKeys` as the alreadyParked filter, WITH the configured round budget in front of it — the pure dedup is actually wired, so a refactor cannot drop it and leave only the local guard, and it cannot land the set in the `maxRounds` slot where it would silently disable the budget",
+    /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, MAX_ROUNDS, parkedSet\)/.test(wfSrc));
+}
+
+// --- ENG-95469 (PR review T5): the INDEPENDENT-SIGNAL cross-check, EXECUTED. A builder's `selfCheck` is its own word
+// that the scoped gate ran and passed; `selfCheckMismatches` reconciles each page unit's self-report against the
+// independent post-hoc verifier and names the two ways they can disagree, for a unit the verifier finds still OPEN.
+{
+  const unitFor = (k) => ({ key: k, kind: "page" });
+  const openVerify = { pages: { "child:A": { complete: false } } };   // the independent verifier finds child:A OPEN
+  const greenVerify = { pages: { "child:A": { complete: true } } };   // …and here it finds it COMPLETE
+  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, complete: true } }];
+  const notRun = [{ key: "child:A", sc: { ran: false, notRunWhy: "could not get-page" } }];
+  const honestComplete = [{ key: "child:A", sc: { ran: true, complete: true } }];
+  check("ENG-95469 T5: a builder that self-reports the gate PASSED on a page the INDEPENDENT verifier finds OPEN is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on complete:false), so the cross-check is the only independent signal",
+    () => { const m = wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined);
+      return m.length === 1 && m[0].key === "child:A" && m[0].kind === "reported-complete-but-verifier-open"; },
+    () => wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined));
+  check("ENG-95469 T5: a `ran:false` self-check on a page the verifier finds OPEN is flagged `gate-not-run` — a builder cannot silently bypass the scoped gate; the skipped-and-still-open unit is surfaced",
+    () => { const m = wf.selfCheckMismatches(notRun, unitFor, openVerify, {}, undefined);
+      return m.length === 1 && m[0].kind === "gate-not-run"; },
+    () => wf.selfCheckMismatches(notRun, unitFor, openVerify, {}, undefined));
+  check("ENG-95469 T5: an HONEST self-report — the verifier independently AGREES the unit is complete — raises NO mismatch (the cross-check only fires when the two disagree on an OPEN unit)",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, greenVerify, {}, undefined).length === 0
+      && wf.selfCheckMismatches(notRun, unitFor, greenVerify, {}, undefined).length === 0);
+  check("ENG-95469 T5: no self-checks at all is an empty mismatch list, not a throw",
+    () => wf.selfCheckMismatches([], unitFor, openVerify, {}, undefined).length === 0
+      && wf.selfCheckMismatches(undefined, unitFor, openVerify, {}, undefined).length === 0);
+  // PR review RC-12: a schema-valid self-report of `{ran:true}` with `complete` ABSENT (the schema requires only
+  // `ran` inside selfCheck) escapes both `selfCheckStillShort` (needs complete===false) and the two branches above
+  // (complete is neither true nor false), so without a dedicated branch such a unit reaches NEITHER the fast park
+  // NOR the audit trail on a still-open unit. It must be flagged `ran-without-verdict`, and must NOT collide with
+  // the honest short case `{ran:true, complete:false}`, which stays a non-mismatch (builder and verifier agree).
+  const ranNoVerdict = [{ key: "child:A", sc: { ran: true } }];
+  const honestShort = [{ key: "child:A", sc: { ran: true, complete: false } }];
+  check("ENG-95469 T5 (RC-12): `{ran:true, complete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
+    () => { const m = wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined);
+      return m.length === 1 && m[0].key === "child:A" && m[0].kind === "ran-without-verdict"; },
+    () => wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined));
+  check("ENG-95469 T5 (RC-12): the honest short case `{ran:true, complete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
+    () => wf.selfCheckMismatches(honestShort, unitFor, openVerify, {}, undefined).length === 0);
+}
+// The T5 cross-check WIRING, pinned at the source level (the round loop drives live agents): buildRound returns the
+// per-unit self-reports, and the round loop cross-checks them against the FRESH post-hoc `state.verify` and records a
+// discrepancy — it must not silently drop the signal on a refactor.
+// The round's tallies live on one object that `dispatchUnit` records into, so the return names them off `r` rather
+// than as bare locals. Read off the buildRound slice with `includes` — the field must be RETURNED, not merely
+// mentioned somewhere in the file, and a slice says so without a backtracking regex (S8786).
+// The slice ENDS at the verifier, not at `chargeBuildAttempt`: the per-unit helpers were hoisted ABOVE `buildRound`
+// (they are declarations in one scope now, not nested closures), so anchoring on one of them yields an EMPTY slice
+// and every `includes` below reads false — a pin that fails for the wrong reason is as bad as one that passes for it.
+const buildRoundBody = wfSrc.slice(wfSrc.indexOf("function* buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
+check("ENG-95469 T5: buildRound returns `selfChecks` and the round loop cross-checks them against the post-hoc verifier via `selfCheckMismatches`, recording each disagreement as a discrepancy",
+  buildRoundBody.includes("selfCheckShort: r.selfCheckShort, selfChecks: r.selfChecks")
+  && /selfCheckMismatches\(selfChecks, unitOf, state\.verify, state\.reachabilityState, packageState\)/.test(wfSrc)
+  && /discrepancies = \[\.\.\.discrepancies, \{ round, unit: m\.key/.test(wfSrc),
+  () => buildRoundBody.split("\n").filter((l) => /return \{|selfCheck/.test(l)).join("\n"));
+// The PRODUCER, which the extraction moved into the page-kind handler: `r.selfChecks` must actually be filled, or the
+// gate silently never fires while every consumer pin above stays green.
+const recordPageSchemaSrc = wfSrc.slice(wfSrc.indexOf("function recordPageSchema(unit, res, r)"),
+  wfSrc.indexOf("\n}\n", wfSrc.indexOf("function recordPageSchema(unit, res, r)")));
+check("ENG-95469 T5: the self-report is COLLECTED per page unit — `recordPageSchema` pushes every raw `selfCheck` and flags the still-short ones, so the return above is not an empty array",
+  recordPageSchemaSrc.includes("r.selfChecks.push({ key: unit.key, sc })")
+    && recordPageSchemaSrc.includes("if (selfCheckStillShort(sc))")
+    && recordPageSchemaSrc.includes("r.selfCheckShort.push"),
+  () => recordPageSchemaSrc);
+
+// PR review round-4 (RC-17): the round-loop consumer of `selfCheckMismatches` used a 2-way ternary that folded
+// `ran-without-verdict` into the `gate-not-run` wording ("did NOT run (ran:false)") — factually the opposite of
+// what a `ran:true, complete-absent` builder reported, and textually indistinguishable from a genuine not-run.
+// `selfCheckDiscrepancyText` now maps ALL THREE kinds to distinct { label, claim } and fails loud on an unknown one.
+{
+  const KINDS = ["reported-complete-but-verifier-open", "ran-without-verdict", "gate-not-run"];
+  const texts = KINDS.map((k) => wf.selfCheckDiscrepancyText(k));
+  check("ENG-95469 RC-17: all three discrepancy kinds resolve to a DISTINCT label and claim — no two share wording, so `ran-without-verdict` can never read as the not-run case",
+    () => new Set(texts.map((t) => t.label)).size === 3 && new Set(texts.map((t) => t.claim)).size === 3,
+    () => texts);
+  check("ENG-95469 RC-17: `ran-without-verdict` names an INCONCLUSIVE verdict, and does NOT claim the gate did not run — the two repairs an operator would take are kept separable",
+    () => { const t = wf.selfCheckDiscrepancyText("ran-without-verdict");
+      const notRun = wf.selfCheckDiscrepancyText("gate-not-run");
+      return /no boolean verdict/i.test(t.claim) && !/did NOT run/i.test(t.claim) && t.claim !== notRun.claim && t.label !== notRun.label; },
+    () => ({ ranNoVerdict: wf.selfCheckDiscrepancyText("ran-without-verdict"), gateNotRun: wf.selfCheckDiscrepancyText("gate-not-run") }));
+  check("ENG-95469 RC-17: an UNRECOGNIZED kind throws loudly — a future kind added to `selfCheckMismatches` without a matching text entry cannot silently inherit stale wording",
+    () => { try { wf.selfCheckDiscrepancyText("some-new-kind"); return false; } catch (e) { return /unknown selfCheck discrepancy kind/.test(e.message); } });
+  // Every kind `selfCheckMismatches` can emit MUST have a text entry — the two lists cannot drift apart.
+  check("ENG-95469 RC-17: every kind `selfCheckMismatches` can return has a `selfCheckDiscrepancyText` entry (the producer and the renderer stay in lockstep)",
+    () => KINDS.every((k) => { try { const t = wf.selfCheckDiscrepancyText(k); return t && t.label && t.claim; } catch { return false; } }));
+}
+// The consumer WIRING, pinned at source: the round loop now routes through `selfCheckDiscrepancyText(m.kind)` (not a
+// 2-way ternary) and carries the machine `kind` onto the discrepancy row so an operator can tell the three apart.
+check("ENG-95469 RC-17: the round loop renders the discrepancy via `selfCheckDiscrepancyText(m.kind)` and records `kind` on the audit row — the old 2-way ternary is gone",
+  /const \{ label, claim \} = selfCheckDiscrepancyText\(m\.kind\)/.test(wfSrc)
+  && /discrepancies = \[\.\.\.discrepancies, \{ round, unit: m\.key, kind: m\.kind, claim,/.test(wfSrc)
+  && !/reported the in-context completeness gate did NOT run \(ran:false\)'\s*\n\s*log\(/.test(wfSrc));
 
 // --- ENG-94975 modes: auto / checkpoints / guided. A checkpoint stops the run at a PAGE BOUNDARY so a human can
 // open the built page and exercise it — the only check the `Form — Logic` handler rows get, since they carry no
@@ -377,8 +574,37 @@ check("ENG-95471 review fix: a quote inside a builder value cannot reshape the f
   () => { const t = wf.guidelinesLine({ ...gOk, referencePage: 'A" , "components": ["x' }, null, true, FENCE);
     return t.includes('"components": ["crt.Input"]') && (t.match(/"components":/g) || []).length === 1; });
 
-check("ENG-95471: `guidelines` is REQUIRED on the page build schema — optional is what let a builder close on silence",
-  /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines'\]/.test(wfSrc));
+check("ENG-95471 / ENG-95469: `guidelines` AND `selfCheck` are REQUIRED on the page build schema — optional `guidelines` let a builder close on silence, and A3's in-context gate (`selfCheck`) must run before a page reports complete",
+  /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'\]/.test(wfSrc));
+// ENG-95469 (PR review T7/T8): the required `selfCheck` field is an intentionally-BREAKING contract change; pin the
+// boundary as an EXECUTED object-level check driven by the SHIPPED `required` lists (parsed from source, so it cannot
+// drift from a copy). `reqOf` lifts a `required: [...]` array out of `wfSrc`; `missingReq` is the top-level
+// required-presence check the boundary turns on (types/nesting are not what changed here — the field count did).
+const reqOf = (re) => { const m = re.exec(wfSrc); return m ? m[1].split(",").map((s) => s.trim().replace(/^'|'$/g, "")).filter(Boolean) : null; };
+const missingReq = (obj, req) => (req || []).filter((k) => !(k in obj));
+const PAGE_REQ = reqOf(/const BUILD_SCHEMA_PAGE = \{[^}]*?required:\s*\[([^\]]*)\]/);
+const SC_REQ = reqOf(/selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\[([^\]]*)\]/);
+// The pre-PR 4-field page-unit shape (no `selfCheck`), and the current 5-field shape whose `selfCheck` uses the
+// documented `ran:false` + `notRunWhy` escape hatch the breaking-change argument leans on.
+const prePrPageResult = { unit: "main", claimedBuilt: ["crt.Input"], schemaName: "UsrMainPage",
+  guidelines: { evidenceId: "main#quality-gates", ran: true, referencePage: "UsrRef", componentsDiffed: ["crt.Input"] } };
+const scRanFalse = { ran: false, notRunWhy: "could not get-page this unit's page on this template" };
+const currentPageResult = { ...prePrPageResult, selfCheck: scRanFalse };
+check("ENG-95469 T7: the SHIPPED page build contract now requires `selfCheck` — the pre-PR 4-field result (no `selfCheck`) FAILS the required set and the 5-field result PASSES, pinning the intentionally-breaking boundary against the shipped `required` list itself",
+  () => Array.isArray(PAGE_REQ) && PAGE_REQ.includes("selfCheck")
+    && missingReq(prePrPageResult, PAGE_REQ).includes("selfCheck")
+    && missingReq(currentPageResult, PAGE_REQ).length === 0,
+  () => ({ PAGE_REQ, oldMissing: missingReq(prePrPageResult, PAGE_REQ), newMissing: missingReq(currentPageResult, PAGE_REQ) }));
+check("ENG-95469 T8: the `ran:false` + `notRunWhy` escape hatch is a VALID page unit — `selfCheck` requires only `ran`, so `{ran:false, notRunWhy}` satisfies both the nested `selfCheck` required set and the full page required set (a build agent that legitimately cannot run the scoped gate stays valid without the version bump)",
+  () => Array.isArray(SC_REQ) && SC_REQ.length === 1 && SC_REQ[0] === "ran"
+    && missingReq(scRanFalse, SC_REQ).length === 0
+    && missingReq(currentPageResult, PAGE_REQ).length === 0,
+  () => ({ SC_REQ, scMissing: missingReq(scRanFalse, SC_REQ) }));
+check("ENG-95469 T8: a `ran:false` self-check takes the correct park-decision paths — EXCLUDED from `selfCheckStillShort` (no in-context park), and treated as OPEN/`gate-not-run` (never a false complete) by `selfCheckMismatches` when the independent verifier finds the unit open",
+  () => wf.selfCheckStillShort(scRanFalse) === false
+    && wf.selfCheckMismatches([{ key: "main", sc: scRanFalse }], () => ({ key: "main", kind: "page" }), { pages: {} }, {}, undefined)
+         .some((m) => m.key === "main" && m.kind === "gate-not-run"),
+  () => wf.selfCheckMismatches([{ key: "main", sc: scRanFalse }], () => ({ key: "main", kind: "page" }), { pages: {} }, {}, undefined));
 // EXECUTED, not matched: the schema decision is a pure helper now, so the four outcomes are run rather than
 // regexed, and the dispatch site is pinned separately as a seam.
 check("ENG-95471 review fix: the schema is selected by whether the unit OWES the record, not by kind alone",
@@ -391,14 +617,26 @@ check("ENG-95471 review fix: the schema is selected by whether the unit OWES the
 check("ENG-95471 review fix: every schema label maps to a declared schema, and only the `page` one requires `guidelines`",
   /const BUILD_SCHEMAS = \{ app: BUILD_SCHEMA_APP, page: BUILD_SCHEMA_PAGE, 'page-no-guidelines': BUILD_SCHEMA_PAGE_NO_GUIDELINES, reach: BUILD_SCHEMA_REACH \}/.test(wfSrc)
     && /schema: BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\]/.test(wfSrc)
-    && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName'\]/.test(wfSrc));
+    && /const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'selfCheck'\]/.test(wfSrc));
+// PR review round-4 (RC-16): the in-context gate prompt (`inContextGateBlock`) fires for EVERY `unit.kind === 'page'`
+// regardless of schema kind, so a `page-no-guidelines` unit that could omit `selfCheck` would reopen the "closes on
+// silence" hole for that class. Pin `selfCheck` into the SHIPPED no-guidelines required set the same way T7 pins it
+// for the page schema — parsed from source, executed against a with/without-`selfCheck` result, so it cannot drift.
+const NOGL_REQ = reqOf(/const BUILD_SCHEMA_PAGE_NO_GUIDELINES = \{[^}]*?required:\s*\[([^\]]*)\]/);
+const noglNoSelfCheck = { unit: "child:U1", claimedBuilt: ["crt.Input"], schemaName: "UsrChildPage" };
+const noglWithSelfCheck = { ...noglNoSelfCheck, selfCheck: scRanFalse };
+check("ENG-95469 RC-16: the no-guidelines page contract ALSO requires `selfCheck` — the gate runs for every page unit, so a `page-no-guidelines` result WITHOUT `selfCheck` FAILS the required set and one WITH it PASSES (and `guidelines` is still NOT required for this class)",
+  () => Array.isArray(NOGL_REQ) && NOGL_REQ.includes("selfCheck") && !NOGL_REQ.includes("guidelines")
+    && missingReq(noglNoSelfCheck, NOGL_REQ).includes("selfCheck")
+    && missingReq(noglWithSelfCheck, NOGL_REQ).length === 0,
+  () => ({ NOGL_REQ, oldMissing: missingReq(noglNoSelfCheck, NOGL_REQ), newMissing: missingReq(noglWithSelfCheck, NOGL_REQ) }));
 check("ENG-95471: the close row runs at DISPATCH and its decision is CARRIED to the claim, not recomputed",
   /guidelinesMiss: guidelinesCloseMiss\(unit, res, state\.evidenceIds, earnedEvidenceIds\(\)\)/.test(wfSrc)
     && /owesGuidelines: owesGuidelines\(unit, state\.evidenceIds\)/.test(wfSrc)
     && /guidelinesLine\(c\.guidelines, c\.guidelinesMiss, c\.owesGuidelines, wrap\)/.test(wfSrc));
 check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list only ever grows and is re-billed into every report payload",
   /function reportGuidelinesMiss\(unitKey, gateMiss\)[\s\S]{0,500}blockedItems\.some\(\(b\) => b\.unit === unitKey && b\.what === GUIDELINES_BLOCKED_WHAT\)/.test(wfSrc)
-    && /reportGuidelinesMiss\(unit\.key, claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
+    && /reportGuidelinesMiss\(unit\.key, r\.claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
 check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
   !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
 check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
@@ -495,13 +733,21 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 
 // Source-level pins: the pure helpers above decide correctly, but the ROUND LOOP has to use them, and the three
 // places it does are all outside the pure block (they close over run state).
-// The slice must span the WHOLE function: the defer guard is at the top of the loop and the pause decision is at
-// the bottom, so a window that reaches only one of them passes on half the mechanism.
-const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function* buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
+// The slice must span the WHOLE ROUND MACHINERY, not one function: the defer guard is at the top of `buildRound`'s
+// loop while the pause decision, the continuation accounting and the per-unit recording live in the sibling
+// declarations hoisted above it (`claimFor` … `dispatchUnit`). A window that reaches only one of them passes on half
+// the mechanism — and one anchored on a single function would go EMPTY the moment another helper is extracted.
+const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function claimFor(unit, res)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("function* buildRound(open)") && /if \(pausedAfter\) \{ deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
-    && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
+  wfSrc.includes("function* buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+    && /!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
+// ONLY a checkpoint terminates the round. A continuation in that guard truncated the round and deferred every other
+// open unit, buying a full extra Verify + Judge + Reconcile cycle for units that do not depend on the continued one.
+check("ENG-95474 review: a CONTINUATION does not terminate the round — the deferral guard names `pausedAfter` alone, so the remaining independent units still get their build",
+  !/if \(r?\.?pausedAfter \|\| continuation/.test(buildRoundSrc) && !/continuationAfter/.test(wfSrc)
+    && /continued: \[\]/.test(buildRoundSrc) && /r\.continued\.push\(unit\.key\)/.test(buildRoundSrc),
+  () => buildRoundSrc.split("\n").filter((l) => /continu/.test(l)).slice(0, 8).join("\n"));
 check("workflow: the checkpoint return is `stopped: 'paused-at-checkpoint'` — a pause is NEVER reported as complete",
   /stopped: 'paused-at-checkpoint'/.test(wfSrc) && !/complete: true[\s\S]{0,80}paused-at-checkpoint/.test(wfSrc));
 check("workflow: the schedule reads openness THROUGH the findings-aware predicate, so a re-opened unit is actually dispatched",
@@ -558,6 +804,41 @@ check("packagePreconditionStop: every other host mode over an existing package i
 check("packagePreconditionStop: the unknown/unnamed stops still win — a `new-app` plan whose package state was inconclusive stops on THAT, not on the host mode",
   () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app").stopped === "target-package-unknown"
     && wf.packagePreconditionStop(null, "absent", "new-app").stopped === "target-package-unnamed"));
+
+// --- ENG-95850 (A2): WHOSE PACKAGE IS IT. `new-app` + a package that exists had ONE answer for two opposite facts —
+// a package somebody else owns (a plan-vs-stand mismatch, a stop) and the package this migration's own app unit
+// created (a resume). The second is what the Applicant run hit: the Agent route created `UsrApplicantFreedom`, the
+// Workflow route saw an existing package, and clearing it cost a re-plan plus a SECOND approval of unchanged scope.
+// It is also, unnoticed until now, why a `new-app` plan could not survive its own success: the app unit sets
+// `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
+const ownRec = (o = {}) => ({ package: "UsrPkg", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrPkg_FormPage", ...o });
+check("packagePreconditionStop: a package THIS migration created, app unit COMPLETE, is NOT a stop — it is a resume, and `new-app` surviving its own app unit depends on exactly this",
+  () => (wf.packagePreconditionStop("UsrPkg", "exists", "new-app", ownRec()) === null));
+check("packagePreconditionStop: with NO provenance record the stop is unchanged, and its `next` says so — absence is never read as ownership, which is what keeps a stranger's application safe",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app", null);
+    return s && s.stopped === "new-app-over-existing-package" && /no state file records this migration creating it/.test(s.next)
+      && /re-plan/.test(s.next) && /BY HAND/.test(s.next); });
+check("packagePreconditionStop: OUR package with an INCOMPLETE app unit still stops — nothing here may infer a section nobody created — but names the finish-and-re-run route and that it needs no second approval",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app", ownRec({ appUnitComplete: false }));
+    return s && s.stopped === "new-app-over-existing-package" && /THIS migration created it/.test(s.next)
+      && /INCOMPLETE/.test(s.next) && /without a second approval/.test(s.next); });
+check("packagePreconditionStop: a record naming a DIFFERENT package authorises nothing — it says nothing about the package in front of the run, so the stop stands",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app", ownRec({ package: "UsrOther" }));
+    return s && s.stopped === "new-app-over-existing-package" && /no state file records this migration creating it/.test(s.next); });
+check("ownPackageRecord: matched on the package NAME (whitespace-insensitive), and a missing/empty name matches nothing — a record cannot be stretched over a package it does not name",
+  () => (wf.ownPackageRecord({ package: " UsrPkg ", appUnitComplete: true }, "UsrPkg")?.package === "UsrPkg"
+    && wf.ownPackageRecord({ package: "", appUnitComplete: true }, "UsrPkg") === null
+    && wf.ownPackageRecord({ appUnitComplete: true }, "UsrPkg") === null
+    && wf.ownPackageRecord(null, "UsrPkg") === null
+    && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, null) === null));
+check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy string or a missing flag reads as incomplete, so a malformed record cannot wave the run past the stop",
+  () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
+    && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
+    && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
+check("packagePreconditionStop: provenance changes ONLY the `new-app`-over-existing branch — the unknown and unnamed stops are untouched by a record, and the other host modes still proceed",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()).stopped === "target-package-unknown"
+    && wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
+    && wf.packagePreconditionStop("UsrPkg", "exists", "existing-app", null) === null));
 check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
   () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
 check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
@@ -658,8 +939,24 @@ check("workflow: the Reconcile prompt tells the agent to RESOLVE each component 
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
 check("workflow: the REFS step is its OWN phase and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
   /phase\('Refs'\)/.test(wfSrc) && /yield\* refsStep\(\)/.test(wfSrc)
-    && /Read \\`\$\{REFS_INDEX\}\\`\. It is REUSABLE only if/.test(wfSrc)
+    && /FIRST, DECIDE WHICH CACHE TIERS ARE STILL VALID/.test(wfSrc)
+    && wfSrc.indexOf("yield* refsStep()") > 0
     && wfSrc.indexOf("yield* refsStep()") < wfSrc.indexOf("while (true) {"));
+check("ENG-95474 REFS: cache invalidation is tiered — a plan-version change rebuilds plan slices, not stable docs, CLI usage or component docs",
+  /STABLE DOCS tier:[\s\S]*guidance-\*\.md[\s\S]*contracts\.md/.test(wfSrc)
+    && /HOST tier:[\s\S]*cli-usage\.md/.test(wfSrc)
+    && /ENVIRONMENT tier:[\s\S]*components\.md/.test(wfSrc)
+    && wfSrc.includes("EXTEND \\`components.md\\`")
+    && /PLAN tier:[\s\S]*spec-\*\.md[\s\S]*Adjustments/.test(wfSrc)
+    && /Delete only stale plan slice files/.test(wfSrc)
+    && /do not delete reusable guidance\/contracts\/cli\/component files just because another tier is stale/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("FIRST, DECIDE WHICH CACHE TIERS"), wfSrc.indexOf("For stale or missing tiers")).slice(0, 1200));
+check("ENG-95474 REFS: the index records tier keys plus the full current inventory, so a later run can validate each tier independently",
+  /rewrite it LAST as the complete current cache inventory/.test(wfSrc)
+    && wfSrc.includes("\\`components: ${components.join(', ')}\\`")
+    && wfSrc.includes("\\`planVersion: ${state.planVersion || '(none published)'}\\`")
+    && wfSrc.includes("\\`environment: ${input.environment}\\`")
+    && wfSrc.includes("\\`cliHost: <the same \\`hostname\\` value"));
 // --- the seven findings from the branch review. Each one is a FALSE SUCCESS or a nontermination path: the run
 // reports done, or never stops, while the thing it exists to guarantee did not happen.
 const bhSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
@@ -697,17 +994,16 @@ check("behaviour analysis: completion requires a Merge that actually produced th
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
 
-check("workflow: the refs cache is invalidated on a DIFFERENT plan version, environment OR CLI HOST, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch, and a slice built through another machine's clio describes that machine's stand",
-  // Pins the SHIPPED wording, and the escaping is load-bearing: the phrase lives inside a template
-  // literal, so the backticks around each key are backslash-escaped in the source and the pattern has
-  // to match that. A pattern without the escape silently never matches, which is a pin that passes
-  // nothing while looking like it passes something.
-  /records ALL THREE of \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
-    && /\\`cliHost:\\` line whose value equals THIS machine's/.test(wfSrc)
-    && /REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc)
-    && /planVersion: \$\{state\.planVersion/.test(wfSrc));
+check("workflow: the refs cache invalidates by tier, not all-or-nothing — stale plan slices, stand component docs and host CLI facts do not force unrelated tiers to rebuild",
+  /The cache is TIERED/.test(wfSrc)
+    && /A different host is silent-wrong/.test(wfSrc)
+    && /A different environment is silent-wrong/.test(wfSrc)
+    && /A new plan version means the per-page slices/.test(wfSrc)
+    && /If only SOME tiers are stale, rebuild only those tiers/.test(wfSrc)
+    && !/REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc));
 check("workflow: the index is written LAST, so a half-built cache cannot read as a finished one",
-  /Write this file LAST/.test(wfSrc));
+  /rewrite it LAST as the complete current cache inventory/.test(wfSrc)
+    && /An index written before the files it lists would let a half-built cache read as a finished one/.test(wfSrc));
 check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
   /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
     && /Do not treat the missing file as a defect/.test(wfSrc));
@@ -726,17 +1022,205 @@ check("workflow: Reconcile transcribes the DIGEST, not the full verdict, and the
   /--verify-digest \$\{q\(VERIFY_DIGEST\)\}/.test(wfSrc) && /the DIGEST, not \$\{VERIFY_JSON\}/.test(wfSrc));
 check("workflow: the parent edge is COPIED from `--units`, and reconstructing it from the plan's prose is forbidden",
   /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
-check("workflow: each unit writes its OWN worklog file and is told not to read the shared log; Close assembles worklog.md by APPENDING",
-  /worklogFile\(unit\.key\)/.test(wfSrc) && /Do NOT read or append to the shared/.test(wfSrc)
-    && /APPEND\. Never rewrite or reorder/.test(wfSrc) && /close:worklog/.test(wfSrc));
+check("ENG-95474 C4: each sequential Build unit writes its own audit file AND appends the same entry to worklog.md, so no Close worklog agent is needed",
+  /worklogFile\(unit\.key, unit\.kind\)/.test(wfSrc)
+    // The shared path is composed ONCE, beside the per-unit names, and handed on by name — so both halves are
+    // pinned: the run's build prompt passes it, and it really is `<outDir>/worklog.md` and not something relative.
+    && /const sharedWorklogFile = `\$\{input\.outDir\}\/worklog\.md`/.test(wfSrc)
+    && /sharedWorklogPath: sharedWorklogFile,/.test(wfSrc)
+    && /Build units run sequentially, so an append has no writer race/.test(wfSrc)
+    && !/close:worklog/.test(wfSrc));
+// The append must be APPEND-ONLY. "preserving existing content" made the builder read a file that grows by one entry
+// per unit — O(n²) across a run, the cost the per-unit files exist to avoid, and the reason the old prompt forbade it.
+check("ENG-95474 review: the shared-worklog instruction is append-only and forbids the READ — a growing shared log read once per unit is the O(n²) this design removed",
+  /Do NOT read that file first, and do not rewrite it/.test(wfSrc)
+    && /append-only write \(shell \\`>>\\`\)/.test(wfSrc)
+    && !/preserving existing content/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /sharedWorklogPath\\`|APPEND the SAME/.test(l)).join("\n").slice(0, 400));
+// `sharedWorklogPath` must have NO relative default: a sub-agent starts in an unknown CWD, so `'worklog.md'` would be
+// a silent write to the wrong file. The no-`undefined` assertion over every composed prompt is what catches an omission.
+check("ENG-95474 review: `composeBuildPrompt` gives `sharedWorklogPath` no relative default — every agent-facing path in this file is absolute",
+  /function composeBuildPrompt\(\{[^}]*sharedWorklogPath,/.test(wfSrc)
+    && !/sharedWorklogPath = 'worklog\.md'/.test(wfSrc),
+  () => wfSrc.split("\n").find((l) => /function composeBuildPrompt/.test(l)) || "?");
 check("workflow: the app unit's package answer is checked as an EQUALITY against the plan's target — a near-match is a blocker, not an acceptance, because every placement row gates on the plan's package",
   /got === unit\.package/.test(wfSrc) && /package MISMATCH/.test(wfSrc) && /packageState = 'exists'/.test(wfSrc));
 check("workflow: the starter page `create-app` minted is recorded as `main`'s schema, so `main` EDITS it instead of trying to create the page again",
   /pageSchemas\.main = res\.starterFormPage/.test(wfSrc));
 check("workflow: Reconcile is asked for the package state as THREE values and told not to resolve doubt into either answer",
   /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
-check("workflow: the builders' answer is persisted BEFORE Verify runs — a stop in that window used to drop every blocker the round produced",
-  /yield\* persistPending\(`recording what round \$\{round\}'s builders reported`\)[\s\S]{0,400}lastVerifier = yield\* verifyRound/.test(wfSrc));
+// --- ENG-95850: THE ONE STATE FILE, and the wiring that keeps it one. The decision helpers are tested above; these
+// pin the parts that are prompt text and call sites, where a regression is invisible to a unit test.
+// --- ENG-95850 (B1): the JUDGE's half of the business-rule defect. ENG-95470 gave the ENGINE a rule slot and a
+// NOT-CHECKABLE verdict; the judge prompt still said nothing about where rules live, and a judge that token-searches
+// `body.js` gets a structural zero on a page whose rules are all present. That produced a FAIL on 8 correct rules
+// plus 2 entity filters and cost 4 diagnostic rounds.
+check("ENG-95850 (B1): the judge is told page business rules do NOT live in the page body, and is pointed at the slot / the dedicated reader instead",
+  /BusinessRule_\*.*schema/.test(wfSrc)
+    && /are not in its body/i.test(wfSrc)
+    && /read-page-business-rules/.test(wfSrc));
+check("ENG-95850 (B1): a body-text zero is explicitly BARRED from producing a `convincing: false` about rules — the prompt states the prohibition, not merely the better source",
+  /body-text zero is NEVER evidence/.test(wfSrc)
+    && /must never produce a [^\n]*convincing: false[^\n]* about rules/.test(wfSrc));
+check("ENG-95850 (B1): an absent `businessRules` slot is stated as NOT-CHECKABLE for the judge too, matching the engine's own row — nobody-read is not absent",
+  /slot means nobody READ the rules/.test(wfSrc)
+    && /not-checkable, not absent/.test(wfSrc));
+check("ENG-95850 (B1): the rule is GENERALISED past business rules — establish that the artifact you read would carry the deliverable before ruling it absent",
+  /the artifact you read is the one that would CARRY it/.test(wfSrc));
+// --- ENG-95850 (B2): the EXECUTOR's half of the workplace count. The engine gate is covered in run-mapper; these pin
+// that the run actually SUPPLIES the number and that it never unbinds anything (the operator chose the
+// non-destructive half deliberately, so "reports it" is the contract, not an implementation detail).
+// --- ENG-95850 (C1): `create-app` minting mobile pages against `with-mobile-pages=false` is a PLATFORM defect. The
+// app unit cannot fix it; what it can do is notice and say so, with the unwind order the residue actually needs.
+// Report-only by decision — the residue is on a customer's stand.
+check("ENG-95850 (C1): the app unit CHECKS whether `with-mobile-pages=false` was honoured and reports the residue with the unwind order, and is told not to remove it",
+  /THEN CHECK WHETHER THE FLAG WAS HONOURED/.test(wfSrc)
+    && /MobileRelatedPage/.test(wfSrc)
+    && /create-related-page-addon … pages=\[\]/.test(wfSrc)
+    && /Do NOT delete them and do NOT unwind the binding/.test(wfSrc));
+// --- ENG-95850 (B3): a stale `get-page` read is EXPOSED, not silently believed. Cache-busting belongs to clio; what
+// this run owes is to notice the disagreement. A cached bundle showed a form "almost empty (3 elements)" while its
+// metadata was 40 minutes newer — four diagnostic rounds and one wrong conclusion ("main not built") on a page that
+// was ~80% complete. Deliberately does NOT soften the gate: a staleness report stops a diagnosis, it closes no row.
+check("ENG-95850 (B3): the verifier records BOTH timestamps and compares them — a bundle older than the page's `modifiedOn` is a cached response, not a short page",
+  /fetchedAt\\` \(the bundle's own\) and \\`modifiedOn\\` \(the page metadata's\)/.test(wfSrc)
+    && /is NEWER than \\`fetchedAt\\`/.test(wfSrc)
+    && /Re-fetch that page ONCE/.test(wfSrc));
+check("ENG-95850 (B3): a persisting disagreement is REPORTED as a discrepancy, and a short verdict may not be concluded off a read believed stale",
+  /record a \\`discrepancies\\` entry/.test(wfSrc)
+    && /Do not conclude a page is short off a read you have reason to believe is stale/.test(wfSrc));
+check("ENG-95850 (B3): the staleness path explicitly does NOT soften the gate — the numbers stay the engine's, so this cannot become a way to avoid a red",
+  /A staleness report never SOFTENS the gate/.test(wfSrc));
+check("ENG-95850 (B3): the BUILDER's own in-context read is guarded too — a stale self-read would burn its one bounded fix re-doing work that is already there",
+  /CHECK YOUR OWN READ IS NOT STALE/.test(wfSrc)
+    && /re-fetch ONCE before you write the file/.test(wfSrc)
+    && /rather than gating on a read you cannot trust/.test(wfSrc));
+// --- ENG-95850 (B4/C3): the page a re-bind leaves behind. `create-app` seeds start pages; a builder that builds the
+// real form as a NEW page and re-binds the section orphans the seeded one, and nothing flagged it — the DEAD page was
+// what a run read while judging progress, concluding "main not built" about a form that was ~80% complete.
+// Non-destructive by decision: recorded, reported, named to later readers; never deleted.
+check("ENG-95850 (B4): a page unit's `reboundFrom` is turned into a recorded ORPHAN, and the orphan is persisted through the same state file as the run's other stand facts",
+  /function applyReboundOrphan\(unit, res\)/.test(wfSrc)
+    && /if \(unit\.kind === 'page'\) applyReboundOrphan\(unit, res\)/.test(wfSrc)
+    && /standWrites = \{ \.\.\.standWrites, orphanedPages \}/.test(wfSrc));
+check("ENG-95850 (B4): a schema that is STILL some published key's page is NOT marked an orphan — a re-bind between two live keys must not mark a live page dead",
+  /const live = Object\.entries\(pageSchemas\)\.filter/.test(wfSrc)
+    && /is still the recorded page of/.test(wfSrc));
+check("ENG-95850 (B4): the orphan reaches the run's ANSWER on every return and as a blocker naming what to decide",
+  /^\s*orphanedPages,$/m.test(wfSrc)
+    && /is orphaned —/.test(wfSrc)
+    && /Deleting it is a stand deletion and not this run/.test(wfSrc));
+check("ENG-95850 (B4): the VERIFIER is told which pages are orphans and not to read one as a key's page — that misread is what cost the four diagnostic rounds",
+  /function orphanBlock\(\)/.test(wfSrc)
+    && /ORPHANED PAGES — these are on the stand and belong to NO published key/.test(wfSrc)
+    && /Do NOT fetch one of these as any key's page/.test(wfSrc)
+    && /\$\{orphanBlock\(\)\}Then report/.test(wfSrc));
+check("ENG-95850 (B4): the orphan list is READ BACK from the state file — the incident was a LATER diagnosis reading a dead page, so a write-only list fixes nothing",
+  /orphanedPagesOnFile: \{/.test(wfSrc)
+    && /Return \\`orphanedPagesOnFile\\`/.test(wfSrc)
+    && /function mergeOrphanedPages\(fromFile\)/.test(wfSrc));
+check("ENG-95850 (B4): the merge is a UNION keyed on the schema name, NOT the `pageSchemas` this-process-wins rule — an orphan an earlier session recorded must not be dropped",
+  /const known = new Set\(orphanedPages\.map\(\(o\) => o\.schema\)\)/.test(wfSrc)
+    && /!known\.has\(o\.schema\)/.test(wfSrc)
+    && /orphanedPages = \[\.\.\.orphanedPages, \.\.\.extra\]/.test(wfSrc));
+check("ENG-95850 (B4): the merged list is pushed BACK into `standWrites`, so the next write persists the whole list and not just this process's half",
+  /orphanedPages = \[\.\.\.orphanedPages, \.\.\.extra\]\s*\n\s*standWrites = \{ \.\.\.standWrites, orphanedPages \}/.test(wfSrc));
+check("ENG-95850 (B4): BOTH acceptance paths merge it — the BASELINE (the resumed run, where it matters most) and every later refresh",
+  (wfSrc.match(/mergeOrphanedPages\(state\.orphanedPagesOnFile\)/g) || []).length === 2);
+check("ENG-95850 (B4): the orphan block renders NOTHING when the run recorded none — no heading over an empty list",
+  /if \(!orphanedPages\.length\) return ''/.test(wfSrc));
+check("ENG-95850 (B4): the BUILD prompt asks for `reboundFrom` on any re-point and forbids deleting the page left behind",
+  /IF YOU RE-BIND, SAY WHAT YOU RE-BOUND AWAY FROM/.test(wfSrc)
+    && /\*\*Do NOT delete it\*\*/.test(wfSrc));
+check("ENG-95850 (B2): the verifier is told `sectionRegistered` is a COUNT, and is given the exact object shape the gate reads",
+  /sectionRegistered\\` IS A COUNT, NOT A FLAG/.test(wfSrc)
+    && /reachability\.sectionRegistered = \{ "workplaces": <n>, "names": \[/.test(wfSrc)
+    && /SysModuleInWorkplace/.test(wfSrc));
+check("ENG-95850 (B2): the verifier is told an OMITTED key is the honest answer when it could not count — a `true` is neither counted nor not-checked",
+  /OMIT the key if you could not count/.test(wfSrc)
+    && /here is neither, and the row will ask you for the number anyway/.test(wfSrc));
+check("ENG-95850 (B2): the reach unit reports its own count, and the schema carries it — a claim the run can surface even on a round the verifier omitted the key",
+  /workplaceBindings: \{\s*\n\s*type: 'object',\s*\n\s*required: \['count'\]/.test(wfSrc)
+    && /report \\`workplaceBindings: \{ count: <n>, names: \[\.\.\.\] \}\\`/.test(wfSrc));
+check("ENG-95850 (B2): NOTHING in the run unbinds a workplace — both the verifier step and the build unit say so explicitly, because the non-destructive half was a deliberate choice",
+  /You COUNT and REPORT; you never unbind/.test(wfSrc)
+    && /\*\*Do NOT unbind anything\*\*/.test(wfSrc)
+    && /reports it instead of unbinding/.test(wfSrc));
+check("ENG-95850 (B2): a count that is not exactly one becomes a BLOCKER in the run's answer, and 0 vs 2+ are given different reasons — unreachable is not the same defect as a leftover binding",
+  /function applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
+    && /if \(unit\.kind === 'reach'\) applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
+    && /a section in no workplace is unreachable/.test(wfSrc)
+    && /the previous binding is still there/.test(wfSrc));
+check("ENG-95850 (B2): a non-integer count is IGNORED rather than reported as a binding — a malformed claim must not manufacture a blocker",
+  /if \(!wb \|\| !Number\.isInteger\(wb\.count\)\) return/.test(wfSrc));
+check("ENG-95850 (A2): the app unit RECORDS its stand write through one writer, on the closed branch and on the short one, so the two cannot disagree about the record's shape",
+  /function recordPackageCreated\(pkg, sectionPage, appUnitComplete = true\)/.test(wfSrc)
+    && /recordStarterPages\(res\)\s*\n[\s\S]{0,600}?recordPackageCreated\(got, sectionPage\)/.test(wfSrc)
+    && /recordPackageCreated\(got, sectionPage, false\)/.test(wfSrc));
+check("ENG-95850 (A2): `standWrites` is declared ABOVE `runReturn` — every return reads it, and `runReturn` is reachable from the earliest stop, so a declaration below a caller is the TDZ throw this suite already has a class of tests for",
+  wfSrc.indexOf("let standWrites") > 0 && wfSrc.indexOf("let standWrites") < wfSrc.indexOf("function runReturn(")
+    && /packageCreatedByRun: standWrites\.packageCreated \|\| null/.test(wfSrc));
+check("ENG-95850 (A2): a recorded `appUnitComplete: true` is MONOTONIC — a later partial report cannot walk the met deliverable back to `false`, because only a stand read could contradict it",
+  /const complete = appUnitComplete === true \|\| standWrites\.packageCreated\?\.appUnitComplete === true/.test(wfSrc));
+check("ENG-95850 (A2): the app unit's stand write is persisted IMMEDIATELY after its dispatch, not at the round's Verify — every later unit in the round is a long killable agent, and this is the one carried fact whose loss is an irreversible stand change the next run cannot account for",
+  /yield\* dispatchUnit\(unit, r\)\n(?:\s*\/\/[^\n]*\n)*\s*if \(unit\.kind === 'app' && standWrites\.packageCreated\) yield\* persistPending\(/.test(wfSrc));
+check("ENG-95850 (A2): the record RIDES THE CARRY into the queue file at its ROOT — the package is not a page, and the next run's placement gate looks for it before any unit exists",
+  /standWrites/.test(wfSrc)
+    && /merge under the ROOT key \\`standWrites\\`/.test(wfSrc)
+    && /"units": \{\}, "nonPageUnits": \{\}, "standWrites": \{\} \}/.test(wfSrc));
+check("ENG-95850 (A2): BOTH package gates are handed `ownPackageNow()` — this process's own record beats the report, or a `new-app` run stops on its own app unit's success one Reconcile later",
+  (wfSrc.match(/packagePreconditionStop\(state\.targetPackage, state\.packageState, state\.sectionHost, ownPackageNow\(\)\)/g) || []).length === 2
+    && /const ownPackageNow = \(\) => standWrites\.packageCreated \|\| state\?\.packageCreatedByRun \|\| null/.test(wfSrc));
+check("ENG-95850 (A2): Reconcile is told to read the provenance OFF THE FILE and never to derive it from the stand — a stand read can say a package exists, never who created it",
+  /Return \\`packageCreatedByRun\\`/.test(wfSrc)
+    && /do NOT derive it from the stand/.test(wfSrc)
+    && /no stand read can say WHO created it/.test(wfSrc));
+// THE THREE call sites are the baseline, the post-preflight refresh and the round tail. The retry is only a fix if
+// ALL of them go through it, so the pin counts both directions: three calls to the helper, and the prompt itself
+// built in exactly ONE place — its own definition plus the single dispatch INSIDE the helper. A fourth
+// `reconcilePrompt(...)` anywhere is a call site the retry does not cover, which is the regression.
+const reconcileAgentSrc = wfSrc.slice(wfSrc.indexOf("function* reconcileAgent(roundNo, id, label, note)"),
+  wfSrc.indexOf("const RECONCILE_FAILED_NEXT"));
+check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper — a `reconcilePrompt(...)` dispatched anywhere else is a call site the retry does not cover",
+  (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length === 3
+    && (wfSrc.match(/reconcilePrompt\(/g) || []).length === 2
+    && /function reconcilePrompt\(round\) \{/.test(wfSrc)
+    && reconcileAgentSrc.includes("reconcilePrompt(roundNo)")
+    && /function\* reconcileAgent\(roundNo, id, label, note\)/.test(wfSrc),
+  () => ({ helperCalls: (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length,
+    promptSites: (wfSrc.match(/reconcilePrompt\(/g) || []).length,
+    insideHelper: reconcileAgentSrc.includes("reconcilePrompt(roundNo)") }));
+// THE SCHEMA-SIZE BUDGET (A3). The rejection that cost the Applicant run its route was reported as "output schema too
+// large to classify safely" at this exact agent, and the host's threshold is not something this repo can reproduce —
+// so the retry above is the fix and this is the guardrail: the Reconcile schema's SERIALIZED size (what the classifier
+// sees; the JS comments around it are not part of it) stays inside a stated budget instead of drifting upward one
+// field at a time. Raising the ceiling is a deliberate act, which is the point.
+const RECONCILE_SCHEMA_BUDGET = 6000;
+let reconcileSchemaBytes = -1;
+let tmpSchema;
+try {
+  tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
+  const modPath = path.join(tmpSchema, "schema.mjs");
+  const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
+  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA };\n`);
+  const mod = await import(pathToFileURL(modPath).href);
+  reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
+} catch (e) {
+  check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
+} finally {
+  if (tmpSchema) rmSync(tmpSchema, { recursive: true, force: true });
+}
+check(`ENG-95850 (A3): the Reconcile structured-output schema stays inside its stated budget of ${RECONCILE_SCHEMA_BUDGET} serialized bytes — the classifier sees this object, and it is on the critical path of the run's first agent`,
+  reconcileSchemaBytes > 0 && reconcileSchemaBytes <= RECONCILE_SCHEMA_BUDGET,
+  () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET})`);
+check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fallback persistence only if Verify cannot confirm that write",
+  /lastVerifier = yield\* verifyRound\(builtThisRound, claims, carryNow\(\)\)/.test(wfSrc)
+    && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
+    && /Verify did not confirm the queue carry write/.test(wfSrc)
+    && /yield\* persistPending\(`recording what round \$\{round\}'s builders reported after verify`\)/.test(wfSrc)
+    // …and the fallback really is a FALLBACK: it sits on the else of the confirmation, so a confirmed write costs
+    // no extra agent. Pinned because dropping the branch would silently restore the per-round persistence agent.
+    && /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,600}?\} else \{[\s\S]{0,300}?yield\* persistPending\(`recording what round/.test(wfSrc));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -819,6 +1303,28 @@ check("ENG-95503 AC4: the stand-derived QUESTION text is passed through the call
   () => { const text = wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
     return text.includes("<<DATA no list columns resolved DATA>>") && !text.includes(`<<DATA ${AC4_COLUMNS}`); },
   () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(0, 260));
+/* THE FALLBACK SHAPE of the same acceptance criterion, and it is NOT the case above. A fallback set carries ONE
+   column, so the list page has a gated deliverable and the `list` key IS published — the question rides on `list`
+   while the empty-set question rides on `main`. Measured on the reopened Applicant1Section run: that shape had no
+   published id at all, so its answer could reach no builder. Both halves are asserted, because the negative one is
+   what a naive `pageKey === unit.key` filter gets wrong in the other direction. */
+const AC4_FALLBACK_ITEM = "fallback list column set";
+const ac4FallbackItems = [
+  { id: `list#confirm:list-columns:${AC4_FALLBACK_ITEM}`, pageKey: "list", kind: KIND_LIST_COLS,
+    item: AC4_FALLBACK_ITEM,
+    resolution: { answer: AC4_COLUMNS, decidedBy: "operator", date: "2026-08-22" } },
+];
+check("ENG-95503 AC4 (fallback): a resolved column set answered against the FALLBACK question reaches the `list` builder's inputs verbatim — the shape whose id the reopened run did not publish at all",
+  () => { const mine = wf.resolutionsForUnit(ac4FallbackItems, "list", new Set(["main", "list"]));
+    const text = wf.resolutionsBlockText(mine, ac4Fence);
+    return mine.length === 1 && text.includes(AC4_COLUMNS) && text.includes(`<<DATA ${AC4_FALLBACK_ITEM} DATA>>`)
+      && text.includes("operator, 2026-08-22"); },
+  () => ({ routed: wf.resolutionsForUnit(ac4FallbackItems, "list", new Set(["main", "list"])).length,
+    text: wf.resolutionsBlockText(wf.resolutionsForUnit(ac4FallbackItems, "list", new Set(["main", "list"])), ac4Fence).slice(0, 300) }));
+check("ENG-95503 AC4 (fallback): the same answer is NOT also handed to `main` while a `list` unit exists — the grid is built on `list`, and a second copy would have two builders acting on one decision",
+  () => wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])).length === 0
+    && wf.resolutionsBlockText(wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])), ac4Fence) === "",
+  () => wf.resolutionsForUnit(ac4FallbackItems, "main", new Set(["main", "list"])).map((x) => x.id));
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
    deciding WHICH batches receive it is executable logic — and as an inline expression nothing referenced it, so a
@@ -843,14 +1349,16 @@ check("ENG-95503: the batch gate treats a blank answer as no answer, and empty/m
 const CBP_ANSWER = "Full name, Stage, Request, Responsible, Source, Modified on";
 const cbpBlock = wf.resolutionsBlockText(
   wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
-const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md",
+const cbpArgs = { rules: "RULES-BLOCK", behaviour: "BEHAVIOUR-BLOCK", worklogPath: "wl/list.md", sharedWorklogPath: "worklog.md",
   kindBlock: "KIND-BLOCK", repair: "", resolutions: cbpBlock, findings: "", checkFirst: "",
   guidelinesReturn: "GUIDELINES-BLOCK" };
 // EVERY composed prompt, every args shape: the literal "undefined" must not appear. A bare-interpolated parameter
 // with no default put it into the shipped assembly while all three checks below stayed green.
 check("ENG-95471 review fix: no composed prompt carries the literal `undefined` — a parameter with no default is interpolated as text, and the checks below cannot see it",
   () => [cbpArgs, { ...cbpArgs, guidelinesReturn: "" }, { ...cbpArgs, guidelinesReturn: undefined },
-    { rules: "R", behaviour: "B", worklogPath: "w", kindBlock: "K", repair: "", resolutions: "", findings: "", checkFirst: "" }]
+    // `sharedWorklogPath` is in the MINIMAL shape too: it has no default by design (a relative one would be a silent
+    // write to a sub-agent's unknown CWD), so omitting it is exactly the `undefined` this check exists to catch.
+    { rules: "R", behaviour: "B", worklogPath: "w", sharedWorklogPath: "/m/worklog.md", kindBlock: "K", repair: "", resolutions: "", findings: "", checkFirst: "" }]
     .every((a) => !wf.composeBuildPrompt(a).includes("undefined")),
   () => wf.composeBuildPrompt({ ...cbpArgs, guidelinesReturn: undefined }).slice(0, 400));
 check("ENG-95503: the operator's answer survives into the COMPOSED build prompt — the assembly is executed and the answer text read back out, not matched in the source",
@@ -1091,6 +1599,50 @@ check("workflow EXECUTES the combined stop: a baseline with new-app-over-existin
     && /crt\.ContactCommunication/.test(combinedStop.next || ""),
   () => (combinedStop.threw ? `threw: ${combinedStop.threw}` : `stopped=${combinedStop.stopped} mismatches=${JSON.stringify(combinedStop.componentMismatches)} next=${(combinedStop.next || "").slice(0, 140)}`));
 
+// --- ENG-95850 (A2) AS AN EXECUTION PATH. The pure-helper checks above prove the DECISION; these run the real
+// prologue through it, which is the only thing that proves the provenance record is actually THREADED into both
+// package gates. A gate handed `undefined` instead of the record passes every pure test and stops every resumed run.
+const newAppBaseline = (packageCreatedByRun) => ({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicantFreedom", packageState: "exists", sectionHost: "new-app",
+  componentResolution: [], packageCreatedByRun,
+});
+const ownedResume = await runToBaseline(newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" })).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the ENG-95850 resume: a baseline whose state file records THIS migration creating the target package does NOT stop on `new-app-over-existing-package` — it reaches a downstream stop, so a gate that ignored the record would surface here",
+  !ownedResume.threw && ownedResume.stopped === "unknown-checkpoint-key",
+  () => (ownedResume.threw ? `threw: ${ownedResume.threw}` : `stopped=${ownedResume.stopped} next=${(ownedResume.next || "").slice(0, 160)}`));
+const strangerPkg = await runToBaseline(newAppBaseline(null)).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the unchanged stop: the SAME baseline with no provenance record still stops on `new-app-over-existing-package`, and the return carries `packageCreatedByRun: null` — so the resume above is the record's doing and not a weakened gate",
+  !strangerPkg.threw && strangerPkg.stopped === "new-app-over-existing-package" && strangerPkg.packageCreatedByRun === null,
+  () => (strangerPkg.threw ? `threw: ${strangerPkg.threw}` : `stopped=${strangerPkg.stopped} rec=${JSON.stringify(strangerPkg.packageCreatedByRun)}`));
+const ownedShort = await runToBaseline(newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: false })).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the half-finished app unit: OUR package with `appUnitComplete: false` still stops, the return CARRIES the record so the caller can see whose package it is, and `next` names the finish-by-hand route",
+  !ownedShort.threw && ownedShort.stopped === "new-app-over-existing-package"
+    && ownedShort.packageCreatedByRun?.package === "UsrApplicantFreedom" && ownedShort.packageCreatedByRun?.appUnitComplete === false
+    && /INCOMPLETE/.test(ownedShort.next || "") && /without a second approval/.test(ownedShort.next || ""),
+  () => (ownedShort.threw ? `threw: ${ownedShort.threw}` : `stopped=${ownedShort.stopped} rec=${JSON.stringify(ownedShort.packageCreatedByRun)}`));
+
+// --- ENG-95850 (A3): RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Two consecutive launches of the real run were
+// rejected at this exact call in 9 ms with 0 writes, a later identical launch passed, and in between the flake read
+// as a hard block and pushed the run onto the other route — which is where A2's split state came from. Executed, not
+// source-pinned: a retry loop that returned on the first `null` passes any regex and still loses the run.
+let retryCalls = 0;
+const afterRetry = await runWith({}, async () => {
+  retryCalls += 1;
+  if (retryCalls === 1) return null;                       // the transient rejection
+  if (retryCalls === 2) return newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true });
+  return null;
+}).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the Reconcile retry: a baseline Reconcile that returns nothing ONCE is retried, the second answer is accepted, and the run proceeds instead of reporting `reconcile-failed`",
+  !afterRetry.threw && afterRetry.stopped !== "reconcile-failed" && afterRetry.stopped === "unknown-checkpoint-key" && retryCalls >= 2,
+  () => (afterRetry.threw ? `threw: ${afterRetry.threw}` : `stopped=${afterRetry.stopped} calls=${retryCalls}`));
+let deadCalls = 0;
+const stillDead = await runWith({}, async () => { deadCalls += 1; return null; }).catch((e) => ({ threw: e.message }));
+check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly twice and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
+  !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 2
+    && /SAME route/.test(stillDead.next || "") && /switching routes/.test(stillDead.next || ""),
+  () => (stillDead.threw ? `threw: ${stillDead.threw}` : `stopped=${stillDead.stopped} calls=${deadCalls} next=${(stillDead.next || "").slice(0, 160)}`));
+
 // --- HARD STOP 3.5 MID-RUN in `acceptReconciled` as an EXECUTION path (ENG-95468). The baseline gate is executed
 // above; this drives a LATER Reconcile — the post-preflight one, the FIRST `acceptReconciled` call site — through the
 // same gate. The mid-run guard was the one part of ENG-95468 asserted only by a source-pin (a regex over
@@ -1150,6 +1702,302 @@ const midRunPasses = await runToPostPreflight(midRunBaseline, midRunBaseline, { 
 check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches the dry-run boundary (`dryRun:true`), so an always-firing mid-run gate would surface here",
   !midRunPasses.threw && midRunPasses.stopped !== "plan-invalid-against-stand" && midRunPasses.dryRun === true,
   () => (midRunPasses.threw ? `threw: ${midRunPasses.threw}` : `stopped=${midRunPasses.stopped} dryRun=${midRunPasses.dryRun}`));
+
+// --- THE BUILD CONTINUATION as an EXECUTION path (ENG-95474 review). Everything about the round-vs-continuation
+// split was asserted only by regexes over the source, which stay green if the accounting is inverted, if the ceiling
+// never fires, or if a continuation silently parks its unit. These drive the real round loop with a builder stub that
+// asks for a continuation, and read the accounting back off the run's own return.
+//
+// `runToRound` clears every baseline hard stop, schedules one page unit with no verdict on file (so it is open), and
+// keys the agent stub by label. `verify:stand` returns a verdict that leaves the unit open, so the loop keeps going
+// until the unit parks — which is the terminating condition these tests are about.
+const roundBaseline = {
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app", mainEntity: "UsrThing",
+  unitKeys: ["main"], buildOrder: ["main"], reachability: [], preflightItems: [],
+  componentResolution: [{ type: "crt.CommunicationOptions", resolved: true }],
+  evidenceIds: [],
+};
+// A builder answer shaped for a page unit. `continuationRequested` is the variable under test.
+const buildAnswer = (continuationRequested) => ({
+  schemaName: "UsrThingFormPage", claimedBuilt: ["Fields"], continuationRequested,
+  continuationReason: "handlers left to port", safeContinuationPoint: "page body saved",
+  guidelines: { ran: false, notRunWhy: "n/a" }, proposals: [], blocked: [],
+});
+// Drives the round loop. `builderContinues(n)` decides, per build call, whether that builder asks to continue.
+// The ACCOUNTING is read off the run's OWN return — `builds` counts real dispatches and the park record carries the
+// rounds actually charged — so the assertions do not depend on a stubbed Reconcile transcribing counters back.
+// `units` overrides the single-unit schedule for the sibling tests; `builderContinues` is called with (nth, unitKey).
+const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
+  let builds = 0;
+  const continuationBlocks = [];
+  // The DISPATCH TRACE: every build keyed by unit, and a marker each time Verify runs. Round 1 is everything before
+  // the first Verify — which is what makes "the sibling was built in the SAME round" observable rather than inferred.
+  const trace = [];
+  const baseline = { ...roundBaseline, unitKeys: units, buildOrder: units };
+  const openVerdict = {
+    complete: false, missing: units.length, unverified: 0,
+    pages: Object.fromEntries(units.map((u) => [u, { openRows: [{ deliverable: "Fields — 7 expected" }] }])),
+  };
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return { ...baseline };
+    if (label.startsWith("build:")) {
+      builds += 1;
+      const key = label.slice("build:".length);
+      trace.push({ build: key });
+      return buildAnswer(builderContinues(builds, key));
+    }
+    // VERIFY is the phase that receives the carry — it is the queue writer. The BUILD CONTINUATIONS block must reach
+    // IT, not Reconcile. Matched on the carry block's own opening: the bare phrase also appears in Verify's static
+    // instructions, so a looser probe would pass on a round that carried nothing.
+    if (label.startsWith("verify:")) {
+      trace.push({ verify: true });
+      const at = prompt.indexOf("BUILD CONTINUATIONS — set each unit's");
+      if (at >= 0) continuationBlocks.push(prompt.slice(at, at + 260));
+      return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    }
+    // The units stay OPEN, so the loop keeps going until the round budget parks them.
+    if (label.startsWith("reconcile:")) return { ...baseline, verify: openVerdict };
+    return null;
+  };
+  return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, builds, continuationBlocks, trace,
+      // The units built BEFORE the first Verify — i.e. in round 1.
+      firstRoundBuilds: trace.slice(0, trace.findIndex((t) => t.verify)).map((t) => t.build) }))
+    .catch((e) => ({ threw: e.message }));
+};
+// A builder that NEVER stops asking. Without a ceiling the unit is never charged a round, so `roundsRun` never
+// advances, `parkedKeys` never reaches MAX_ROUNDS, and the loop cannot end — the run would spin instead of returning.
+const alwaysContinues = await runToRound(() => true);
+const parkOf = (r) => (r.res?.parked || []).find((p) => p.key === "main");
+check("ENG-95474 review EXECUTES the continuation ceiling: a builder that asks to continue on EVERY round still TERMINATES — past `MAX_CONTINUATIONS` the ask is refused, the attempt is charged, and the unit parks",
+  !alwaysContinues.threw && !!parkOf(alwaysContinues),
+  () => (alwaysContinues.threw ? `threw: ${alwaysContinues.threw}`
+    : { builds: alwaysContinues.builds, parked: (alwaysContinues.res?.parked || []).map((p) => p.key), rounds: alwaysContinues.res?.rounds }));
+// The SPLIT, as arithmetic over the run's own numbers: 5 builds for a 3-round budget means exactly 2 of them were
+// continuations that spent no repair round. A ceiling folded into `rounds` would give 3 builds; no ceiling at all
+// would never park.
+check("ENG-95474 review: honoured continuations do NOT spend a repair round — a never-satisfied builder gets MAX_CONTINUATIONS (2) extra builds on top of MAX_ROUNDS (3), and the park record still reads 3 rounds",
+  !alwaysContinues.threw && alwaysContinues.builds === 5 && parkOf(alwaysContinues)?.rounds === 3,
+  () => ({ builds: alwaysContinues.builds, parkRounds: parkOf(alwaysContinues)?.rounds }));
+check("ENG-95474 review: the carry advertises BUILD CONTINUATIONS to the phase that WRITES the queue (Verify), as a counter separate from `rounds`",
+  !alwaysContinues.threw && alwaysContinues.continuationBlocks.length > 0
+    && /separate from `rounds`/.test(alwaysContinues.continuationBlocks[0] || "")
+    && /must not increment `rounds`/.test(alwaysContinues.continuationBlocks[0] || ""),
+  () => alwaysContinues.continuationBlocks[0] || "(no BUILD CONTINUATIONS carry block reached Verify)");
+// Reconcile is NOT a writer of these counters, so it must not be handed the carry — an unused parameter there reads
+// as if it were one, and its prompt then instructs on blocks that can never appear in it.
+check("ENG-95474 review: `reconcilePrompt` takes no carry — Verify is the queue writer, and Reconcile is told to PRESERVE both counters rather than increment either",
+  /function reconcilePrompt\(round\) \{/.test(wfSrc)
+    && !/reconcilePrompt\(round, carryNow\(\)\)/.test(wfSrc)
+    && /PRESERVE the \\`rounds\\` and \\`continuations\\` counters each unit already has/.test(wfSrc)
+    && /\*\*Do NOT increment either one here\.\*\*/.test(wfSrc)
+    && !/unless the ROUND COUNTERS block below is present/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /reconcilePrompt\(/.test(l)).join("\n"));
+// One continuation, then plain repairs: the unit gets exactly ONE build more than its round budget.
+const oneContinuation = await runToRound((n) => n === 1);
+check("ENG-95474 review EXECUTES the round-vs-continuation split: a single continuation buys the unit ONE extra build without spending a repair round — 4 builds for a 3-round budget",
+  !oneContinuation.threw && oneContinuation.builds === 4 && parkOf(oneContinuation)?.rounds === 3,
+  () => (oneContinuation.threw ? `threw: ${oneContinuation.threw}`
+    : { builds: oneContinuation.builds, parkRounds: parkOf(oneContinuation)?.rounds }));
+// `maxContinuations: 0` refuses every ask — the pre-continuation behaviour, and the control that shows the CEILING
+// governs rather than the builder. The unit gets exactly its round budget and no extra build.
+const noContinuations = await runToRound(() => true, { maxContinuations: 0 });
+check("ENG-95474 review: `maxContinuations: 0` refuses every continuation — the unit spends only its repair rounds, so the ceiling and not the builder decides how many builds it gets",
+  !noContinuations.threw && noContinuations.builds === 3 && parkOf(noContinuations)?.rounds === 3
+    && noContinuations.continuationBlocks.length === 0,
+  () => (noContinuations.threw ? `threw: ${noContinuations.threw}`
+    : { builds: noContinuations.builds, parkRounds: parkOf(noContinuations)?.rounds, blocks: noContinuations.continuationBlocks.length }));
+// --- SIBLING NON-DEFERRAL, EXECUTED with TWO units (review round 2). The single-unit scenarios above cannot catch a
+// regression that reintroduces `r.deferred.push(...)` for other units on a continuation: with one unit there is no
+// sibling to defer. Two independent page units, only `main` continuing, and the assertion is that `list` got its BUILD
+// CALL in the SAME round — not merely that `deferred` came back empty, which would also hold if the sibling were
+// silently dropped.
+const siblingRun = await runToRound((_n, key) => key === "main", {}, ["main", "list"]);
+check("ENG-95474 review round 2 EXECUTES sibling non-deferral: with two open units and only `main` continuing, `list` is still DISPATCHED in the same round — the guarantee the source-regex pin cannot prove",
+  !siblingRun.threw && siblingRun.firstRoundBuilds?.length === 2
+    && siblingRun.firstRoundBuilds.includes("main") && siblingRun.firstRoundBuilds.includes("list"),
+  () => (siblingRun.threw ? `threw: ${siblingRun.threw}` : { firstRound: siblingRun.firstRoundBuilds, trace: siblingRun.trace?.slice(0, 6) }));
+// And not just in round 1: the sibling is dispatched in EVERY round it is open, so a continuation never costs it a
+// turn. `main` continues twice then spends one charged round; `list` is charged all three. Both get one build per round.
+const buildsPerUnit = (r) => (r.trace || []).filter((t) => t.build).reduce((n, t) => ({ ...n, [t.build]: (n[t.build] ?? 0) + 1 }), {});
+check("ENG-95474 review round 2: the sibling is dispatched in every round it is open — `main`'s two continuations never cost `list` a build",
+  !siblingRun.threw && buildsPerUnit(siblingRun).list === 3 && buildsPerUnit(siblingRun).main === 3,
+  () => ({ perUnit: buildsPerUnit(siblingRun), rounds: siblingRun.res?.rounds }));
+
+// --- PREFLIGHT EVIDENCE is settled only by a REPORTED filing (review round 2). `judged`/`queueWritten` being truthy
+// says the agent answered, not that it transcribed the records — and the records live only in memory until it does.
+const runPreflight = (judgeReports, verifyReports) => {
+  const evidence = [];
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    // One ⚠ Confirm item, so Preflight files a record and the post-preflight Judge runs before any build.
+    if (label === "reconcile:baseline") return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }] };
+    if (label.startsWith("preflight:")) return { resolved: [{ id: "pf1", referencePage: "RefPage", components: ["crt.Input"] }], unresolved: [] };
+    if (label.startsWith("judge:")) {
+      evidence.push({ judge: /PREFLIGHT EVIDENCE TO FILE/.test(prompt) });
+      return { verdicts: [{ id: "pf1", convincing: true, why: "ok" }], evidenceWritten: judgeReports };
+    }
+    if (label.startsWith("verify:")) {
+      evidence.push({ verify: /PREFLIGHT EVIDENCE —/.test(prompt) });
+      return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: verifyReports };
+    }
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: true, missing: 0, unverified: 0, pages: {} } };
+    return null;
+  };
+  return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, evidence })).catch((e) => ({ threw: e.message }));
+};
+// A Judge that answers but reports NO filed id must leave the record pending, so a later writer still receives it.
+const judgeSilent = await runPreflight([], []);
+check("ENG-95474 review round 2: a Judge that returns verdicts but reports NO `evidenceWritten` does NOT settle the record — a verdict list is not a filing receipt, and the record must reach a later writer",
+  !judgeSilent.threw && judgeSilent.evidence?.some((e) => e.judge === true)
+    && judgeSilent.evidence?.some((e) => e.verify === true),
+  () => (judgeSilent.threw ? `threw: ${judgeSilent.threw}`
+    : { sawJudgeBlock: judgeSilent.evidence?.some((e) => e.judge), sawVerifyBlock: judgeSilent.evidence?.some((e) => e.verify), trace: judgeSilent.evidence }));
+// A Judge that DOES report the id settles it, so no later prompt carries it again.
+const judgeFiles = await runPreflight(["pf1"], []);
+check("ENG-95474 review round 2: a Judge that reports the id in `evidenceWritten` settles it — no later prompt carries that record again",
+  !judgeFiles.threw && judgeFiles.evidence?.some((e) => e.judge === true)
+    && !judgeFiles.evidence?.some((e) => e.verify === true),
+  () => (judgeFiles.threw ? `threw: ${judgeFiles.threw}` : { trace: judgeFiles.evidence }));
+// The id-scoped clear, executed on the shipped helper's contract: only reported ids go, everything else stays pending.
+// `preflightEvidence = {}` must survive in exactly ONE place — the declaration. A second whole-object assignment is
+// the unconditional clear coming back. Counted rather than matched with `\s*\n\s*`, which backtracks (S8786).
+check("ENG-95474 review round 2: the evidence clear is ID-SCOPED — an unreported id survives while a reported one is dropped",
+  /function markEvidenceFiled\(ids\) \{[\s\S]{0,400}?Object\.hasOwn\(preflightEvidence, id\)[\s\S]{0,200}?delete preflightEvidence\[id\]/.test(wfSrc)
+    && (wfSrc.match(/preflightEvidence = \{\}/g) || []).length === 1,
+  () => ({ wholeObjectAssignments: (wfSrc.match(/preflightEvidence = \{\}/g) || []).length,
+    helper: wfSrc.slice(wfSrc.indexOf("function markEvidenceFiled"), wfSrc.indexOf("function markEvidenceFiled") + 420) }));
+// ORDERING is the whole fix on the Verify path: `markCarryPersisted` recomputes the fingerprint, so settling the carry
+// while unfiled records are still in it records them as durable. Evidence must be dropped FIRST.
+check("ENG-95474 review round 2: on the `queueWritten` path the evidence is settled BEFORE the carry — otherwise the fingerprint records unfiled records as durable",
+  /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,400}?markEvidenceFiled\(lastVerifier\.evidenceWritten\)[\s\S]{0,40}?markCarryPersisted\(\)/.test(wfSrc)
+    && /markEvidenceFiled\(persisted\.evidenceWritten\)[\s\S]{0,200}?markCarryPersisted\(\)/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("if (lastVerifier.queueWritten)"), wfSrc.indexOf("if (lastVerifier.queueWritten)") + 460));
+// Schema membership is read off the SLICE for each schema, not off an adjacency regex: `\s*\n\s*` backtracks (S8786),
+// and a slice also proves the field landed in the right schema rather than merely somewhere in the file.
+// A schema object closes with `}` at column 0, the same boundary the render harness below slices on.
+const schemaSrc = (name) => {
+  const at = wfSrc.indexOf(`const ${name} = {`);
+  return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
+};
+const EVIDENCE_SCHEMAS = ["VERIFIER_SCHEMA", "JUDGE_SCHEMA", "PERSIST_SCHEMA"];
+check("ENG-95474 review round 2: `queueWritten` is not read as evidence confirmation — the evidence carry block asks for its own `evidenceWritten` answer and says the two are different files",
+  /A DIFFERENT FILE from the queue merge above/.test(wfSrc)
+    && /\\`queueWritten\\` says nothing about this write/.test(wfSrc)
+    // Every agent handed the block can now confirm it: Judge and the fallback writer gained the field, Verify had it.
+    && EVIDENCE_SCHEMAS.every((s) => schemaSrc(s).includes("evidenceWritten:")),
+  () => Object.fromEntries(EVIDENCE_SCHEMAS.map((s) => [s, schemaSrc(s).includes("evidenceWritten:")])));
+
+// --- THE CONTINUATION COUNTER IS MONOTONIC (review round 2). It is the ceiling's only input, so a stale lower report
+// from the queue file must not walk it backwards and hand a unit budget it already spent.
+check("ENG-95474 review round 2: `continuationOf` merges with `Math.max`, like the round counter — a stale queue report cannot roll spent continuation budget back and defeat `MAX_CONTINUATIONS`",
+  /function mergeContinuationCounters\(continuationOf\) \{[\s\S]{0,320}?continuations\[key\] = Math\.max\(continuations\[key\] \?\? 0, count\)/.test(wfSrc)
+    // ONE helper, both call sites — two copies of a monotonicity invariant drift.
+    && (wfSrc.match(/mergeContinuationCounters\(state\.continuationOf\)/g) || []).length === 2
+    && !/continuations\[key\] = count/.test(wfSrc),
+  () => ({ callSites: (wfSrc.match(/mergeContinuationCounters\(state\.continuationOf\)/g) || []).length,
+    rawAssign: /continuations\[key\] = count/.test(wfSrc) }));
+
+// --- the two dead-code findings from review round 2.
+check("ENG-95474 review round 2: `reconcilePrompt` no longer promises a PREFLIGHT EVIDENCE block — it takes no carry and never emits one, so the instruction was dead text",
+  !/If the PREFLIGHT EVIDENCE block below is present/.test(wfSrc)
+    && /function reconcilePrompt\(round\)/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /PREFLIGHT EVIDENCE block below/.test(l)).join("\n") || "(clean)");
+// Neither writer schema carries a `queueFile` the script never reads. `runReturn` has its own, unrelated, and read.
+check("ENG-95474 review round 2: no agent schema carries a dead `queueFile` field — nothing read it and no prompt asked for it",
+  ["VERIFIER_SCHEMA", "PERSIST_SCHEMA"].every((s) => !schemaSrc(s).includes("queueFile"))
+    && !wfSrc.includes("lastVerifier.queueFile") && !wfSrc.includes("persisted.queueFile"),
+  () => Object.fromEntries(["VERIFIER_SCHEMA", "PERSIST_SCHEMA"].map((s) => [s, schemaSrc(s).includes("queueFile")])));
+
+// THE PURE CEILING, executed directly: the predicate the loop above depends on.
+check("ENG-95474 review: `continuationAllowed` refuses at and past the cap, and treats a 0 or non-finite cap as 'no continuations'",
+  () => wf.continuationAllowed(0, 2) === true && wf.continuationAllowed(1, 2) === true
+    && wf.continuationAllowed(2, 2) === false && wf.continuationAllowed(3, 2) === false
+    && wf.continuationAllowed(0, 0) === false && wf.continuationAllowed(0, Infinity) === false
+    && wf.continuationAllowed(undefined, 2) === true,
+  () => ({ atCap: wf.continuationAllowed(2, 2), underCap: wf.continuationAllowed(1, 2),
+    zeroCap: wf.continuationAllowed(0, 0), infCap: wf.continuationAllowed(0, Infinity) }));
+// The builder's half of the contract: EMPTY at budget 0, so an agent never told to stop cannot ask to.
+check("ENG-95474 review: `continuationBudgetBlock` renders the budget only for a finite positive value — 0, Infinity and NaN yield the empty string, which is what disables the mechanism",
+  () => wf.continuationBudgetBlock(80).includes("about 80 assistant turns")
+    && wf.continuationBudgetBlock(80).includes("continuationRequested")
+    && wf.continuationBudgetBlock(0) === "" && wf.continuationBudgetBlock(Infinity) === ""
+    && wf.continuationBudgetBlock(Number("x")) === "",
+  () => ({ at80: wf.continuationBudgetBlock(80).slice(0, 80), at0: JSON.stringify(wf.continuationBudgetBlock(0)),
+    atInf: JSON.stringify(wf.continuationBudgetBlock(Infinity)) }));
+check("ENG-95474 review: `repairBlock` is empty on round 1 and names the open rows from round 2 — a round with no row named still says so rather than rendering an empty list",
+  () => wf.repairBlock(1, "  - Fields", 3, "/v.md") === ""
+    && wf.repairBlock(2, "  - Fields", 3, "/v.md").includes("REPAIR ROUND 2 of 3")
+    && wf.repairBlock(2, "  - Fields", 3, "/v.md").includes("  - Fields")
+    && wf.repairBlock(2, "", 3, "/v.md").includes("the verdict named no open row for this unit; re-read /v.md"),
+  () => ({ r1: JSON.stringify(wf.repairBlock(1, "x", 3, "/v.md")), noRows: wf.repairBlock(2, "", 3, "/v.md").slice(0, 160) }));
+
+// --- THE `queueWritten` BRANCH as an EXECUTION path (ENG-95474 review). Verify self-reports whether it merged the
+// carry; `true` skips the fallback persistence agent and `false` runs it. Both branches were asserted only by the
+// presence of their strings, which stays green if the condition is inverted or the fallback never fires.
+// The `why` note in each `persist:carry` prompt is what tells the round-close write apart from the fallback.
+const runVerifyBranch = (queueWritten, extra = {}) => {
+  const persistWhys = [];
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return { ...roundBaseline };
+    if (label.startsWith("build:")) return buildAnswer(false);
+    if (label.startsWith("verify:")) return { queueWritten, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    if (label === "persist:carry") {
+      const m = /persistence step of a Freedom build run \(([^)]*)\)/.exec(prompt);
+      persistWhys.push(m ? m[1] : "(no why)");
+      return { written: true, parkKeys: [] };
+    }
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    return null;
+  };
+  return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, persistWhys }))
+    .catch((e) => ({ threw: e.message }));
+};
+const afterVerify = (w) => (w || []).filter((s) => /after verify/.test(s));
+const queueConfirmed = await runVerifyBranch(true);
+check("ENG-95474 review EXECUTES the `queueWritten: true` branch: Verify confirming the carry write means the fallback persistence agent is NOT spawned for it",
+  !queueConfirmed.threw && afterVerify(queueConfirmed.persistWhys).length === 0,
+  () => (queueConfirmed.threw ? `threw: ${queueConfirmed.threw}` : { whys: queueConfirmed.persistWhys }));
+const queueUnconfirmed = await runVerifyBranch(false);
+check("ENG-95474 review EXECUTES the `queueWritten: false` branch: the fallback persistence agent runs ONCE per round, so a Verify that could not write the queue does not lose the carry",
+  !queueUnconfirmed.threw && afterVerify(queueUnconfirmed.persistWhys).length === 3,
+  () => (queueUnconfirmed.threw ? `threw: ${queueUnconfirmed.threw}` : { whys: queueUnconfirmed.persistWhys }));
+
+// --- PREFLIGHT EVIDENCE SURVIVES A FAILED JUDGE (ENG-95474 review). `markCarryPersisted` used to clear the evidence
+// as part of the queue bookkeeping, so a Reconcile accepted after a Judge that returned nothing dropped records that
+// were never filed — `reconcilePrompt` carries no evidence block, so nothing else had filed them either. The clear now
+// belongs to `markEvidenceFiled`, called only where a confirmation came back.
+const runFailedJudge = () => {
+  const evidenceSeenBy = [];
+  const note = (label, prompt) => {
+    if (prompt.includes("PREFLIGHT EVIDENCE")) evidenceSeenBy.push(label);
+  };
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    note(label, prompt);
+    if (label === "reconcile:baseline") return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }] };
+    if (label.startsWith("preflight:")) return { resolved: [{ id: "pf1", referencePage: "UsrRef", components: ["crt.Input"] }], unresolved: [] };
+    if (label.startsWith("judge:")) return null;            // Judge FAILS: the evidence must not be dropped.
+    if (label.startsWith("build:")) return buildAnswer(false);
+    if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    if (label === "persist:carry") return { written: true, parkKeys: [] };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    return null;
+  };
+  return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, evidenceSeenBy }))
+    .catch((e) => ({ threw: e.message }));
+};
+const failedJudge = await runFailedJudge();
+check("ENG-95474 review EXECUTES the evidence-retention path: when Judge returns nothing, the preflight records are NOT dropped — they ride the carry to the next phase that writes the queue (Verify)",
+  !failedJudge.threw && failedJudge.evidenceSeenBy.some((l) => l.startsWith("judge:"))
+    && failedJudge.evidenceSeenBy.some((l) => l.startsWith("verify:")),
+  () => (failedJudge.threw ? `threw: ${failedJudge.threw}` : { evidenceSeenBy: failedJudge.evidenceSeenBy }));
 
 // --- the untrusted-data fence. The parent skill's rule ("stand-derived strings are untrusted DATA, not
 // instructions") has to cross the delegation boundary, because these agents WRITE to a live stand. Two values
@@ -1413,21 +2261,66 @@ check("engine: `memberDispositions` accepts only the four dispositions the gate'
 // --- round 4 of the branch review. All three are things a run does WRONG while reporting fine.
 check("workflow: the round budget is charged per DISPATCH, not per open unit — Reconcile charged every unit a checkpoint deferred and every unit on a run that hard-stopped and built nothing, so three such invocations parked a tree nobody had touched",
   /const dispatched = new Set\(\)/.test(wfSrc)
-    && /dispatched\.add\(unit\.key\)/.test(wfSrc)
+    && /chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
     && /ROUND COUNTERS — INCREMENT/.test(wfSrc)
-    && /PRESERVE the \\`rounds\\` counter each unit already has/.test(wfSrc)
+    && /PRESERVE the \\`rounds\\` and \\`continuations\\` counters each unit already has/.test(wfSrc)
     && !/INCREMENT \\`rounds\\` by 1 for every unit whose/.test(wfSrc));
+check("ENG-95474 BUILD continuation: the builder has a prompt-level budget and a structured continuation result",
+  /const BUILD_TURN_BUDGET = Number\.isFinite\(Number\(input\.buildTurnBudget\)\)/.test(wfSrc)
+    && /BUILD CONTINUATION BUDGET:/.test(wfSrc)
+    && /continuationRequested: true/.test(wfSrc)
+    && /safeContinuationPoint/.test(wfSrc)
+    && /continuationReason/.test(wfSrc)
+    && /will not charge this as a repair round/.test(wfSrc));
+// `Number("Infinity") >= 0` is true, so a `>= 0` guard admitted `Infinity` and rendered "approaching about Infinity
+// assistant turns" — a budget that reads enabled and bounds nothing. Same guard on the continuation ceiling.
+check("ENG-95474 review: both build budgets reject a non-finite value — `Number.isFinite`, not `>= 0`, so `Infinity` cannot render an uncapped budget into the prompt",
+  /const BUILD_TURN_BUDGET = Number\.isFinite\(Number\(input\.buildTurnBudget\)\) && Number\(input\.buildTurnBudget\) >= 0/.test(wfSrc)
+    && /const MAX_CONTINUATIONS = Number\.isFinite\(Number\(input\.maxContinuations\)\) && Number\(input\.maxContinuations\) >= 0/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /BUILD_TURN_BUDGET =|MAX_CONTINUATIONS =/.test(l)).join("\n"));
+check("ENG-95474 BUILD continuation: continuation handoff is verified but does NOT spend the repair-round counter",
+  /const chargeBuildAttempt = \(key\) => \{[\s\S]{0,180}?localRounds\[key\][\s\S]{0,180}?dispatched\.add\(key\)/.test(wfSrc)
+    && /const continuation = resolveContinuation\(unit, res, r\)/.test(wfSrc)
+    && /if \(!continuation\) chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
+    && /build continuation \$\{continuations\[unit\.key\]\} of \$\{MAX_CONTINUATIONS\}[\s\S]*does not consume a repair round/.test(wfSrc)
+    && /CONTINUATION: \$\{r\.continued\.length\}/.test(wfSrc));
+check("ENG-95474 BUILD continuation: continuation counts are tracked and persisted separately from repair rounds",
+  /continuationOf: \{ type: 'object', additionalProperties: \{ type: 'integer' \} \}/.test(wfSrc)
+    && /const continuations = \{\}/.test(wfSrc)
+    && /continuations\[unit\.key\] = spent \+ 1/.test(wfSrc)
+    && /BUILD CONTINUATIONS — set each unit's \\`continuations\\` counter/.test(wfSrc)
+    && /must not increment \\`rounds\\`/.test(wfSrc)
+    && /continuationOf\\` = the continuations counter now on file/.test(wfSrc));
+// THE TERMINATION GUARD. A continuation does not spend a repair round, so `roundsRun` never advances and
+// `parkedKeys` never reaches `MAX_ROUNDS` — without a ceiling a builder that asks every round loops forever.
+check("ENG-95474 review: an over-budget continuation ask is REFUSED and charged as a repair round, so the unit parks instead of looping",
+  /function resolveContinuation\(unit, res, r\) \{[\s\S]{0,400}?continuationAllowed\(spent, MAX_CONTINUATIONS\)/.test(buildRoundSrc)
+    && /build continuation REFUSED/.test(wfSrc)
+    && /charged as a repair round instead/.test(wfSrc)
+    // The refusal must RETURN FALSE, which is what makes the caller charge the attempt.
+    && /if \(!continuationAllowed\(spent, MAX_CONTINUATIONS\)\) \{[\s\S]{0,320}?return false/.test(buildRoundSrc),
+  () => buildRoundSrc.split("\n").filter((l) => /REFUSED|spent/.test(l)).join("\n"));
+check("ENG-95474 BUILD continuation: an unfinished continuation result cannot also trigger a human checkpoint pause",
+  /if \(!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)\)/.test(wfSrc));
 check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistPending` runs more than once per round, and re-sending the same set charged one build attempt two or three times, parking a unit before it spent its real repair rounds",
   /dispatched\.clear\(\)/.test(wfSrc)
     && /dispatched\.clear\(\)[\s\S]{0,200}carryPersisted = carryFingerprint\(\)/.test(wfSrc)
     && !/if \(persisted\?\.written\) \{ markParksPersisted\(\); carryPersisted = carryNowFp \}/.test(wfSrc));
-check("workflow: the dispatched set rides in the carry, so it is written by the persistence step that runs right after the build — a kill still cannot come back with the budget reset",
+check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by Verify/Reconcile on the normal path and by fallback persistence only when needed — a kill still cannot come back with the budget reset",
   /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\]\]\)/.test(wfSrc));
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites\]\)/.test(wfSrc)
+    && /markCarryPersisted\(\)/.test(wfSrc)
+    && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",
   /reconcile:after-preflight/.test(wfSrc)
     && wfSrc.indexOf("reconcile:after-preflight") < wfSrc.indexOf("const DRY_RUN = input.dryRun === true")
     && wfSrc.indexOf("reconcile:after-preflight") < wfSrc.indexOf("while (true) {"));
+check("ENG-95474 C4: preflight evidence is returned structurally and filed by Judge, so the dedicated preflight merge agent is gone without adding an extra Reconcile",
+  /structured evidence returned to the next Reconcile/.test(wfSrc)
+    && /function preflightEvidenceJudgeBlock/.test(wfSrc)
+    && /judgeRound\(preIds, preflightEvidence\)/.test(wfSrc)
+    && !/PREFLIGHT_MERGE_SCHEMA/.test(wfSrc)
+    && !/preflight:merge/.test(wfSrc));
 check("workflow: every path in a generated engine command is SHELL-QUOTED — a migration folder with a space split into two arguments and every phase then read or wrote the wrong path, with no error",
   /const q = \(v\) =>/.test(wfSrc)
     && /const cli = \(flags\) => `node \$\{q\(ENGINE\)\} \$\{q\(input\.manifest\)\}/.test(wfSrc)
@@ -1605,13 +2498,13 @@ check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the
   /const SLICE_DIR = `\$\{input\.outDir\}\/slices`/.test(wfSrc)
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
-check("ENG-95472: NO per-unit file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name",
+check("ENG-95472: NO per-PAGE file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name (a NON-page unit has no such number — see the reopen checks below)",
   /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(unitKeys, key\)/.test(wfSrc)
     && /queue-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc)
-    && /spec-\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
-    && /worklog\/\$\{readablePart\(key\)\}-\$\{unitNoOf\(key\)\}\.md/.test(wfSrc)
+    && /spec-\$\{unitFileStem\(key, 'page'\)\}\.md/.test(wfSrc)
+    && /worklog\/\$\{unitFileStem\(key, kind\)\}\.md/.test(wfSrc)
     && !/sliceFileName/.test(dsSrc),
-  () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|readablePart|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
+  () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|unitFileStem|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
 check("ENG-95472: and there is ONE numbering rule, not one per file family — every file helper reads the same bound `unitNoOf`",
   // Matched WITH `return `: the helper's own signature (`function unitNo(unitKeys, key)`) is now inlined into the
   // same file, so the bare call shape appears twice and only one of them is a CALL.
@@ -1619,6 +2512,16 @@ check("ENG-95472: and there is ONE numbering rule, not one per file family — e
     && (wfSrc.match(/indexOf\(key\)/g) || []).length === 1,
   () => ({ bound: (wfSrc.match(/return unitNo\(unitKeys, key\)/g) || []).length,
     indexOf: (wfSrc.match(/indexOf\(key\)/g) || []).length }));
+// REOPEN (2026-08-22): the numbering rule was TOTAL over pages and undefined for every other unit class the
+// schedule produces, so the first file named for a reachability unit threw and killed the run after 12 agents.
+// One rule, one entry point, and the kind — not a membership test — decides which half applies: keying off
+// "is it in `unitKeys`?" would silently name a file for a MISTYPED page key, which is the defect `unitNo` stops.
+check("ENG-95472 reopen: ONE naming entry point, and it is KIND-driven — the `app` unit and the reachability keys are scheduled but are not in `unitKeys`, so a rule defined only for pages cannot name their files",
+  /const unitFileStem = \(key, kind\) => unitStem\(\{ key, kind \}, unitNoOf\)/.test(wfSrc)
+    && /function unitStem\(unit, pageNo\)/.test(wfSrc)
+    && /if \(kind && kind !== 'page'\) return nonPageUnitStem\(key, kind\)/.test(wfSrc)
+    && /worklogFile\(unit\.key, unit\.kind\)/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /unitFileStem|function unitStem|nonPageUnitStem/.test(l)).slice(0, 8));
 // RC-4/RC-14: the two failures must read differently. A missing key list is not a schedule mismatch, and a
 // caller told the wrong one goes hunting an inconsistency that does not exist.
 check("ENG-95472: an ABSENT key list gets its own message, distinct from the key-not-in-list one — `unitNo`'s own error would misdiagnose it as a schedule mismatch",
@@ -1674,6 +2577,80 @@ check("ENG-95472: an ABSENT key list gets its own message, distinct from the key
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
+}
+// THE PREMISE, OBSERVED against the engine rather than inferred: an APPLICABLE reachability key is published in
+// its own array and is NOT among `pages[]` — so it is not in `unitKeys` either, and the positional rule cannot name
+// a file for it. This is the whole reason the naming rule needs a second half; if the engine ever published reach
+// keys as pages, this check is where that shows up.
+{
+  const ENGINE_MJS2 = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/classic-to-freedom-migration/engine/migrate.mjs");
+  const manifest = JSON.stringify({
+    entity: "Applicant",
+    // `planMeta.sectionSchema` is what gates the `Navigable section registered` row, and that row is what makes
+    // `sectionRegistered` applicable — the exact shape of the run that crashed.
+    planMeta: { sectionSchema: "Applicant1Section", listTemplate: "ListPage" },
+    schemas: [{ pkg: "HRApplicant", body: `define("N2Reach", [], function() {
+  return {
+    entitySchemaName: "Applicant",
+    details: /**SCHEMA_DETAILS*/{
+      "A": { "schemaName": "EduA", "entitySchemaName": "Education", "filter": { "detailColumn": "Applicant", "masterColumn": "Id" } }
+    }/**SCHEMA_DETAILS*/,
+    diff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/
+  };
+});` }],
+    detailSchemas: { EduA: { title: "Education", entity: "Education" } },
+  });
+  const r = spawnSync(process.execPath, [ENGINE_MJS2, "-", "--units"], { input: manifest, encoding: "utf8" });
+  const units = r.stdout?.trim().startsWith("{") ? JSON.parse(r.stdout) : null;
+  const pageKeys = (units?.pages || []).map((pg) => pg.key);
+  const applicable = (units?.reachability || []).filter((x) => x.appliesWhen).map((x) => x.key);
+  check("ENG-95472 reopen: the engine really publishes an APPLICABLE reachability key that is NOT a published page key — the premise the second naming rule rests on, observed rather than assumed",
+    () => applicable.includes("sectionRegistered") && applicable.every((k) => !pageKeys.includes(k)),
+    () => ({ status: r.status, pageKeys, applicable, stderr: (r.stderr || "").slice(0, 200) }));
+  check("ENG-95472 reopen: and the positional rule REFUSES that key while the kind-driven rule names it — the crash and its fix, over the engine's own output",
+    () => { let threw = false;
+      try { wf.unitNo(pageKeys, "sectionRegistered"); } catch { threw = true; }
+      return threw && wf.unitStem({ key: "sectionRegistered", kind: "reach" }, () => 0) === "reach-sectionRegistered"; },
+    () => ({ pageKeys, stem: wf.unitStem({ key: "sectionRegistered", kind: "reach" }, () => 0) }));
+}
+// THE REOPEN, DRIVEN. A full run died naming a file for `sectionRegistered`: the schedule produces THREE unit
+// classes and the naming rule covered one. So this drives the REAL schedule — pages, the app unit and an applicable
+// reachability key — through the REAL rule and asserts it is total, collision-free, and byte-identical for pages.
+{
+  const buildOrder = ["child:\u041e\u0441\u0432\u0456\u0442\u0430", "list", "main"];
+  const reachability = [
+    { key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the app-menu entry", miss: "unreachable" },
+    { key: "relatedPageBound", appliesWhen: false, pages: ["main"] },
+  ];
+  const appUnit = wf.appUnitFor("HRApplicant", "missing", "Applicant", null);
+  const schedule = wf.scheduleUnits(buildOrder, reachability, appUnit);
+  const pageNo = (k) => wf.unitNo(buildOrder, k);
+  const stemOf = (u) => { try { return wf.unitStem(u, pageNo); } catch (e) { return `THREW: ${e.message}`; } };
+  const stems = schedule.map((u) => ({ key: u.key, kind: u.kind, stem: stemOf(u) }));
+  check("ENG-95472 reopen: the schedule really carries all three unit classes, or the totality check below proves nothing",
+    () => new Set(schedule.map((u) => u.kind)).size === 3 && schedule.length === 5,
+    () => schedule.map((u) => ({ key: u.key, kind: u.kind, at: u.at })));
+  check("ENG-95472 reopen: EVERY scheduled unit can be named — a reachability unit threw here before, after 12 agents and 73 minutes, with `main` built and the section never registered",
+    () => stems.every((s) => !s.stem.startsWith("THREW")),
+    () => stems);
+  check("ENG-95472 reopen: and the stems are DISTINCT — a shared stem would put two units' worklogs in one file",
+    () => new Set(stems.map((s) => s.stem)).size === stems.length, () => stems);
+  check("ENG-95472 reopen: a PAGE stem is unchanged — `<readable>-<published position>`, the same bytes the numbering rule produced before, so no existing per-page file is renamed",
+    () => stems.filter((s) => s.kind === "page")
+      .every((s) => s.stem === `${wf.readableUnitPart(s.key)}-${pageNo(s.key)}`)
+      && stems.find((s) => s.key === "main")?.stem === "main-3",
+    () => stems.filter((s) => s.kind === "page"));
+  check("ENG-95472 reopen: a NON-page stem comes from the KEY, namespaced by the kind — stable across rounds and sessions, where a schedule position shifts on a park or an absent app unit",
+    () => stems.find((s) => s.key === "sectionRegistered")?.stem === "reach-sectionRegistered"
+      && stems.find((s) => s.key === "app")?.stem === "app",
+    () => stems.filter((s) => s.kind !== "page"));
+  check("ENG-95472 reopen: a MISTYPED page key still STOPS — the kind, not membership in `unitKeys`, chooses the rule, so an unpublished page key cannot quietly acquire a file name",
+    () => { const r = stemOf({ key: "child:NotPublished", kind: "page" });
+      return r.startsWith("THREW") && /not in the published key list/.test(r); },
+    () => stemOf({ key: "child:NotPublished", kind: "page" }));
+  check("ENG-95472 reopen: a reachability key `--units` does NOT publish as applicable is not scheduled, so nothing names a file for it",
+    () => !schedule.some((u) => u.key === "relatedPageBound"), () => schedule.map((u) => u.key));
 }
 check("ENG-95472: the engine writes those files under the same positional rule, 1-based over `pages[]`",
   /\$\{prefix\}-\$\{i \+ 1\}\.json/.test(mgSrc) && /forEach\(\(pg, i\)/.test(mgSrc),
@@ -1745,6 +2722,8 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     // above takes, and for the same reason.
     const STUBS = String.raw`
 const MAX_ROUNDS = 3
+const BUILD_TURN_BUDGET = 80
+const VERIFY_TABLE = "/m/verify.md"
 const REFS_DIR = "/m/refs"
 const REFS_INDEX = "/m/refs/index.md"
 const BUILT_FILE = "/m/built.json"
@@ -1752,13 +2731,9 @@ const REF_BLOCK = "<refs>"
 const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
-const state = { applicationCode: "UsrApp" }
+const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
-const specFile = (k) => "/m/refs/spec-" + k + ".md"
-const worklogFile = (k) => "/m/worklog/" + k + ".md"
-const queueSliceFile = (k) => "/m/slices/queue-" + k + ".json"
-const builtSliceFile = (k) => "/m/slices/built-" + k + ".json"
 const cliChecklistPage = (k) => "node e.mjs m.json --checklist --page " + k
 const cliUnitsPage = (k) => "node e.mjs m.json --units --page " + k
 const cliBuiltPage = (k) => "node e.mjs m.json --verify --built b.json --page " + k
@@ -1768,10 +2743,26 @@ const resolutionsPromptBlock = () => ""
 const findingsPromptBlock = () => ""
 const checkFirstPromptBlock = () => ""
 const guidelinesReturnFor = () => ""
+const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "")
+const SLICE_DIR = "/m/slices"
+const q = (v) => JSON.stringify(String(v))
+// The sliced names block is a closure body in the core: it takes its paths off ctx and asks
+// getUnitKeys() for the published list instead of closing over state directly.
+const getUnitKeys = () => state.unitKeys
+const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
 `;
+    // THE REAL PER-UNIT FILE NAMES, not stubs. A stub of `worklogFile` is exactly what hid the reopened defect:
+    // it took the key alone and could not throw, so this harness rendered a reachability prompt while the shipped
+    // helper died on the same unit. The shipped block is sliced in and reads the `state.unitKeys` in STUBS above.
+    const NAMES_BEGIN = "// ---8<--- PER-UNIT FILE NAMES ---8<---";
+    const NAMES_END = "// ---8<--- END PER-UNIT FILE NAMES ---8<---";
+    const nFrom = wfSrc.indexOf(NAMES_BEGIN), nTo = wfSrc.indexOf(NAMES_END);
+    check("ENG-95472 reopen: the per-unit file-name block is delimited in the shipped file, so this harness renders the REAL names instead of stubs that cannot throw",
+      nFrom >= 0 && nTo > nFrom, () => ({ nFrom, nTo }));
+    const namesSrc = nFrom >= 0 && nTo > nFrom ? wfSrc.slice(nFrom + NAMES_BEGIN.length, nTo) : "";
     // ONE source of truth for what is stubbed: the names are read back out of the declarations above, so the
     // guard below cannot drift from them.
-    const stubbed = new Set([...STUBS.matchAll(/^const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
+    const stubbed = new Set([...`${STUBS}\n${namesSrc}`.matchAll(/^\s*const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
     // A free variable with no stub FAILS here; auto-stubbing would swallow the typo this check exists to catch.
     // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
@@ -1789,7 +2780,13 @@ const guidelinesReturnFor = () => ""
     try {
       tmpBp = mkdtempSync(path.join(os.tmpdir(), "bp-render-"));
       const modPath = path.join(tmpBp, "buildPrompt.mjs");
-      writeFileSync(modPath, `${STUBS}\n${fnSrc}\nexport { buildPrompt };\n`);
+      // The two pure blocks `buildPrompt` composes are sliced in FOR REAL rather than stubbed: they carry the prompt
+      // text the assertions below match on, so a stub would make the render pass while shipping nothing.
+      const pureFn = (name) => {
+        const at = wfSrc.indexOf(`function ${name}(`);
+        return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
+      };
+      writeFileSync(modPath, `${STUBS}\n${pureFn("unitNo")}\n${pureFn("readableUnitPart")}\n${pureFn("nonPageUnitStem")}\n${pureFn("unitStem")}\n${namesSrc}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${fnSrc}\nexport { buildPrompt };\n`);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
@@ -1807,13 +2804,30 @@ const guidelinesReturnFor = () => ""
     check("ENG-95472: the two app arms really are different prompts — the no-menu arm forbids the section the default arm creates",
       () => /DO NOT CREATE A SECTION/.test(rendered.appNoMenu || "") && !/DO NOT CREATE A SECTION/.test(rendered.app || ""),
       () => ({ noMenu: /DO NOT CREATE A SECTION/.test(rendered.appNoMenu || ""), dflt: /DO NOT CREATE A SECTION/.test(rendered.app || "") }));
+    // `main` is 3rd in the stubbed `unitKeys`, so its slices are `queue-3` / `built-3` — the REAL numbering,
+    // and `list` (2nd) must not appear in `main`'s prompt.
     check("ENG-95472: a rendered PAGE prompt carries BOTH slice paths for its own key and no other unit's",
-      () => /\/m\/slices\/queue-main\.json/.test(rendered.main) && /\/m\/slices\/built-main\.json/.test(rendered.main)
-        && !/slices\/queue-list\.json/.test(rendered.main) && !/slices\/queue-child/.test(rendered.main),
+      () => /\/m\/slices\/queue-3\.json/.test(rendered.main) && /\/m\/slices\/built-3\.json/.test(rendered.main)
+        && !/slices\/queue-2\.json/.test(rendered.main) && !/slices\/queue-1\.json/.test(rendered.main),
       () => [...(rendered.main || "").matchAll(/\/m\/slices\/\S+\.json/g)].map((m) => m[0]));
+    check("ENG-95472 reopen: a NON-page unit's prompt carries a REAL worklog path named from its key — this is the render that used to pass on a stub while the shipped helper threw",
+      () => /\/m\/worklog\/reach-sectionRegistered\.md/.test(rendered.reach || "")
+        && /\/m\/worklog\/app\.md/.test(rendered.app || "")
+        && /\/m\/worklog\/main-3\.md/.test(rendered.main || ""),
+      () => ["reach", "app", "main"].map((k) => [...(rendered[k] || "").matchAll(/\/m\/worklog\/\S+\.md/g)].map((m) => m[0])));
     check("ENG-95472: a NON-page unit is handed no slice path — `--units` publishes slices for page keys, and `app` / reachability units are not among them",
       () => !/\/m\/slices\//.test(rendered.app) && !/\/m\/slices\//.test(rendered.appNoMenu) && !/\/m\/slices\//.test(rendered.reach),
       () => ({ app: /\/m\/slices\//.test(rendered.app || ""), reach: /\/m\/slices\//.test(rendered.reach || "") }));
+    // ENG-95469: `buildPrompt` threads the in-context gate into the composer FOR PAGE UNITS — a page (and the list
+    // page) gets it, an app / reachability unit does not. The block's own text is asserted at the source level above;
+    // this pins the WIRING (buildPrompt hands `gate: inContextGateBlock(unit)` to the composer, page-only).
+    check("ENG-95469: the in-context gate is composed into a PAGE unit's build prompt (and the list page's), never an app / reachability unit's",
+      () => /<IN-CONTEXT GATE>/.test(rendered.main) && /<IN-CONTEXT GATE>/.test(rendered.list)
+        && !/<IN-CONTEXT GATE>/.test(rendered.app) && !/<IN-CONTEXT GATE>/.test(rendered.reach),
+      () => ({ main: /<IN-CONTEXT GATE>/.test(rendered.main || ""), list: /<IN-CONTEXT GATE>/.test(rendered.list || ""),
+        app: /<IN-CONTEXT GATE>/.test(rendered.app || ""), reach: /<IN-CONTEXT GATE>/.test(rendered.reach || "") }));
+    check("ENG-95469: buildPrompt hands `gate: inContextGateBlock(unit)` to the composer",
+      /gate: inContextGateBlock\(unit\)/.test(wfSrc));
   }
 }
 
@@ -1825,6 +2839,9 @@ const guidelinesReturnFor = () => ""
  * that CAN silently drift — a `crt.*` type that does not exist, and a table row nobody documented.
  */
 {
+  // Suffix classes the COMPONENT index cannot judge: requests and Angular services live in the CDN's
+  // separate RequestRegistry, and a `*Handler` is platform-registered against a request, never placed on a page.
+  const NON_COMPONENT_SUFFIX = /(?:Request|Service|Handler)$/;
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
@@ -1832,11 +2849,14 @@ const guidelinesReturnFor = () => ""
   // DOC form: `crt.ContactCommunication` was written in prose long before anyone checked it against a stand, and
   // prose is what an agent reads when Node is unavailable.
   const allDocTypes = [...new Set((doc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || []))];
-  // A `crt.*Request` / `crt.*Service` is NOT a component: requests live in the CDN's separate RequestRegistry
-  // (published for `latest` only, and it does not carry all of them — `crt.HandlerChainService` is an Angular
-  // service, `crt.EntityStageProgressBarLoadDataRequest` a component-specific request). The component index cannot
-  // judge them, so they are excluded here and remain UNCHECKED — stated rather than silently folded in.
-  const isComponentName = (t) => !/(?:Request|Service)$/.test(t);
+  // A `crt.*Request` / `crt.*Service` / `crt.*Handler` is NOT a component: requests live in the CDN's separate
+  // RequestRegistry (published for `latest` only, and it does not carry all of them — `crt.HandlerChainService` is
+  // an Angular service, `crt.EntityStageProgressBarLoadDataRequest` a component-specific request), and a `*Handler`
+  // is platform-registered against a request rather than placed on a page (`crt.ValidateDuplicatesOnSaveHandler`
+  // on `crt.SaveDataRequest`). The component index cannot judge any of the three, so they are excluded here and
+  // remain UNCHECKED — stated rather than silently folded in. The exclusion is kept honest below: a suffix-excluded
+  // type that DOES appear in the index would mean the suffix is hiding a real component.
+  const isComponentName = (t) => !NON_COMPONENT_SUFFIX.test(t);
   // A type the doc names as a COUNTER-EXAMPLE ("NOT `crt.ContactCommunication`") is not a claim that it exists —
   // it is the warning that it does not. Those are checked the other way round below.
   const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
@@ -1882,9 +2902,9 @@ const guidelinesReturnFor = () => ""
   // with a `crt.` prefix, which resolves to nothing on a stand). Exempt here, checked the other way round below.
   const codeCounterExamples = new Set([...engineSrc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
-    .filter((t) => !/(?:Request|Service)$/.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
+    .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
   const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
-  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services and the crt.Tab acceptance spelling)",
+  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers and the crt.Tab acceptance spelling)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as

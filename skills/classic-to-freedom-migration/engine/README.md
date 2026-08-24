@@ -23,6 +23,7 @@ node migrate.mjs <manifest.json> --units --page main    # ONE page's slice of th
 node migrate.mjs <manifest.json> --units --slices s/    # …and one `queue-<n>.json` per published key, into `s/`
 node migrate.mjs <manifest.json> --verify --built b.json --slices s/ # one `built-<n>.json` per published key
 node migrate.mjs <manifest.json> --verify --built b.json --page main # ONE page's row of the built file (JSON)
+node migrate.mjs <manifest.json> --verify --built b.json --page main --verify-json v.json # the IN-CONTEXT single-unit GATE (per-page done-gate: exit 2 if THIS page is short)
 ```
 
 Mode flags take no value and only ONE is honoured per run (the CLI picks the first it matches, so a second mode
@@ -33,6 +34,14 @@ is exit 1, never the whole artifact. `--slices <dir>` (with `--units` or `--veri
 FILE per published key, so a caller with one agent per page hands each its own row instead of the whole file. Both
 are additive — stdout and `--out` are unchanged — and `--slices` writes on exit 2 too, which is when a build agent
 needs its row.
+
+**`--verify --page <key>` alone is a pure READ** (this page's row of the built file, exit 0, gates nothing). **Adding
+`--verify-json <file>` turns it into the IN-CONTEXT SINGLE-UNIT GATE** (ENG-95469): it runs the SAME detector the
+full sweep does, SCOPED to that one page, writes the per-unit verdict `{ pageKey, complete, missing, unverified,
+openRows, planGaps }` to `<file>`, and drives the HARD done-gate on THIS page — a short page is **exit 2**, exactly
+like the full `--verify`, so a build agent can gate its own unit in its own context before reporting it complete. A
+`<key>` this plan does not publish fails LOUDLY (exit 1 with a distinct message), never a false-green complete
+verdict.
 
 **Slice files are numbered, not named after the key** — `queue-1.json` is the first entry in `pages[]`, and so on.
 A page key is not a legal filename, and sanitising one is many-to-one: every non-Latin caption strips to the same
@@ -91,7 +100,7 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 ```jsonc
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
-  "reachability": { "sectionRegistered": true, "reuseBindings": false },
+  "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
   "evidence": { "<id from --units>": { "referencePage": "…", "components": ["…"] } },
   "judge":    { "<id from --units>": { "convincing": true, "why": "…" } } }
 ```
@@ -168,6 +177,12 @@ skeletal seed), `structure.complete` (input completeness: unresolved detail / ch
 `⛔` banner to stderr and exits **2** (the artifact is still written/printed, with the banner at the top, so you
 see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan. (`--spec`/default runs need no
 `planMeta`, so the plan check applies only to `--plan`.)
+
+`--verify --built` applies the same exit-**2** done-gate whenever a deliverable is MISSING/unverified (or `planGaps`
+is non-empty). `--verify --page <key> --verify-json <file>` narrows that gate to ONE page — the in-context
+single-unit gate (ENG-95469): if THAT page is short it is exit **2**, so a build agent's bounded self-check fails
+loudly rather than closing a short unit. A `<key>` the plan does not publish is exit **1** (a broken gate is a loud
+diagnosis, never a complete verdict).
 
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a

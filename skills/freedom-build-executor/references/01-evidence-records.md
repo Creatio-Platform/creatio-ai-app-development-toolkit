@@ -112,14 +112,18 @@ reference page, or lists a component the page does not carry, is the judge faili
 
 Five wiring facts (`typedFormsBuilt`, `typedRouting`, `miniPageWired`, `reuseBindings`,
 `sectionRegistered`) are configuration records, not page content — `--units.reachability[]` says
-which of the five this run actually gates. They are plain tri-state
-booleans under `--built.reachability`, not evidence records:
+which of the five this run actually gates. Four are plain tri-state
+booleans under `--built.reachability`, not evidence records; `sectionRegistered` is the
+exception and takes an OBJECT (see below):
 
 ```json
-"reachability": { "sectionRegistered": true, "miniPageWired": false }
+"reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "miniPageWired": false }
 ```
 
 `true` = confirmed on-stand · `false` = confirmed absent (❌ MISSING) · key omitted = nobody
-checked (⚠ unverified). `--units.reachability[]` publishes which of the keys this run actually
+checked (⚠ unverified). **`sectionRegistered` does NOT take a bare `true`:** a workplace
+registration only ADDS, so a flag cannot tell one binding from two — report the COUNT you
+actually read on the stand, `{ "workplaces": <n>, "names": [...] }`, and the row closes at
+exactly 1. A bare `true` there reads ⚠ unverified, by design. `--units.reachability[]` publishes which of the keys this run actually
 gates (`appliesWhen: true`) and which page keys read each one, so you can neither invent an
 obligation nor miss one.

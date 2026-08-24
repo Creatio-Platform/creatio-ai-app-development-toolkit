@@ -12,7 +12,7 @@
 // to the contract every phase is handed. `run-workflow-parity.mjs` compares the prompt text of the shipped script
 // against the hand-written original byte for byte, which is how that was caught the first time.
 
-import { buildMode, findingKeySet, unitNo } from './helpers.mjs'
+import { buildMode, findingKeySet, unitNo, unitStem } from './helpers.mjs'
 
 export const REQUIRED_INPUTS = ['manifest', 'environment', 'outDir', 'planFile']
 
@@ -151,6 +151,20 @@ export function makeContext(input, selfPath) {
   // never been observed to close a unit the third did not — it burns a stand write and a full
   // verify sweep to re-learn the same shortfall.
   const MAX_ROUNDS = Number(input.maxRounds) > 0 ? Number(input.maxRounds) : 3
+  // A BUILD agent that gets too large should hand the same unit to a fresh-context continuation at a safe boundary,
+  // not burn a repair round. The workflow cannot observe sub-agent turns directly, so the builder owns the signal and
+  // this script owns the accounting. `0` disables the prompt budget. A SOFT trigger the builder judges, so a low value
+  // invites a continuation, never forces one. `Number.isFinite`, because `Number("Infinity") >= 0` is true and yields a
+  // budget that bounds nothing.
+  const BUILD_TURN_BUDGET = Number.isFinite(Number(input.buildTurnBudget)) && Number(input.buildTurnBudget) >= 0
+    ? Number(input.buildTurnBudget)
+    : 80
+  // CONTINUATIONS PER UNIT — the ceiling that makes the continuation path terminate. A continuation does not spend a
+  // repair round, so the park arithmetic cannot bound it. Past this cap the ask is refused and charged as an ordinary
+  // round, so `MAX_ROUNDS` parks the unit. `0` refuses every continuation.
+  const MAX_CONTINUATIONS = Number.isFinite(Number(input.maxContinuations)) && Number(input.maxContinuations) >= 0
+    ? Number(input.maxContinuations)
+    : 2
   // Preflight is READ-ONLY, so it parallelises. Kept well under the host's concurrency ceiling.
   const MAX_PREFLIGHT = Number(input.maxPreflightAgents) > 0 ? Number(input.maxPreflightAgents) : 6
   // HOW MUCH THE OPERATOR WATCHES. Three modes, one mechanism: the run stops at a PAGE BOUNDARY so a human can
@@ -182,12 +196,10 @@ export function makeContext(input, selfPath) {
   const FINDING_KEYS = findingKeySet(FINDINGS)
   const QUEUE_FILE = `${input.outDir}/build-queue.json`
   const BUILT_FILE = `${input.outDir}/built.json`
-  // Per-preflight-agent output files. The ⚠ Confirm fan-out is READ-ONLY AGAINST THE STAND — but "read-only" is
-  // about the STAND, and up to `MAX_PREFLIGHT` agents were told to write their records into the ONE `built.json`.
-  // Read-modify-write of a shared file with no lock is last-write-wins at best; a torn write destroys the gate's
-  // own input. So each agent gets its OWN file and a single sequential merge step folds them into `built.json`
-  // afterwards. The fan-out is unchanged — only the WRITING stops being concurrent.
-  const preflightFile = (i) => `${input.outDir}/preflight-${i + 1}.json`
+  // The ⚠ Confirm fan-out is READ-ONLY AGAINST THE STAND — but "read-only" is about the STAND, and up to
+  // `MAX_PREFLIGHT` agents were once told to write their records into the ONE `built.json`. Read-modify-write of a
+  // shared file with no lock is last-write-wins at best; a torn write destroys the gate's own input. Preflight agents
+  // therefore return structured records; the existing Judge/Reconcile sequence performs the single sequential write.
   const VERIFY_TABLE = `${input.outDir}/verify.md`
   // The machine-readable verdict (`--verify-json`). The table is the HUMAN report and stays the run's
   // closing artifact; this file is what the scheduling arithmetic reads.
@@ -261,9 +273,9 @@ Read the card for each imperative row this page owns before you write the handle
   })()
 return {
   input, ENGINE, SKILLS_ROOT, REF_RECIPE, REF_MAPPING, REF_POLICY, REF_BLOCK,
-  SURFACE, MAX_ROUNDS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
+  SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
   FINDINGS, FINDING_KEYS,
-  QUEUE_FILE, BUILT_FILE, preflightFile, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
+  QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
   REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
   cli, CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
   dataFence, openRowPrompt, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
@@ -274,9 +286,16 @@ return {
 // which only exists once Reconcile has answered — `getUnitKeys` is read at call time for exactly that reason.
 export function makePaths(ctx, getUnitKeys) {
   const input = ctx.input
-  // Bound to THIS run's published key list; the rule is the pure `unitNo` in the helpers block below. Every per-unit
-  // FILE carries the number, because a name derived from the page key alone is many-to-one. The readable part stays
-  // for the folder's sake; the number is what makes it unique.
+  // ---8<--- PER-UNIT FILE NAMES ---8<---
+  // `engine-tests/classic-to-freedom/run-infra.mjs` slices THIS block out of the GENERATED script into its
+  // `buildPrompt` render harness, instead of stubbing these helpers — a stub is what let the reachability crash ship:
+  // the harness rendered a reach prompt against a key-only `worklogFile` that could not throw, while the shipped one
+  // did. Keep the block self-contained: it may read only `input`, `ctx`, `getUnitKeys` and the pure helpers in
+  // `helpers.mjs`, all of which the harness supplies.
+  // Bound to THIS run's published key list; the rule is the pure `unitNo` in the helpers module. Every per-unit
+  // PAGE file carries the number, because a name derived from the page key alone is many-to-one. The readable part
+  // stays for the folder's sake; the number is what makes it unique. A NON-PAGE unit is named the other way — see
+  // `unitFileStem` / `nonPageUnitStem`: it has no position in the published list to be numbered by.
   // TWO FAILURES, TWO MESSAGES. `unitNo`'s own error says the schedule and the key list disagree, which is the
   // wrong diagnosis when the list is simply not there yet — a caller reading it would go hunting a key mismatch
   // that does not exist.
@@ -288,11 +307,23 @@ export function makePaths(ctx, getUnitKeys) {
     return unitNo(unitKeys, key)
   }
   const readablePart = (key) => key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')
-  const specFile = (key) => `${ctx.REFS_DIR}/spec-${readablePart(key)}-${unitNoOf(key)}.md`
-  // One worklog FILE per unit, so a builder writes its own and reads nobody else's. The single append-only file was
-  // read 37 times in one run for one reason: to append to it you first read it. `worklog.md` is still the human
-  // artifact the documentation standard requires — the Close phase assembles it from these.
-  const worklogFile = (key) => `${input.outDir}/worklog/${readablePart(key)}-${unitNoOf(key)}.md`
+  // THE ONE PER-UNIT FILE NAME, over every unit class the schedule produces. A PAGE is named by its published
+  // POSITION — the same number the engine wrote its slices under; a NON-PAGE unit (the `app` unit, every applicable
+  // reachability key) by its own key, because it has no position to be numbered by. The rule itself is the pure
+  // `unitStem` in the helpers module, with `unitNoOf` injected as the numberer, so the numbering and the guard above
+  // stay in one place. Nothing else composes a per-unit file name.
+  const unitFileStem = (key, kind) => unitStem({ key, kind }, unitNoOf)
+  // PAGE-ONLY. Every key `--units` publishes is a page key, and `--spec` renders a page — a non-page unit has no
+  // design spec to slice, so this is never called for one.
+  const specFile = (key) => `${ctx.REFS_DIR}/spec-${unitFileStem(key, 'page')}.md`
+  // One worklog FILE per unit, so a builder writes its own and reads nobody else's. Builders run SEQUENTIALLY, so each
+  // also APPENDS its entry to the shared worklog once — append-only, never read-then-write: reading a growing shared log
+  // to append to it costs O(n²) across a run, and the per-unit files are the audit trail either way.
+  // EVERY SCHEDULED UNIT CLASS gets one, not only the page ones — which is why it takes the KIND: the `app` unit and
+  // the reachability keys are scheduled but are not in `unitKeys`, and naming them by position threw.
+  const worklogFile = (key, kind) => `${input.outDir}/worklog/${unitFileStem(key, kind)}.md`
+  // The shared, human-readable roll-up every sequential Build unit appends its own entry to, once.
+  const sharedWorklogFile = `${input.outDir}/worklog.md`
 
   // NAMED BY THE UNIT NUMBER ALONE, the same rule the engine writes them under — these are machine payloads, so they
   // need no readable half. `unitKeys` is the published order copied verbatim, but it reaches this script through an
@@ -300,6 +331,18 @@ export function makePaths(ctx, getUnitKeys) {
   // is told to check both before building.
   const queueSliceFile = (key) => `${ctx.SLICE_DIR}/queue-${unitNoOf(key)}.json`
   const builtSliceFile = (key) => `${ctx.SLICE_DIR}/built-${unitNoOf(key)}.json`
+  // THE IN-CONTEXT COMPLETENESS GATE'S own files (ENG-95469). `self-built` is the builder's get-page of ITS OWN page,
+  // assembled in its own context; `self-verdict` is the single-unit `--verify --page` verdict written over it. They
+  // are the builder's SELF-CHECK — distinct from the read-only verifier's `built-*` slices, which remain the
+  // authoritative evidence — so a short unit is caught before it reports complete, not a round later.
+  const selfBuiltFile = (key) => `${ctx.SLICE_DIR}/self-built-${unitNoOf(key)}.json`
+  const selfVerdictFile = (key) => `${ctx.SLICE_DIR}/self-verdict-${unitNoOf(key)}.json`
 const cliSpec = (key) => ctx.cli(`--spec --page ${q(key)} --out ${q(specFile(key))}`)
-return { unitNoOf, readablePart, specFile, worklogFile, queueSliceFile, builtSliceFile, cliSpec }
+// The IN-CONTEXT single-unit gate (ENG-95469): the builder's own scoped `--verify` over ITS page, writing a
+// single-unit verdict file. `--verify --page <key> --verify-json` reconciles what the slice DECLARED against what
+// was built, for this page only, and exits 2 when the build is short — the ONE `--verify` a builder runs.
+const cliSelfCheck = (key) => ctx.cli(`--verify --built ${q(selfBuiltFile(key))} --page ${q(key)} --verify-json ${q(selfVerdictFile(key))}`)
+  // ---8<--- END PER-UNIT FILE NAMES ---8<---
+return { unitNoOf, readablePart, unitFileStem, specFile, worklogFile, sharedWorklogFile, queueSliceFile, builtSliceFile,
+  selfBuiltFile, selfVerdictFile, cliSpec, cliSelfCheck }
 }
