@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -171,17 +172,28 @@ class McpClientTests(unittest.TestCase):
                     mcp_client._resolve_clio_cmd(), [r"C:\Program Files\clio\clio.exe"]
                 )
 
-    def test_resolve_clio_cmd_ignores_a_directory_at_the_executable_path(self):
-        # `exists()` was true for a directory, so a stray folder at the install path was returned as
-        # the command and the spawn failed with "Is a directory" instead of "clio not installed".
-        #
-        # The directory needs a space in its name for the two behaviours to differ at all: without
-        # one, the fall-through split yields the same single token and the assertion proves nothing.
+    def test_resolve_clio_cmd_keeps_a_single_path_whole_even_when_it_does_not_exist(self):
+        # A spaced path that resolves to nothing — a stale config after a reinstall, a typo, an
+        # install still in progress — must still be reported WHOLE. Splitting it reproduces the
+        # original bug for exactly that case: the caller then names `C:\Program` in its "not found"
+        # message, a path the developer never configured, which is the least helpful moment to lose
+        # the real one. The discriminator is whether the FIRST token is itself runnable.
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp) / "Program Files" / "clio"
-            directory.mkdir(parents=True)
-            with patch.dict(os.environ, {"CLIO_CMD": str(directory)}):
-                self.assertNotEqual(mcp_client._resolve_clio_cmd(), [str(directory)])
+            for missing in (Path(tmp) / "Program Files" / "clio.exe",
+                            Path(tmp) / "Program Files" / "clio"):
+                with self.subTest(path=missing.name):
+                    with patch.dict(os.environ, {"CLIO_CMD": str(missing)}):
+                        self.assertEqual(mcp_client._resolve_clio_cmd(), [str(missing)])
+
+    def test_resolve_clio_cmd_still_splits_a_runnable_first_token(self):
+        # The counter-case that keeps the rule above honest: `dotnet` resolves on PATH, so this is a
+        # command plus an argument and must stay two tokens even though the whole value has a space.
+        if shutil.which("dotnet") is None:
+            self.skipTest("needs dotnet on PATH to distinguish a command from a path")
+        # The argument is quoted, which is how a spaced argument has to be written for any splitter:
+        # unquoted, `dotnet C:/no where/clio.dll` is three tokens by every shell's rules too.
+        with patch.dict(os.environ, {"CLIO_CMD": 'dotnet "C:/no where/clio.dll"'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/no where/clio.dll"])
 
     def test_resolve_clio_cmd_still_splits_the_documented_two_token_form(self):
         # `dotnet /path/to/clio.dll` must keep splitting: that string is not itself a file, so the

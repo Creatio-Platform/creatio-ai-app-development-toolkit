@@ -13,6 +13,10 @@
 // there is no way to tell "few runs happened" from "runs happened and went unreported" — the floor
 // is the denominator that makes the funnel's own reliability measurable.
 //
+// This is the SECOND place the toolkit talks to clio's MCP server; `runtime/scripts/mcp_client.py`
+// is the first. That is deliberate and the reasoning — plus the one rule both sides must keep in
+// step, the CLIO_CMD single-path rule — is recorded in docs/telemetry-transport-decision.md.
+//
 // EMIT MECHANISM: clio exposes telemetry only as an MCP tool, so this drives clio's stdio MCP
 // server for one call (~1.2s). The floor is once per session; `session_usage` is a series, so it can
 // fire once per response — which is why the call is handed off rather than waited for, and why the
@@ -119,6 +123,12 @@ const FLOOR_ATTEMPT_LIMIT = 3;
 // than clio's measured start-up (~1.2s for the whole exchange), short enough that a session with a
 // broken clio still retries within itself.
 const OUTCOME_GRACE_MS = 10_000;
+// The JSON-RPC id of the tools/call in the batch below, so the answer is matched to the request
+// rather than to whatever else the server happened to print.
+const TOOL_CALL_ID = 2;
+// How much of the transcript's head is fingerprinted to decide whether a remembered byte offset
+// still refers to the same file. Enough to catch a rewrite, small enough to be free.
+const PREFIX_SAMPLE_BYTES = 4096;
 // The floor is one event, so FLOOR_ATTEMPT_LIMIT bounds it. `session_usage` is a series and its
 // guard is "the transcript grew", which is true on nearly every response — so a clio that never
 // confirms a reading (an older clio rejecting the event, a broken binary) would re-read and re-parse
@@ -186,15 +196,16 @@ function readStdin() {
 // `usage` — and the file is named for the session id, so it is reachable even when the payload omits
 // `transcript_path`.
 //
-// Only `output_tokens` accumulates. The other two are per-REQUEST sizes: each assistant turn reports
-// the whole prompt it just sent, so the same context is counted again every turn and summing them grows
-// quadratically with turn count — it produced a `cached_input_tokens` of 157,881,680 for a single
-// session, which is why this is a correctness fix and not a preference. The LATEST reading is the
-// meaningful one: it is the size of the context as it now stands.
+// Read INCREMENTALLY. `Stop` fires per response, and the growth check only skips turns where the file
+// did not change at all, so an active session used to re-parse the whole transcript on nearly every
+// response: measured on real transcripts from this machine, 23 ms at 5 MB and 97 ms at 35 MB, paid
+// again each turn. Only the bytes appended since the last read are parsed now, with the remembered
+// offset trusted only while a fingerprint of the file's head still matches — see `fingerprint`.
 //
 // `hasData` separates "read the transcript, it reported no usage" from "could not read it at all", so
 // callers can omit the counters instead of shipping zeros that look like a session that spent nothing.
 function readSessionUsage(payload) {
+	const sessionId = payload?.session_id;
 	const transcript = payload?.transcript_path
 		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
 	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false };
@@ -204,13 +215,81 @@ function readSessionUsage(payload) {
 	if (typeof payload?.model === 'string' && MODEL_TOKEN.test(payload.model.toLowerCase())) {
 		usage.model = payload.model.toLowerCase();
 	}
-	let raw;
+	let size;
 	try {
-		raw = fs.readFileSync(transcript, 'utf8');
+		size = fs.statSync(transcript).size;
 	} catch {
 		return usage; // No transcript reachable: send the event without these fields.
 	}
-	for (const line of raw.split('\n')) {
+
+	let handle;
+	try {
+		handle = fs.openSync(transcript, 'r');
+	} catch {
+		return usage;
+	}
+	try {
+		// Where to start. A transcript only ever grows in normal operation, but "normal" is not a
+		// guarantee: compaction rewrites it, and a rewritten file whose size happens to be larger
+		// would make a remembered offset point into the middle of different content — silently
+		// under-reporting the session's consumption, which is the one number this event carries. So
+		// the offset is only trusted when a fingerprint of the file's first bytes still matches.
+		const prefix = fingerprint(handle, size);
+		const previous = readScan(sessionId);
+		const resumable = previous
+			&& previous.prefix === prefix
+			&& size >= previous.size
+			&& previous.offset <= size;
+		let from = 0;
+		if (resumable) {
+			from = previous.offset;
+			usage.output_tokens = previous.output_tokens || 0;
+			usage.input_tokens = previous.input_tokens || 0;
+			usage.cached_input_tokens = previous.cached_input_tokens || 0;
+			usage.hasData = previous.hasData === true;
+			if (typeof previous.model === 'string' && MODEL_TOKEN.test(previous.model)) {
+				usage.model = previous.model;
+			}
+		}
+		const appended = readFrom(handle, from, size);
+		// The last line of a live transcript usually has no trailing newline yet — including the turn
+		// that just ended, which is the one this reading is about. So the split is between what is
+		// COMMITTED and what is merely REPORTED: everything up to the final newline is added to the
+		// persisted totals and its bytes are never read again, while the trailing fragment is counted
+		// into this reading only. Committing it too would double it on the next Stop; skipping it
+		// entirely would make every reading lag a turn behind, which is the opposite of the point.
+		const lastBreak = appended.lastIndexOf('\n');
+		const complete = lastBreak >= 0 ? appended.slice(0, lastBreak + 1) : '';
+		const trailing = appended.slice(complete.length);
+		accumulate(usage, complete);
+		writeScan(sessionId, {
+			size,
+			offset: from + Buffer.byteLength(complete, 'utf8'),
+			prefix,
+			output_tokens: usage.output_tokens,
+			input_tokens: usage.input_tokens,
+			cached_input_tokens: usage.cached_input_tokens,
+			model: usage.model,
+			hasData: usage.hasData
+		});
+		accumulate(usage, trailing);
+	} catch {
+		// Any failure falls back to reporting what was accumulated so far, never to a throw.
+	} finally {
+		try {
+			fs.closeSync(handle);
+		} catch {
+			// Nothing to do.
+		}
+	}
+	return usage;
+}
+
+// Sums `output_tokens` and takes the LATEST reading of the other two, which is what they mean: each
+// assistant turn reports the whole prompt it just sent, so summing those grows quadratically with
+// turn count — it produced a `cached_input_tokens` of 157,881,680 for a single session.
+function accumulate(usage, text) {
+	for (const line of text.split('\n')) {
 		if (!line.startsWith('{')) {
 			continue;
 		}
@@ -218,7 +297,7 @@ function readSessionUsage(payload) {
 		try {
 			message = JSON.parse(line)?.message;
 		} catch {
-			continue; // A partially flushed final line is normal while a session is live.
+			continue; // A partially flushed line is normal while a session is live.
 		}
 		if (!message) {
 			continue;
@@ -241,7 +320,53 @@ function readSessionUsage(payload) {
 		usage.cached_input_tokens =
 			(consumed.cache_read_input_tokens || 0) + (consumed.cache_creation_input_tokens || 0);
 	}
-	return usage;
+}
+
+// Cheap, non-cryptographic, and only ever compared against itself: it answers "are these the same
+// first bytes as last time", not "what are they".
+function fingerprint(handle, size) {
+	const sample = readFrom(handle, 0, Math.min(size, PREFIX_SAMPLE_BYTES));
+	let hash = 5381;
+	for (let index = 0; index < sample.length; index += 1) {
+		hash = ((hash * 33) ^ sample.charCodeAt(index)) | 0;
+	}
+	// Deliberately NOT keyed on the file size: a transcript grows on every turn, and folding the size
+	// in would change the fingerprint every time and make the offset useless on exactly the files
+	// this exists for. What is fingerprinted is the CONTENT of the head, which a rewrite changes and
+	// an append does not.
+	return `${sample.length}:${hash}`;
+}
+
+function readFrom(handle, from, to) {
+	const length = Math.max(0, to - from);
+	if (length === 0) {
+		return '';
+	}
+	const buffer = Buffer.allocUnsafe(length);
+	const read = fs.readSync(handle, buffer, 0, length, from);
+	return buffer.subarray(0, read).toString('utf8');
+}
+
+function readScan(sessionId) {
+	if (!sessionId) {
+		return null;
+	}
+	try {
+		return JSON.parse(fs.readFileSync(markerPath(sessionId, 'scan'), 'utf8'));
+	} catch {
+		return null;
+	}
+}
+
+function writeScan(sessionId, scan) {
+	if (!sessionId || !ensureStateDir()) {
+		return;
+	}
+	try {
+		fs.writeFileSync(markerPath(sessionId, 'scan'), JSON.stringify(scan), { mode: 0o600 });
+	} catch {
+		// Without the scan state the next read is a full parse: slower, never wrong.
+	}
 }
 
 // The host derives a project directory name from the working directory by replacing every path
@@ -369,12 +494,6 @@ function ensureStateDir() {
 	}
 }
 
-// Whether this session has ever called clio. One stat, no writes: it is the guard that keeps the
-// always-firing events out of the filesystem in sessions that have nothing to do with Creatio.
-function hasTouchedClio(sessionId) {
-	return fs.existsSync(markerPath(sessionId, 'touched'));
-}
-
 // Claimed with 'wx' so two hook processes racing on parallel tool calls cannot both act.
 function claimOnce(sessionId, suffix) {
 	if (!ensureStateDir()) {
@@ -489,6 +608,10 @@ function transcriptSize(payload) {
 // to answer "did this session use clio at all" — which is what scopes the `Stop` handler to Creatio
 // work. Kept separate from the floor's one-shot claim so neither can consume the other.
 function markTouchedClio(sessionId) {
+	// This is the FIRST write of a session, so it is the one that has to create the directory:
+	// `markerPath` deliberately resolves without side effects now, and without this the marker
+	// silently failed to appear on a fresh machine — leaving Stop silent for the whole session.
+	ensureStateDir();
 	try {
 		fs.writeFileSync(markerPath(sessionId, 'touched'), '');
 	} catch {
@@ -496,6 +619,8 @@ function markTouchedClio(sessionId) {
 	}
 }
 
+// Whether this session has ever called clio. One stat and no writes, which is what keeps the
+// always-firing events out of the filesystem in sessions that have nothing to do with Creatio.
 function touchedClio(sessionId) {
 	try {
 		return fs.existsSync(markerPath(sessionId, 'touched'));
@@ -608,7 +733,7 @@ function emitEvent(sessionId, usage, eventName) {
 		{ jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
 		{
 			jsonrpc: '2.0',
-			id: 2,
+			id: TOOL_CALL_ID,
 			method: 'tools/call',
 			params: {
 				name: 'clio-run',
@@ -696,6 +821,74 @@ function dispatch(sessionId, kind, request) {
 	}
 }
 
+// Reads clio's answer as the JSON-RPC response it is, rather than searching the raw bytes for a
+// substring: an error whose prose happens to contain `"recorded"` — "already recorded for this
+// session", a schema message naming a `recorded` field — would otherwise be read as success, and this
+// outcome decides whether the floor claim is kept forever or released for retry. A false success
+// there silently drops the one event this file exists to guarantee.
+//
+// Returns true/false when the response says something definite, and null when it cannot be parsed at
+// all, so the caller can fall back to the older check rather than treat an unrecognised shape as a
+// refusal.
+function parseRecorded(answer) {
+	let seenResponse = false;
+	for (const line of answer.split('\n')) {
+		if (!line.startsWith('{')) {
+			continue;
+		}
+		let message;
+		try {
+			message = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (message?.id !== TOOL_CALL_ID) {
+			continue;
+		}
+		seenResponse = true;
+		if (message.error) {
+			return false;
+		}
+		const status = telemetryStatus(message.result);
+		if (status !== null) {
+			return status === 'recorded';
+		}
+	}
+	// A response arrived but carried no status and no error this code understands. Not something to
+	// call success on its own, and not something to call a refusal either: null sends the caller to
+	// the substring fallback, which is what shipped before, so an unrecognised shape can never make
+	// the floor worse than it already was.
+	void seenResponse;
+	return null;
+}
+
+// clio returns the tool's result either as `structuredContent` or, for the long-tail default, as a
+// JSON document inside a text content block. Both are read, because which one appears is clio's
+// choice and not part of any contract this hook can rely on.
+function telemetryStatus(result) {
+	if (!result || typeof result !== 'object') {
+		return null;
+	}
+	const structured = result.structuredContent;
+	if (structured && typeof structured.status === 'string') {
+		return structured.status;
+	}
+	for (const block of Array.isArray(result.content) ? result.content : []) {
+		if (typeof block?.text !== 'string') {
+			continue;
+		}
+		try {
+			const payload = JSON.parse(block.text);
+			if (typeof payload?.status === 'string') {
+				return payload.status;
+			}
+		} catch {
+			// Not a JSON block: prose for an older client, which says nothing machine-readable.
+		}
+	}
+	return null;
+}
+
 // What clio said about the PREVIOUS dispatch of this kind, read on a later invocation.
 //   'recorded'  clio stored the event.
 //   'rejected'  clio answered something else, or the spawn never produced an answer.
@@ -713,18 +906,21 @@ function readOutcome(sessionId, kind) {
 	} catch {
 		return 'none';
 	}
+	const parsed = parseRecorded(answer);
+	if (parsed !== null) {
+		return parsed ? 'recorded' : 'rejected';
+	}
 	if (answer.includes('"recorded"')) {
+		// Last resort for a shape this code does not recognise: the check that shipped before. A
+		// structured status or an error object always wins over it, which is what removes the false
+		// success on a rejection whose prose happens to contain the word.
 		return 'recorded';
 	}
-	if (answer.trim() !== '') {
-		return 'rejected';
-	}
-	// Empty, which is ambiguous: the child may still be starting, or it may never have run at all.
-	// A clio that is not installed produces no answer AND no error this process can see, because the
-	// spawn is detached and its error event would arrive after this process is gone. So an answer
-	// that has not appeared within the grace period counts as a refusal — otherwise a broken install
-	// would leave the floor waiting on an answer that is never coming, which is the failure this
-	// whole outcome mechanism exists to prevent.
+	// Nothing definite. Either the child has not answered yet, it is answering RIGHT NOW and this is
+	// half a line, or it never ran at all — a detached spawn reports neither exit code nor error
+	// here, so a missing binary looks exactly like a slow one. Only time separates them: calling a
+	// half-written answer a refusal cost a duplicate reading under load, and calling a permanently
+	// absent one 'pending' would leave the floor waiting on an answer that is never coming.
 	return Date.now() - stat.mtimeMs < OUTCOME_GRACE_MS ? 'pending' : 'rejected';
 }
 
@@ -769,7 +965,7 @@ function main() {
 		// most of which have nothing to do with Creatio. A session that has never called clio holds no
 		// claim to clear, so the work here is one stat and a return — nothing is created, written, or
 		// swept, and no process is spawned on this path at all.
-		if (!hasTouchedClio(sessionId)) {
+		if (!touchedClio(sessionId)) {
 			return;
 		}
 		// A new user request is plausibly a new run, so the next clio call is allowed to route again.

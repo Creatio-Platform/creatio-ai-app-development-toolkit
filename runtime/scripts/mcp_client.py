@@ -68,6 +68,10 @@ def _unquote(value):
 def _parse_clio_cmd(env_cmd):
     """Turn a CLIO_CMD value into argv.
 
+    The same rule is implemented once more in ``hooks/telemetry-routing.mjs``, which cannot share
+    this code (different language, different transport shape). Both sides and the reason are recorded
+    in ``docs/telemetry-transport-decision.md``; a change here changes there too.
+
     A bare path to the executable, spaces and all, is ONE token — checked before any splitting.
     Windows' default install location contains a space, so splitting first turned
     `C:\\Program Files\\...\\clio.exe` into `C:\\Program` plus a stray argument and reported clio as
@@ -81,8 +85,20 @@ def _parse_clio_cmd(env_cmd):
     if bare and Path(bare).is_file():
         return [bare]
     if sys.platform != "win32":
-        return shlex.split(env_cmd)
-    return [_unquote(part) for part in shlex.split(env_cmd, posix=False)]
+        parts = shlex.split(env_cmd)
+    else:
+        parts = [_unquote(part) for part in shlex.split(env_cmd, posix=False)]
+    # A value that splits into several tokens whose FIRST token is not runnable is not a command plus
+    # arguments — it is one path that happens to contain spaces, and splitting it reproduces the very
+    # bug this function exists to fix: `C:\Program Files\clio\clio.exe` becomes `C:\Program` and the
+    # caller reports a file it was never configured with. Returning the whole value keeps the
+    # diagnostic honest in exactly the misconfiguration case where it matters — a stale path after a
+    # reinstall, a typo, an install still in progress.
+    #
+    # `dotnet /path/to/clio.dll` is unaffected: `dotnet` resolves, so the split stands.
+    if len(parts) > 1 and not (shutil.which(parts[0]) or Path(parts[0]).is_file()):
+        return [bare]
+    return parts
 
 
 def _resolve_clio_cmd():

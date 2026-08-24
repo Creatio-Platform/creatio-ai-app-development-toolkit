@@ -35,14 +35,21 @@ STUB_CAPTURE_SOURCE = NEWLINE.join([
 # `emitEvent` looks for the substring "recorded" in RAW stdout, so the status has to appear
 # unescaped. Nesting it inside a JSON-encoded text block yields (backslash-quote)recorded and
 # would make the stub look like a rejection - which it silently did until this was checked.
-RECORDED_REPLY = "process.stdout.write(JSON.stringify({result:{structuredContent:{success:true,status:'recorded'}}}));"
+RECORDED_REPLY = "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,result:{structuredContent:{success:true,status:'recorded'}}}));"
 # What clio answers when it refuses: an answer, just not one containing "recorded". A stub that
 # printed nothing instead would be indistinguishable from a clio that never ran, which the hook
 # resolves by the age of the answer rather than by its content.
-REJECTED_REPLY = ("process.stdout.write(JSON.stringify({result:{structuredContent:"
+REJECTED_REPLY = ("process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,result:{structuredContent:"
                   "{success:false,status:'rejected',error:{code:'invalid-token'}}}}));")
 # A clio that hangs: the point of the promptness test, since the hook must not wait for it.
 HANGING_REPLY = "setTimeout(() => {}, 30000);"
+# A refusal whose payload names a `recorded` field, so the raw bytes contain the quoted word
+# while the response is plainly an error. Read as a substring this is indistinguishable from
+# success; read as JSON-RPC it is a refusal.
+ECHOES_RECORDED_REPLY = (
+    "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,error:{code:-32602,"
+    "data:{recorded:false},message:'event already stored for this session'}}));"
+)
 
 def _base_env() -> dict:
     return {
@@ -126,7 +133,8 @@ def stub_clio(*, answers: str = "recorded") -> "tuple[str, Path]":
     # `emitEvent` counts a send as delivered when stdout contains `"recorded"`, which is what clio
     # answers; a stub that prints nothing reproduces a rejection without restating clio's error shape.
     reply = {"recorded": RECORDED_REPLY, "rejected": REJECTED_REPLY,
-             "hangs": HANGING_REPLY, "silent": ""}[answers]
+             "hangs": HANGING_REPLY, "silent": "",
+             "echoes-recorded": ECHOES_RECORDED_REPLY}[answers]
     (directory / "mcp-server").write_text(
         STUB_CAPTURE_SOURCE + reply + NEWLINE, encoding="utf-8"
     )
@@ -784,6 +792,127 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         # The routing still reached the agent: a broken clio costs the floor, not the reminder.
         self.assertIn("workflow_started", result.stdout)
+
+    def test_a_refusal_that_echoes_the_success_word_is_still_a_refusal(self):
+        # The outcome used to be decided by searching the raw stdout for `"recorded"`. A rejection
+        # whose message happens to contain it — "already recorded for this session" — would then be
+        # read as success, and since this outcome decides whether the floor claim is kept forever or
+        # released for retry, a false success permanently drops the one event this file guarantees.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        echoing, _ = stub_clio(answers="echoes-recorded")
+        recording, capture = stub_clio()
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                 telemetry_home=home, clio=NODE, capture_dir=echoing)
+        answer = await_outcome(session, "floor")
+        self.assertIn("recorded", answer, "the fixture must contain the word, or it tests nothing")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                 telemetry_home=home, clio=NODE, capture=capture, capture_dir=recording)
+
+        self.assertEqual(
+            len(await_payloads(capture, 1, event_name="workflow_started")), 1,
+            "an error response must be read as a refusal and the floor retried",
+        )
+
+    def test_works_from_a_completely_fresh_state_directory(self):
+        # Regression: `markerPath` was made side-effect-free so the always-firing events touch
+        # nothing, but `markTouchedClio` — the FIRST write of a session — then had no directory to
+        # write into. The marker silently failed to appear, so Stop stayed silent for the whole
+        # session and no usage reading was ever sent. The suite could not see it because every other
+        # test shares one state directory that an earlier test had already created.
+        fresh = tempfile.mkdtemp(prefix="caadt-fresh-flow-", dir=_TMP)
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        env = {**_base_env(), "TMPDIR": fresh, "TMP": fresh, "TEMP": fresh,
+               "CLIO_TELEMETRY_HOME": home, "CAADT_TELEMETRY_CLIO": NODE,
+               "CAADT_STUB_CAPTURE": str(capture)}
+
+        for payload in (
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": fresh},
+            {"session_id": session, "hook_event_name": "Stop",
+             "transcript_path": write_transcript()},
+        ):
+            result = subprocess.run(
+                [NODE, str(HOOK)], input=json.dumps(payload), cwd=stub,
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            self.assertEqual(result.returncode, 0)
+
+        events = [p["event_name"] for p in await_payloads(capture, 2)]
+        self.assertIn("workflow_started", events)
+        self.assertIn("session_usage", events,
+                      "a session on a fresh machine must still report its consumption")
+
+    def test_incremental_reading_matches_a_full_parse_across_appends(self):
+        # The transcript is now read from a remembered byte offset instead of from zero. That is only
+        # allowed if the answer is identical: this walks a session turn by turn, appending as the host
+        # does — including a final line with no trailing newline, which is what a just-ended turn looks
+        # like — and asserts each reading equals the total of everything written so far.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        transcript = Path(tempfile.mkdtemp(prefix="caadt-incremental-", dir=_TMP), "session.jsonl")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        expected = []
+        total = 0
+        for turn in range(1, 6):
+            total += turn
+            # Written the way a host writes it: previous lines terminated, the newest one not yet.
+            lines = [
+                json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                    "input_tokens": 10 * t, "output_tokens": t,
+                    "cache_read_input_tokens": t, "cache_creation_input_tokens": 0}}})
+                for t in range(1, turn + 1)
+            ]
+            transcript.write_text(chr(10).join(lines), encoding="utf-8")
+            expected.append(total)
+            run_hook({"session_id": session, "hook_event_name": "Stop",
+                      "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+            await_outcome(session, "usage")
+
+        readings = await_payloads(capture, len(expected), event_name="session_usage")
+        self.assertEqual([r["output_tokens"] for r in readings], expected,
+                         "an incrementally read total must equal the full parse of the same file")
+        # The latest turn's per-request figures, not a sum of them.
+        self.assertEqual(readings[-1]["input_tokens"], 50)
+
+    def test_a_rewritten_transcript_is_read_from_scratch(self):
+        # Compaction rewrites the transcript. A remembered offset would then point into the middle of
+        # different content and silently under-report the session — the failure that made this
+        # optimisation risky at all, which is why the offset is trusted only while a fingerprint of
+        # the file's head still matches.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        transcript = Path(tempfile.mkdtemp(prefix="caadt-rewritten-", dir=_TMP), "session.jsonl")
+
+        def turn(input_tokens, output_tokens):
+            return json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": input_tokens, "output_tokens": output_tokens}}})
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        transcript.write_text(chr(10).join([turn(10, 3), turn(20, 4)]) + chr(10), encoding="utf-8")
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+        await_outcome(session, "usage")
+
+        # Rewritten from the top, LONGER than before, with different content — so neither the size
+        # comparison nor a "files only grow" assumption would catch it on its own.
+        transcript.write_text(
+            chr(10).join([turn(99, 100), turn(99, 100), turn(99, 100)]) + chr(10), encoding="utf-8")
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+
+        readings = await_payloads(capture, 2, event_name="session_usage")
+        self.assertEqual([r["output_tokens"] for r in readings], [7, 300],
+                         "a rewritten transcript must be re-read from the beginning")
 
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns

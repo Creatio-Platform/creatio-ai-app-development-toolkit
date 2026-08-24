@@ -277,6 +277,33 @@ class ProductTelemetryContractTests(unittest.TestCase):
             len(set(policies.values())), 1,
             f"the surfaces state different legacy-name policies: {policies}")
 
+    def test_the_two_orchestrator_telemetry_sections_do_not_drift(self):
+        # The whole section — the flow-to-stage mapping included — is hand-mirrored into the Cursor
+        # rule, and hand-mirrored copies drift the next time a flow's gates change. They are supposed
+        # to differ in exactly ONE way: the relative path to `context/product-telemetry.md`, because
+        # the rule sits one directory shallower than the skill. Everything else must be identical, so
+        # a change to one surface that is not made to the other fails here rather than in a session.
+        heading = "## Product telemetry"
+        sections = {}
+        for name, path in (
+            ("SKILL.md", ROOT / "skills" / "creatio-app-orchestrator" / "SKILL.md"),
+            ("cursor-rule", ROOT / "rules" / "creatio-app-orchestrator.mdc"),
+        ):
+            text = path.read_text(encoding="utf-8")
+            start = text.index(heading)
+            end = text.find(chr(10) + "## ", start + len(heading))
+            section = text[start:end if end > 0 else len(text)]
+            # Normalise only the documented difference.
+            sections[name] = section.replace("../../context/", "../context/").strip()
+
+        self.assertEqual(
+            sections["SKILL.md"], sections["cursor-rule"],
+            "the Claude and Cursor telemetry sections have drifted apart; change both or neither")
+        # Guard the normalisation itself: if both surfaces stop referencing the file, the comparison
+        # above would still pass while saying nothing.
+        for name, section in sections.items():
+            self.assertIn("../context/product-telemetry.md", section, f"{name} must route to the file")
+
     def test_every_stage_is_documented_at_a_point_of_use(self):
         # A stage that exists in the vocabulary but is named in no skill is a stage
         # no agent will ever emit — it looks like "that never happens" in the data
