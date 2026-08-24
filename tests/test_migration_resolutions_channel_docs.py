@@ -153,6 +153,43 @@ class ConsumptionContractDocTests(unittest.TestCase):
             flat(read_text(EXECUTOR_SKILL)),
         )
 
+    def test_cannot_tell_is_its_own_state_and_is_not_a_refutation(self):
+        """`shows` is three-valued, and the rule-shaped answer has a surface that can answer.
+
+        A two-valued `shows` forced the verifier to report "I could not determine this" as
+        `false`, and every `false` was read as a refutation -- so an honest builder plus an
+        honest verifier produced a contradiction that was not one, and the `lookup-value`
+        question this channel added was the systematic case, its effect living in
+        `BusinessRule_*` schemas that no page-body walk can see.
+        """
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            content = flat(read_text(path))
+            self.assertIn('`"unknown"`', content, path)
+            self.assertIn("read-page-business-rules", content, path)
+        skill = flat(read_text(EXECUTOR_SKILL))
+        # The distinction itself, not merely the vocabulary: a doc that listed three values
+        # while still calling the third one a defect would pass a bare-word check.
+        self.assertIn("NOT a refutation", skill)
+        self.assertIn("invisible to `viewConfig`", skill)
+
+    def test_an_unconsumed_answer_outlives_the_process_that_found_it(self):
+        """The record is persisted, and its EMPTY value is load-bearing.
+
+        This is the criterion-5 guarantee across a session boundary. A well-formed
+        `applied: false` files no `blocked` row and no `discrepancies` row, so before the
+        record was persisted it was the one outcome with no trace at all, and a re-run on a
+        green gate reported the folder complete over a dropped answer.
+        """
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            content = flat(read_text(path))
+            self.assertIn("persisted", content, path)
+            self.assertIn("re-seeded", content, path)
+        skill = flat(read_text(EXECUTOR_SKILL))
+        self.assertIn("even when it is empty", skill.lower())
+        # The queue-file doc has to say WHERE, or an agent cannot write it.
+        doc = flat(read_text(EXECUTOR_FILES_DOC))
+        self.assertIn("`unconsumedResolutions` is at the ROOT", doc)
+
     def test_the_file_must_exist_before_the_run_reads_it(self):
         # The 79-minute gap: written after the only `--units` invocation, so nothing consumed it.
         content = flat(read_text(EXECUTOR_FILES_DOC))

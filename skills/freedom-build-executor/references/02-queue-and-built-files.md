@@ -21,6 +21,16 @@ An answer that a build agent WAS handed is tracked to a build action or to a sta
 the read-only verifier returns `resolutionChecks` saying whether the page it fetched actually shows each answer's
 effect; and anything left over is returned in `unconsumedResolutions` and **blocks `complete`**. None of this writes
 `built.evidence` or closes a row — the direction is one way, toward stricter.
+
+`resolutionChecks[].shows` is `"yes"` / `"no"` / `"unknown"`, and only `"no"` refutes the builder. `"unknown"` means
+the verifier could not determine the effect and is read exactly like an absent row — unconfirmed, and not a defect.
+That distinction is load-bearing for any answer about BUSINESS RULES, whose effect lives in separate
+`BusinessRule_*` schemas invisible to `viewConfig`: the verifier reads `pages[<key>].businessRules` or calls
+`read-page-business-rules` rather than reporting a page-body zero as a refutation.
+
+The leftovers are not process-local. They are persisted at the root of this file under `unconsumedResolutions` and
+re-seeded next run, so an answer that reached a builder and died there still blocks `complete` after a usage limit,
+a session end, or a new agent picking the folder up tomorrow — which is the whole reason the two files exist.
 They exist because a run is interrupted routinely — a usage limit, a session end, a new
 agent picking the work up in the same folder tomorrow. Nothing about "where we are" may live
 only in an agent's context.
@@ -73,6 +83,11 @@ there is no "resume" command: there is one command, and it does the next undone 
   "discrepancies": [
     { "round": 2, "unit": "main", "claim": "crt.ApprovalList added",
       "found": "get-page shows no crt.ApprovalList" }
+  ],
+  "unconsumedResolutions": [
+    { "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)", "kind": "entity-filter",
+      "item": "(1 lookup)", "answer": "restrict to Status IN {InProgress}",
+      "why": "no lookupListConfig anywhere in viewConfig", "source": "verifier" }
   ],
   "history": [
     { "round": 1, "units": ["child:VisaRequest", "child:Education", "mini:ApplicantMiniPage"], "at": "2026-08-07T11:04Z" }
@@ -136,6 +151,18 @@ Rules that make it trustworthy:
   accepted — an agent that quoted the number has not reported a count the row can gate on); a key you could not
   count is OMITTED, which reads ⚠ not-checked. **Nothing in the run unbinds a workplace** — that is a deletion of a
   customer record, so the extra binding is reported for a human to settle.
+- **`unconsumedResolutions` is at the ROOT, and it is written on EVERY close — including when it is `[]`.** It is
+  the operator answers a build agent was handed that produced no build action, and it is the one piece of run state
+  whose EMPTY value is load-bearing: an emptied list is how the next run learns the answer was finally built, so a
+  conditional write would leave a stale entry holding a finished folder open for ever. Absent reads as `[]`, which
+  is what a first run means. It has to be persisted at all because a well-formed `applied: false` + `why` is the
+  ONE outcome that files nothing else — an accounting miss files a `blocked` row and a verifier contradiction files
+  a `discrepancies` row, a clean refusal files neither — so before this existed the record died with its process and
+  a re-run on a green gate reported the folder `complete`. `source` (`dispatch` or `verifier`) round-trips because
+  it decides what may clear the row: a builder's own account of its own work is replaced whenever that unit builds
+  again, while the independent read that DISBELIEVED such an account is cleared only by a verifier that confirms
+  the effect. Copy the rows verbatim; the run re-checks each one against the questions the plan still asks, so a
+  withdrawn answer or an id a re-plan moved drops out on its own.
 - **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
   else in this file is bookkeeping about units; this is the one section that records a change made outside the
   file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before
