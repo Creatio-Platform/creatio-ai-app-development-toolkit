@@ -2445,6 +2445,28 @@ function pageUnit(key, node, rows) {
     componentTypes: componentTypesOf(rows),
   };
 }
+// THE PAGE TEMPLATE SCHEMA NAMES THIS PLAN ASSERTS, deduped (ENG-95468). The template axis of exactly the question
+// `componentTypes` asks about components: does the name the plan uses exist on the TARGET stand? A template name is
+// an assertion like any other — `ListPageV2FreedomTemplate` reached a real build, and the page came out on
+// `ListPageV3Template`, because nothing between the plan and the first write ever asked the stand about the name.
+// Published as a root-level union (not per page) for the same reason `componentTypes` is unioned by the executor:
+// the resolution is one read-only lookup per DISTINCT name, and a name repeated across ten pages is one question.
+// `planMeta.listTemplate` is folded in DELIBERATELY, and it is NOT redundant with the list page's own template row
+// (ENG-95470): that row is CONDITIONAL — `buildListItems` adds it only when the list page is already gated by
+// another row, because a list page nothing else resolved must stay ungated (ENG-95218). So a plan can name a list
+// template that reaches no `pages[].expectedTemplate` at all, which is exactly the case that went wrong. Folding the
+// planMeta name in makes the CHECKED set independent of whether that row happened to be emitted; a plan where both
+// apply names the same string twice and the dedupe collapses it. Note the two answer different questions and both
+// are wanted: this set asks the STAND, before the first write, whether the name exists at all; the checklist row
+// asks the BUILT page, afterwards, whether it came out on the template the plan named.
+// Pure in its inputs (the already-built page units + planMeta), so `--units` stays deterministic.
+export function templateNamesOf(pages, opts = {}) {
+  const out = new Set();
+  const add = (v) => { if (typeof v === "string" && v.trim()) out.add(v.trim()); };
+  for (const p of pages || []) add(p?.expectedTemplate);
+  add(opts.planMeta?.listTemplate);
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
 // The five REACHABILITY keys, each with its applicability decided HERE: `appliesWhen: true` iff this run actually
 // emits a gated row for it, so the executor can neither invent an obligation nor miss one. `reuseBindings` is
 // published like the rest — it is gated by the engine and was documented nowhere, so a migration with a reused
@@ -2628,6 +2650,10 @@ export function pageUnits(result, opts = {}) {
   // with the unmatched report below, so the two cannot disagree about what matched.
   const resIndex = asResolutionIndex(opts.resolutions);
   const preflight = preflightUnits(evidence.filter((r) => r.confirm), resIndex);
+  // Built BEFORE the return object rather than inline in it, because `templateNames` below is derived FROM these
+  // units — the template each page expects is already decided here, and re-deriving it from the rows a second time
+  // is how one source of truth becomes two that agree only until someone edits one of them.
+  const pages = [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || listUnitNode(k, opts), r));
   return {
     entity: result.entity || null,
     // The version the `--plan` artifact printed, republished here so the executor never has to parse it back out
@@ -2645,7 +2671,10 @@ export function pageUnits(result, opts = {}) {
     // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
     // approved app instead of resolving one off the stand.
     applicationCode: opts.applicationCode || null,
-    pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || listUnitNode(k, opts), r)),
+    pages,
+    // The template names this plan asserts, for the pre-build stand check (ENG-95468). Root-level and deduped, like
+    // the executor's `componentTypes` union: one lookup per distinct name, before the first write.
+    templateNames: templateNamesOf(pages, opts),
     reachability: reachabilityUnits(rows),
     // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so
     // it is closed through `--built.evidence`/`.judge` exactly like any other evidence row — republished here with

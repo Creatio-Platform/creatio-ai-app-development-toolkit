@@ -507,6 +507,33 @@ const RECONCILE_SCHEMA = {
         },
       },
     },
+    // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
+    // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
+    // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
+    templateNames: { type: 'array', items: { type: 'string' } },
+    // ENG-95468 — the Reconcile agent's read-only resolution of each `templateNames` entry against the TARGET stand:
+    // `{ name, resolved, note }`. Same shape, same rules and the same absence rule as `componentResolution`: only an
+    // explicit `resolved: false` gates, an unreported name is not a failure, and a plan predating the field behaves
+    // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
+    // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
+    templateResolution: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['name', 'resolved'],
+        properties: {
+          name: { type: 'string' },
+          resolved: { type: 'boolean' },
+          note: { type: 'string' },
+        },
+      },
+    },
+    // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
+    // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
+    // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
+    // writes. THE EMPTY STRING IS A REAL VALUE and is NOT the same as absence — a stand with no prefix is exactly
+    // the case the third Applicant run hit (package == app code) — so `''` gates and `null`/absent does not.
+    schemaNamePrefix: { type: ['string', 'null'] },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -1376,6 +1403,123 @@ const planInvalidNext = (mismatches, tail) =>
   'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
   + 'These do not: ' + componentReplanClause(mismatches) + ' ' + tail
 
+// --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
+// A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
+// first write. Components were (above). These two were not, and the third Applicant run failed on both:
+//   * TEMPLATE NAMES — the plan named `ListPageV2FreedomTemplate`; the built page came out on `ListPageV3Template`.
+//   * THE APP/PACKAGE IDENTITY — the plan promised the app code `UsrApplicantApp`; the stand ended up with
+//     `UsrApplicant`, and the divergence was recorded as a proposal AFTER `create-app` had already written.
+// Both are read-only questions with a definite answer, asked at the same point and reported in the same stop, so a
+// re-plan fixes every axis in one pass instead of one axis per round.
+
+// The unresolved TEMPLATE names, by exactly the rules `componentTypeMismatches` applies to types — the two are
+// deliberately the same shape so one mental model covers both: only an explicit `resolved: false` gates (absence is
+// not evidence), only a name the PLAN published can gate (a free-text sweep must not invent a stop), and a plan that
+// published no `templateNames` skips the intersection and is trusted as given (behave exactly as before).
+function templateMismatches(templateResolution, publishedNames) {
+  const published = new Set((publishedNames || []).filter((t) => typeof t === 'string'))
+  return (templateResolution || [])
+    .filter((t) => t && typeof t.name === 'string' && t.resolved === false)
+    .filter((t) => published.size === 0 || published.has(t.name))
+    .map((t) => ({ name: t.name, note: (typeof t.note === 'string' && t.note.trim()) ? t.note : 'does not resolve on the target stand' }))
+}
+const templateNameList = (mismatches) => (mismatches || []).map((t) => t.name).join(', ')
+const templateMismatchList = (mismatches) => (mismatches || []).map((t) => '`' + t.name + '` (' + t.note + ')').join('; ')
+// The re-plan instruction for unresolved templates — ONE home for the wording, like `componentReplanClause`, so the
+// standalone stop and the combined package stop cannot drift apart.
+const templateReplanClause = (mismatches) =>
+  templateMismatchList(mismatches) + '. A page template is a PLAN assertion about the stand like any other — fix the '
+  + 'plan\'s `planMeta.listTemplate` / `planMeta.formTemplate` (or the manifest row that names it) to a template this '
+  + 'stand actually has, re-run `--plan --out`, re-approve, then re-run this build.'
+const templateInvalidClause = (mismatches) =>
+  'each named page template must resolve on the target stand (clio `get-schema`). '
+  + 'These do not: ' + templateReplanClause(mismatches)
+
+// THE APP CODE THE PLAN'S TARGET PACKAGE REQUIRES, or null when it is not derivable. `create-app` takes a CODE and
+// the package that comes out is `SchemaNamePrefix + code` — so given the prefix, the code is not a choice a builder
+// makes, it is arithmetic. Returning it makes the build unit's instruction a FACT instead of "choose the code so that
+// the package comes out right", which is where the divergence came from: the builder chose, and nothing had checked
+// the plan's own promise against what this stand can produce. `null` when the prefix was not reported (nobody
+// looked), when the package is unnamed, or when the target cannot be expressed with this prefix at all — that last
+// case is not a missing answer but a mismatch, and `appIdentityMismatch` below is what reports it.
+function requiredAppCode(targetPackage, schemaNamePrefix) {
+  if (typeof schemaNamePrefix !== 'string') return null
+  const pkg = typeof targetPackage === 'string' ? targetPackage.trim() : ''
+  if (!pkg || !pkg.startsWith(schemaNamePrefix)) return null
+  const code = pkg.slice(schemaNamePrefix.length)
+  return code || null
+}
+// THE `app` UNIT'S CODE INSTRUCTION, derived rather than delegated (ENG-95468). When the prefix is known the code is
+// arithmetic, so the prompt hands the builder the EXACT string instead of the rule for computing one: "choose the
+// code so that the package comes out right" is precisely the instruction the third Applicant run followed to a
+// package the plan did not name. When the prefix was not reported the old wording stands unchanged — the builder
+// reads the prefix off the stand itself, and its package read-back is still the backstop either way. PURE in its two
+// inputs (the prompt passes `state.schemaNamePrefix` in) so the prompt-render harness slices in the real text
+// instead of a stub that cannot reproduce an escaping mistake.
+function appCodeInstruction(targetPackage, schemaNamePrefix) {
+  const code = requiredAppCode(targetPackage, schemaNamePrefix)
+  // Plain backticks, NOT escaped ones: this string is INTERPOLATED into the prompt's template literal, so it must
+  // already carry the real character — a `\`` here would reach the agent as a backslash.
+  return code
+    ? 'PASS `code` EXACTLY `' + code + '` — that is not a suggestion and not yours to adjust: this stand\'s '
+      + '`SchemaNamePrefix` was read off the stand before the build (' + (schemaNamePrefix === '' ? 'it is EMPTY' : '`' + schemaNamePrefix + '`')
+      + '), and clio derives the package as prefix + code, so this code is the ONLY one that yields `' + targetPackage
+      + '`. If `create-app` rejects it, that is a `blocked` — never a cue to pick a different code.'
+    : 'Choose the `code` so that the package clio produces is EXACTLY `' + targetPackage + '` — clio applies the '
+      + 'environment\'s `SchemaNamePrefix` to `code`, so the code you pass and the package you get are usually NOT '
+      + 'the same string. Read the prefix off the stand rather than assuming it.'
+}
+
+// THE APP/PACKAGE IDENTITY CHECK, before the first write. Applies ONLY where the run will actually create the app
+// (`sectionHost === 'new-app'`): under `existing-app` the app is already there and `placementIssues` owns the
+// primary-package question, and under `pages-only-no-menu` nothing is registered. Two distinct failures, both
+// decidable from facts the plan and one read-only stand read already carry:
+//   * `target-package-not-producible` — `SchemaNamePrefix + <any code>` cannot produce the plan's target package,
+//     because the target does not start with this stand's prefix (or leaves no code at all). The plan is impossible
+//     HERE, whatever code the builder picks, and it would fail the `app` unit's read-back after the write.
+//   * `app-code-contradicts-target-package` — the plan publishes an `applicationCode` that is NOT the code this
+//     target package requires on this stand. This is the third Applicant run exactly: plan `UsrApplicantApp`,
+//     required code `UsrApplicant` (empty prefix), and the two cannot both be honoured.
+// `null` when the prefix was not reported: the check then does not exist rather than guessing, and the caller logs
+// the absence so a silent skip is visible (same rule as an un-swept component type).
+function appIdentityMismatch(targetPackage, sectionHost, schemaNamePrefix, applicationCode) {
+  if (sectionHost !== 'new-app' || typeof schemaNamePrefix !== 'string') return null
+  const pkg = typeof targetPackage === 'string' ? targetPackage.trim() : ''
+  if (!pkg) return null                      // an unnamed target is `packagePreconditionStop`'s stop, not this one
+  const code = requiredAppCode(pkg, schemaNamePrefix)
+  if (!code) {
+    return { kind: 'target-package-not-producible', targetPackage: pkg, prefix: schemaNamePrefix, requiredCode: null, applicationCode: null }
+  }
+  const planned = typeof applicationCode === 'string' ? applicationCode.trim() : ''
+  if (planned && planned !== code) {
+    return { kind: 'app-code-contradicts-target-package', targetPackage: pkg, prefix: schemaNamePrefix, requiredCode: code, applicationCode: planned }
+  }
+  return null
+}
+// The operator-facing rendering of an identity mismatch — one home, shared by the standalone stop, the combined
+// package stop and the mid-run re-check. Names the arithmetic, not just the verdict: an operator re-planning has to
+// see WHICH of the two strings to change, and `prefix` is the stand fact that decides it.
+const appIdentityClause = (m) => {
+  const prefix = m.prefix === '' ? '(empty)' : '`' + m.prefix + '`'
+  return m.kind === 'target-package-not-producible'
+    ? 'the plan\'s target package `' + m.targetPackage + '` cannot be produced on this stand: `create-app` derives the '
+      + 'package as SchemaNamePrefix + code, this stand\'s prefix is ' + prefix + ', and no code yields that package. '
+      + 'Point the plan at a package this stand can produce, re-run `--plan --out`, re-approve, then re-run this build.'
+    : 'the plan promises the application code `' + m.applicationCode + '`, but the target package `' + m.targetPackage
+      + '` requires the code `' + m.requiredCode + '` on this stand (prefix ' + prefix + '). Both cannot hold — fix the '
+      + 'plan so its application code and its target package agree, re-run `--plan --out`, re-approve, then re-run this build.'
+}
+// THE WHOLE pre-build verdict as ONE `next`, whatever combination of axes failed. Built by joining the per-axis
+// clauses and ending with the tail that says whether anything is on disk — so an operator gets every plan defect in
+// one read and fixes them in one re-plan, which is the entire point of checking before the first write. The
+// component clause keeps `planInvalidNext`'s exact wording: that text is what the pre-build/mid-run tail tests pin,
+// and this composer must not quietly reword the axis that already shipped.
+const planInvalidNextAll = (componentM, templateM, appM, tail) => [
+  componentM.length ? planInvalidNext(componentM, '').trim() : '',
+  templateM.length ? templateInvalidClause(templateM) : '',
+  appM ? appIdentityClause(appM) : '',
+].filter(Boolean).join(' ') + ' ' + tail
+
 // WHICH ⚠ CONFIRM ITEMS PREFLIGHT ACTUALLY HAS TO RESOLVE. `--units.preflight` is the PLAN's list of open
 // questions, not a list of unanswered ones, and the run used to hand all of it to the fan-out on every start. So a
 // resumed session re-resolved every item its predecessor had already answered: measured on a real folder, 107
@@ -1704,6 +1848,12 @@ function runReturn(extra) {
     // stop keeps `stopped: 'new-app-over-existing-package'` (placement is primary) yet still carries the component
     // mismatches here, so keying off `stopped === 'plan-invalid-against-stand'` alone would miss them on that stop.
     componentMismatches: [],
+    // The other two axes of the same pre-build question (ENG-95468), defaulted for the same reason and read the same
+    // way: `templateMismatches.length` and `appIdentityMismatch !== null` are true or false on EVERY return, whatever
+    // stop fired. A consumer that had to switch on `stopped` to learn whether the plan disagreed with the stand would
+    // miss exactly the case these exist for — a placement stop that also carries a template or identity defect.
+    templateMismatches: [],
+    appIdentityMismatch: null,
     next: null,
     ...extra,
   }
@@ -1789,7 +1939,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\`, with the entry quoted verbatim and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` — the root-level \`--units.resolutionsUnmatched\`, verbatim: those are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks, and this run is the only thing that can tell the operator so.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, or \`list-pages\` matched on \`schema-name\`), \`false\` when nothing of that name is on the stand. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty string is a REAL answer and is not the same as \`null\`**: return \`""\` when this stand's prefix is empty (a common and correct configuration), and \`null\` ONLY when you could not read it at all. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` — the root-level \`--units.resolutionsUnmatched\`, verbatim: those are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks, and this run is the only thing that can tell the operator so.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that. **\`'exists'\` does not say WHOSE it is.** A package this migration created itself reads exactly like a stranger's from the stand, and the two need opposite handling under \`sectionHost: new-app\`; the only thing that tells them apart is the \`standWrites.packageCreated\` record in the queue file, which step 5 has you report as \`packageCreatedByRun\`. Report the state you actually read here, and let that record answer the ownership question.
 
@@ -1950,21 +2100,47 @@ const componentMismatches = componentTypeMismatches(state.componentResolution, s
 const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
 const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
 if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
+// The TEMPLATE axis and the APP/PACKAGE IDENTITY axis of the same pre-build question (ENG-95468), computed on the
+// same baseline facts so all three travel in one stop. Both were missing when the third Applicant run planned
+// `ListPageV2FreedomTemplate` (built as `ListPageV3Template`) and promised the app code `UsrApplicantApp` (the stand
+// got `UsrApplicant`) — each recorded AFTER the write, as a proposal, which is the cost this gate exists to avoid.
+const templateMismatchesNow = templateMismatches(state.templateResolution, state.templateNames)
+// The same non-gating visibility the component axis has: a published template name nobody resolved is not a failure,
+// but a silent partial sweep would let the build reach a page whose template was never checked.
+const sweptTemplates = new Set((state.templateResolution || []).filter((t) => t && typeof t.name === 'string').map((t) => t.name))
+const unsweptTemplates = [...new Set(state.templateNames || [])].filter((t) => typeof t === 'string' && !sweptTemplates.has(t))
+if (unsweptTemplates.length) log(`NOTE — ${unsweptTemplates.length} published page template(s) have no resolution entry (NOT gated — absence is not evidence): ${unsweptTemplates.join(', ')}`)
+const appIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode)
+// A `new-app` run whose Reconcile reported no prefix cannot have this check at all — say so once rather than leaving
+// the operator to believe the identity axis was cleared. `typeof` and not truthiness: `''` is a REPORTED prefix.
+if (state.sectionHost === 'new-app' && typeof state.schemaNamePrefix !== 'string') {
+  log('NOTE — no `schemaNamePrefix` was reported, so the app/package identity check did NOT run (NOT gated — absence is not evidence). The `app` unit will read the prefix off the stand itself and its package read-back stays the backstop.')
+}
 const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
-  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}`)
+  const alsoTemplates = templateMismatchesNow.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : ''
+  const alsoIdentity = appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : ''
+  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}${alsoTemplates}${alsoIdentity}`)
   return runReturn({
     ...stopOnPackage,
     componentMismatches,
+    templateMismatches: templateMismatchesNow,
+    appIdentityMismatch: appIdentity,
     packageCreatedByRun: ownPackageNow(),
-    // `...stopOnPackage` carries the package fix in `next`; when component types ALSO fail, spell them out in the
-    // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
-    // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
-    next: componentMismatches.length
-      ? stopOnPackage.next + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
-        + componentReplanClause(componentMismatches)
-      : stopOnPackage.next,
+    // `...stopOnPackage` carries the package fix in `next`; when the other axes ALSO fail, spell them out in the
+    // same human-readable field so the operator fixes ALL of them in one re-plan instead of hitting Hard Stop 3.5 as
+    // a second round-trip. The structured fields above are not enough — `next` is what an operator reads.
+    next: [
+      stopOnPackage.next,
+      componentMismatches.length
+        ? 'ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: ' + componentReplanClause(componentMismatches)
+        : '',
+      templateMismatchesNow.length
+        ? 'ALSO — ' + templateMismatchesNow.length + ' plan page template(s) do not resolve on the stand: ' + templateReplanClause(templateMismatchesNow)
+        : '',
+      appIdentity ? 'ALSO — ' + appIdentityClause(appIdentity) : '',
+    ].filter(Boolean).join(' '),
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -1975,16 +2151,29 @@ if (stopOnPackage) {
   })
 }
 
-// --- HARD STOP 3.5: a named component type that does not resolve on the stand (ENG-95468) ------------------
-// The plan asserts `crt.*` types the build will look for; one that is not a real type on THIS stand makes a
-// builder fail mid-Build and the run pay repair rounds for it. Catch it here, before the first unit, naming
-// EVERY unresolved type at once so a re-plan fixes them in a single pass. Read-only: the resolution was
-// Reconcile's `get-component-info` sweep. (When placement ALSO fails, the stop above already carried these.)
-if (componentMismatches.length) {
-  log(`STOP — ${componentMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(componentMismatches)}`)
+// --- HARD STOP 3.5: the plan asserts something untrue of the stand (ENG-95468) -----------------------------
+// THREE axes, ONE stop, before the first unit and before the first write:
+//   * a `crt.*` type that is not a real type on THIS stand — a builder would fail mid-Build and the run would pay
+//     repair rounds for it (the original Applicant blocker);
+//   * a page TEMPLATE name the stand does not have — the page gets built on whatever the platform defaults to, and
+//     the divergence surfaces after the write as something to confirm rather than something to fix;
+//   * an APP/PACKAGE identity the stand cannot produce, or a plan whose own app code and target package contradict
+//     each other under this stand's `SchemaNamePrefix` — `create-app` is a write, and it is the FIRST one.
+// All named at once so a re-plan fixes them in a single pass. Read-only throughout: the resolutions came from
+// Reconcile's `get-component-info` / `get-schema` sweeps and one prefix read. (When placement ALSO fails, the stop
+// above already carried all three.)
+if (componentMismatches.length || templateMismatchesNow.length || appIdentity) {
+  const parts = [
+    componentMismatches.length ? `${componentMismatches.length} component type(s): ${componentTypeList(componentMismatches)}` : '',
+    templateMismatchesNow.length ? `${templateMismatchesNow.length} page template(s): ${templateNameList(templateMismatchesNow)}` : '',
+    appIdentity ? `app/package identity: ${appIdentity.kind}` : '',
+  ].filter(Boolean).join(' · ')
+  log(`STOP — the plan asserts what this stand does not have — ${parts}`)
   return runReturn({
     stopped: 'plan-invalid-against-stand',
     componentMismatches,
+    templateMismatches: templateMismatchesNow,
+    appIdentityMismatch: appIdentity,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -1992,7 +2181,7 @@ if (componentMismatches.length) {
     verdict: verdictOf(state.verify),
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
-    next: planInvalidNext(componentMismatches, 'Nothing was built.'),
+    next: planInvalidNextAll(componentMismatches, templateMismatchesNow, appIdentity, 'Nothing was built.'),
   })
 }
 
@@ -2411,12 +2600,15 @@ IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (EN
 // page unit's `placement` row gates on the plan's package, so building into a substitute fails the gate later
 // and wastes the whole tree.
 function appKindBlock(unit) {
+  // The code clause as a LOCAL, like every other composed block in this prompt: the helper is pure, the run-scope
+  // prefix is passed in here, and the interpolation below reads a local rather than a free name (ENG-95468).
+  const appCodeStep = appCodeInstruction(unit.package, state?.schemaNamePrefix)
   return `YOUR UNIT is \`app\` — the APPLICATION AND PACKAGE every page unit is waiting for. It is NOT a page.
 
 The plan targets the package \`${unit.package}\`, and the stand does not have it. Create it, and create NOTHING else.
 
 1. Read the tool contracts before you call anything: \`get-tool-contract\` for \`create-app\` AND for \`create-app-section\`. Do not guess an argument shape.
-2. Create the application with template \`AppFreedomUI\` (do NOT substitute another template) and \`with-mobile-pages\` false unless the plan asks for mobile pages. **THEN CHECK WHETHER THE FLAG WAS HONOURED (ENG-95850 / C1).** On a real run \`create-app\` minted \`<Code>_MobileFormPage\` and \`<Code>_MobileListPage\` ANYWAY, with \`with-mobile-pages=false\`, and made the mobile form the DEFAULT mobile page — so they could not simply be deleted: the \`MobileRelatedPage\` binding had to be unwound first (\`create-related-page-addon … pages=[]\` until \`pageCount\` reads 0). List the pages the call actually produced. If mobile pages exist and the plan did not ask for them, report them in \`proposals\` — naming each page AND that the default-mobile-page binding has to be unwound before any removal — and carry on with your own deliverable. **Do NOT delete them and do NOT unwind the binding**: this is a platform-side defect (the flag is not honoured), the residue is on a customer's stand, and removing it is the operator's decision, not a step this unit takes on its own. Choose the \`code\` so that the package clio produces is EXACTLY \`${unit.package}\` — clio applies the environment's \`SchemaNamePrefix\` to \`code\`, so the code you pass and the package you get are usually NOT the same string. Read the prefix off the stand rather than assuming it.
+2. Create the application with template \`AppFreedomUI\` (do NOT substitute another template) and \`with-mobile-pages\` false unless the plan asks for mobile pages. **THEN CHECK WHETHER THE FLAG WAS HONOURED (ENG-95850 / C1).** On a real run \`create-app\` minted \`<Code>_MobileFormPage\` and \`<Code>_MobileListPage\` ANYWAY, with \`with-mobile-pages=false\`, and made the mobile form the DEFAULT mobile page — so they could not simply be deleted: the \`MobileRelatedPage\` binding had to be unwound first (\`create-related-page-addon … pages=[]\` until \`pageCount\` reads 0). List the pages the call actually produced. If mobile pages exist and the plan did not ask for them, report them in \`proposals\` — naming each page AND that the default-mobile-page binding has to be unwound before any removal — and carry on with your own deliverable. **Do NOT delete them and do NOT unwind the binding**: this is a platform-side defect (the flag is not honoured), the residue is on a customer's stand, and removing it is the operator's decision, not a step this unit takes on its own. ${appCodeStep}
 3. CONFIRM what you actually got: \`list-packages\` / \`find-app\`, and report the real \`packageName\`. **If it is not exactly \`${unit.package}\`, that is a \`blocked\`, not a near-enough.** Every page unit's placement row gates on the plan's package name: building into a substitute passes here and fails the whole tree later.
 ${unit.sectionHost === 'pages-only-no-menu' ? appSectionHostNoMenuBlock(unit) : appSectionHostMigrationBlock(unit)}`
 }
@@ -3179,16 +3371,29 @@ function acceptReconciled(next, whereFrom) {
   // from the stand during a long run. Re-checking here stops before the NEXT build unit is dispatched instead of
   // paying repair rounds for a plan assertion untrue of the stand — the exact failure this gate exists to prevent.
   const midRunMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
-  if (midRunMismatches.length) {
-    log(`STOP after ${whereFrom} — ${midRunMismatches.length} plan component type(s) do not resolve on the stand: ${componentTypeList(midRunMismatches)}`)
+  // The template and identity axes are mid-run guarantees for exactly the same reasons (ENG-95468): a resumed run's
+  // baseline may predate these fields, a template schema can be uninstalled during a long run, and `sectionHost` /
+  // `targetPackage` are re-read every Reconcile — so a round that FIRST reports a producible-package contradiction
+  // must stop before the next unit rather than let `create-app` run on it.
+  const midRunTemplates = templateMismatches(state.templateResolution, state.templateNames)
+  const midRunIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode)
+  if (midRunMismatches.length || midRunTemplates.length || midRunIdentity) {
+    const parts = [
+      midRunMismatches.length ? `${midRunMismatches.length} component type(s): ${componentTypeList(midRunMismatches)}` : '',
+      midRunTemplates.length ? `${midRunTemplates.length} page template(s): ${templateNameList(midRunTemplates)}` : '',
+      midRunIdentity ? `app/package identity: ${midRunIdentity.kind}` : '',
+    ].filter(Boolean).join(' · ')
+    log(`STOP after ${whereFrom} — the plan asserts what this stand does not have — ${parts}`)
     return {
       stopped: 'plan-invalid-against-stand',
       componentMismatches: midRunMismatches,
+      templateMismatches: midRunTemplates,
+      appIdentityMismatch: midRunIdentity,
       targetPackage: state.targetPackage || null,
       packageState: state.packageState || null,
       approval: state.approval || approval,
       planVersion: state.planVersion || null,
-      next: planInvalidNext(midRunMismatches, 'Anything already built this run is on disk.'),
+      next: planInvalidNextAll(midRunMismatches, midRunTemplates, midRunIdentity, 'Anything already built this run is on disk.'),
     }
   }
   packageState = state.packageState || packageState
