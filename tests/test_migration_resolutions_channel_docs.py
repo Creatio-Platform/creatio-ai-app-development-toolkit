@@ -128,8 +128,10 @@ class ConsumptionContractDocTests(unittest.TestCase):
         missing = missing_markers(
             content,
             [
-                "verifier",
-                "returns `resolutionChecks`",
+                # PR #128 review: `"verifier"` alone appeared seven times in this file, including in prose
+                # predating the channel, so the marker could not fail. The sentence that carries the
+                # claim is what this test is named for.
+                "the read-only VERIFIER returns `resolutionChecks`",
                 "the same class of claim as",
             ],
         )
@@ -139,7 +141,11 @@ class ConsumptionContractDocTests(unittest.TestCase):
         for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
             content = flat(read_text(path))
             self.assertIn("`unconsumedResolutions`", content, path)
-            self.assertIn("blocks", content, path)
+            # PR #128 review: this asserted the bare word "blocks", which SKILL.md already satisfied
+            # from an unrelated pre-existing line ("a parked `app` unit blocks everything") -- so for
+            # that file the marker had no failure mode at all. The test is named for criterion 5's
+            # core guarantee and never asserted the word `complete`; both halves are pinned now.
+            self.assertIn("blocks `complete`", content, path)
         # The invariant must not be broken in the other direction while closing this gap: the
         # whole fix is monotone, and a doc that stopped saying so is how it stops being true.
         self.assertIn(

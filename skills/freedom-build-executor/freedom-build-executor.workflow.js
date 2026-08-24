@@ -1536,6 +1536,21 @@ ${RESOLUTIONS_RETURN}
 `
 }
 
+// ENG-95503 / PR #128 review -- ONE id-keyed index of a builder's `resolutionsApplied` rows, and ONE matching rule.
+// Three helpers built this map independently and all three keyed it on `row.id.trim()` while looking the row up with
+// the RAW `p.id`, and `resolutionContradictions` trimmed neither side. That asymmetry is latent only because no id
+// source produces edge whitespace today; its failure mode is a PERMANENT accounting miss -- the answer is reported
+// unconsumed for ever and the unit can never close, which is indistinguishable from the defect this ticket fixes.
+// `function` declarations, not const arrows, so the helpers above may use them without an ordering constraint.
+function idKey(id) {
+  return String(id ?? '').trim()
+}
+function rowsById(rows) {
+  const byId = new Map()
+  for (const row of rows || []) if (row && typeof row.id === 'string') byId.set(idKey(row.id), row)
+  return byId
+}
+
 // ENG-95503 — IS EVERY ANSWER THIS UNIT WAS HANDED ACCOUNTED FOR? Returns a reason string when the builder's report
 // does not answer the questions it was given, `null` when it does. It judges the SET OF IDS and the shape of each
 // row — never whether the answer was built WELL, which is the verifier's job and then the engine's gate.
@@ -1545,13 +1560,12 @@ function resolutionAccountingMiss(routed, res) {
   if (!owed.length) return null
   const rows = res?.resolutionsApplied
   if (!Array.isArray(rows)) return `no \`resolutionsApplied\` returned, and this unit was handed ${owed.length} answered ⚠ Confirm question(s)`
-  const byId = new Map()
-  for (const row of rows) if (row && typeof row.id === 'string') byId.set(row.id.trim(), row)
-  const absent = owed.filter((id) => !byId.has(id))
+  const byId = rowsById(rows)
+  const absent = owed.filter((id) => !byId.has(idKey(id)))
   if (absent.length) return `no \`resolutionsApplied\` row for ${absent.map((id) => `\`${id}\``).join(', ')} — the answer was handed to this build and nothing says what became of it`
-  const unexplained = owed.filter((id) => byId.get(id).applied === false && !nonBlank(byId.get(id).why))
+  const unexplained = owed.filter((id) => byId.get(idKey(id)).applied === false && !nonBlank(byId.get(idKey(id)).why))
   if (unexplained.length) return `reported NOT applied with no \`why\` for ${unexplained.map((id) => `\`${id}\``).join(', ')}`
-  const unsupported = owed.filter((id) => byId.get(id).applied === true && !nonBlank(byId.get(id).how))
+  const unsupported = owed.filter((id) => byId.get(idKey(id)).applied === true && !nonBlank(byId.get(idKey(id)).how))
   if (unsupported.length) return `reported applied with no \`how\` for ${unsupported.map((id) => `\`${id}\``).join(', ')} — a claim of "built" that names nothing built is not a report`
   return null
 }
@@ -1561,13 +1575,12 @@ function resolutionAccountingMiss(routed, res) {
 // that moved on, and a page with no filter on it anywhere. Pure, so the claim and the block rendering it agree.
 function resolutionClaimRows(routed, res) {
   const rows = Array.isArray(res?.resolutionsApplied) ? res.resolutionsApplied : []
-  const byId = new Map()
-  for (const row of rows) if (row && typeof row.id === 'string') byId.set(row.id.trim(), row)
+  const byId = rowsById(rows)
   return (routed || []).map((p) => ({
     id: p.id, kind: p.kind || null, item: p.item || null,
     answer: p.resolution?.answer || null,
-    applied: byId.get(p.id)?.applied === true,
-    how: nonBlank(byId.get(p.id)?.how) ? byId.get(p.id).how.trim() : null,
+    applied: byId.get(idKey(p.id))?.applied === true,
+    how: nonBlank(byId.get(idKey(p.id))?.how) ? byId.get(idKey(p.id)).how.trim() : null,
   }))
 }
 // THE VERIFIER'S INSTRUCTION FOR ONE UNIT'S ANSWERS, rendered from those rows. It asks for an OBSERVATION, never a
@@ -1628,12 +1641,11 @@ function resolutionContradictions(claims, checks) {
 // unaccounted answer is exactly as unconsumed as a declined one. Pure, so the report and the gate cannot disagree.
 function unconsumedResolutions(routed, res, unitKey) {
   const rows = Array.isArray(res?.resolutionsApplied) ? res.resolutionsApplied : []
-  const byId = new Map()
-  for (const row of rows) if (row && typeof row.id === 'string') byId.set(row.id.trim(), row)
-  return (routed || []).filter((p) => byId.get(p.id)?.applied !== true).map((p) => ({
+  const byId = rowsById(rows)
+  return (routed || []).filter((p) => byId.get(idKey(p.id))?.applied !== true).map((p) => ({
     unit: unitKey, id: p.id, kind: p.kind || null, item: p.item || null,
     answer: p.resolution?.answer || null, source: 'dispatch',
-    why: nonBlank(byId.get(p.id)?.why) ? byId.get(p.id).why.trim() : 'the build reported nothing for this answer',
+    why: nonBlank(byId.get(idKey(p.id))?.why) ? byId.get(idKey(p.id)).why.trim() : 'the build reported nothing for this answer',
   }))
 }
 
@@ -1643,7 +1655,7 @@ function unconsumedResolutions(routed, res, unitKey) {
 // file implements were written without ever seeing its diff, and one of them approved it on that basis. The escape
 // keeps the delimiter exactly as unambiguous (no unit key or evidence id can contain a NUL) while leaving the
 // source plain ASCII that a reviewer can actually read.
-const pairKey = (unit, id) => `${unit}\u0000${id}`
+const pairKey = (unit, id) => `${idKey(unit)}\u0000${idKey(id)}`
 
 // ENG-95503 / PR #128 review -- THE `(unit, id)` PAIRS AN ANSWER IS STILL OWED AGAINST. Derived from the SAME pure
 // routing call the build prompt and the accounting use, so "still owed" cannot mean one thing here and another at
@@ -1679,6 +1691,33 @@ function reconcileUnconsumed(entries, owed, confirmed) {
     if (!owed.has(pair)) return false
     return !(u.source === UNCONSUMED_FROM_VERIFIER && confirmed.has(pair))
   })
+}
+
+// ENG-95503 / PR #128 review -- WHY THIS UNIT IS BEING BUILT AGAIN, for the round an unconsumed answer bought it.
+// The reopen round used to be dispatched with a BYTE-IDENTICAL prompt: neither the accounting miss nor the verifier's
+// `found` reached the rebuilt prompt, and an unconsumed answer has no `--verify` row by construction, so `openRows`
+// carried nothing about it either. `findingsPromptBlock` sets the opposite precedent -- it tells the builder what the
+// operator saw. This is the most expensive thing the ticket adds; spending it on a retry that says nothing new is
+// how a builder gives the same refusal twice.
+function unconsumedRepairText(entries, unitKey, fence) {
+  const mine = (entries || []).filter((u) => u.unit === unitKey)
+  if (!mine.length) return ''
+  const wrap = typeof fence === 'function' ? fence : String
+  const lines = mine.map((u) => `- ${JSON.stringify(u.id)} — the answer was: ${wrap(String(u.answer ?? '').slice(0, 400))}\n  WHAT HAPPENED LAST TIME: ${wrap(String(u.why ?? '').slice(0, 400))}`).join('\n')
+  return `
+THIS UNIT IS OPEN BECAUSE AN ANSWER IT WAS ALREADY GIVEN PRODUCED NOTHING. This is the reason for THIS round, and it is your one repair attempt for it:
+${lines}
+Build the answer, or return \`applied: false\` with a \`why\` that is a REASON rather than a restatement of the answer. Repeating last round's outcome spends the round and changes nothing; if the answer genuinely cannot be built as written, say what blocks it and put the conflict in \`proposals\`.
+`
+}
+// The operator-facing clause naming the answers that went nowhere. `next` used to name the verify table, the parked
+// units and the proposals -- and in the EXACT case this ticket is about (green gate, nothing parked, one answer gone
+// nowhere) all three of those are empty or silent, so the report said the run was not complete and showed nothing
+// explaining why. The closing log names them; `next` is what a caller reads.
+function unconsumedNextClause(entries) {
+  if (!(entries || []).length) return ''
+  const ids = entries.map((u) => `\`${u.unit}\`/${JSON.stringify(u.id)}`).join(', ')
+  return ` ALSO: ${entries.length} operator answer(s) reached a build agent and produced NO build action — ${ids}. The engine gate has no row for this and never will; put each one to the user with its \`why\` from \`unconsumedResolutions\`, then either fix the build or record the decision to drop the answer.`
 }
 
 // WHETHER A PREFLIGHT BATCH NEEDS THE ANSWERED-ITEMS INSTRUCTIONS. A batch carrying at least one answered item gets
@@ -2828,7 +2867,7 @@ function resolutionsPromptBlock(unitKey) {
   return resolutionsBlockText(
     resolutionsForUnit(state.preflightItems, unitKey, new Set(state.unitKeys || [])),
     dataFence,
-  )
+  ) + unconsumedRepairText(unconsumed, unitKey, dataFence)
 }
 
 // At a CHECKPOINT the run is about to hand the page to a human, so the builder is asked for the script that
@@ -3071,8 +3110,16 @@ function reportResolutionAccounting(unit, routed, res) {
   if (!(routed || []).length) return
   const miss = resolutionAccountingMiss(routed, res)
   if (miss) {
-    log(`answers NOT accounted for on \`${unit.key}\`: ${miss}`)
-    blockedItems = [...blockedItems, { unit: unit.key, what: RESOLUTIONS_BLOCKED_WHAT, why: miss }]
+    // DEDUPED ON `(unit, what)` (PR #128 review), exactly as `reportGuidelinesMiss` does it and for the reason that
+    // one states: "a row repeated each round is re-billed". `RESOLUTIONS_BLOCKED_WHAT` was introduced here so the
+    // report and any dedup would match on one literal, and then no dedup followed -- while `blockedItems` is
+    // persisted AND re-seeded, so the duplicates accumulated across every round and every resume.
+    if (blockedItems.some((b) => b.unit === unit.key && b.what === RESOLUTIONS_BLOCKED_WHAT)) {
+      log(`answers NOT accounted for AGAIN on \`${unit.key}\`: ${miss}`)
+    } else {
+      log(`answers NOT accounted for on \`${unit.key}\`: ${miss}`)
+      blockedItems = [...blockedItems, { unit: unit.key, what: RESOLUTIONS_BLOCKED_WHAT, why: miss }]
+    }
   }
   const gone = unconsumedResolutions(routed, res, unit.key)
   if (!gone.length) return
@@ -3815,5 +3862,5 @@ return runReturn({
   planVersion: state.planVersion || null,
   next: complete
     ? `present ${VERIFY_TABLE} verbatim as the completion report — it is the only sanctioned close report`
-    : `present ${VERIFY_TABLE} verbatim (it names every unmet row), then put the parked units — each with its \`parkedWhy\` — and the proposals to the user; record their answers in the migration folder before re-running`,
+    : `present ${VERIFY_TABLE} verbatim (it names every unmet row), then put the parked units — each with its \`parkedWhy\` — and the proposals to the user; record their answers in the migration folder before re-running.${unconsumedNextClause(unconsumed)}`,
 })

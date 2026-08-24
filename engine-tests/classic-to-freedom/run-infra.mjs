@@ -166,6 +166,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
   // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
   "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed",
+  "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
@@ -1451,13 +1452,23 @@ check("ENG-95503 schema: `resolutionsApplied` is REQUIRED of a unit handed answe
   () => { const base = { type: "object", required: ["unit", "claimedBuilt"], properties: {} };
     const owed = wf.buildSchemaWithResolutions(base, 2);
     const none = wf.buildSchemaWithResolutions(base, 0);
+    // PR #128 review (RC-9): the ORIGINAL required fields must survive the spread. The check pinned the added
+    // obligation and the no-mutation invariant and implicitly trusted the copy — so a `required` rebuilt as
+    // `['resolutionsApplied']` alone would have passed here while every build schema silently stopped requiring
+    // `unit` and `claimedBuilt`.
     return owed.required.includes("resolutionsApplied") && owed !== base
+      && owed.required.includes("unit") && owed.required.includes("claimedBuilt")
       && none === base && !base.required.includes("resolutionsApplied"); },
   () => ({ owed: wf.buildSchemaWithResolutions({ type: "object", required: ["unit"], properties: {} }, 1).required }));
 check("ENG-95503 prompt: the rendered answers block CARRIES the return obligation — the schema makes the field required, and this is what tells the agent what to put in it",
   () => { const text = wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence);
+    // PR #128 review (RC-7b): the fourth conjunct used to be `RESOLUTIONS_RETURN.includes("never composed")` — a
+    // phrase asserted against the constant it was read from, with no failure mode but a reword, and the three
+    // conjuncts before it already prove the constant is interpolated. What it could pin instead is the ORDER: the
+    // return obligation must render AFTER the "an answer is an INPUT, not evidence" sentence, so a builder reads
+    // what an answer is NOT before it reads what to hand back about one.
     return text.includes("resolutionsApplied") && /applied: false/.test(text) && /UNCONSUMED/.test(text)
-      && wf.RESOLUTIONS_RETURN.includes("never composed"); },
+      && text.indexOf("An answer is an INPUT, not evidence") < text.indexOf("THEN RETURN"); },
   () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(-500));
 
 /* The wiring that connects the executed decisions above to the run. Pinned on the shipped source because each site
@@ -1610,6 +1621,48 @@ check("PR #128 review: an `unknown` check produces NO contradiction and NO uncon
   () => wf.resolutionContradictions(accClaims, [
     { unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_UNKNOWN, found: "business rules are not in the page body" }]).length === 0,
   () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_UNKNOWN }]));
+
+/* --- PR #128 review: the id matching rule, the repair prompt and the operator-facing clause. --- */
+check("PR #128 review (RC-13): the id index matches on a TRIMMED key on BOTH sides — three helpers keyed the map on `row.id.trim()` and looked up with the raw id, an asymmetry whose failure mode is a permanent accounting miss the unit can never clear",
+  () => { const padded = { resolutionsApplied: [{ id: `  ${ACC_ID_A}  `, applied: true, how: "h" },
+      { id: ACC_ID_B, applied: true, how: "h" }] };
+    // A row the agent returned with edge whitespace still matches the routed id, and vice versa.
+    return wf.resolutionAccountingMiss(accRouted, padded) === null
+      && wf.unconsumedResolutions(accRouted, padded, "main").length === 0
+      && wf.idKey("  x  ") === "x" && wf.rowsById([{ id: " a " }]).has("a"); },
+  () => wf.resolutionAccountingMiss(accRouted, { resolutionsApplied: [{ id: `  ${ACC_ID_A}  `, applied: true, how: "h" }] }));
+check("PR #128 review (RC-13): a routed id carrying edge whitespace matches a clean returned row too — the asymmetry ran in both directions, and only one of them was ever going to be the one that happened",
+  () => wf.unconsumedResolutions([{ id: `  ${ACC_ID_B}  `, pageKey: "main", kind: "entity-filter", item: "i", resolution: { answer: "a" } }],
+    { resolutionsApplied: [{ id: ACC_ID_B, applied: true, how: "h" }] }, "main").length === 0,
+  () => "a padded routed id matches a clean row");
+
+check("PR #128 review (RC-12): the repair round tells the builder WHY the unit re-opened and what happened last time — the reopen used to be dispatched with a byte-identical prompt, and it is the most expensive thing this ticket adds",
+  () => { const t = wf.unconsumedRepairText(
+      [{ unit: "main", id: ACC_ID_B, answer: "restrict to Status IN {InProgress}", why: "no lookupListConfig on the page" }], "main", ac4Fence);
+    return /THIS UNIT IS OPEN BECAUSE AN ANSWER IT WAS ALREADY GIVEN PRODUCED NOTHING/.test(t)
+      && t.includes(JSON.stringify(ACC_ID_B))
+      && t.includes("<<DATA no lookupListConfig on the page DATA>>")
+      && t.includes("<<DATA restrict to Status IN {InProgress} DATA>>"); },
+  () => wf.unconsumedRepairText([{ unit: "main", id: ACC_ID_B, answer: "a", why: "w" }], "main", ac4Fence));
+check("PR #128 review (RC-12): a unit with no unconsumed answer gets NO repair block, and another unit's entry never leaks into this one's prompt — the block is the reason for THIS round, so a stray line would send a builder to fix someone else's page",
+  () => wf.unconsumedRepairText([{ unit: "list", id: ACC_ID_A, answer: "a", why: "w" }], "main", ac4Fence) === ""
+    && wf.unconsumedRepairText([], "main", ac4Fence) === ""
+    && wf.unconsumedRepairText(undefined, "main", ac4Fence) === "",
+  () => "no entry for this unit renders nothing");
+check("PR #128 review (RC-12): the repair block REACHES the build prompt through the answers seam — a pure helper nothing calls is the same silence in a new place",
+  /\) \+ unconsumedRepairText\(unconsumed, unitKey, dataFence\)/.test(wfSrc));
+
+check("PR #128 review (RC-11): the operator-facing `next` NAMES the answers that went nowhere — in the exact case this ticket is about the verify table, the parked list and the proposals are all empty or silent, so the report said NOT COMPLETE and explained nothing",
+  () => { const c = wf.unconsumedNextClause([{ unit: "main", id: ACC_ID_B, why: "no filter on the page" }]);
+    return c.includes(JSON.stringify(ACC_ID_B)) && /produced NO build action/.test(c)
+      && /unconsumedResolutions/.test(c) && wf.unconsumedNextClause([]) === "" && wf.unconsumedNextClause(undefined) === ""; },
+  () => wf.unconsumedNextClause([{ unit: "main", id: ACC_ID_B, why: "w" }]));
+check("PR #128 review (RC-11): the clause is interpolated into the NOT-COMPLETE `next`, not merely defined",
+  /record their answers in the migration folder before re-running\.\$\{unconsumedNextClause\(unconsumed\)\}/.test(wfSrc));
+
+check("PR #128 review (RC-10): the answers-blocked row is DEDUPED on `(unit, what)` like its neighbour — `blockedItems` is persisted AND re-seeded, so an un-deduped row accumulated a copy every round and across every resume",
+  /if \(blockedItems\.some\(\(b\) => b\.unit === unit\.key && b\.what === RESOLUTIONS_BLOCKED_WHAT\)\) \{/.test(wfSrc)
+    && /answers NOT accounted for AGAIN on/.test(wfSrc));
 
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
