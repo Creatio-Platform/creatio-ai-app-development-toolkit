@@ -8554,6 +8554,25 @@ try {
   // and an input that exists only on some versions is exactly the 8.3.0-vs-8.3.3 `handleItemClick` case.
   const fakeRow = (target) => ({ match: { by: MATCH.ITEM_TYPE, itemType: 999 }, role: "mapped", tier: TIER.AUTO, ownedBy: OWNER.TABLE, target });
   const kindsOf = (r) => r.map((f) => f.kind).sort((a, b) => a.localeCompare(b));
+  // ---- ENG-95863: per-OUTPUT deprecation, on a REAL, currently-deprecated registry fact -----------------------
+  // `crt.DataGrid.selectedRowsChange` / `crt.ApprovalList.selectedRowsChange` are deprecated in the vendored
+  // registry ("Use `selectionStateChange` output instead."). A row naming one as an event must get an ADVISORY,
+  // never an error — the output still fires, and the row's author decides with the reason in front of them.
+  const deprecatedOutputRow = (componentType) => fakeRow({ componentType, slot: "items", propMap: {}, events: { selectedRowsChange: true } });
+  for (const ct of ["crt.DataGrid", "crt.ApprovalList"]) {
+    const findings = validateRow(deprecatedOutputRow(ct));
+    const dep = findings.find((f) => f.kind === "deprecated-output");
+    check(`ENG-95863: ${ct}.selectedRowsChange is reported as a \`deprecated-output\` ADVISORY naming the exact reason`,
+      !!dep && isAdvisory(dep) && dep.reason === "Use `selectionStateChange` output instead.",
+      () => findings);
+  }
+  // `crt.ComboBox.addRecord` is deprecated with NO `deprecationReason` published — a real registry fact, not a
+  // fabricated one. The advisory must still fire, with `reason: null` rather than the literal string "undefined".
+  const comboBoxFindings = validateRow(fakeRow({ componentType: "crt.ComboBox", slot: "items", propMap: {}, events: { addRecord: true } }));
+  const comboBoxDep = comboBoxFindings.find((f) => f.kind === "deprecated-output");
+  check("ENG-95863: crt.ComboBox.addRecord (deprecated, no reason published) still fires the ADVISORY, with reason: null",
+    !!comboBoxDep && isAdvisory(comboBoxDep) && comboBoxDep.reason === null,
+    () => comboBoxFindings);
   check("ENG-95543(neg): a fabricated componentType is an `unknown-component` error — the fabricated-type defect this check exists to prevent",
     kindsOf(validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} }))).includes("unknown-component"),
     () => validateRow(fakeRow({ componentType: "crt.ContactCommunication", slot: "items", propMap: {} })));
@@ -8599,6 +8618,22 @@ try {
   check("ENG-95543: ranking is scoped to the target version — a component that exists only in the newest snapshot is not offered for the oldest",
     !newOnly || !rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }).some((c) => c.componentType === newOnly[0]),
     () => ({ newestOnly: newOnly?.[0], ranked: newOnly ? rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }) : null }));
+  // ---- ENG-95863: entity-coupling evidence, on a SYNTHETIC index for the `appliesToCustomEntities === false`
+  // branch. Real data is `true` on every one of the 8/205 components that publish the field (zero `false`
+  // observed), so this branch cannot be exercised against the vendored index — it needs a fabricated component.
+  const couplingIdx = { meta: { versions: ["v1"] }, baseInputs: {}, components: {
+    "crt.SyntheticCoupled": { v: 1, compositeOnly: false, taxonomy: { synonyms: ["widget"], appliesToCustomEntities: false, entityCouplingNote: "does not bind to a custom entity" }, inputs: {}, outputs: {} },
+    "crt.SyntheticNoNote": { v: 1, compositeOnly: false, taxonomy: { synonyms: ["widget"], appliesToCustomEntities: false }, inputs: {}, outputs: {} },
+  } };
+  const coupledRanked = rankCandidates(["widget"], { index: couplingIdx });
+  const coupled = coupledRanked.find((c) => c.componentType === "crt.SyntheticCoupled");
+  const noNote = coupledRanked.find((c) => c.componentType === "crt.SyntheticNoNote");
+  check("ENG-95863: a candidate with appliesToCustomEntities:false is NOT dropped, and the false value + note both survive as evidence — no `=== false` gate anywhere in rankCandidates",
+    !!coupled && coupled.appliesToCustomEntities === false && coupled.entityCouplingNote === "does not bind to a custom entity",
+    () => coupledRanked);
+  check("ENG-95863: entityCouplingNote does not have to co-occur with appliesToCustomEntities — a candidate missing the note still carries the false value, unset key omitted rather than defaulted",
+    !!noNote && noNote.appliesToCustomEntities === false && !("entityCouplingNote" in noNote),
+    () => noNote);
 
   // ---- ENG-95543: the RUN-TIME registry (the half that keeps this reachable without the clio change) ----------
   // Three sources, deliberately distinguished, because "checked against the stand", "checked against a pinned
@@ -8624,6 +8659,15 @@ try {
     exportIdx.meta.versions[0] === "8.3.5" && exportIdx.components["crt.Button"].inputs.caption.type === "string"
     && exportIdx.components["crt.Button"].outputs.clicked && exportIdx.baseInputs.name.type === "string",
     () => exportIdx);
+  // ENG-95863: a STAND's own export can carry a deprecated output too — without this, the deprecated-output
+  // advisory would only ever fire against the vendored index, never against a real stand-export run.
+  const exportJsonDeprecated = { resolvedTargetVersion: "8.3.5",
+    components: [{ componentType: "crt.DataGrid", inputs: {}, outputs: { selectedRowsChange: { deprecated: true, deprecationReason: "Use `selectionStateChange` output instead." } } }] };
+  const exportIdxDeprecated = indexFromRegistryExport(exportJsonDeprecated);
+  check("ENG-95863: indexFromRegistryExport carries an output's deprecated/deprecationReason through, same as it already does for inputs",
+    exportIdxDeprecated.components["crt.DataGrid"].outputs.selectedRowsChange.deprecated === true
+    && exportIdxDeprecated.components["crt.DataGrid"].outputs.selectedRowsChange.deprecationReason === "Use `selectionStateChange` output instead.",
+    () => exportIdxDeprecated);
   // A run is judged on what IT emits, not on the whole table: a check that reports rows the run never touched is a
   // check a reader learns to skip.
   const runCs = { tableElements: [{ classic: "B", classicKind: "BUTTON", componentType: "crt.Button" }],
