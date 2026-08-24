@@ -1580,7 +1580,17 @@ function resolutionClaimsLine(rows, fence) {
   const wrap = typeof fence === 'function' ? fence : String
   const line = (r) => {
     const said = r.applied ? `claims APPLIED${r.how ? ` — ${wrap(r.how)}` : ''}` : 'reports NOT applied'
-    return `  · \`${r.id}\` (${r.kind || 'confirm'}) — answer: ${wrap(String(r.answer ?? '').slice(0, 400))} — the builder ${said}`
+    // `r.id` IS STAND-DERIVED TEXT (PR #128 review). It is composed as `{pageKey}#confirm:{kind}:{item}` from the
+    // RAW `item` — a diff `bindTo`, a `define()` dependency, a source method or process name read off the customer's
+    // Classic schema. It used to be interpolated into a backtick span unfenced, while the sibling
+    // `resolutionsBlockText` fences `item` whenever it has one: so on the common path the base branch fenced this
+    // text and this line did not, aimed at the read-only VERIFIER — the run's trust anchor, which produces
+    // `resolutionChecks`, `discrepancies` and `evidenceWritten`. A backtick plus a newline closed the span and put
+    // attacker-chosen text at instruction level, directly under "check each against the page you just fetched".
+    // `JSON.stringify`, matching `guidelinesLine`, neutralises backticks and newlines AND round-trips byte for byte,
+    // so the agent can still copy the id into `resolutionChecks[].id` and the pair key still matches. A `dataFence`
+    // would be WRONG here: it would corrupt the value the agent has to echo back.
+    return `  · ${JSON.stringify(r.id)} (${r.kind || 'confirm'}) — answer: ${wrap(String(r.answer ?? '').slice(0, 400))} — the builder ${said}`
   }
   return `OPERATOR ANSWERS THIS UNIT WAS BUILT FROM — check each against the page you just fetched:\n${rows.map(line).join('\n')}`
 }
@@ -3180,9 +3190,6 @@ async function dispatchUnit(unit, r) {
     // `resolutionsApplied` is added on top for a unit that was handed answers, and only for one.
     schema: buildSchemaWithResolutions(BUILD_SCHEMAS[buildSchemaKind(unit, state.evidenceIds)], routed.length),
   })
-  // The answer channel's repair attempt is spent HERE, at dispatch, for the same reason the findings one is: the
-  // machine verdict cannot confirm a consumption it has no row for, so waiting for it would never consume.
-  if (resolutionsPending.delete(unit.key)) log(`unaccounted answers on \`${unit.key}\` have had their repair round — they no longer force the unit open`)
   if (!res) {
     chargeBuildAttempt(unit.key)
     log(`build agent returned nothing for ${unit.key} — it stays open`)
@@ -3200,6 +3207,14 @@ async function dispatchUnit(unit, r) {
   // The finding has now had its repair attempt. Consumed here, at dispatch, rather than after the verifier: the
   // machine verdict cannot confirm a fix it could not see the defect in, so waiting for it would never consume.
   if (findingsPending.delete(unit.key)) log(`operator finding for \`${unit.key}\` has had its repair round — it no longer forces the unit open`)
+  // The answer channel's repair attempt is spent HERE, at dispatch, for the same reason the findings one is: the
+  // machine verdict cannot confirm a consumption it has no row for, so waiting for it would never consume.
+  // BELOW the `!res` return, beside `findingsPending` (PR #128 review). It used to sit ABOVE it, between the
+  // `await agent(...)` and the guard, so a build agent that died returning `null` — a transient this file documents
+  // (`401 OAuth access token has expired`) — spent the answer's ONE repair attempt on a dispatch where no builder
+  // ever ran. `reportResolutionAccounting` then re-recorded the answers and granted nothing, because
+  // `resolutionsReopened` already held the key; with a green gate no later round touched the unit again.
+  if (resolutionsPending.delete(unit.key)) log(`unaccounted answers on \`${unit.key}\` have had their repair round — they no longer force the unit open`)
   r.claims.push(claimFor(unit, res, routed))
   reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
   reportResolutionAccounting(unit, routed, res)

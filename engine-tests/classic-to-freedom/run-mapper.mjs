@@ -1953,6 +1953,28 @@ check("ENG-95503: a page whose rules compare no GUID raises NO `lookup-value` qu
   () => lookupValueOf(lpEmptySection.changeSet || {}).length === 0
     && lookupValueOf(lpRun.changeSet || {}).length === 0,
   () => ({ empty: lookupValueOf(lpEmptySection.changeSet || {}), run: lookupValueOf(lpRun.changeSet || {}) }));
+/* PR #128 review (RC-8a) — THE SECOND DISJUNCT, EXERCISED. `mapper.mjs` raises the question when a GUID appears in
+   `pageBusinessRules` OR in `entityBusinessRules`, and every fixture above is a BINDPARAMETER rule, which lands in
+   the PAGE list. `||` short-circuits, so the entity half never evaluated: deleting it left all four tests plus C2
+   green. The uncovered case is the canonical Classic "filter this lookup by a fixed Stage record" — a FILTRATION
+   rule (`ruleType: 1`) whose static filter constant IS a lookup GUID. Its failure mode is the ticket's own: no
+   question is raised, so there is no id, so no answer can bind, and the operator's answer lands in
+   `resolutionsUnmatched`, which is the same as not answering. The `entityBusinessRules`-is-the-non-empty-one
+   assertion is what stops this test silently drifting back onto the page branch. */
+const guidFilterSchema = (attr, guid) => ({ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{${attr}:{f:{ruleType:1,baseAttributePatch:"${attr}",comparisonType:3,value:"${guid}",dataValueType:10}}},diff:[{operation:"insert",name:"${attr}",parentName:"Header",propertyName:"items",values:{bindTo:"${attr}"}}]};});` });
+const resGuidFilterCs = runMigration({ entity: "X", schemas: [guidFilterSchema("Stage", "aa11bb22-3344-4c55-8d66-000000000777")] }, { baseDir: FIX });
+check("ENG-95503 review fix (RC-8a): a FILTRATION rule whose STATIC FILTER CONSTANT is a lookup GUID raises the `lookup-value` question — this is the `entityBusinessRules` half of the condition, and no fixture reached it, so the disjunct could be deleted with every test still green",
+  () => { const cs = resGuidFilterCs.changeSet || {};
+    const raised = lookupValueOf(cs);
+    return raised.length === 1 && raised[0].item === LOOKUP_VALUE_ITEM; },
+  () => ({ raised: lookupValueOf(resGuidFilterCs.changeSet || {}), err: resGuidFilterCs.error }));
+check("ENG-95503 review fix (RC-8a): and it is genuinely the ENTITY list carrying the GUID, not the page list — without this the fixture could drift back onto the first disjunct and the second would stop being covered again, silently",
+  () => { const cs = resGuidFilterCs.changeSet || {};
+    const guid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+    return (cs.entityBusinessRules || []).length > 0
+      && guid.test(JSON.stringify(cs.entityBusinessRules))
+      && !guid.test(JSON.stringify(cs.pageBusinessRules || [])); },
+  () => ({ entity: resGuidFilterCs.changeSet?.entityBusinessRules, page: resGuidFilterCs.changeSet?.pageBusinessRules }));
 check("ENG-95503: the `lookup-value` question is PUBLISHED in `--units.preflight` and an answer keyed on it matches — the end of the round trip the reopen found broken, asserted through the real key form an operator writes",
   () => { const u = pageUnits(resGuidCs, checklistOpts({}));
     const asked = u.preflight.find((p) => p.kind === "lookup-value");
@@ -3148,6 +3170,13 @@ const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
 check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
   /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+/* PR #128 review (RC-8b) — and EXACTLY ONCE. The check above uses `.test()`, which cannot see a double-render: the
+   item used to be pushed straight into the rendered worklist, and a re-added render-time `confirm.push` would emit
+   it twice — one copy with an evidence id and one without — with this suite still green. The copy without an id is
+   the original defect (a question an operator was asked and had nowhere to answer), so a count is the assertion. */
+check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACTLY ONCE — a re-added render-time push would double-render it, one copy carrying an id and one not, and `.test()` is blind to that",
+  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1,
+  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length);
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
