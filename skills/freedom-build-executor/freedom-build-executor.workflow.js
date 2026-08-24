@@ -1303,6 +1303,16 @@ const ownPackageRecord = (rec, targetPackage) => {
   return { package: name, appUnitComplete: rec.appUnitComplete === true, planVersion: rec.planVersion ?? null, sectionPage: rec.sectionPage ?? null }
 }
 function packagePreconditionStop(targetPackage, packageState, sectionHost, packageCreatedByRun) {
+  const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+  // ENG-95884 — an INCONCLUSIVE live check is not stronger evidence than the run's OWN record of having minted
+  // this exact package: `list-packages`/`find-app` can flake, time out, or simply not be reported, but this
+  // process's own prior write already proves the package is there. Measured: a resumed round reported
+  // `packageState: 'unknown'` while `standWrites.packageCreated` on disk named this very package — the record was
+  // right there and the live check being inconclusive is not evidence against it. Resolve 'unknown' to 'exists'
+  // when the record agrees, BEFORE any branch below runs, so a resumed run's own success is never re-litigated as
+  // "inconclusive". Deliberately NOT applied to a CONFIDENT 'absent': that would mean the package was removed
+  // after this run made it, which is a stand-vs-record conflict worth its own stop, never a silent resume.
+  const effectiveState = (own && packageState === 'unknown') ? 'exists' : packageState
   // `new-app` over a package that ALREADY exists is unsatisfiable by construction, so it is a stop rather than a
   // unit. `create-app` mints its OWN package, and the app unit's acceptance criterion is an exact equality with
   // the planned package name — no `create-app` can produce a package that is already there. The only route to an
@@ -1312,8 +1322,7 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
   // operator to decide: the app unit already closed on its full deliverable, so this is a RESUME and the run
   // continues. Without this branch a `new-app` plan could not survive its own success — the app unit sets
   // `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
-  if (sectionHost === 'new-app' && packageState === 'exists') {
-    const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+  if (sectionHost === 'new-app' && effectiveState === 'exists') {
     if (own && own.appUnitComplete) return null
     if (own) {
       return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\` and the target package \`${targetPackage || '(unnamed)'}\` is on the stand because THIS migration created it — but the state file records its app unit as INCOMPLETE (the package exists; the section on the migrated object and/or the removal of the stub \`create-app\` mints did not finish). \`create-app\` cannot be re-run over a package that is already there, and this run will not infer a section nobody confirmed. Two ways out, both yours to pick: (a) finish the app unit BY HAND — \`create-app-section --entity-schema-name <the migrated object>\` in that application, then \`delete-app-section\` for the stub — and re-run this build, which then resumes without a re-plan and without a second approval; or (b) re-plan with \`sectionHost: existing-app\` against the package that now exists. Nothing further has been built` }
@@ -1323,10 +1332,10 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
   // Anything that is not one of the three published states — absent, empty, misspelled — is UNKNOWN. The schema
   // requires the field; this is what makes a result that slipped through anyway stop the run instead of being read
   // as "go ahead and create it".
-  if (packageState !== 'exists' && packageState !== 'absent') {
+  if (effectiveState !== 'exists' && effectiveState !== 'absent') {
     return { stopped: 'target-package-unknown', next: 'the stand checks for the target package were inconclusive, so this run will neither create it (a second `create-app` over an existing application is not a no-op) nor assume it is there (which is what wasted the previous run) — check by hand with `list-packages` / `find-app`, then re-run; nothing has been built' }
   }
-  if (packageState === 'absent' && !targetPackage) {
+  if (effectiveState === 'absent' && !targetPackage) {
     return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
   }
   return null
@@ -1865,6 +1874,51 @@ async function reconcileAgent(roundNo, label) {
 // how two routes ended up with two views of one stand.
 const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. Nothing was built`
 
+// ENG-95884 — `packageCreatedByRun` is deliberately NOT required on RECONCILE_SCHEMA (ENG-95850: "an agent that
+// cannot read the file must be able to say nothing rather than guess"), so a Reconcile call that silently dropped
+// the field and a queue file that genuinely holds no `standWrites.packageCreated` record were indistinguishable —
+// both paid the SAME stop. Measured cost of that on a resumed round: 18 agents, 982K tokens, 144 tool calls, zero
+// progress, because the record WAS on disk. Before either package-ownership stop below is trusted with no record in
+// hand, this ONE single-purpose read confirms it — cheap, and bounded the same way Reconcile's own retry is.
+const PACKAGE_RECORD_READ_ATTEMPTS = 2
+const PACKAGE_RECORD_SCHEMA = {
+  type: 'object',
+  required: ['read', 'packageCreated'],
+  properties: {
+    read: { type: 'boolean' },   // true iff the file was actually opened and inspected — false only on a real I/O/parse failure
+    packageCreated: {
+      type: ['object', 'null'],
+      required: ['package', 'appUnitComplete'],
+      properties: {
+        package: { type: 'string' },
+        appUnitComplete: { type: 'boolean' },
+        planVersion: { type: ['string', 'null'] },
+        sectionPage: { type: ['string', 'null'] },
+      },
+    },
+  },
+}
+function packageRecordPrompt() {
+  return `A build is about to STOP because the baseline Reconcile report carried no \`standWrites.packageCreated\` record — before that stop is trusted, confirm it with ONE single-purpose read. This is NOT a repeat of Reconcile; do nothing else — no \`--units\`, no \`--verify\`, no stand read.
+
+Open ${QUEUE_FILE}.
+- If the file cannot be opened or parsed, return { "read": false, "packageCreated": null }.
+- Otherwise return { "read": true, "packageCreated": <the root key \`standWrites.packageCreated\`, VERBATIM, or null when the key is absent> }. Copy the object exactly as written — do NOT derive it from the stand, do NOT infer it from \`find-app\`/\`list-packages\`, and do not reshape it.
+
+Return the schema. Nothing else.`
+}
+async function confirmPackageRecordAbsent() {
+  for (let attempt = 1; attempt <= PACKAGE_RECORD_READ_ATTEMPTS; attempt += 1) {
+    const answer = await agent(packageRecordPrompt(), {
+      agentType: 'general-purpose', schema: PACKAGE_RECORD_SCHEMA, phase: 'Reconcile',
+      label: attempt === 1 ? 'reconcile:package-record' : `reconcile:package-record:retry-${attempt - 1}`,
+    })
+    if (answer && answer.read) return answer
+    if (attempt < PACKAGE_RECORD_READ_ATTEMPTS) log(`package-record re-read returned nothing usable on attempt ${attempt} of ${PACKAGE_RECORD_READ_ATTEMPTS} — retrying the SAME single-purpose read before trusting the stop`)
+  }
+  return { read: false, packageCreated: null }
+}
+
 let state = await reconcileAgent(round, 'reconcile:baseline')
 
 if (!state) {
@@ -1875,6 +1929,23 @@ if (!state) {
 // created the package the report cannot know yet — and the mid-run gate would otherwise stop the run on its own
 // success. Declared here, below `state`, so it can never be called inside its temporal dead zone.
 const ownPackageNow = () => standWrites.packageCreated || state?.packageCreatedByRun || null
+// ENG-95884 — the confirming half of the dedicated read declared above. Only the two stops that hinge on
+// OWNERSHIP (a record this run made vs. nobody's record at all) are worth a re-read; every other stop from
+// `packagePreconditionStop` (unnamed package, absent-with-no-name) has nothing a file read could change. Returns
+// the (possibly cleared) stop plus whether the record was actually confirmed absent or merely never read.
+async function confirmPackageStop(candidateStop, targetPackage, pkgState, sectionHost) {
+  if (!candidateStop || (candidateStop.stopped !== 'target-package-unknown' && candidateStop.stopped !== 'new-app-over-existing-package')) {
+    return { stop: candidateStop, unread: false }
+  }
+  if (ownPackageNow()) return { stop: candidateStop, unread: false }
+  log(`no standWrites.packageCreated on the baseline report — confirming with one dedicated read of ${QUEUE_FILE} before trusting ${candidateStop.stopped}`)
+  const record = await confirmPackageRecordAbsent()
+  if (record.read) {
+    state = { ...state, packageCreatedByRun: record.packageCreated || null }
+    return { stop: packagePreconditionStop(targetPackage, pkgState, sectionHost, ownPackageNow()), unread: false }
+  }
+  return { stop: candidateStop, unread: true }
+}
 mergeContinuationCounters(state.continuationOf)
 // ENG-95850 (B4/C3) — AT THE BASELINE TOO, and this is the call that matters most: the baseline is the RESUMED run,
 // which is exactly when an orphan a previous session recorded is about to be read as a live page. The refresh sites
@@ -1930,21 +2001,29 @@ const componentMismatches = componentTypeMismatches(state.componentResolution, s
 const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
 const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
 if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
-const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+let stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+let packageRecordUnread = false
+;({ stop: stopOnPackage, unread: packageRecordUnread } = await confirmPackageStop(stopOnPackage, state.targetPackage, state.packageState, state.sectionHost))
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
   log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}`)
+  // ENG-95884 — distinguish "confirmed absent" from "not read": the second is not evidence of anything and must
+  // not read like a settled verdict, or an operator acts on a stop that a dead read produced.
+  const packageNext = packageRecordUnread
+    ? `${stopOnPackage.next} — NOTE: a dedicated re-read of ${QUEUE_FILE} could not confirm this after ${PACKAGE_RECORD_READ_ATTEMPTS} attempts. The record was NOT READ, which is NOT the same as confirmed absent. Nothing was spent on this attempt; simply re-run this build to retry the read.`
+    : stopOnPackage.next
   return runReturn({
     ...stopOnPackage,
     componentMismatches,
     packageCreatedByRun: ownPackageNow(),
+    packageRecordUnread,
     // `...stopOnPackage` carries the package fix in `next`; when component types ALSO fail, spell them out in the
     // same human-readable field so the operator fixes BOTH in one re-plan instead of hitting Hard Stop 3.5 as a
     // second round-trip. The structured `componentMismatches` above is not enough — `next` is what an operator reads.
     next: componentMismatches.length
-      ? stopOnPackage.next + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
+      ? packageNext + ' ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: '
         + componentReplanClause(componentMismatches)
-      : stopOnPackage.next,
+      : packageNext,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -2959,7 +3038,7 @@ if (pendingJudgeIds.size) {
   phase('Reconcile')
   const refreshed = await reconcileAgent(round, 'reconcile:after-preflight')
   if (refreshed) {
-    const stop = acceptReconciled(refreshed, 'the post-preflight Reconcile')
+    const stop = await acceptReconciled(refreshed, 'the post-preflight Reconcile')
     if (stop) {
       await persistPending('stopping after the post-preflight reconcile')
       return runReturn({ ...stop, rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet],
@@ -3102,7 +3181,7 @@ await refsStep()
 //
 // One place, so a fourth refresh site cannot invent a fourth set of rules. Returns a STOP when a guarantee is now
 // broken; the caller returns it, because none of them can be built out of.
-function acceptReconciled(next, whereFrom) {
+async function acceptReconciled(next, whereFrom) {
   markCarryPersisted()
   state = next
   mergeContinuationCounters(state.continuationOf)
@@ -3125,10 +3204,21 @@ function acceptReconciled(next, whereFrom) {
   // `ownPackageNow()` and not `state.packageCreatedByRun`: on the round that created the package this process holds
   // the record and the refreshed report cannot yet, so reading only the report would stop a `new-app` run on its own
   // app unit's success — which is exactly what it did before ENG-95850.
-  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+  let stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+  let pkgRecordUnread = false
+  ;({ stop: stopPkg, unread: pkgRecordUnread } = await confirmPackageStop(stopPkg, state.targetPackage, state.packageState, state.sectionHost))
   if (stopPkg) {
     log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
-    return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null, packageCreatedByRun: ownPackageNow() }
+    return {
+      ...stopPkg,
+      targetPackage: state.targetPackage || null,
+      packageState: state.packageState || null,
+      packageCreatedByRun: ownPackageNow(),
+      packageRecordUnread: pkgRecordUnread,
+      next: pkgRecordUnread
+        ? `${stopPkg.next} — NOTE: a dedicated re-read of ${QUEUE_FILE} could not confirm this after ${PACKAGE_RECORD_READ_ATTEMPTS} attempts. The record was NOT READ, which is NOT the same as confirmed absent. Nothing was spent on this attempt; simply re-run this build to retry the read.`
+        : stopPkg.next,
+    }
   }
   // The component-type gate (ENG-95468) is a mid-run GUARANTEE too, for the same reason the two stops above are:
   // a Reconcile can surface a `resolved: false` type that the BASELINE gate never saw — a resumed run whose baseline
@@ -3246,7 +3336,7 @@ while (true) {
       next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it`,
     })
   }
-  const stopAfterRound = acceptReconciled(next, `round ${round}'s Reconcile`)
+  const stopAfterRound = await acceptReconciled(next, `round ${round}'s Reconcile`)
   if (stopAfterRound) {
     await persistPending('stopping on a guarantee that no longer holds')
     return runReturn({ ...stopAfterRound, rounds: round, verdict: verdictOf(state.verify),
