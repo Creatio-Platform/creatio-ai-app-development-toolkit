@@ -1490,10 +1490,11 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
     const byKind = Object.fromEntries(rows.filter((r) => r.list).map((r) => [r.list.kind + ":" + r.list.item, r.vk.type]));
     // 4 deliverable rows (columns · 2 filters · 1 action) + the per-page `creatio-ui-guidelines` quality gate, which
     // applies to a list page's layout like any other page's — a published key must carry exactly one of those.
-    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4 
-    // ⚠ Confirm items + the page's one quality gate
+    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4
+    // ⚠ Confirm items + the page's TWO quality-gate rows (ENG-95859: "design pass ran" and "independently judged"
+    // are different facts, reported as two rows sharing the ONE `list#quality-gates` id below)
     return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 4
-      && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 1
+      && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 2
       && byKind["columns:set"] === "listcolumns"
       && byKind["filter:QuickFilterByDueDate"] === "listfilter" && byKind["filter:QuickFilterByStage"] === "listfilter"
       && byKind["action:runBulkAssign"] === "evidence"
@@ -6046,7 +6047,10 @@ check("verify: a built page missing the DCM progress bar / Next steps / Communic
 const vOk = renderVerify(vResult, {}, {
   ops: [{ name: "Contact", type: "crt.ComboBox" }, { name: "Owner", type: "crt.ComboBox" }, { name: "DG", type: "crt.DataGrid" },
     { name: "Bar", type: "crt.EntityStageProgressBar" }, { name: "NS", type: "crt.NextSteps" },
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    // ENG-95859: Approvals is TWO required components — the module ABOVE the island (`crt.Approval`) AND the
+    // list (`crt.ApprovalList`). A page with "all deliverables present" must build both, or this fixture is no
+    // longer testing what its name says.
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
@@ -7212,7 +7216,10 @@ const tplProvidedRes = { changeSet: { viewConfigDiff: [{ name: "Contact", values
 const tplProvidedDeep = renderVerify(tplProvidedRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate", viewConfig: { items: [
   { name: "Root", type: "crt.Grid", items: [{ name: "Tabs", type: "crt.TabContainer", items: [{ name: "T1", type: "crt.Tab", items: [
     { name: "Contact", type: "crt.ComboBox" }, { name: "Feed", type: "crt.Feed" },
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AL", type: "crt.ApprovalList" },
+    // ENG-95859: Approvals' second required half (`crt.Approval`, the module above the island) nested just as
+    // deep as its list — the D6 regression this test pins was about finding a nested type at all, not about
+    // this specific feature having only one gated type.
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" },
   ] }] }] },
 ] } } }, ...QG_EVIDENCE });
 const tplProvidedShallow = renderVerify(tplProvidedRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate",
@@ -7220,7 +7227,9 @@ const tplProvidedShallow = renderVerify(tplProvidedRes, {}, { pages: { main: { p
 check("ENG-94975 D6: template-provided components nested 4 levels deep in the merged `bundle.viewConfig` ARE found (Feed / CommunicationOptions / ApprovalList all ✅, verdict complete) — the regression that motivated contract v2",
   tplProvidedDeep.missing === 0 && tplProvidedDeep.unverified === 0 && tplProvidedDeep.complete === true
   && /Feed \(`crt\.Feed`\) \| ✅ Done/.test(tplProvidedDeep.markdown)
-  && tplProvidedShallow.missing === 3, // positive control: the SAME expectations, without those nodes, are MISSING
+  // positive control: the SAME expectations, without those nodes, are MISSING — 4 now that Approvals gates on
+  // TWO components (crt.Approval + crt.ApprovalList) instead of one (ENG-95859).
+  && tplProvidedShallow.missing === 4,
   () => ({ deep: { m: tplProvidedDeep.missing, u: tplProvidedDeep.unverified }, shallow: { m: tplProvidedShallow.missing },
     rows: tplProvidedDeep.markdown.split("\n").filter((l) => /crt\./.test(l)).map((l) => l.slice(0, 110)) }));
 
@@ -7929,9 +7938,10 @@ const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main:
 // sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
 const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
 const m12Row = (v, label) => v.markdown.split("\n").find((l) => /^\| \d/.test(l) && l.includes(label)) || "";
-// The five component TYPES this page's rows look for, all present in the right NUMBER — but not one of them
-// carrying a `name`. This is the checker's payload: right count, right types, zero identity.
-const M12_NAMELESS = [{ type: "crt.Input" }, { type: "crt.Tab" }, { type: "crt.ApprovalList" }, { type: "crt.EntityStageProgressBar" }, { type: "crt.NextSteps" }];
+// The six component TYPES this page's rows look for, all present in the right NUMBER — but not one of them
+// carrying a `name`. This is the checker's payload: right count, right types, zero identity. `crt.Approval` is
+// Approvals' second required half (ENG-95859: the module above the profile island, gated alongside the list).
+const M12_NAMELESS = [{ type: "crt.Input" }, { type: "crt.Tab" }, { type: "crt.Approval" }, { type: "crt.ApprovalList" }, { type: "crt.EntityStageProgressBar" }, { type: "crt.NextSteps" }];
 const M12_NAMED = M12_NAMELESS.map((o, i) => ({ name: `E${i}`, ...o }));
 M12_NAMED[0].name = "MainF";   // the one element whose NAME the plan actually expects
 
@@ -8071,7 +8081,7 @@ check("ENG-94975 M1: the fields row tells the three inputs APART — fetched-and
    `resolveCountVk`. So a page whose `--built.pages` key was never supplied reported hard ❌ MISSING on all three —
    "you built it wrong" about a page the verifier never fetched, sending the executor to rebuild instead of to
    re-read. Both outcomes still block exit 0; which of the two repairs is named is the whole point. ---- */
-const M12_COMPONENT_ROWS = ["Approvals (`crt.ApprovalList`)", "DCM case progress bar", "DCM Next steps"];
+const M12_COMPONENT_ROWS = ["Approvals (`crt.ApprovalList`)", "Approvals — second required component (`crt.Approval`)", "DCM case progress bar", "DCM Next steps"];
 check("ENG-94975 M2: with NO `--built.pages[\"main\"]` entry, every COMPONENT row is ⚠ unverified and names the missing ENTRY — never ❌ MISSING (pre-fix all three read ❌ MISSING for a page nobody fetched)",
   () => M12_COMPONENT_ROWS.every((r) => /⚠ verify/.test(m12Row(m1NoEntry, r)) && /no .--built\.pages\["main"\]. entry/.test(m12Row(m1NoEntry, r)) && !/❌ MISSING/.test(m12Row(m1NoEntry, r)))
   && m1NoEntry.pages.main.missing === 0 && m1NoEntry.pages.main.unverified > 0
