@@ -162,15 +162,25 @@ class ConsumptionContractDocTests(unittest.TestCase):
         question this channel added was the systematic case, its effect living in
         `BusinessRule_*` schemas that no page-body walk can see.
         """
+        # `"unknown"` is quoted-in-backticks deliberately: the bare word `unknown` already
+        # appears in both files ("cannot verify, unknown schema") and would not fail.
         for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
-            content = flat(read_text(path))
-            self.assertIn('`"unknown"`', content, path)
-            self.assertIn("read-page-business-rules", content, path)
-        skill = flat(read_text(EXECUTOR_SKILL))
+            self.assertIn('`"unknown"`', flat(read_text(path)), path)
         # The distinction itself, not merely the vocabulary: a doc that listed three values
         # while still calling the third one a defect would pass a bare-word check.
+        skill = flat(read_text(EXECUTOR_SKILL))
         self.assertIn("NOT a refutation", skill)
         self.assertIn("invisible to `viewConfig`", skill)
+        # THE SURFACE THAT CAN ANSWER, pinned per file on a phrase this change introduced.
+        # `read-page-business-rules` on its own is NOT usable here: the queue-file doc already
+        # mentioned it twice before this channel existed (the `Business rules` row, and the
+        # verify-row example), so a bare-name check there had no failure mode at all -- the
+        # same defect this module fixed for "blocks", reintroduced by the pin meant to prevent it.
+        self.assertIn("read, so it is within the read-only remit", skill)
+        self.assertIn(
+            "`read-page-business-rules` rather than reporting a page-body zero as a refutation",
+            flat(read_text(EXECUTOR_FILES_DOC)),
+        )
 
     def test_an_unconsumed_answer_outlives_the_process_that_found_it(self):
         """The record is persisted, and its EMPTY value is load-bearing.
