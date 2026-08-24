@@ -408,19 +408,15 @@ Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_d
 
 Notes for each release live in `RELEASE-NOTES.md` (canonical file at the repo root). Add a `## X.Y.Z (YYYY-MM-DD)` section at the top of the file in a separate PR before triggering the release workflow. Subsections (`###`) are free-form per release (Features, Bug Fixes, Migration Notes, etc.).
 
-<!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
+<!-- BEGIN MANAGED SECTION: company-agent-policy v1.1.0 -->
 <!-- DO NOT EDIT THIS SECTION MANUALLY. -->
 
 ## Required Workflow
-Before any substantial repository analysis, planning, implementation, refactoring, bug fixing, or file edits, use the `$ensure-ai-commit-attribution` skill.
-
-This is a mandatory attribution rule for all coding sessions in this repository.
+Attribution of AI-authored changes is handled automatically by the installed Claude Code tooling hooks (Pre/PostToolUse events) — no manual skill or marker command is required for normal work.
 
 The agent must:
-1. Mark every file the agent creates or modifies with the skill marker helper.
-2. Allow the repository hooks to manage the `AI agents: ...` trailer automatically.
-3. Avoid all other attribution commands during normal work.
-
-For normal work, the only allowed attribution command is the file-marking command after a real file write. That single command must also handle any needed hook installation quietly.
+1. Let the installed hooks record every file the agent creates or modifies.
+2. Allow the hooks to manage the `AI agents: ...` commit trailer automatically.
+3. Avoid running manual attribution commands during normal work.
 
 <!-- END MANAGED SECTION -->
