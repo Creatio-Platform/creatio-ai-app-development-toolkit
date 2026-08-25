@@ -1775,12 +1775,16 @@ function rowsById(rows) {
 // PR #128 review (round 5) -- AGENT-AUTHORED AND OPERATOR-AUTHORED TEXT IS CAPPED WHERE IT IS RECORDED, not only
 // where it is rendered. An `unconsumed` row RIDES THE CARRY: `carryBlock` dumps `${j(carry.unconsumed)}` into the
 // round-close prompt on EVERY close, and the row is re-persisted and re-read for as long as it survives -- so an
-// uncapped `answer` / `why` / `how` / `found` is re-serialised into a prompt every round for the LIFE of the entry,
-// and a run with several stuck answers pays for all of them, every round. The sibling RENDER paths
+// uncapped `item` / `answer` / `why` / `how` / `found` is re-serialised into a prompt every round for the LIFE of the
+// entry, and a run with several stuck answers pays for all of them, every round. The sibling RENDER paths
 // (`resolutionClaimsLine`, `unconsumedRepairText`) already `.slice(0, 400)` for exactly the reason this closes --
 // RC-6: fencing stops a break-out, not a context-flooding string -- but a cap that lives only at a render site
 // binds nothing on the persisted row and is one forgotten call away from not applying at all.
 // The marker is INSIDE the budget, so a downstream `.slice(0, 400)` can never shear it off and hide the truncation.
+// `id` is deliberately NOT capped and must never be: it is the MATCH KEY -- `pairKey`, `rowsById`, the routed-set
+// comparison and the verifier's echoed `resolutionChecks[].id` all key on it byte for byte, so truncating it would
+// turn a long question into a permanently unmatchable one, which is the accounting miss RC-13 exists to prevent.
+// `item` carries no such duty on this row -- it is the question text a reader sees beside the id -- so it is capped.
 const CARRY_TEXT_CAP = 400
 const CARRY_TEXT_TRUNCATED = ' …[truncated]'
 function capCarryText(value) {
@@ -1869,7 +1873,7 @@ function resolutionContradictions(claims, checks) {
       // `false` and read as a contradiction, so one wasted build round plus a NOT COMPLETE was the EXPECTED outcome
       // for every answer whose effect is not in the page body.
       if (!seen || seen.shows !== SHOWS_NO) continue
-      out.push({ unit: claim.unit, id: row.id, kind: row.kind, item: row.item,
+      out.push({ unit: claim.unit, id: row.id, kind: row.kind, item: capCarryText(row.item),
         answer: capCarryText(row.answer), how: capCarryText(row.how),
         source: UNCONSUMED_FROM_VERIFIER,
         found: nonBlank(seen.found) ? capCarryText(seen.found.trim()) : 'the verifier could not find it on the page' })
@@ -1885,7 +1889,7 @@ function unconsumedResolutions(routed, res, unitKey) {
   const rows = Array.isArray(res?.resolutionsApplied) ? res.resolutionsApplied : []
   const byId = rowsById(rows)
   return (routed || []).filter((p) => byId.get(idKey(p.id))?.applied !== true).map((p) => ({
-    unit: unitKey, id: p.id, kind: p.kind || null, item: p.item || null,
+    unit: unitKey, id: p.id, kind: p.kind || null, item: capCarryText(p.item) || null,
     answer: capCarryText(p.resolution?.answer) || null, source: 'dispatch',
     why: nonBlank(byId.get(idKey(p.id))?.why) ? capCarryText(byId.get(idKey(p.id)).why.trim()) : 'the build reported nothing for this answer',
   }))

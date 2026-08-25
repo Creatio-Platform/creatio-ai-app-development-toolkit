@@ -2004,10 +2004,36 @@ check("PR #128 review (round 5, Major): the cap leaves a SHORT value byte-identi
     && String(wf.capCarryText(CAP_LONG)).slice(0, 400) === wf.capCarryText(CAP_LONG),
   () => JSON.stringify(wf.capCarryText(CAP_LONG)).slice(0, 120));
 check("PR #128 review (round 5, Major): BOTH record sites call `capCarryText` in the shipped source — the helper existing while a site still records raw text is the same silence in a new place",
-  /answer: capCarryText\(row\.answer\), how: capCarryText\(row\.how\)/.test(wfSrc)
+  /item: capCarryText\(row\.item\),\s*\n?\s*answer: capCarryText\(row\.answer\), how: capCarryText\(row\.how\)/.test(wfSrc)
     && /found: nonBlank\(seen\.found\) \? capCarryText\(seen\.found\.trim\(\)\)/.test(wfSrc)
-    && /answer: capCarryText\(p\.resolution\?\.answer\) \|\| null/.test(wfSrc)
+    && /item: capCarryText\(p\.item\) \|\| null,\s*\n?\s*answer: capCarryText\(p\.resolution\?\.answer\) \|\| null/.test(wfSrc)
     && /why: nonBlank\(byId\.get\(idKey\(p\.id\)\)\?\.why\) \? capCarryText\(byId\.get\(idKey\(p\.id\)\)\.why\.trim\(\)\)/.test(wfSrc));
+check("PR #128 review (round 5, Major): `item` is capped on BOTH carry-record sites too — it is stand-derived free text off the customer's Classic schema riding the same persisted row, so an uncapped one floods the round-close prompt for the life of the entry exactly like an uncapped `why` does",
+  () => { const gone = wf.unconsumedResolutions(
+      [{ id: ACC_ID_B, pageKey: "main", kind: "entity-filter", item: CAP_LONG, resolution: { answer: "a" } }],
+      { resolutionsApplied: [{ id: ACC_ID_B, applied: false, why: "w" }] }, "main");
+    const bad = wf.resolutionContradictions(
+      [{ unit: "main", resolutionClaims: [{ id: ACC_ID_B, kind: "entity-filter", item: CAP_LONG, answer: "a", applied: true, how: "h" }] }],
+      [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: "absent" }]);
+    return gone.length === 1 && gone[0].item.length === 400 && /\[truncated\]$/.test(gone[0].item)
+      && bad.length === 1 && bad[0].item.length === 400 && /\[truncated\]$/.test(bad[0].item); },
+  () => ({ dispatch: wf.unconsumedResolutions([{ id: ACC_ID_B, pageKey: "main", item: CAP_LONG, resolution: { answer: "a" } }],
+    { resolutionsApplied: [{ id: ACC_ID_B, applied: false, why: "w" }] }, "main")[0]?.item?.length }));
+check("PR #128 review (round 5, Major): `id` is NOT capped on either record site and must never be — it is the MATCH KEY (`pairKey`, `rowsById`, the routed-set comparison, the verifier's echoed `resolutionChecks[].id`), so truncating a long question's id would make it permanently unmatchable, which is the RC-13 accounting miss with a different cause",
+  () => { const longId = `main#confirm:entity-filter:${"z".repeat(900)}`;
+    const routed = [{ id: longId, pageKey: "main", kind: "entity-filter", item: "i", resolution: { answer: "a" } }];
+    const gone = wf.unconsumedResolutions(routed, { resolutionsApplied: [{ id: longId, applied: false, why: "w" }] }, "main");
+    // the id round-trips byte for byte, so the row still matches its own question on the next round
+    return gone.length === 1 && gone[0].id === longId
+      && wf.hasUnconsumedPair(gone, "main", longId)
+      && wf.unconsumedResolutions(routed, { resolutionsApplied: [{ id: longId, applied: true, how: "h" }] }, "main").length === 0; },
+  () => "a long id must round-trip uncapped");
+check("PR #128 review (round 5, Major): the `item` cap is in the SHIPPED source at both record sites, and `id` is left alone at both — the pin fails in either direction, so neither capping the key nor forgetting the text can pass",
+  /item: capCarryText\(row\.item\)/.test(wfSrc)
+    && /item: capCarryText\(p\.item\) \|\| null/.test(wfSrc)
+    && /out\.push\(\{ unit: claim\.unit, id: row\.id, kind: row\.kind/.test(wfSrc)
+    && /unit: unitKey, id: p\.id, kind: p\.kind \|\| null/.test(wfSrc)
+    && !/id: capCarryText\(/.test(wfSrc));
 
 // Round-5 Minor — the `(unit, id)` dedup on `unconsumed` normalises like everything else. RC-13 fixed this exact
 // asymmetry for the `resolutionsApplied` lookups; these two sites were the same shape left behind.
