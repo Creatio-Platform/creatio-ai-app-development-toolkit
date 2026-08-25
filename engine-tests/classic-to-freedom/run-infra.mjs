@@ -156,8 +156,11 @@ check("ENG-95503 review fix: the `shows` vocabulary and the unconsumed-source ta
 const INJECTED = SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`).join("\n");
 
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
+  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
+  // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
+  // app/package identity it promises is producible on this stand at all.
+  "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
@@ -484,6 +487,19 @@ check("buildMode: the three modes are accepted, case- and whitespace-insensitive
 check("buildMode: an UNKNOWN mode THROWS — it must never fall back to `auto`, which would silently run unattended the one time the operator asked to watch",
   () => { try { wf.buildMode("semi"); return false; } catch (e) { return /unknown mode/i.test(e.message) && /checkpoints/.test(e.message); } });
 
+// ENG-95855 — the migration skill's verification-surface preflight, handed over as an explicit argument.
+// Unlike `buildMode`, absence is never guessed into one of the three tokens: a caller that omits the field
+// gets `null`, not a default tier, because guessing a tier nobody resolved is the exact "preference silently
+// drifted from what was resolved" failure this ticket exists to close.
+check("buildVerificationSurface: an absent value is `null` — never guessed into a tier",
+  () => (wf.buildVerificationSurface(undefined) === null && wf.buildVerificationSurface(null) === null && wf.buildVerificationSurface("") === null));
+check("buildVerificationSurface: the three tokens round-trip verbatim",
+  () => (wf.buildVerificationSurface("automatic:2") === "automatic:2" && wf.buildVerificationSurface("automatic:3") === "automatic:3" && wf.buildVerificationSurface("manual") === "manual"));
+check("buildVerificationSurface: accepted case- and whitespace-insensitively, matching buildMode's own normalization",
+  () => (wf.buildVerificationSurface(" Manual ") === "manual" && wf.buildVerificationSurface("AUTOMATIC:2") === "automatic:2"));
+check("buildVerificationSurface: an UNKNOWN token THROWS — a typo must not silently ship as a resolved tier",
+  () => { try { wf.buildVerificationSurface("automatic"); return false; } catch (e) { return /unknown verificationSurface/i.test(e.message) && /automatic:2/.test(e.message); } });
+
 check("unknownCheckpointKeys: a key `--units` does not publish is REPORTED — it matches no unit, so the run would never stop and the section would be built unwatched",
   () => (wf.unknownCheckpointKeys(["main", "child:Nope"], ["main", "child:Documents"]).join(",") === "child:Nope"));
 check("unknownCheckpointKeys: every key published ⇒ nothing reported; no keys requested ⇒ nothing reported",
@@ -561,6 +577,22 @@ check("guidelinesCloseMiss: the row never holds a reachability or app unit",
   () => (gMiss({}, gIds, [], { key: "sectionRegistered", kind: "reach" }) === null
     && gMiss({}, gIds, [], { key: "app", kind: "app" }) === null));
 
+// --- ENG-95471 REOPEN — a page diffed and found ALREADY compliant (0 edits, identical to the reference) could not
+// file ANY record: `componentsDiffed` demanded a non-empty list, so the honest outcome was unfileable and the row
+// stayed a permanent ❌ MISSING across repair rounds. `noChangesNeeded: true` + `noChangesReason` is the answer for
+// exactly that outcome — never a substitute for a real diff when one is due.
+const gNoDiff = { evidenceId: "main#quality-gates", ran: true, referencePage: "ContactsListPage", componentsDiffed: [], noChangesNeeded: true, noChangesReason: "diffed QuickFilter and the command buttons against ContactsListPage — identical" };
+check("ENG-95471 reopen: `noChangesNeeded: true` WITH a reason answers the row — empty `componentsDiffed` is not silence when it is explicitly a no-drift finding",
+  () => (gMiss({ guidelines: gNoDiff }) === null));
+check("ENG-95471 reopen: `noChangesNeeded: true` with NO reason does not answer — the flag alone is not evidence",
+  () => (typeof gMiss({ guidelines: { ...gNoDiff, noChangesReason: undefined } }) === "string"
+    && typeof gMiss({ guidelines: { ...gNoDiff, noChangesReason: "   " } }) === "string"));
+check("ENG-95471 reopen: an empty `componentsDiffed` with NEITHER `noChangesNeeded` NOR a non-empty diff is still a miss — the concession never becomes a silent free pass",
+  () => (typeof gMiss({ guidelines: { ...gOk, componentsDiffed: [] } }) === "string"));
+check("ENG-95471 reopen: `noChangesNeeded` is ignored when a real diff IS present — a builder cannot set the flag to dodge naming what it actually diffed AND still have the diff count",
+  () => (gMiss({ guidelines: { ...gOk, noChangesNeeded: false } }) === null
+    && gMiss({ guidelines: { ...gOk, noChangesNeeded: true, noChangesReason: "" } }) === null));
+
 // --- guidelinesLine: the text that actually reaches the verifier, so every branch is asserted on the RENDERED
 // string. It renders the close-row decision; re-deriving it is how the two surfaces came to disagree.
 check("guidelinesLine: a unit that owes no record renders NOTHING — no instruction about an id that does not exist",
@@ -582,6 +614,10 @@ check("ENG-95471 review fix: a whitespace-only `referencePage` cannot reach a fi
 check("ENG-95471 review fix: a quote inside a builder value cannot reshape the filing instruction — values are JSON-quoted, not interpolated raw",
   () => { const t = wf.guidelinesLine({ ...gOk, referencePage: 'A" , "components": ["x' }, null, true, FENCE);
     return t.includes('"components": ["crt.Input"]') && (t.match(/"components":/g) || []).length === 1; });
+check("ENG-95471 reopen: a no-changes-needed record renders `components: []` plus the JSON-quoted `noChangesReason` — never confused with the run-and-diffed filing",
+  () => { const t = wf.guidelinesLine(gNoDiff, null, true, FENCE);
+    return t.includes('"components": []') && t.includes(JSON.stringify(gNoDiff.noChangesReason))
+      && t.includes("NO CHANGES NEEDED") && !t.includes("file NOTHING"); });
 
 check("ENG-95471 / ENG-95469: `guidelines` AND `selfCheck` are REQUIRED on the page build schema — optional `guidelines` let a builder close on silence, and A3's in-context gate (`selfCheck`) must run before a page reports complete",
   /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'\]/.test(wfSrc));
@@ -859,10 +895,34 @@ check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy s
   () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
-check("packagePreconditionStop: provenance changes ONLY the `new-app`-over-existing branch — the unknown and unnamed stops are untouched by a record, and the other host modes still proceed",
-  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()).stopped === "target-package-unknown"
-    && wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
+check("packagePreconditionStop: an own record ALSO resolves a `new-app` stop over 'unknown' — 'unknown' + a matching COMPLETE record is exactly the resumed-run-over-its-own-success case ENG-95884 exists to let through, not a stop to preserve",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()) === null));
+check("packagePreconditionStop: 'unknown' + a matching but INCOMPLETE record resolves to the OWNERSHIP stop, not the generic unknown one — the record already answers 'exists', so the operator is told to finish the app unit, not to go check `list-packages` by hand",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec({ appUnitComplete: false })).stopped === "new-app-over-existing-package"));
+check("packagePreconditionStop: provenance changes ONLY what a matching record can resolve — the unnamed stop is untouched (no record ever supplies a package NAME), and a non-`new-app` host mode with no record proceeds exactly as before",
+  () => (wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
     && wf.packagePreconditionStop("UsrPkg", "exists", "existing-app", null) === null));
+
+// --- ENG-95884 (review fix): `resolvePackageState` — the resolved fact SCHEDULING must observe too, not just the
+// stop above. Executed against `appUnitFor`/`isOpenApp` themselves (not source-text), because the bug this fix
+// closes is exactly that those two kept reading the raw, unconfirmed `packageState` after the stop had already
+// cleared on the run's own record — a resumed run's own success re-dispatching `create-app` over itself.
+check("resolvePackageState: an own record with a COMPLETE app unit resolves 'unknown' to 'exists' — this is the value scheduling must see",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec()) === "exists"));
+check("resolvePackageState: 'absent' is NEVER overridden by an own record — a confident absent could mean the package was removed after this run made it, a conflict worth its own stop, never a silent resume",
+  () => (wf.resolvePackageState("UsrPkg", "absent", ownRec()) === "absent"));
+check("resolvePackageState: a record naming a DIFFERENT package resolves nothing — the override is scoped to a NAME match, so a stale record from an earlier package in the same queue cannot flip the wrong target to 'exists'",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" })) === "unknown"));
+check("resolvePackageState: an own record with an INCOMPLETE app unit still resolves to 'exists' — the package itself is confirmed on the stand even though the deliverable is not, matching packagePreconditionStop's own new-app-over-existing-package stop text",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec({ appUnitComplete: false })) === "exists"));
+check("resolvePackageState: with NO provenance record 'unknown' stays 'unknown' — absence is never read as ownership",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", null) === "unknown"));
+check("THE BLOCKER FIX ITSELF: scheduling handed the RESOLVED state (not the raw 'unknown') reports the app unit CLOSED — this is the exact gap where `create-app` used to get re-dispatched over a package the run's own record already proved exists",
+  () => (wf.appUnitFor("UsrPkg", wf.resolvePackageState("UsrPkg", "unknown", ownRec())) === null
+    && wf.isOpenApp(wf.resolvePackageState("UsrPkg", "unknown", ownRec())) === false));
+check("THE BLOCKER FIX, negative case: a record for a DIFFERENT package must NOT close scheduling — the override stays scoped to a matching package name all the way through to `appUnitFor`/`isOpenApp`",
+  () => (wf.appUnitFor("UsrPkg", wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" }))) !== null
+    && wf.isOpenApp(wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" }))) === true));
 check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
   () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
 check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
@@ -945,6 +1005,85 @@ check("ENG-95468 replay: the Applicant plan's BOTH round-1 blockers are caught p
     return comp.length === 1 && comp[0].type === "crt.ContactCommunication"
       && place?.stopped === "new-app-over-existing-package"; });
 
+/* ---- ENG-95468: the TEMPLATE axis and the APP/PACKAGE IDENTITY axis of the same pre-build question ----------
+ * Added after the third Applicant run (2026-08-24), which diverged on BOTH of them and on neither component types
+ * nor placement: the plan named `ListPageV2FreedomTemplate` (the page was built on `ListPageV3Template`) and
+ * promised the app code `UsrApplicantApp` (the stand ended up with `UsrApplicant`, the prefix being empty). Both
+ * were recorded AFTER the write, as proposals. These pin the decision layer; the execution paths are driven below.
+ */
+check("ENG-95468: `templateMismatches` gates on an explicit resolved:false and carries the stand's reason, exactly like the component axis",
+  () => { const m = wf.templateMismatches([{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
+    ["ListPageV2FreedomTemplate"]);
+    return m.length === 1 && m[0].name === "ListPageV2FreedomTemplate" && /ListPageV3Template/.test(m[0].note); },
+  () => JSON.stringify(wf.templateMismatches([{ name: "ListPageV2FreedomTemplate", resolved: false }], ["ListPageV2FreedomTemplate"])));
+check("ENG-95468: `templateMismatches` applies the SAME three absence rules as the component axis — a resolved:true name does not gate, a name the plan never published cannot manufacture a stop, and an unreported name is not a failure",
+  () => wf.templateMismatches([{ name: "ListPageV3Template", resolved: true }], ["ListPageV3Template"]).length === 0
+    && wf.templateMismatches([{ name: "SomeOtherTemplate", resolved: false }], ["ListPageV3Template"]).length === 0
+    && wf.templateMismatches([], ["ListPageV3Template"]).length === 0,
+  () => ({ resolvedTrue: wf.templateMismatches([{ name: "ListPageV3Template", resolved: true }], ["ListPageV3Template"]),
+    unpublished: wf.templateMismatches([{ name: "SomeOtherTemplate", resolved: false }], ["ListPageV3Template"]),
+    unreported: wf.templateMismatches([], ["ListPageV3Template"]) }));
+check("ENG-95468: a plan that published NO `templateNames` (one predating the field) skips the intersection and is trusted as given — the same 'behave exactly as before' rule `componentTypeMismatches` applies",
+  () => wf.templateMismatches([{ name: "AnyTemplate", resolved: false }], []).length === 1
+    && wf.templateMismatches([{ name: "AnyTemplate", resolved: false }], undefined).length === 1);
+check("ENG-95468: `requiredAppCode` is the arithmetic `create-app` performs — package = prefix + code — so the code is derived, never chosen: empty prefix yields the package itself, a real prefix is stripped, and a target the prefix cannot produce yields null",
+  () => wf.requiredAppCode("UsrApplicant", "") === "UsrApplicant"
+    && wf.requiredAppCode("UsrApplicant", "Usr") === "Applicant"
+    && wf.requiredAppCode("CrtThing", "Usr") === null
+    && wf.requiredAppCode("Usr", "Usr") === null,
+  () => ({ empty: wf.requiredAppCode("UsrApplicant", ""), pfx: wf.requiredAppCode("UsrApplicant", "Usr"),
+    foreign: wf.requiredAppCode("CrtThing", "Usr"), exact: wf.requiredAppCode("Usr", "Usr") }));
+check("ENG-95468: `requiredAppCode` treats an UNREPORTED prefix as no answer, not as an empty one — `null`/absent is 'nobody looked' and must not silently behave like a stand with no prefix",
+  () => wf.requiredAppCode("UsrApplicant", null) === null && wf.requiredAppCode("UsrApplicant", undefined) === null);
+// THE THIRD APPLICANT RUN, replayed through the decision layer: plan `UsrApplicantApp`, target package
+// `UsrApplicant`, prefix empty. Both cannot hold, and this is the check that says so BEFORE `create-app` writes.
+check("ENG-95468 replay (third Applicant run): a plan whose application code and target package contradict each other under this stand's prefix is caught PRE-BUILD, naming the code the package actually requires",
+  () => { const m = wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp");
+    return m?.kind === "app-code-contradicts-target-package" && m.requiredCode === "UsrApplicant" && m.applicationCode === "UsrApplicantApp"; },
+  () => JSON.stringify(wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp")));
+check("ENG-95468: a target package this stand's prefix cannot produce AT ALL is its own verdict — no code fixes it, so it is not reported as a code contradiction",
+  () => wf.appIdentityMismatch("CrtThing", "new-app", "Usr", null)?.kind === "target-package-not-producible",
+  () => JSON.stringify(wf.appIdentityMismatch("CrtThing", "new-app", "Usr", null)));
+check("ENG-95468: the identity check is SCOPED and fails closed — it applies only where the run will create the app (`new-app`), it does not exist without a reported prefix, and a consistent plan clears it",
+  () => wf.appIdentityMismatch("UsrApplicant", "existing-app", "", "UsrApplicantApp") === null
+    && wf.appIdentityMismatch("UsrApplicant", "pages-only-no-menu", "", "UsrApplicantApp") === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", null, "UsrApplicantApp") === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicant") === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "Usr", "Applicant") === null,
+  () => ({ existing: wf.appIdentityMismatch("UsrApplicant", "existing-app", "", "UsrApplicantApp"),
+    noPrefix: wf.appIdentityMismatch("UsrApplicant", "new-app", null, "UsrApplicantApp"),
+    agrees: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicant") }));
+check("ENG-95468: a `new-app` plan that publishes NO application code is not a mismatch — the engine publishes `null` there by design, and inventing a contradiction from an absent field would stop every such plan",
+  () => wf.appIdentityMismatch("UsrApplicant", "new-app", "", null) === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "") === null);
+// THE RESUME. This check guards `create-app`; once THIS run's own app unit has closed on its full deliverable that
+// write is behind us, and stopping would spend a round reporting a contradiction nothing can act on. It goes quiet
+// exactly where `packagePreconditionStop` already lets a resume through — and not one step earlier.
+check("ENG-95468: the identity check goes quiet on a RESUME whose own app unit already completed — the write it guards is behind us, so the same contradiction that stops a fresh run must not stop a run that already created the app",
+  () => wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", true) === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", false)?.kind === "app-code-contradicts-target-package"
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", undefined)?.kind === "app-code-contradicts-target-package",
+  () => ({ resume: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", true),
+    fresh: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", false) }));
+// The app unit's own instruction, which is where the divergence entered: "choose the code so the package comes out
+// right" is what the builder followed. With the prefix known the code is a FACT the prompt states; without it the
+// old wording must survive unchanged, because the builder then has to read the prefix itself.
+check("ENG-95468: with the prefix known the `app` prompt PASSES the exact code instead of asking the builder to choose one — and it names the package that code yields",
+  () => { const t = wf.appCodeInstruction("UsrApplicant", "");
+    return /PASS `code` EXACTLY `UsrApplicant`/.test(t) && /it is EMPTY/.test(t) && !/Choose the `code`/.test(t); },
+  () => wf.appCodeInstruction("UsrApplicant", ""));
+check("ENG-95468: with a NON-empty prefix the instruction names the prefix and the stripped code, so the builder can check the arithmetic rather than trust it",
+  () => { const t = wf.appCodeInstruction("UsrApplicant", "Usr");
+    return /PASS `code` EXACTLY `Applicant`/.test(t) && /`Usr`/.test(t) && /`UsrApplicant`/.test(t); },
+  () => wf.appCodeInstruction("UsrApplicant", "Usr"));
+check("ENG-95468: with NO prefix reported the app prompt keeps the ORIGINAL choose-the-code wording — the check does not exist there, and pretending otherwise would hand the builder a code nobody derived",
+  () => { const t = wf.appCodeInstruction("UsrApplicant", null);
+    return /Choose the `code`/.test(t) && /Read the prefix off the stand/.test(t) && !/PASS `code` EXACTLY/.test(t); },
+  () => wf.appCodeInstruction("UsrApplicant", null));
+check("ENG-95468: the app-code clause carries REAL backticks — it is interpolated into a template literal, so an escaped backtick would reach the builder as a backslash",
+  () => !/\\`/.test(wf.appCodeInstruction("UsrApplicant", "")) && !/\\`/.test(wf.appCodeInstruction("UsrApplicant", null)),
+  () => wf.appCodeInstruction("UsrApplicant", ""));
+
 // Source-level pins for the parts that close over run state.
 check("workflow: the app unit creates the section on the EXISTING object via `create-app-section --entity-schema-name`, and REMOVES the stub section create-app always mints — this is the created-a-new-object failure",
   /create-app-section\b/.test(wfSrc) && /--entity-schema-name \$\{unit\.entity/.test(wfSrc)
@@ -958,6 +1097,18 @@ check("workflow: the component-type gate (ENG-95468) is WIRED at the baseline �
     && /stopped: 'plan-invalid-against-stand'/.test(wfSrc));
 check("workflow: the Reconcile prompt tells the agent to RESOLVE each component type read-only (get-component-info) and return componentResolution — the gate's input",
   /get-component-info component-type=<type>/.test(wfSrc) && /return \\`componentResolution\\`/.test(wfSrc));
+// ENG-95468 — the two new gates have inputs only the Reconcile agent can supply, so a gate wired to a field nobody
+// is asked for is a gate that never fires. Pin the ASK, including the one thing an agent would otherwise normalise
+// away: an empty `SchemaNamePrefix` is an answer, and reporting it as `null` would silently switch the check off.
+check("ENG-95468: the Reconcile prompt asks for BOTH new gate inputs — the read-only template resolution and the stand's `SchemaNamePrefix` — and states that an empty prefix is a real answer, not `null`",
+  /return \\`templateResolution\\`/.test(wfSrc) && /\\`templateNames\\`/.test(wfSrc)
+    && /Return \\`schemaNamePrefix\\`/.test(wfSrc)
+    && /The empty string is a REAL answer and is not the same as \\`null\\`/.test(wfSrc));
+check("ENG-95468: the pre-build gate and its mid-run twin are wired to all THREE axes — a stop computed from one of them and returned from another is the failure mode a source pin catches and an execution test cannot name",
+  /const templateMismatchesNow = templateMismatches\(state\.templateResolution, state\.templateNames\)/.test(wfSrc)
+    && /const appIdentity = appIdentityMismatch\(state\.targetPackage, state\.sectionHost, state\.schemaNamePrefix, state\.applicationCode, appUnitDone\(\)\)/.test(wfSrc)
+    && /if \(componentMismatches\.length \|\| templateMismatchesNow\.length \|\| appIdentity\)/.test(wfSrc)
+    && /if \(midRunMismatches\.length \|\| midRunTemplates\.length \|\| midRunIdentity\)/.test(wfSrc));
 // --- ENG-94859 the per-run REFS cache, the page slice and the split worklog. Measured on a real run: 40% of all
 // tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
@@ -1032,6 +1183,21 @@ check("workflow: the index is written LAST, so a half-built cache cannot read as
 check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
   /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
     && /Do not treat the missing file as a defect/.test(wfSrc));
+// ENG-95855 — the resolved verification surface has to reach the per-page prompt as literal text, or the
+// per-page recipe's "use the verificationSurface VALUE" instruction has nothing concrete to point at: a
+// documented hand-over that no prompt-building code actually threads is the exact defect a prior review round
+// caught in this ticket's own diff.
+check("workflow: VERIFICATION_SURFACE is threaded into the page unit's prompt, not left for the builder to read from decisions.md",
+  /const VERIFICATION_SURFACE = buildVerificationSurface\(input\.verificationSurface\)/.test(wfSrc)
+    && /VERIFICATION SURFACE FOR THIS BUILD:.*\$\{VERIFICATION_SURFACE\}/.test(wfSrc)
+    && /none was handed to this run \(.verificationSurface. was omitted\)/.test(wfSrc));
+// ENG-95855 — a reach unit closes by OPENING the surface its wiring governs, which is a per-unit render check
+// under a different deliverable. Threading the surface into the page prompt only left section registration —
+// the one deliverable a real run silently dropped — telling its agent to open a browser nobody resolved.
+check("workflow: the resolved verification surface is hoisted and reaches the REACH unit's prompt too, with a `blocked` path when the surface is unachievable",
+  /const VERIFICATION_SURFACE_NOTE = VERIFICATION_SURFACE/.test(wfSrc)
+    && /a saved record is not a working binding\.\$\{VERIFICATION_SURFACE_NOTE\}/.test(wfSrc)
+    && /If that surface turns out unachievable for this wiring/.test(wfSrc));
 check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
   /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
 check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",
@@ -2045,6 +2211,90 @@ check("workflow EXECUTES the combined stop: a baseline with new-app-over-existin
     && /crt\.ContactCommunication/.test(combinedStop.next || ""),
   () => (combinedStop.threw ? `threw: ${combinedStop.threw}` : `stopped=${combinedStop.stopped} mismatches=${JSON.stringify(combinedStop.componentMismatches)} next=${(combinedStop.next || "").slice(0, 140)}`));
 
+/* --- ENG-95468: the TEMPLATE and IDENTITY axes AS EXECUTION PATHS -------------------------------------------
+ * The pure checks above prove the decisions; these drive the real run, because a decision nothing calls is a
+ * decision that ships switched off — which is exactly how the third Applicant run reached `create-app` with a plan
+ * whose app code its own target package contradicted. `packageState: "absent"` with a named target and `new-app` is
+ * NOT a package stop (that absent package is what the app unit exists to build), so these isolate the new gates.
+ */
+const templateStop = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app",
+  templateNames: ["ListPageV2FreedomTemplate"],
+  templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES the template gate — a baseline Reconcile whose plan names a template this stand does not have STOPS with `plan-invalid-against-stand` before any unit, carrying `templateMismatches` and naming the template in `next`",
+  !templateStop.threw && templateStop.stopped === "plan-invalid-against-stand"
+    && Array.isArray(templateStop.templateMismatches) && templateStop.templateMismatches.some((t) => t.name === "ListPageV2FreedomTemplate")
+    && /ListPageV2FreedomTemplate/.test(templateStop.next || "")
+    && /Nothing was built\./.test(templateStop.next || ""),
+  () => (templateStop.threw ? `threw: ${templateStop.threw}` : `stopped=${templateStop.stopped} templates=${JSON.stringify(templateStop.templateMismatches)} next=${(templateStop.next || "").slice(0, 200)}`));
+// THE THIRD APPLICANT RUN as a real run: plan `UsrApplicantApp`, target package `UsrApplicant`, empty prefix. The
+// package is ABSENT (so the app unit would build it) and placement is fine — nothing else stops this run, which is
+// precisely why the divergence survived to `create-app` and was only recorded afterwards.
+const identityStop = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 replay (third Applicant run, EXECUTED): a plan promising `UsrApplicantApp` against target package `UsrApplicant` on an empty-prefix stand STOPS before the first write — `create-app` is the first write, and this is the round that used to reach it",
+  !identityStop.threw && identityStop.stopped === "plan-invalid-against-stand"
+    && identityStop.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && identityStop.appIdentityMismatch?.requiredCode === "UsrApplicant"
+    && /UsrApplicantApp/.test(identityStop.next || "") && /UsrApplicant`/.test(identityStop.next || ""),
+  () => (identityStop.threw ? `threw: ${identityStop.threw}` : `stopped=${identityStop.stopped} identity=${JSON.stringify(identityStop.appIdentityMismatch)} next=${(identityStop.next || "").slice(0, 240)}`));
+// ONE WAVE, not three: the whole point of checking before the first write is that a re-plan fixes everything the
+// plan got wrong in a single pass. Three axes failing at once must produce ONE stop naming all three.
+const allThree = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+  componentTypes: ["crt.ContactCommunication"],
+  componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }],
+  templateNames: ["ListPageV2FreedomTemplate"],
+  templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: all THREE axes failing produce ONE stop that names all three — component type, page template and app/package identity in a single `next`, so one re-plan fixes the lot instead of one round per axis",
+  !allThree.threw && allThree.stopped === "plan-invalid-against-stand"
+    && allThree.componentMismatches.some((c) => c.type === "crt.ContactCommunication")
+    && allThree.templateMismatches.some((t) => t.name === "ListPageV2FreedomTemplate")
+    && allThree.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && /crt\.ContactCommunication/.test(allThree.next || "")
+    && /ListPageV2FreedomTemplate/.test(allThree.next || "")
+    && /UsrApplicantApp/.test(allThree.next || ""),
+  () => (allThree.threw ? `threw: ${allThree.threw}` : `stopped=${allThree.stopped} next=${(allThree.next || "").slice(0, 400)}`));
+// Positive control for BOTH new axes at once: a plan whose template resolves and whose identity is consistent must
+// pass the gate and reach a downstream stop — an always-firing gate (or one that read `''` as "no prefix") dies here.
+const newAxesPass = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicant", schemaNamePrefix: "",
+  templateNames: ["ListPageV3Template"],
+  templateResolution: [{ name: "ListPageV3Template", resolved: true }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES PAST both new gates — a resolvable template and an identity that agrees with the stand's (empty) prefix reach a downstream stop, so an inverted gate or one that misreads `''` as absent surfaces here",
+  !newAxesPass.threw && newAxesPass.stopped !== "plan-invalid-against-stand" && newAxesPass.stopped === "unknown-checkpoint-key",
+  () => (newAxesPass.threw ? `threw: ${newAxesPass.threw}` : `stopped=${newAxesPass.stopped}`));
+check("ENG-95468: a stop on another axis entirely still exposes `templateMismatches` as `[]` and `appIdentityMismatch` as `null` — one uniform signal per axis on EVERY return, so a consumer never switches on `stopped` to learn whether the plan disagreed with the stand",
+  Array.isArray(newAxesPass.templateMismatches) && newAxesPass.templateMismatches.length === 0
+    && newAxesPass.appIdentityMismatch === null,
+  () => ({ templates: newAxesPass.templateMismatches, identity: newAxesPass.appIdentityMismatch }));
+// The COMBINED package stop carries the new axes too — the placement stop stays primary (it is what an operator
+// acts on first), but a re-plan must see every defect the baseline found, not just the one that stopped first.
+const combinedAll = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "exists", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+  templateNames: ["ListPageV2FreedomTemplate"],
+  templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema" }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: the package stop carries the template and identity axes as well — `stopped` stays `new-app-over-existing-package`, but the return and its `next` name the unresolved template and the contradicted app code too",
+  !combinedAll.threw && combinedAll.stopped === "new-app-over-existing-package"
+    && combinedAll.templateMismatches.some((t) => t.name === "ListPageV2FreedomTemplate")
+    && combinedAll.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && /ListPageV2FreedomTemplate/.test(combinedAll.next || "") && /UsrApplicantApp/.test(combinedAll.next || ""),
+  () => (combinedAll.threw ? `threw: ${combinedAll.threw}` : `stopped=${combinedAll.stopped} next=${(combinedAll.next || "").slice(0, 300)}`));
+
 // --- ENG-95850 (A2) AS AN EXECUTION PATH. The pure-helper checks above prove the DECISION; these run the real
 // prologue through it, which is the only thing that proves the provenance record is actually THREADED into both
 // package gates. A gate handed `undefined` instead of the record passes every pure test and stops every resumed run.
@@ -2067,6 +2317,26 @@ check("workflow EXECUTES the half-finished app unit: OUR package with `appUnitCo
     && ownedShort.packageCreatedByRun?.package === "UsrApplicantFreedom" && ownedShort.packageCreatedByRun?.appUnitComplete === false
     && /INCOMPLETE/.test(ownedShort.next || "") && /without a second approval/.test(ownedShort.next || ""),
   () => (ownedShort.threw ? `threw: ${ownedShort.threw}` : `stopped=${ownedShort.stopped} rec=${JSON.stringify(ownedShort.packageCreatedByRun)}`));
+// ENG-95468 — the identity gate must let the SAME resume through, for the same reason: `create-app` is behind us.
+// Without this the new gate re-broke exactly what ENG-95850 fixed — a `new-app` run could not survive its own
+// success — only one stop later and under a different key, which is the worst version of that bug to debug.
+const ownedResumeIdentity = await runToBaseline({
+  ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 × ENG-95850: a RESUME whose own app unit completed is not stopped by the identity gate either — the contradiction is real but `create-app` already ran, so the run continues to a downstream stop instead of paying a round to report it",
+  !ownedResumeIdentity.threw && ownedResumeIdentity.stopped === "unknown-checkpoint-key"
+    && ownedResumeIdentity.appIdentityMismatch === null,
+  () => (ownedResumeIdentity.threw ? `threw: ${ownedResumeIdentity.threw}` : `stopped=${ownedResumeIdentity.stopped} identity=${JSON.stringify(ownedResumeIdentity.appIdentityMismatch)}`));
+// And the control: the same contradiction on a package with NO provenance record still surfaces — so the quiet above
+// is the resume record's doing, not a gate that stopped working.
+const strangerIdentity = await runToBaseline({
+  ...newAppBaseline(null), applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 × ENG-95850: the same contradiction against a package this migration did NOT create still reaches the operator — carried on the package stop, so the one re-plan that run needs fixes both",
+  !strangerIdentity.threw && strangerIdentity.stopped === "new-app-over-existing-package"
+    && strangerIdentity.appIdentityMismatch?.kind === "app-code-contradicts-target-package",
+  () => (strangerIdentity.threw ? `threw: ${strangerIdentity.threw}` : `stopped=${strangerIdentity.stopped} identity=${JSON.stringify(strangerIdentity.appIdentityMismatch)}`));
 
 // --- ENG-95850 (A3): RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Two consecutive launches of the real run were
 // rejected at this exact call in 9 ms with 0 writes, a later identical launch passed, and in between the flake read
@@ -2148,6 +2418,31 @@ const midRunPasses = await runToPostPreflight(midRunBaseline, midRunBaseline, { 
 check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches the dry-run boundary (`dryRun:true`), so an always-firing mid-run gate would surface here",
   !midRunPasses.threw && midRunPasses.stopped !== "plan-invalid-against-stand" && midRunPasses.dryRun === true,
   () => (midRunPasses.threw ? `threw: ${midRunPasses.threw}` : `stopped=${midRunPasses.stopped} dryRun=${midRunPasses.dryRun}`));
+// ENG-95468 — the template axis is a mid-run guarantee for the same reasons: a resumed run's baseline may predate
+// `templateResolution`, and a template schema can leave the stand during a long run. The post-preflight Reconcile is
+// the first to report it, and the next unit must not be dispatched on it.
+const midRunTemplate = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, templateNames: ["ListPageV2FreedomTemplate"],
+    templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }] })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES the mid-run TEMPLATE gate — a post-preflight Reconcile that FIRST reports an unresolvable template stops before the next unit, with the MID-RUN tail (units may already be on disk)",
+  !midRunTemplate.threw && midRunTemplate.stopped === "plan-invalid-against-stand"
+    && (midRunTemplate.templateMismatches || []).some((t) => t.name === "ListPageV2FreedomTemplate")
+    && /ListPageV2FreedomTemplate/.test(midRunTemplate.next || "")
+    && /Anything already built this run is on disk\./.test(midRunTemplate.next || "")
+    && !/Nothing was built/.test(midRunTemplate.next || ""),
+  () => (midRunTemplate.threw ? `threw: ${midRunTemplate.threw}` : `stopped=${midRunTemplate.stopped} next=${(midRunTemplate.next || "").slice(0, 240)}`));
+// The identity axis likewise: `sectionHost` / `targetPackage` are re-read on every Reconcile, so a round that first
+// makes the contradiction visible must stop rather than let a later `create-app` run on it.
+const midRunIdentityStop = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+    applicationCode: "UsrApplicantApp", schemaNamePrefix: "" })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES the mid-run IDENTITY gate — a Reconcile that first reveals an app code its own target package contradicts stops before the next unit is dispatched",
+  !midRunIdentityStop.threw && midRunIdentityStop.stopped === "plan-invalid-against-stand"
+    && midRunIdentityStop.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && /UsrApplicantApp/.test(midRunIdentityStop.next || ""),
+  () => (midRunIdentityStop.threw ? `threw: ${midRunIdentityStop.threw}` : `stopped=${midRunIdentityStop.stopped} identity=${JSON.stringify(midRunIdentityStop.appIdentityMismatch)}`));
 
 // --- THE BUILD CONTINUATION as an EXECUTION path (ENG-95474 review). Everything about the round-vs-continuation
 // split was asserted only by regexes over the source, which stay green if the accounting is inverted, if the ceiling
@@ -2781,7 +3076,9 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
   /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected']/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
-  /if \(packageState !== 'exists' && packageState !== 'absent'\)/.test(wfSrc));
+  // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
+  // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.
+  /if \(effectiveState !== 'exists' && effectiveState !== 'absent'\)/.test(wfSrc));
 check("engine: a MEMBER key carries its scope — two child pages declaring the same member produced one key, so the coverage Set counted two rows as one and ONE card closed both",
   /function memberDigestOf\(changeSet, scopeSchema\)/.test(mgSrc)
     && /key: scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
@@ -3296,6 +3593,8 @@ const REF_BLOCK = "<refs>"
 const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
+const VERIFICATION_SURFACE = "automatic:2"
+const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automatic:2"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -3345,7 +3644,24 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
       const modPath = path.join(tmpBp, "buildPrompt.mjs");
       // The two pure blocks `buildPrompt` composes are sliced in FOR REAL rather than stubbed: they carry the prompt
       // text the assertions below match on, so a stub would make the render pass while shipping nothing.
-      writeFileSync(modPath, `${STUBS}\n${pureFn("unitNo")}\n${pureFn("readableUnitPart")}\n${pureFn("nonPageUnitStem")}\n${pureFn("unitStem")}\n${namesSrc}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${kindBlockFnsSrc}\n${fnSrc}\nexport { buildPrompt };\n`);
+      // `requiredAppCode` / `appCodeInstruction` (ENG-95468) are sliced in for the same reason: the app arm's code
+      // clause IS the shipped text, and a stub could not reproduce an escaping mistake in it — the clause is
+      // interpolated into a template literal, so a `\`` where a backtick belongs would reach the builder as a
+      // backslash and nothing else in this suite would see it.
+      writeFileSync(modPath, `${STUBS}
+${pureFn("unitNo")}
+${pureFn("readableUnitPart")}
+${pureFn("nonPageUnitStem")}
+${pureFn("unitStem")}
+${namesSrc}
+${pureFn("repairBlock")}
+${pureFn("continuationBudgetBlock")}
+${pureFn("requiredAppCode")}
+${pureFn("appCodeInstruction")}
+${kindBlockFnsSrc}
+${fnSrc}
+export { buildPrompt };
+`);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
@@ -3481,6 +3797,30 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
   check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
+}
+
+// ENG-95855 — the hand-over has to have a documented channel on EVERY route, not just the Workflow one. A recipe
+// that tells routes 2 and 3 to use a value they were never given, forbids `decisions.md`, and names no fallback is
+// the same silent drift this ticket closes, one route down.
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const recipe08 = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/references/04-per-page-build-recipe.md"), "utf8");
+  const execSkillSrc = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/SKILL.md"), "utf8");
+  const migrationSkillSrc = readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+  check("ENG-95855: recipe step 8 has the null-surface clause — a surface nobody handed over is a `blocked[]` report, never a guessed tier",
+    /If NO `verificationSurface` reached this unit/.test(recipe08)
+      && /do not guess a tier and do not fall back to reading `decisions.md`/.test(recipe08),
+    () => recipe08.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: routes 2 and 3 name `verificationSurface` in their hand-over text, so no route is told to use a value it has no channel for",
+    /Hand `verificationSurface` to every unit prompt/.test(execSkillSrc)
+      && /Reach units get it too/.test(execSkillSrc)
+      && /so `verificationSurface` is already in context/.test(execSkillSrc),
+    () => execSkillSrc.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: tier 4 is stated as never recordable, and a `manual` outcome is pointed at `mode: checkpoints` — the place the render actually gets exercised",
+    /Tier 4 is never a recordable surface/.test(migrationSkillSrc)
+      && /There is no `automatic:4` token, by design/.test(migrationSkillSrc)
+      && /\*\*`mode: checkpoints`\*\* \(item 5\)/.test(migrationSkillSrc),
+    () => migrationSkillSrc.split("\n").filter((l) => /Tier 4|automatic:4/.test(l)).slice(0, 3).join("\n"));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);

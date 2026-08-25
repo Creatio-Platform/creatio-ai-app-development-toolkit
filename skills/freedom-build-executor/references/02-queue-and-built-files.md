@@ -181,6 +181,22 @@ Rules that make it trustworthy:
   - **Absence is never ownership.** A folder written before this key existed has none, and every gate then
     behaves exactly as it did then — it stops. Reconcile reports the record as `packageCreatedByRun`, read off
     THIS FILE and never derived from the stand.
+  - **An INCONCLUSIVE live check does not outrank this record (ENG-95884).** A resumed round reported
+    `packageState: 'unknown'` from its `list-packages`/`find-app` sweep while this file already named the package
+    under `packageCreated` — and the run stopped on `target-package-unknown` anyway, paying a full round for nothing
+    (18 agents, 982K tokens, zero progress) even though its own prior write proved the package was there.
+    `packagePreconditionStop` now resolves `packageState: 'unknown'` to `'exists'` whenever this record names the
+    SAME package, before any stop branch runs — a stand check that could not tell is not stronger evidence than the
+    run's own memory of having created the thing. This does **not** apply to a CONFIDENT `'absent'`: that would mean
+    the package was removed after this run made it, a stand-vs-record conflict worth its own stop, not a silent
+    resume.
+  - **A dropped field is not absence, either.** Reconcile is one busy agent doing four jobs at once, and it can fail
+    to carry `packageCreatedByRun` even when this file DOES hold `packageCreated`. Before either ownership stop
+    (`target-package-unknown`, `new-app-over-existing-package`) fires with no record in hand, the script runs ONE
+    dedicated, single-purpose re-read of this file — nothing else — to confirm the record is genuinely absent rather
+    than merely unreported. If even that dedicated read cannot open the file, the stop text says so explicitly
+    (`packageRecordUnread: true`) instead of reading like a confirmed absence: that case is not evidence of anything,
+    and simply re-running retries the read at no cost.
 
 ### `verify.md` / `verify.json` are only current as of the last COMPLETED Reconcile (ENG-95850 / D)
 

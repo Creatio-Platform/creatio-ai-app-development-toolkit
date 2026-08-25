@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1474,6 +1474,23 @@ check("ENG-95218: the design spec renders the list page as POSITIONED tables (co
 // must agree with `pages[]` (build order, parent edge, the evidence ids the executor files) agrees by construction.
 const lpUnits = pageUnits(lpRun, lpOpts);
 const lpList = lpUnits.pages.find((p) => p.key === "list");
+/* ENG-95468 — `--units` publishes the TEMPLATE NAMES the plan asserts, so the executor can resolve them against the
+ * target stand before the first write. This is the plan-side half of the gate: without a published set, the build
+ * side has nothing to check, and `ListPageV2FreedomTemplate` is exactly what reached a real build unchecked.
+ */
+check("ENG-95468: `--units` publishes `templateNames` — the deduped, sorted set of page templates this plan asserts, INCLUDING `planMeta.listTemplate` (whose own checklist row is CONDITIONAL, so the name must not depend on that row being emitted)",
+  () => { const t = lpUnits.templateNames;
+    return Array.isArray(t) && t.includes("ListFreedomTemplate") && t.includes("FormPageTemplate")
+      && t.length === new Set(t).size && [...t].sort((a, b) => a.localeCompare(b)).join(",") === t.join(","); },
+  () => ({ templateNames: lpUnits.templateNames,
+    expected: lpUnits.pages.map((p) => [p.key, p.expectedTemplate]), listTemplate: lpOpts.planMeta?.listTemplate }));
+check("ENG-95468: `templateNamesOf` is pure and total — it dedupes a template named by several pages, drops blanks, and returns `[]` for a plan that names none (a plan with no template must publish an empty set, never `undefined`)",
+  () => { const dup = templateNamesOf([{ expectedTemplate: "T" }, { expectedTemplate: "T" }, { expectedTemplate: "  " }, {}], { planMeta: { listTemplate: "T" } });
+    const none = templateNamesOf([], {});
+    return dup.length === 1 && dup[0] === "T" && Array.isArray(none) && none.length === 0
+      && templateNamesOf(undefined, undefined).length === 0; },
+  () => ({ dup: templateNamesOf([{ expectedTemplate: "T" }, { expectedTemplate: "T" }], { planMeta: { listTemplate: "T" } }),
+    none: templateNamesOf([], {}) }));
 check("ENG-95218: `--units` publishes a `list` build unit — role, the classic section it was derived from, and per-kind expectations in the LIST vocabulary (a grid has no fields/tabs/details)",
   () => lpList?.role === "list" && lpList.schema === "Applicant1Section"
     && lpList.expect.listColumns === 3 && lpList.expect.listColumnNames.join(",") === "Name,Stage.Name,Flagged"
@@ -1490,10 +1507,11 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
     const byKind = Object.fromEntries(rows.filter((r) => r.list).map((r) => [r.list.kind + ":" + r.list.item, r.vk.type]));
     // 4 deliverable rows (columns · 2 filters · 1 action) + the per-page `creatio-ui-guidelines` quality gate, which
     // applies to a list page's layout like any other page's — a published key must carry exactly one of those.
-    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4 
-    // ⚠ Confirm items + the page's one quality gate
+    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4
+    // ⚠ Confirm items + the page's TWO quality-gate rows (ENG-95859: "design pass ran" and "independently judged"
+    // are different facts, reported as two rows sharing the ONE `list#quality-gates` id below)
     return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 4
-      && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 1
+      && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 2
       && byKind["columns:set"] === "listcolumns"
       && byKind["filter:QuickFilterByDueDate"] === "listfilter" && byKind["filter:QuickFilterByStage"] === "listfilter"
       && byKind["action:runBulkAssign"] === "evidence"
@@ -1671,6 +1689,17 @@ check("ENG-95470 (defect 3, guard): a plan with NOTHING else resolved for the li
     return !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list")
       && !rows.some((r) => r.pageKey === "list" && /List template/.test(r.label)); },
   () => checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label));
+// ENG-95468 × ENG-95470 — THE HOLE THE CONDITIONAL ROW LEAVES, and why `templateNames` folds in `planMeta.listTemplate`
+// instead of reading the published units alone. On this very fixture there is no list unit and no template row, so
+// `pages[].expectedTemplate` names the list template NOWHERE — yet the plan still asserts it, and the build still
+// puts a page on it. The pre-build set must ask the stand about it anyway. The two checks are complementary: the row
+// asks the BUILT page afterwards, this set asks the STAND before the first write.
+check("ENG-95468: on the same ungated-list fixture — no `list` unit, no template row — `templateNames` STILL carries `planMeta.listTemplate`, so the name the plan asserts is resolved against the stand even where nothing gates the built page",
+  () => { const t = pageUnits(lpEmptySection, lpOpts).templateNames;
+    return t.includes("ListFreedomTemplate")
+      && !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list"); },
+  () => ({ templateNames: pageUnits(lpEmptySection, lpOpts).templateNames,
+    keys: pageUnits(lpEmptySection, lpOpts).pages.map((p) => p.key) }));
 check("ENG-95218: with NOTHING gated for the list page (empty section, no `list` unit) its ⚠ Confirm items are still GATED — they ride on `main` as `main#confirm:list-*` and reach `--units.preflight`, because withholding a page nobody builds must not withhold the questions",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
@@ -6183,7 +6212,10 @@ check("verify: a built page missing the DCM progress bar / Next steps / Communic
 const vOk = renderVerify(vResult, {}, {
   ops: [{ name: "Contact", type: "crt.ComboBox" }, { name: "Owner", type: "crt.ComboBox" }, { name: "DG", type: "crt.DataGrid" },
     { name: "Bar", type: "crt.EntityStageProgressBar" }, { name: "NS", type: "crt.NextSteps" },
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    // ENG-95859: Approvals is TWO required components — the module ABOVE the island (`crt.Approval`) AND the
+    // list (`crt.ApprovalList`). A page with "all deliverables present" must build both, or this fixture is no
+    // longer testing what its name says.
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
@@ -7339,6 +7371,16 @@ check("ENG-94975 F4/D3: a one-key JSON object closes the unresolved child's STRU
   () => ({ junk: pgJunkNoEvidence.pages["child:U1"], withEv: pgJunkWithEvidence.pages["child:U1"],
     ids: pgUnits.evidenceRows.filter((e) => e.pageKey === "child:U1") }));
 
+// ENG-95471 SCOPE: the `components: [] + noChangesReason` concession is `#quality-gates`-ONLY. A `#childpage`
+// record proves a page was BUILT, which an empty answer never can — "nothing to fix" is not a meaningful outcome
+// for it — so the same no-diff shape here must stay ⚠ unverified, never a false close.
+const pgChildNoDiff = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": { viewConfig: { items: [{ name: "Box", items: [{ name: "F", type: "crt.Input" }] }] } } },
+  evidence: { "child:U1#childpage": { referencePage: "the existing Classic child page", components: [], noChangesReason: "diffed and found identical" } },
+  judge: { "child:U1#childpage": { convincing: true, why: "looks fine" } } });
+check("ENG-95471 SCOPE: the no-diff concession does NOT leak onto `#childpage` — `components: []` there stays incomplete even with a `noChangesReason` and a convincing judge",
+  pgChildNoDiff.pages["child:U1"].complete === false && pgChildNoDiff.pages["child:U1"].unverified === 1,
+  () => pgChildNoDiff.pages["child:U1"]);
+
 /* ---- D6/v2 change 1: `--built` carries `get-page`'s MERGED `bundle.viewConfig`, a JSON TREE the engine walks
    itself. A component the TEMPLATE provides is touched in the page's own body with `operation: "merge"` and
    carries NO type, so the previously documented source (`ownBodySummary.viewConfigDiffOps`) structurally could
@@ -7349,7 +7391,10 @@ const tplProvidedRes = { changeSet: { viewConfigDiff: [{ name: "Contact", values
 const tplProvidedDeep = renderVerify(tplProvidedRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate", viewConfig: { items: [
   { name: "Root", type: "crt.Grid", items: [{ name: "Tabs", type: "crt.TabContainer", items: [{ name: "T1", type: "crt.Tab", items: [
     { name: "Contact", type: "crt.ComboBox" }, { name: "Feed", type: "crt.Feed" },
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AL", type: "crt.ApprovalList" },
+    // ENG-95859: Approvals' second required half (`crt.Approval`, the module above the island) nested just as
+    // deep as its list — the D6 regression this test pins was about finding a nested type at all, not about
+    // this specific feature having only one gated type.
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" },
   ] }] }] },
 ] } } }, ...QG_EVIDENCE });
 const tplProvidedShallow = renderVerify(tplProvidedRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate",
@@ -7357,7 +7402,9 @@ const tplProvidedShallow = renderVerify(tplProvidedRes, {}, { pages: { main: { p
 check("ENG-94975 D6: template-provided components nested 4 levels deep in the merged `bundle.viewConfig` ARE found (Feed / CommunicationOptions / ApprovalList all ✅, verdict complete) — the regression that motivated contract v2",
   tplProvidedDeep.missing === 0 && tplProvidedDeep.unverified === 0 && tplProvidedDeep.complete === true
   && /Feed \(`crt\.Feed`\) \| ✅ Done/.test(tplProvidedDeep.markdown)
-  && tplProvidedShallow.missing === 3, // positive control: the SAME expectations, without those nodes, are MISSING
+  // positive control: the SAME expectations, without those nodes, are MISSING — 4 now that Approvals gates on
+  // TWO components (crt.Approval + crt.ApprovalList) instead of one (ENG-95859).
+  && tplProvidedShallow.missing === 4,
   () => ({ deep: { m: tplProvidedDeep.missing, u: tplProvidedDeep.unverified }, shallow: { m: tplProvidedShallow.missing },
     rows: tplProvidedDeep.markdown.split("\n").filter((l) => /crt\./.test(l)).map((l) => l.slice(0, 110)) }));
 
@@ -8082,9 +8129,10 @@ const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main:
 // sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
 const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
 const m12Row = (v, label) => v.markdown.split("\n").find((l) => /^\| \d/.test(l) && l.includes(label)) || "";
-// The five component TYPES this page's rows look for, all present in the right NUMBER — but not one of them
-// carrying a `name`. This is the checker's payload: right count, right types, zero identity.
-const M12_NAMELESS = [{ type: "crt.Input" }, { type: "crt.Tab" }, { type: "crt.ApprovalList" }, { type: "crt.EntityStageProgressBar" }, { type: "crt.NextSteps" }];
+// The six component TYPES this page's rows look for, all present in the right NUMBER — but not one of them
+// carrying a `name`. This is the checker's payload: right count, right types, zero identity. `crt.Approval` is
+// Approvals' second required half (ENG-95859: the module above the profile island, gated alongside the list).
+const M12_NAMELESS = [{ type: "crt.Input" }, { type: "crt.Tab" }, { type: "crt.Approval" }, { type: "crt.ApprovalList" }, { type: "crt.EntityStageProgressBar" }, { type: "crt.NextSteps" }];
 const M12_NAMED = M12_NAMELESS.map((o, i) => ({ name: `E${i}`, ...o }));
 M12_NAMED[0].name = "MainF";   // the one element whose NAME the plan actually expects
 
@@ -8224,7 +8272,7 @@ check("ENG-94975 M1: the fields row tells the three inputs APART — fetched-and
    `resolveCountVk`. So a page whose `--built.pages` key was never supplied reported hard ❌ MISSING on all three —
    "you built it wrong" about a page the verifier never fetched, sending the executor to rebuild instead of to
    re-read. Both outcomes still block exit 0; which of the two repairs is named is the whole point. ---- */
-const M12_COMPONENT_ROWS = ["Approvals (`crt.ApprovalList`)", "DCM case progress bar", "DCM Next steps"];
+const M12_COMPONENT_ROWS = ["Approvals (`crt.ApprovalList`)", "Approvals — second required component (`crt.Approval`)", "DCM case progress bar", "DCM Next steps"];
 check("ENG-94975 M2: with NO `--built.pages[\"main\"]` entry, every COMPONENT row is ⚠ unverified and names the missing ENTRY — never ❌ MISSING (pre-fix all three read ❌ MISSING for a page nobody fetched)",
   () => M12_COMPONENT_ROWS.every((r) => /⚠ verify/.test(m12Row(m1NoEntry, r)) && /no .--built\.pages\["main"\]. entry/.test(m12Row(m1NoEntry, r)) && !/❌ MISSING/.test(m12Row(m1NoEntry, r)))
   && m1NoEntry.pages.main.missing === 0 && m1NoEntry.pages.main.unverified > 0
@@ -9518,8 +9566,27 @@ try {
   const closed = qgRun({ [qgId]: { referencePage: "AccountPage", components: ["crt.Input"] } },
     { [qgId]: { convincing: true, why: "prop-level diff against AccountPage" } });
   check("ENG-95471: a complete record PLUS a judge verdict is the only thing that closes the quality-gates row — no false positive on the honest path",
-    () => /✅/.test(qgRow(closed)) && !/❌|⚠/.test(qgRow(closed)),
+    () => /✅/.test(qgRow(closed)) && !/[❌⚠]/.test(qgRow(closed)),
     () => qgRow(closed));
+
+  // ENG-95471 reopen — a page diffed and found ALREADY compliant (0 edits) could not file ANY record: `components`
+  // demanded a non-empty list, so an honest "nothing to fix" was unfileable and the row stayed ❌ MISSING forever.
+  // `components: []` + a non-blank `noChangesReason` is now the accepted shape for this outcome, and ONLY for it.
+  const noDiffClosed = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [], noChangesReason: "diffed QuickFilter, ButtonToggleGroup and the four command buttons against ContactsListPage — identical props, no drift" } },
+    { [qgId]: { convincing: true, why: "reason names the specific components compared and they genuinely match the reference" } });
+  check("ENG-95471 reopen: `components: []` WITH a non-blank `noChangesReason` closes the row — a page reviewed and found already compliant is a legitimate pass, not a permanent MISSING",
+    () => /✅/.test(qgRow(noDiffClosed)) && !/[❌⚠]/.test(qgRow(noDiffClosed)),
+    () => qgRow(noDiffClosed));
+
+  const noDiffNoReason = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [] } }, { [qgId]: { convincing: true, why: "looks fine" } });
+  check("ENG-95471 reopen: `components: []` with NO `noChangesReason` is still an INCOMPLETE record — the empty list alone proves nothing, it needs the reason to earn the pass",
+    () => /⚠/.test(qgRow(noDiffNoReason)) && !/✅/.test(qgRow(noDiffNoReason)),
+    () => qgRow(noDiffNoReason));
+
+  const noDiffBlankReason = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [], noChangesReason: "   " } }, { [qgId]: { convincing: true, why: "looks fine" } });
+  check("ENG-95471 reopen: a whitespace-only `noChangesReason` does not satisfy the shape either — the reason must be a REAL non-blank string, not a filled-in-looking blank",
+    () => /⚠/.test(qgRow(noDiffBlankReason)) && !/✅/.test(qgRow(noDiffBlankReason)),
+    () => qgRow(noDiffBlankReason));
 }
 
 // ---------------------------------------------------------------------------

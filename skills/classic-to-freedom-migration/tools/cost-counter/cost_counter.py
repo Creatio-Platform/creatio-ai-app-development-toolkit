@@ -28,7 +28,7 @@ from pathlib import Path
 
 import export as export_mod
 import metrics
-from report import Report
+from report import COUNTER_VERSION, Report
 
 # The shared path-resolution boundary lives with the rest of the repository's
 # Python runtime, not in this tool: `mcp_client.py` and `installer/install.py`
@@ -157,6 +157,7 @@ def _config_payload(report: Report) -> dict:
         "cache_write_1h_weight": cfg.cache_write_1h_weight,
         "effective_cache_write_weight": round(report.effective_w, 3),
         "effective_from_fallback": from_fallback,
+        "counter_version": COUNTER_VERSION,
     }
 
 
@@ -195,6 +196,9 @@ def _normalization_payload(report: Report) -> dict:
     return {
         "built_pages": sorted(report.built_pages),
         "page_count": pages,
+        # See summary()["page_count_defaulted"]: True means no built page was
+        # discovered and `pages` fell back to 1 rather than a real count.
+        "page_count_defaulted": report.pages_override is None and not report.built_pages,
         "weighted_total": weighted,
         "weighted_per_page": weighted / pages,
     }
@@ -202,6 +206,13 @@ def _normalization_payload(report: Report) -> dict:
 
 def render_json(report: Report, section: str) -> str:
     doc: dict = {}
+    if section not in ("summary", "all"):
+        # "summary" and "all" already carry counter_version nested in their
+        # own payload (summary()/_config_payload()); every other section
+        # (stage/tool/role/agent/ttl/check) had none until now, so a saved
+        # per-section report carried no indication of which counting rule
+        # produced it.
+        doc["counter_version"] = COUNTER_VERSION
     if section == "summary":
         doc["summary"] = report.summary()
     if section == "all":
@@ -284,10 +295,15 @@ def _normalization_markdown(report: Report) -> str:
 
 def render_markdown(report: Report, section: str) -> str:
     parts: list = []
+    if section not in ("summary", "all"):
+        # See render_json(): "summary" and "all" already print their own
+        # counter-version line.
+        parts.append(f"_counter version: {COUNTER_VERSION}_")
     if section == "summary":
         parts.append(_summary_markdown(report))
     if section == "all":
         cfg = _config_payload(report)
+        parts.append(f"_counter version: {cfg['counter_version']}_")
         parts.append(
             "**Weighted-cost config** (Anthropic list-price ratios, relative to 1 "
             "input token; model-tier independent):\n\n"
@@ -342,6 +358,8 @@ def _summary_markdown(report: Report) -> str:
     return "\n".join([
         "### Summary",
         "",
+        f"_counter version: {s['counter_version']}_",
+        "",
         "| measure | value |",
         "| :-- | --: |",
         f"| section (built pages) | {pages} |",
@@ -359,6 +377,7 @@ def _print_summary(report: Report) -> None:
     s = report.summary()
     pages = _pages_label(s["page_count"], s["built_pages"])
     print("summary:")
+    print(f"    counter version              : {s['counter_version']}")
     print(f"    section (built pages)        : {pages}")
     print(f"    weighted cost per built page : {s['weighted_per_page'] / 1e6:,.2f}M input-equiv tokens")
     print(f"    weighted cost (total)        : {s['weighted_total'] / 1e6:,.2f}M")
@@ -382,7 +401,29 @@ def _compare_rows(base: dict, cand: dict) -> list:
     return rows
 
 
+def _version_note(base: dict, cand: dict) -> str:
+    """State which side was measured with which counter version.
+
+    A live export is always recomputed by this same running binary, so two
+    live exports can never actually differ here -- the guard earns its keep
+    when one side is a `summary --format json` file saved before a counting
+    fix (see `_load_summary`), which is the exact pre-fix/post-fix comparison
+    ENG-95856 warns about. A saved summary from before this field existed has
+    no ``counter_version`` key at all, so missing is its own distinct value
+    rather than raising or silently matching the other side.
+    """
+    bv = base.get("counter_version", "unversioned")
+    cv = cand.get("counter_version", "unversioned")
+    if bv != cv:
+        return (f"REFUSED -- baseline measured with counter version {bv}, "
+                 f"candidate with version {cv}; regenerate both with the same "
+                 f"counter before comparing.")
+    return f"both sides measured with counter version {bv}"
+
+
 def _compare_verdict(base: dict, cand: dict, same_section: bool) -> str:
+    if base.get("counter_version") != cand.get("counter_version"):
+        return _version_note(base, cand)
     bv, cv = base["weighted_per_page"], cand["weighted_per_page"]
     if not bv:
         core = "baseline cost is zero -- cannot compute a ratio"
@@ -398,18 +439,42 @@ def _compare_verdict(base: dict, cand: dict, same_section: bool) -> str:
     return ("SECTIONS DIFFER -- comparison void. " + core) if not same_section else core
 
 
+def _load_summary(path_or_dir: str, name: str, cfg: metrics.CostConfig) -> dict:
+    """Resolve one side of `--compare`: a live export directory (recomputed
+    with today's COUNTER_VERSION) or a `summary --format json` file saved from
+    an earlier run. A single process only ever runs one COUNTER_VERSION, so
+    loading a previously-saved summary is the only way the two sides of a
+    compare can genuinely carry different counter versions -- which is what
+    lets `_version_note`'s REFUSED path actually fire for the pre-fix/post-fix
+    scenario ENG-95856 calls out, instead of being permanently unreachable.
+    """
+    p = Path(path_or_dir)
+    if p.is_file():
+        with open(p, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        try:
+            return doc["summary"]
+        except KeyError:
+            raise ValueError(
+                f"{path_or_dir} is not a saved cost-counter summary (missing "
+                f"'summary' key) -- produce it with: "
+                f"cost_counter.py <export> summary --format json"
+            ) from None
+    session = export_mod.discover(path_or_dir)
+    if not session.main_transcript and not session.workflows:
+        raise ValueError(
+            f"no transcripts found in the {name} export -- is it a session export?"
+        )
+    return Report(session, cfg).summary()
+
+
 def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "text") -> int:
-    sessions = {
-        "baseline": export_mod.discover(base_dir),
-        "candidate": export_mod.discover(cand_dir),
-    }
-    for name, session in sessions.items():
-        if not session.main_transcript and not session.workflows:
-            print(f"no transcripts found in the {name} export -- is it a session export?",
-                  file=sys.stderr)
-            return 2
-    base = Report(sessions["baseline"], cfg).summary()
-    cand = Report(sessions["candidate"], cfg).summary()
+    try:
+        base = _load_summary(base_dir, "baseline", cfg)
+        cand = _load_summary(cand_dir, "candidate", cfg)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     # Two runs are the same section when their built-page sets are equal --
     # including when both are empty (a schema-only / rule-only run records no
     # page schemas). A bool() short-circuit here would wrongly void the compare
@@ -422,6 +487,7 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
         print(json.dumps({
             "baseline": base, "candidate": cand,
             "same_section": same_section, "deltas": rows, "verdict": verdict,
+            "version_note": _version_note(base, cand),
         }, indent=2, ensure_ascii=False))
     elif fmt == "md":
         print(_compare_markdown(base, cand, same_section, rows, verdict))
@@ -433,6 +499,7 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
 def _compare_markdown(base: dict, cand: dict, same_section: bool,
                       rows: list, verdict: str) -> str:
     lines = ["### Cost comparison (baseline vs candidate)", ""]
+    lines.append(f"- {_version_note(base, cand)}")
     lines.append(f"- baseline section: {base['built_pages'] or '(none)'}")
     lines.append(f"- candidate section: {cand['built_pages'] or '(none)'}"
                  + ("  · ✓ same section" if same_section
@@ -457,6 +524,7 @@ def _compare_text(base: dict, cand: dict, same_section: bool,
     mark = "same section" if same_section else "SECTIONS DIFFER -- comparison void"
     lines = [
         "cost comparison (baseline -> candidate):",
+        f"    {_version_note(base, cand)}",
         f"    baseline section : {b_sec}",
         f"    candidate section: {c_sec}   [{mark}]",
         "",
@@ -472,21 +540,10 @@ def _compare_text(base: dict, cand: dict, same_section: bool,
     return "\n".join(lines)
 
 
-def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
-        fmt: str = "text") -> int:
-    session = export_mod.discover(export_dir)
-    if not session.main_transcript and not session.workflows:
-        print(f"no transcripts found under {export_dir!r} -- is this a session export?",
-              file=sys.stderr)
-        return 2
-    report = Report(session, cfg, pages_override=pages_override)
-
-    if fmt == "json":
-        print(render_json(report, section))
-        return 0
-    if fmt == "md":
-        print(render_markdown(report, section))
-        return 0
+def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
+    if section != "summary":
+        # "summary" prints its own counter-version line inside _print_summary.
+        print(f"counter version: {COUNTER_VERSION}")
 
     if section in ("all",):
         total = report.totals
@@ -520,6 +577,25 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
         _print_check(report)
         print()
         _print_normalization(report)
+
+
+def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
+        fmt: str = "text") -> int:
+    session = export_mod.discover(export_dir)
+    if not session.main_transcript and not session.workflows:
+        print(f"no transcripts found under {export_dir!r} -- is this a session export?",
+              file=sys.stderr)
+        return 2
+    report = Report(session, cfg, pages_override=pages_override)
+
+    if fmt == "json":
+        print(render_json(report, section))
+        return 0
+    if fmt == "md":
+        print(render_markdown(report, section))
+        return 0
+
+    _run_text(report, section, cfg)
     return 0
 
 
@@ -550,8 +626,11 @@ def main(argv=None, store=None) -> int:
     )
     parser.add_argument(
         "--compare", metavar="CANDIDATE_EXPORT", default=None,
-        help="compare export_dir (baseline) against this candidate export -- a "
-             "cost-only before/after diff with a same-section guard; honours --format",
+        help="compare export_dir (baseline) against this candidate -- a "
+             "cost-only before/after diff with a same-section guard; honours "
+             "--format. Either side may be a live export dir or a "
+             "'summary --format json' file saved from an earlier run, which "
+             "is how a compare across a counter-version change is done",
     )
     args = parser.parse_args(argv)
     cfg = metrics.CostConfig()
