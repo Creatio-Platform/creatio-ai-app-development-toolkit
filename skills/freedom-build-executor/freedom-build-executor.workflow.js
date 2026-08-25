@@ -1772,6 +1772,23 @@ function rowsById(rows) {
   return byId
 }
 
+// PR #128 review (round 5) -- AGENT-AUTHORED AND OPERATOR-AUTHORED TEXT IS CAPPED WHERE IT IS RECORDED, not only
+// where it is rendered. An `unconsumed` row RIDES THE CARRY: `carryBlock` dumps `${j(carry.unconsumed)}` into the
+// round-close prompt on EVERY close, and the row is re-persisted and re-read for as long as it survives -- so an
+// uncapped `answer` / `why` / `how` / `found` is re-serialised into a prompt every round for the LIFE of the entry,
+// and a run with several stuck answers pays for all of them, every round. The sibling RENDER paths
+// (`resolutionClaimsLine`, `unconsumedRepairText`) already `.slice(0, 400)` for exactly the reason this closes --
+// RC-6: fencing stops a break-out, not a context-flooding string -- but a cap that lives only at a render site
+// binds nothing on the persisted row and is one forgotten call away from not applying at all.
+// The marker is INSIDE the budget, so a downstream `.slice(0, 400)` can never shear it off and hide the truncation.
+const CARRY_TEXT_CAP = 400
+const CARRY_TEXT_TRUNCATED = ' …[truncated]'
+function capCarryText(value) {
+  if (typeof value !== 'string') return value ?? null
+  if (value.length <= CARRY_TEXT_CAP) return value
+  return `${value.slice(0, CARRY_TEXT_CAP - CARRY_TEXT_TRUNCATED.length)}${CARRY_TEXT_TRUNCATED}`
+}
+
 // ENG-95503 — IS EVERY ANSWER THIS UNIT WAS HANDED ACCOUNTED FOR? Returns a reason string when the builder's report
 // does not answer the questions it was given, `null` when it does. It judges the SET OF IDS and the shape of each
 // row — never whether the answer was built WELL, which is the verifier's job and then the engine's gate.
@@ -1852,9 +1869,10 @@ function resolutionContradictions(claims, checks) {
       // `false` and read as a contradiction, so one wasted build round plus a NOT COMPLETE was the EXPECTED outcome
       // for every answer whose effect is not in the page body.
       if (!seen || seen.shows !== SHOWS_NO) continue
-      out.push({ unit: claim.unit, id: row.id, kind: row.kind, item: row.item, answer: row.answer, how: row.how,
+      out.push({ unit: claim.unit, id: row.id, kind: row.kind, item: row.item,
+        answer: capCarryText(row.answer), how: capCarryText(row.how),
         source: UNCONSUMED_FROM_VERIFIER,
-        found: nonBlank(seen.found) ? seen.found.trim() : 'the verifier could not find it on the page' })
+        found: nonBlank(seen.found) ? capCarryText(seen.found.trim()) : 'the verifier could not find it on the page' })
     }
   }
   return out
@@ -1868,8 +1886,8 @@ function unconsumedResolutions(routed, res, unitKey) {
   const byId = rowsById(rows)
   return (routed || []).filter((p) => byId.get(idKey(p.id))?.applied !== true).map((p) => ({
     unit: unitKey, id: p.id, kind: p.kind || null, item: p.item || null,
-    answer: p.resolution?.answer || null, source: 'dispatch',
-    why: nonBlank(byId.get(idKey(p.id))?.why) ? byId.get(idKey(p.id)).why.trim() : 'the build reported nothing for this answer',
+    answer: capCarryText(p.resolution?.answer) || null, source: 'dispatch',
+    why: nonBlank(byId.get(idKey(p.id))?.why) ? capCarryText(byId.get(idKey(p.id)).why.trim()) : 'the build reported nothing for this answer',
   }))
 }
 
@@ -1880,6 +1898,18 @@ function unconsumedResolutions(routed, res, unitKey) {
 // keeps the delimiter exactly as unambiguous (no unit key or evidence id can contain a NUL) while leaving the
 // source plain ASCII that a reviewer can actually read.
 const pairKey = (unit, id) => `${idKey(unit)}\u0000${idKey(id)}`
+
+// PR #128 review (round 5) -- THE TWO `unconsumed` DEDUP SITES GO THROUGH `pairKey`, like every other `(unit, id)`
+// comparison in this file. Both compared `u.unit === x.unit && u.id === x.id` RAW while every lookup against a
+// builder's `resolutionsApplied` normalises through `idKey`/`rowsById` (the note above) and `reconcileUnconsumed`
+// keys on `pairKey`. That is the RC-13 asymmetry in a second place: an id carrying edge whitespace on ONE side only
+// fails to dedup, so one answer is recorded TWICE -- two rows for one question in the operator report, and a run
+// held short of `complete` twice over a single fact. Prevented today only by convention, which is exactly what
+// RC-13 said about the last place this shape appeared.
+const hasUnconsumedPair = (entries, unit, id) => {
+  const key = pairKey(unit, id)
+  return (entries || []).some((u) => pairKey(u.unit, u.id) === key)
+}
 
 // ENG-95503 / PR #128 review -- THE `(unit, id)` PAIRS AN ANSWER IS STILL OWED AGAINST. Derived from the SAME pure
 // routing call the build prompt and the accounting use, so "still owed" cannot mean one thing here and another at
@@ -3583,7 +3613,7 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   // the run short of `complete` twice on one question. The verifier append site already dedups the other direction
   // (line ~3780); this closes the dispatch→verifier direction the per-unit clear structurally cannot.
   const gone = unconsumedResolutions(routed, res, unit.key)
-    .filter((g) => !unconsumed.some((u) => u.unit === g.unit && u.id === g.id))
+    .filter((g) => !hasUnconsumedPair(unconsumed, g.unit, g.id))
   if (!gone.length) return
   unconsumed = [...unconsumed, ...gone]
   log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${gone.map((g) => `\`${g.id}\``).join(', ')} — the run cannot report complete while that stands`)
@@ -4258,7 +4288,7 @@ while (true) {
     // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
     discrepancies = [...discrepancies, { round, unit: c.unit, kind: 'resolution-not-applied',
       claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${String(c.how).slice(0, 400)}` : ''}`, found: c.found }]
-    if (!unconsumed.some((u) => u.unit === c.unit && u.id === c.id)) {
+    if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
       // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
       // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
       // next dispatch's untrusted `applied: true` erased the independent read that recorded the contradiction, the

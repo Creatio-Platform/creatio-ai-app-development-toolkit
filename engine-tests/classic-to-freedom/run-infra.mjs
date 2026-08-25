@@ -170,6 +170,8 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
   "pairKey", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds", "runComplete",
   "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
+  // PR #128 review (round 5) — the record-time text cap the carry depends on, and the one `(unit, id)` dedup rule.
+  "capCarryText", "hasUnconsumedPair",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
@@ -1967,7 +1969,61 @@ check("PR #128 review (finding 1): both reconcile sites pass `publishedResolutio
 // clear drops only dispatch-sourced rows, so a verifier-confirmed contradiction survives it; without this filter the
 // next dispatch's miss for the same `(unit, id)` carried a SECOND row for one answer into the operator report.
 check("PR #128 third-round review (RC-9): a dispatch-sourced miss is deduped against a SURVIVING verifier-sourced row for the same `(unit, id)` — the per-unit clear drops only dispatch rows, so without this filter one answer surfaced twice in the operator report and held the run open twice",
-  /const gone = unconsumedResolutions\(routed, res, unit\.key\)\s*\n?\s*\.filter\(\(g\) => !unconsumed\.some\(\(u\) => u\.unit === g\.unit && u\.id === g\.id\)\)/.test(wfSrc));
+  /const gone = unconsumedResolutions\(routed, res, unit\.key\)\s*\n?\s*\.filter\(\(g\) => !hasUnconsumedPair\(unconsumed, g\.unit, g\.id\)\)/.test(wfSrc));
+/* ===================================================================================================
+   PR #128 FIFTH-ROUND REVIEW — the two findings that survived the round-5 fixes: text recorded onto an
+   entry that RIDES THE CARRY was capped only at its render sites, and the two `(unit, id)` dedup sites
+   on `unconsumed` itself compared ids RAW while every other comparison in the file normalises. Both are
+   asserted in both directions below, and each source pin names a line whose deletion turns one red.
+   =================================================================================================== */
+
+// Round-5 Major — the cap binds on the PERSISTED row, not only on the render. `carryBlock` dumps the whole
+// `unconsumed` array into the round-close prompt on every close, and the row survives resumes, so an uncapped
+// `why`/`answer`/`how`/`found` is re-serialised into a prompt every round for the life of the entry.
+const CAP_LONG = "x".repeat(1200);
+check("PR #128 review (round 5, Major): `unconsumedResolutions` caps the operator `answer` and the builder's `why` AT RECORD TIME — the row rides the carry into every round-close prompt and across every resume, so a cap that lives only at a render site bounds nothing that is actually persisted",
+  () => { const gone = wf.unconsumedResolutions(
+      [{ id: ACC_ID_B, pageKey: "main", kind: "entity-filter", item: "i", resolution: { answer: CAP_LONG } }],
+      { resolutionsApplied: [{ id: ACC_ID_B, applied: false, why: CAP_LONG }] }, "main");
+    return gone.length === 1 && gone[0].answer.length === 400 && gone[0].why.length === 400
+      && /\[truncated\]$/.test(gone[0].answer) && /\[truncated\]$/.test(gone[0].why); },
+  () => wf.unconsumedResolutions([{ id: ACC_ID_B, pageKey: "main", resolution: { answer: CAP_LONG } }],
+    { resolutionsApplied: [{ id: ACC_ID_B, applied: false, why: CAP_LONG }] }, "main"));
+check("PR #128 review (round 5, Major): the verifier-contradiction record site caps `answer`, `how` AND `found` the same way — `found` becomes the entry's `why` at the append site, so leaving it uncapped would carry the verifier's whole page report into every later prompt",
+  () => { const claims = [{ unit: "main", resolutionClaims: [
+      { id: ACC_ID_B, kind: "entity-filter", item: "i", answer: CAP_LONG, applied: true, how: CAP_LONG }] }];
+    const bad = wf.resolutionContradictions(claims, [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: CAP_LONG }]);
+    return bad.length === 1 && bad[0].answer.length === 400 && bad[0].how.length === 400 && bad[0].found.length === 400
+      && bad[0].source === SHOWS.UNCONSUMED_FROM_VERIFIER; },
+  () => wf.resolutionContradictions([{ unit: "main", resolutionClaims: [{ id: ACC_ID_B, answer: CAP_LONG, applied: true, how: CAP_LONG }] }],
+    [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: CAP_LONG }]));
+check("PR #128 review (round 5, Major): the cap leaves a SHORT value byte-identical and keeps its marker INSIDE the 400 budget — a marker appended PAST the cap would be sheared off by the render-site `.slice(0, 400)` and the truncation would be invisible exactly where it matters",
+  () => wf.capCarryText("short") === "short" && wf.capCarryText("") === ""
+    && wf.capCarryText(null) === null && wf.capCarryText(undefined) === null
+    && wf.capCarryText(CAP_LONG).length === 400
+    && String(wf.capCarryText(CAP_LONG)).slice(0, 400) === wf.capCarryText(CAP_LONG),
+  () => JSON.stringify(wf.capCarryText(CAP_LONG)).slice(0, 120));
+check("PR #128 review (round 5, Major): BOTH record sites call `capCarryText` in the shipped source — the helper existing while a site still records raw text is the same silence in a new place",
+  /answer: capCarryText\(row\.answer\), how: capCarryText\(row\.how\)/.test(wfSrc)
+    && /found: nonBlank\(seen\.found\) \? capCarryText\(seen\.found\.trim\(\)\)/.test(wfSrc)
+    && /answer: capCarryText\(p\.resolution\?\.answer\) \|\| null/.test(wfSrc)
+    && /why: nonBlank\(byId\.get\(idKey\(p\.id\)\)\?\.why\) \? capCarryText\(byId\.get\(idKey\(p\.id\)\)\.why\.trim\(\)\)/.test(wfSrc));
+
+// Round-5 Minor — the `(unit, id)` dedup on `unconsumed` normalises like everything else. RC-13 fixed this exact
+// asymmetry for the `resolutionsApplied` lookups; these two sites were the same shape left behind.
+check("PR #128 review (round 5, Minor): the `unconsumed` dedup matches through `pairKey`, so an id carrying edge whitespace on ONE side still dedups — a raw `===` here was the RC-13 asymmetry in a second place, and its failure mode is one answer recorded twice and a run held short twice over one fact",
+  () => wf.hasUnconsumedPair([{ unit: "main", id: `  ${ACC_ID_B}  ` }], "main", ACC_ID_B)
+    && wf.hasUnconsumedPair([{ unit: "  main  ", id: ACC_ID_B }], "main", ACC_ID_B)
+    && wf.hasUnconsumedPair([{ unit: "main", id: ACC_ID_B }], "main", `  ${ACC_ID_B}  `),
+  () => "a padded pair must still dedup");
+check("PR #128 review (round 5, Minor): the dedup still distinguishes a DIFFERENT unit and a DIFFERENT id, and an empty or absent list matches nothing — a dedup that over-matched would silently swallow a second unit's genuinely separate unconsumed answer",
+  () => !wf.hasUnconsumedPair([{ unit: "list", id: ACC_ID_B }], "main", ACC_ID_B)
+    && !wf.hasUnconsumedPair([{ unit: "main", id: ACC_ID_A }], "main", ACC_ID_B)
+    && !wf.hasUnconsumedPair([], "main", ACC_ID_B) && !wf.hasUnconsumedPair(undefined, "main", ACC_ID_B),
+  () => "a different unit or id is not a duplicate");
+check("PR #128 review (round 5, Minor): BOTH dedup sites route through `hasUnconsumedPair` in the shipped source, and NO raw `(unit, id)` comparison on `unconsumed` survives anywhere — the verifier-append site is the one the RC-9 pin above does not cover",
+  /if \(!hasUnconsumedPair\(unconsumed, c\.unit, c\.id\)\) \{/.test(wfSrc)
+    && !/unconsumed\.some\(\(u\) => u\.unit === /.test(wfSrc));
 
 // O3 — the `resolution-not-applied` audit `claim` wraps its untrusted halves like the sibling `resolutionClaimsLine`
 // does. Only ever re-enters a prompt JSON-encoded (via `carryBlock`), so this is defense-in-depth/consistency, not a
