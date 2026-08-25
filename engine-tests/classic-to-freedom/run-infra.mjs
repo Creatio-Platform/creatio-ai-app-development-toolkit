@@ -141,7 +141,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
   // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
   // app/package identity it promises is producible on this stand at all.
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
@@ -851,10 +851,34 @@ check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy s
   () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
-check("packagePreconditionStop: provenance changes ONLY the `new-app`-over-existing branch — the unknown and unnamed stops are untouched by a record, and the other host modes still proceed",
-  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()).stopped === "target-package-unknown"
-    && wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
+check("packagePreconditionStop: an own record ALSO resolves a `new-app` stop over 'unknown' — 'unknown' + a matching COMPLETE record is exactly the resumed-run-over-its-own-success case ENG-95884 exists to let through, not a stop to preserve",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()) === null));
+check("packagePreconditionStop: 'unknown' + a matching but INCOMPLETE record resolves to the OWNERSHIP stop, not the generic unknown one — the record already answers 'exists', so the operator is told to finish the app unit, not to go check `list-packages` by hand",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec({ appUnitComplete: false })).stopped === "new-app-over-existing-package"));
+check("packagePreconditionStop: provenance changes ONLY what a matching record can resolve — the unnamed stop is untouched (no record ever supplies a package NAME), and a non-`new-app` host mode with no record proceeds exactly as before",
+  () => (wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
     && wf.packagePreconditionStop("UsrPkg", "exists", "existing-app", null) === null));
+
+// --- ENG-95884 (review fix): `resolvePackageState` — the resolved fact SCHEDULING must observe too, not just the
+// stop above. Executed against `appUnitFor`/`isOpenApp` themselves (not source-text), because the bug this fix
+// closes is exactly that those two kept reading the raw, unconfirmed `packageState` after the stop had already
+// cleared on the run's own record — a resumed run's own success re-dispatching `create-app` over itself.
+check("resolvePackageState: an own record with a COMPLETE app unit resolves 'unknown' to 'exists' — this is the value scheduling must see",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec()) === "exists"));
+check("resolvePackageState: 'absent' is NEVER overridden by an own record — a confident absent could mean the package was removed after this run made it, a conflict worth its own stop, never a silent resume",
+  () => (wf.resolvePackageState("UsrPkg", "absent", ownRec()) === "absent"));
+check("resolvePackageState: a record naming a DIFFERENT package resolves nothing — the override is scoped to a NAME match, so a stale record from an earlier package in the same queue cannot flip the wrong target to 'exists'",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" })) === "unknown"));
+check("resolvePackageState: an own record with an INCOMPLETE app unit still resolves to 'exists' — the package itself is confirmed on the stand even though the deliverable is not, matching packagePreconditionStop's own new-app-over-existing-package stop text",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec({ appUnitComplete: false })) === "exists"));
+check("resolvePackageState: with NO provenance record 'unknown' stays 'unknown' — absence is never read as ownership",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", null) === "unknown"));
+check("THE BLOCKER FIX ITSELF: scheduling handed the RESOLVED state (not the raw 'unknown') reports the app unit CLOSED — this is the exact gap where `create-app` used to get re-dispatched over a package the run's own record already proved exists",
+  () => (wf.appUnitFor("UsrPkg", wf.resolvePackageState("UsrPkg", "unknown", ownRec())) === null
+    && wf.isOpenApp(wf.resolvePackageState("UsrPkg", "unknown", ownRec())) === false));
+check("THE BLOCKER FIX, negative case: a record for a DIFFERENT package must NOT close scheduling — the override stays scoped to a matching package name all the way through to `appUnitFor`/`isOpenApp`",
+  () => (wf.appUnitFor("UsrPkg", wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" }))) !== null
+    && wf.isOpenApp(wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" }))) === true));
 check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
   () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
 check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
@@ -2575,7 +2599,9 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
   /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected']/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
-  /if \(packageState !== 'exists' && packageState !== 'absent'\)/.test(wfSrc));
+  // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
+  // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.
+  /if \(effectiveState !== 'exists' && effectiveState !== 'absent'\)/.test(wfSrc));
 check("engine: a MEMBER key carries its scope — two child pages declaring the same member produced one key, so the coverage Set counted two rows as one and ONE card closed both",
   /function memberDigestOf\(changeSet, scopeSchema\)/.test(mgSrc)
     && /key: scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
