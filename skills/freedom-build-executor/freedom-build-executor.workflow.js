@@ -1956,9 +1956,9 @@ function claimsBlock(claims, fence) {
 // so skipping it leaves it absent forever. `pagesRecorded` absent or empty fetches every key. It is Reconcile's
 // report and nothing here corroborates it, so this may only ever skip a READ-BACK: Reconcile's all-keys sweep runs
 // every round independently, which is what stops an over-report starving a page instead of costing it one round.
-function verifyFetchKeys(builtThisRound, unitKeys, schemas, pagesRecorded) {
+function verifyFetchKeys({ touchedThisRound, unitKeys, schemas, pagesRecorded }) {
   const recorded = new Set(pagesRecorded || [])
-  return (unitKeys || []).filter((k) => schemas[k] && (builtThisRound.includes(k) || !recorded.has(k)))
+  return (unitKeys || []).filter((k) => schemas[k] && (touchedThisRound.includes(k) || !recorded.has(k)))
 }
 
 // Two empty states, two labels: nothing recorded anywhere, and everything recorded with nothing to fetch this
@@ -1996,13 +1996,27 @@ function requeueSkipReason(id, earnedBeforeRound, filedBeforeRound, builtThisRou
 }
 // One verdict per id the verifier filed, from the round's own inputs. The two derivations live here rather than at
 // the call site so which list feeds which predicate is covered by the same test as the order.
-function requeueDecisions(evidenceWritten, earnedBeforeRound, evidenceFiled, builtThisRound, claims) {
+function requeueDecisions({ evidenceWritten, earnedBeforeRound, evidenceFiled, builtThisRound, claims }) {
   const touchedThisRound = touchedKeys(builtThisRound, claims)
   const filedBeforeRound = new Set(evidenceFiled || [])
   return (evidenceWritten || []).map((id) => ({
     id,
     why: requeueSkipReason(id, earnedBeforeRound, filedBeforeRound, builtThisRound, touchedThisRound),
   }))
+}
+
+// Everything the read-back needs, derived from the round's raw state in one place: which units may have changed,
+// which pages that means fetching, which are left alone, and the table the verifier is shown. Named options because
+// every slot here is a key collection and a positional swap between them would be silent.
+function verifyFetchPlan({ unitKeys, schemas, pagesRecorded, builtThisRound, claims }) {
+  const touched = touchedKeys(builtThisRound, claims)
+  const fetchKeys = verifyFetchKeys({ touchedThisRound: touched, unitKeys, schemas, pagesRecorded })
+  return {
+    touched,
+    fetchKeys,
+    notReRead: fetchTableGroups(fetchKeys, unitKeys, schemas).keep,
+    table: verifierSchemaTable(fetchKeys, unitKeys, schemas),
+  }
 }
 
 function verifierSchemaTable(fetchKeys, unitKeys, schemas) {
@@ -3422,10 +3436,10 @@ async function dispatchUnit(unit, r) {
 
 async function verifyRound(builtThisRound, claims, carry) {
   phase('Verify')
-  const touched = touchedKeys(builtThisRound, claims)
-  const fetchKeys = verifyFetchKeys(touched, state.unitKeys, pageSchemas, state.pagesRecorded)
+  const { touched, notReRead, table } = verifyFetchPlan({
+    unitKeys: state.unitKeys, schemas: pageSchemas, pagesRecorded: state.pagesRecorded, builtThisRound, claims,
+  })
   // The scope is a cost decision made from a report this script cannot verify, so it is stated in the run log.
-  const notReRead = fetchTableGroups(fetchKeys, state.unitKeys, pageSchemas).keep
   if (notReRead.length) log(`round ${round}: ${notReRead.length} page(s) already on file and untouched — not read back: ${notReRead.join(', ')}`)
   if (!(state.pagesRecorded || []).length) log(`round ${round}: no pages reported on file — reading back every key with a schema`)
   return agent(
@@ -3442,7 +3456,7 @@ PUBLISHED PAGE KEYS, for reference — fetch ONLY what the key → schema table 
 EVIDENCE IDS \`--units\` PUBLISHED: ${(state.evidenceIds || []).join(', ') || '(none)'}
 REACHABILITY KEYS THAT APPLY: ${(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key).join(', ') || '(none)'}
 
-${verifierSchemaTable(fetchKeys, state.unitKeys, pageSchemas)}
+${table}
 
 FIRST, before any stand read, MERGE the run carry into ${QUEUE_FILE}. This replaces the old dedicated PERSISTENCE agent: you are already the single sequential agent after Build, and this bookkeeping is transcription only, not verification. Open ${QUEUE_FILE} (create it as \`{ "schemaVersion": 1, "manifest": "${input.manifest}", "builtFile": "${BUILT_FILE}", "units": {}, "nonPageUnits": {}, "standWrites": {} }\` if it is missing) and MERGE — do not drop keys you do not recognise:${carryBlock(carry)}
 
@@ -3841,7 +3855,10 @@ while (true) {
     settled: 'already carried an unrejected record and its unit was not built this round',
     refiled: 'already had a record on file and its unit was not touched this round',
   }
-  for (const { id, why } of requeueDecisions(lastVerifier?.evidenceWritten, earnedBeforeRound, state.evidenceFiled, builtThisRound, claims)) {
+  const decisions = requeueDecisions({
+    evidenceWritten: lastVerifier?.evidenceWritten, earnedBeforeRound, evidenceFiled: state.evidenceFiled, builtThisRound, claims,
+  })
+  for (const { id, why } of decisions) {
     if (why) {
       log(`round ${round}: \`${id}\` ${SKIP_WHY[why]} — not re-queuing it for Judge`)
       continue
