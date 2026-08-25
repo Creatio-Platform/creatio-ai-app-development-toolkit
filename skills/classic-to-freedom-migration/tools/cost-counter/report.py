@@ -186,12 +186,13 @@ class ReconcileRow:
     def explained(self) -> bool:
         """True when an interrupted run accounts for its surplus transcripts.
 
-        Note this deliberately does NOT check that the three classes add up to
-        ``agents_seen``: they are derived from the same file list, so that sum is
-        an identity and would verify nothing. What can genuinely fail is the run
-        file's internal consistency -- ``agentCount`` against the number of
-        ``workflowProgress`` entries. A record that disagrees with itself leaves
-        the surplus unexplained no matter how the transcripts classify.
+        The test is the run file's internal consistency -- ``agentCount`` against
+        the number of ``workflowProgress`` entries. A record that disagrees with
+        itself leaves the surplus unexplained however the transcripts classify.
+
+        Checking that the three classes sum to ``agents_seen`` would verify
+        nothing: they are derived from the same file list, so that sum is an
+        identity.
         """
         attribution = self.attribution
         if attribution is None or not attribution.classified:
@@ -234,13 +235,10 @@ class ReconcileRow:
     def tool_calls_comparable(self) -> bool:
         """False when the two tool-call counts are on different bases.
 
-        Do NOT "improve" this by comparing ``totalToolCalls`` against the
-        live-only subtotal. That matches on trivial workflows and fails on real
-        ones: on the ENG-95941 reference export the run file reports 144 while
-        the live transcripts hold 103, live+replayed 409 and all 41 transcripts
-        1089 -- it matches no subset. Like ``totalTokens``, ``totalToolCalls`` is
-        on its own accounting basis once a run has been interrupted. An
-        uninterrupted workflow in the same export reconciles exactly (83/83).
+        Once a run has been interrupted, ``totalToolCalls`` is on its own
+        accounting basis: it matches no subset of the transcripts -- not the
+        live agents, not live+replayed, not all of them. It must not be compared
+        against any of them. An uninterrupted run reconciles exactly.
         """
         if self.tool_calls_meta is None or self.tool_calls_meta == self.tool_calls_seen:
             return True

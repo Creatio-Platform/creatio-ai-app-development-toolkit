@@ -1,15 +1,14 @@
 """Attempt classification: which transcripts the surviving run's record claims.
 
-The behaviours pinned here were all observed on real exports and on two probe
-workflows run deliberately (a double resume, and a kill followed by a resume):
+The export invariants pinned here:
 
 * ``cached`` is written only when true, never as ``false``;
-* a fully-replayed resume writes no new transcript, so it must NOT be reported
-  as interrupted -- the plain sum is already right for it;
+* a fully-replayed resume writes no new transcript, so it is not interrupted --
+  the plain sum is already right for it;
 * a killed agent leaves a full-size transcript with a journal ``started`` and no
-  ``result``, and disappears from ``workflowProgress`` once the run is resumed;
-* a re-run agent REUSES the cache ``key`` of the attempt it replaces, so journal
-  outcomes must be matched on ``agentId``.
+  ``result``, and drops out of ``workflowProgress`` once the run is resumed;
+* a re-run agent reuses the cache ``key`` of the attempt it replaces, so journal
+  outcomes are matched on ``agentId``.
 """
 import json
 import os
@@ -387,9 +386,9 @@ class InterruptedRunReportTest(unittest.TestCase):
         self.assertIn("leftover", row.note)
 
     def test_tool_calls_are_reported_not_comparable_rather_than_ok(self):
-        # totalToolCalls is on its own basis once a run is interrupted -- on the
-        # reference export it matches neither the live subtotal nor any other.
-        # Suppressing the MISMATCH is right; calling it "ok" would overclaim.
+        # totalToolCalls is on its own basis once a run is interrupted, matching
+        # no subset of the transcripts. Suppressing the MISMATCH is correct;
+        # reporting "ok" would claim a comparison that never ran.
         row = self.report.reconcile()[0]
         self.assertTrue(row.tool_calls_ok)
         self.assertFalse(row.tool_calls_comparable)

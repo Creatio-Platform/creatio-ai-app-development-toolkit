@@ -1,32 +1,28 @@
 """Which transcripts belong to the surviving run, and which are left over.
 
-A workflow directory accumulates transcripts across every *attempt* of a run.
-Resuming replays some agents and re-runs others; killing one leaves the
-interrupted agents' transcripts behind. The run file (``workflows/<wf>.json``)
-is rewritten on each attempt, so it describes only the latest one -- which is
-why a directory can hold 41 ``agent-*.jsonl`` files for a run whose own record
-says ``agentCount: 18``.
+A workflow directory accumulates transcripts across every *attempt* of a run,
+and ``workflows/<wf>.json`` is rewritten on each attempt, so it describes only
+the latest one. Transcripts are classified against that record; the attempts
+themselves are not reconstructed.
 
-Everything here classifies transcripts *against that record* rather than trying
-to reconstruct the attempts. Two signals carry it, and the harness writes both
-independently of why an agent stopped:
+Two signals classify a transcript, both written independently of why an agent
+stopped:
 
-* membership in ``workflowProgress`` -- present means the surviving run owns
-  the agent (``cached: true`` when its result was replayed rather than
-  recomputed); absent means no record claims the transcript at all.
+* membership in ``workflowProgress`` -- present means the surviving run owns the
+  agent (``cached: true`` when its result was replayed rather than recomputed);
+  absent means no record claims the transcript.
 * a journal ``result`` line for the agent id -- absent means the agent produced
-  nothing, whatever ended it.
+  nothing.
 
-Attempt boundaries are deliberately NOT reconstructed. ``promptId`` tracks the
-main-session prompt chain rather than the resume (a kill-and-resume was observed
-with both attempts sharing one), and every replayed ``workflowProgress`` entry
-carries the *replay* timestamp rather than its original, so ``startedAt`` cannot
-order attempts either. Leftover transcripts therefore stay in one bucket instead
-of being split into attempts the data cannot support.
+Two fields must NOT be used to order or group attempts: ``promptId`` tracks the
+main-session prompt chain, not the resume, so two attempts can share one; and a
+replayed ``workflowProgress`` entry carries the replay timestamp, not its
+original, so ``startedAt`` does not order them. Leftovers therefore stay in one
+bucket.
 
 Journal outcomes are matched on ``agentId``, never on ``key``: a re-run agent
-reuses the cache ``key`` of the attempt it replaces, so keying on it would
-credit a killed transcript with its successor's result.
+reuses the ``key`` of the attempt it replaces, so keying on it would credit a
+killed transcript with its successor's result.
 """
 from __future__ import annotations
 
@@ -78,12 +74,32 @@ class RunRecord:
         return self.replayed | self.live
 
 
+def _progress_agents(progress) -> tuple:
+    """(replayed ids, live ids) from a ``workflowProgress`` list.
+
+    Only ``type: workflow_agent`` entries carry an agent; phase entries and any
+    malformed entry are skipped. ``cached`` is written only when true -- it is
+    absent, never False, on an agent that ran -- so ``.get`` is the only correct
+    test for it.
+    """
+    replayed, live = set(), set()
+    if not isinstance(progress, list):
+        return frozenset(), frozenset()
+    for entry in progress:
+        if not isinstance(entry, dict) or entry.get("type") != "workflow_agent":
+            continue
+        agent_id = entry.get("agentId")
+        if not isinstance(agent_id, str) or not agent_id:
+            continue
+        (replayed if entry.get("cached") else live).add(agent_id)
+    return frozenset(replayed), frozenset(live)
+
+
 def read_run_record(path: Optional[str]) -> RunRecord:
     """Parse one run file. Never raises; unreadable input yields ``readable=False``.
 
-    This is the single reader for ``workflows/<wf>.json``. Callers that only
-    want a couple of fields go through it too, so the degrade-on-malformed-JSON
-    behaviour cannot drift between them.
+    This is the single reader for ``workflows/<wf>.json``, so the
+    degrade-on-malformed-JSON behaviour cannot drift between its callers.
     """
     if not path or not os.path.isfile(path):
         return RunRecord()
@@ -95,19 +111,7 @@ def read_run_record(path: Optional[str]) -> RunRecord:
     if not isinstance(data, dict):
         return RunRecord()
 
-    replayed, live = set(), set()
-    progress = data.get("workflowProgress")
-    if isinstance(progress, list):
-        for entry in progress:
-            if not isinstance(entry, dict) or entry.get("type") != "workflow_agent":
-                continue
-            agent_id = entry.get("agentId")
-            if not isinstance(agent_id, str) or not agent_id:
-                continue
-            # `cached` is written ONLY when true -- it is absent, never False,
-            # on an agent that ran. `.get` is therefore the only correct test.
-            (replayed if entry.get("cached") else live).add(agent_id)
-
+    replayed, live = _progress_agents(data.get("workflowProgress"))
     return RunRecord(
         readable=True,
         agent_count=data.get("agentCount"),
@@ -117,8 +121,8 @@ def read_run_record(path: Optional[str]) -> RunRecord:
         timestamp=data.get("timestamp"),
         status=data.get("status"),
         total_tokens=data.get("totalTokens"),
-        replayed=frozenset(replayed),
-        live=frozenset(live),
+        replayed=replayed,
+        live=live,
     )
 
 

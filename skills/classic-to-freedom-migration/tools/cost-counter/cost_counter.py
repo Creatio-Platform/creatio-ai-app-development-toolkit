@@ -98,10 +98,9 @@ def _mark(ok: bool, comparable: bool = True) -> str:
 def _reconcile_verdict(rows: list) -> str:
     """Footer line for the cross-check table.
 
-    A suppressed check must not be folded into an unqualified pass: a row that
-    renders ``n/a`` verified nothing, so claiming "all workflows reconcile"
-    underneath it would restate at the footer exactly the overclaim the cell
-    avoids. An export with nothing suppressed keeps the original wording.
+    A suppressed check is never folded into an unqualified pass: a row rendering
+    ``n/a`` verified nothing, so the footer counts it rather than claiming every
+    workflow reconciled. A real MISMATCH outranks both.
     """
     if not all(row.agents_ok and row.tool_calls_ok for row in rows):
         return "DISCREPANCIES ABOVE"
@@ -239,11 +238,10 @@ def _reconcile_payload(report: Report) -> list:
             "agents_ok": r.agents_ok,
             "tool_calls_meta": r.tool_calls_meta,
             "tool_calls_seen": r.tool_calls_seen,
-            # null, not true, when the comparison was suppressed: a consumer
-            # reading this key alone must not see a clean pass over a check that
-            # never ran. `tool_calls_comparable: false` rides along to say why.
-            # Both only differ from the old payload on an interrupted run, so an
-            # ordinary export keeps exactly the keys and values it had before.
+            # null, not true, when the comparison was suppressed: reading this
+            # key alone must never show a pass over a check that did not run.
+            # `tool_calls_comparable: false` rides along to say why. Neither
+            # appears unless the run was interrupted.
             "tool_calls_ok": r.tool_calls_ok if r.tool_calls_comparable else None,
             **({} if r.tool_calls_comparable else {"tool_calls_comparable": False}),
             **({"note": r.note} if r.note else {}),
