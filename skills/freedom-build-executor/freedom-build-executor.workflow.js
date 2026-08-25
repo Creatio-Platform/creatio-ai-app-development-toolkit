@@ -1894,39 +1894,56 @@ function owedResolutionPairs(items, unitKeys) {
   for (const k of keys) for (const p of resolutionsForUnit(items, k, keys)) out.add(pairKey(k, p.id))
   return out
 }
-// The pairs THIS round's verifier read off the page and CONFIRMED. `SHOWS_YES` only: `SHOWS_UNKNOWN` is the verifier
-// saying it could not tell, which is exactly as unconfirmed as an absent row and must never clear a record.
-function confirmedResolutionPairs(checks) {
+// THE PAIRS THIS ROUND'S VERIFIER READ AND DID NOT REFUTE. `SHOWS_YES` (it confirmed the effect) OR `SHOWS_UNKNOWN`
+// (it looked and could not tell) — both RELEASE a stale verifier-sourced row, and for the same reason: that row
+// exists ONLY because an EARLIER round read `no`, and a later non-refuting read of the SAME page is that refutation
+// withdrawn. `SHOWS_UNKNOWN` is included deliberately (PR #128 review, finding 2). A verifier row can only ever be
+// scored `unknown` after its rebuild when the answer's effect lives where the page body cannot show it — a rule-shaped
+// answer whose effect is in `BusinessRule_*` schemas invisible to `viewConfig`; without releasing on `unknown` such a
+// row would block `complete` FOR EVER, because once the unit is green it is never re-verified and the confirming `yes`
+// can never arrive. An ABSENT row is NOT a release: a `resolutionChecks` row exists only for a unit the verifier was
+// asked about — i.e. one that was open and REBUILT this round — so this can never clear a row off a page nobody re-read,
+// and the historical `resolution-not-applied` discrepancy the `no` filed stays in `discrepancies` regardless.
+function releasedResolutionPairs(checks) {
   const out = new Set()
   for (const c of checks || []) {
-    if (c && typeof c.unit === 'string' && typeof c.id === 'string' && c.shows === SHOWS_YES) out.add(pairKey(c.unit, c.id))
+    if (c && typeof c.unit === 'string' && typeof c.id === 'string' && (c.shows === SHOWS_YES || c.shows === SHOWS_UNKNOWN)) {
+      out.add(pairKey(c.unit, c.id))
+    }
   }
   return out
 }
-// IS THERE A REAL PREFLIGHT ITEM LIST TO RECONCILE AGAINST? (PR #128 review, N1.) `preflightItems` is agent-transcribed
-// and NOT gated by anything before the reconcile reads it. The routing helper on an `undefined` list returns `[]` rather
-// than throwing, so an ABSENT or EMPTY list yields an empty owed set — and an empty owed set filters EVERY unconsumed entry
-// out, which then reports `complete: true` over a lost answer. This is the discriminator that keeps that erase from
-// happening on absence: a genuine withdrawal empties the ANSWER (`resolution: null`) while the ⚠ item stays in the
-// list, so the list is non-empty on that path and the ordinary owed-set drop still runs.
-function preflightItemsPresent(state) {
-  return Array.isArray(state?.preflightItems) && state.preflightItems.length > 0
+// THE IDS THE PLAN ACTUALLY PUBLISHES THIS RUN, answered or not. The discriminator that lets `reconcileUnconsumed`
+// tell "the operator withdrew this answer" (id still published, answer gone) from "this answer's item was dropped from
+// an under-reported `preflightItems`" (id not published at all). `preflightItems` is agent-transcribed and gated by
+// nothing before the reconcile reads it, so a partial transcription — the list non-empty but missing exactly the item
+// that carries a surviving unconsumed answer — must be treated as the loss it might be, not as a withdrawal.
+function publishedResolutionIds(items) {
+  const out = new Set()
+  for (const p of items || []) if (p?.id) out.add(idKey(p.id))
+  return out
 }
 // WHAT STAYS UNCONSUMED after a round, reconciled against the currently-owed set rather than per dispatched unit.
 // Two things clear an entry and NEITHER is a builder's own word about its own work: the question is no longer owed
-// at all, or this round's INDEPENDENT verifier confirmed the effect on the page. A dispatch that comes back
-// `applied: true` clears nothing here -- letting it would hand the untrusted claim the power to erase the record
-// that exists to disbelieve it, which is exactly how a verifier-confirmed contradiction used to vanish on the very
-// next round. Pure, so the gate and the report cannot disagree about what is still outstanding.
-// FAILS CLOSED when `itemsPresent` is false (PR #128 review, N1): with no reliable owed-set input, erasing nothing is
-// the safe direction — a run held open on a stale answer is recoverable, a `complete: true` over a lost one is not.
-function reconcileUnconsumed(entries, owed, confirmed, itemsPresent = true) {
+// at all, or this round's INDEPENDENT verifier released it. A dispatch that comes back `applied: true` clears nothing
+// here -- letting it would hand the untrusted claim the power to erase the record that exists to disbelieve it, which
+// is exactly how a verifier-confirmed contradiction used to vanish on the very next round. Pure, so the gate and the
+// report cannot disagree about what is still outstanding.
+// FAILS CLOSED PER ENTRY on an under-reported item list (PR #128 review, N1 + finding 1): an entry whose id is ABSENT
+// from `publishedIds` is KEPT, whether the list is empty (total omission) or merely incomplete (a partial transcription
+// that dropped this one item). Losing an answer to `complete: true` is unrecoverable; holding one open is not. An empty
+// `publishedIds` keeps EVERY entry, which subsumes the old whole-list `itemsPresent` guard. An entry whose id IS still
+// published but no longer owed (`resolution: null`, or a `list-*` item re-routed to another unit by a newly published
+// `list` key) is a genuine drop. A re-keyed id that has genuinely left the plan is kept, not dropped — the safe
+// direction when its presence cannot be confirmed; the operator clears it by withdrawing the answer.
+function reconcileUnconsumed(entries, owed, released, publishedIds) {
   const list = entries || []
-  if (!itemsPresent) return list
+  const present = publishedIds instanceof Set ? publishedIds : new Set(publishedIds || [])
   return list.filter((u) => {
+    if (!present.has(idKey(u.id))) return true
     const pair = pairKey(u.unit, u.id)
     if (!owed.has(pair)) return false
-    return !(u.source === UNCONSUMED_FROM_VERIFIER && confirmed.has(pair))
+    return !(u.source === UNCONSUMED_FROM_VERIFIER && released.has(pair))
   })
 }
 
@@ -2789,12 +2806,13 @@ pageSchemas = { ...state.pageSchemas }
 // Which is the failure this whole ticket exists to end, arriving one session boundary later.
 // RECONCILED AS IT IS SEEDED, not merely copied: a persisted entry whose question the operator has since withdrawn,
 // or whose id a re-plan has shifted, must not come back from the dead and hold a finished folder open for ever.
-// FAILS CLOSED ON AN ABSENT ITEM LIST (PR #128 review, N1): `preflightItems` is agent-transcribed, and an omitted or
-// empty list makes `owedResolutionPairs` empty, which would erase EVERY entry and report `complete: true` over a lost
-// answer. So the reconcile only drops when there is a real item list to judge against; a genuine withdrawal keeps the
-// ⚠ item with `resolution: null`, so the list stays non-empty and the ordinary drop still runs.
+// FAILS CLOSED PER ENTRY on an under-reported item list (PR #128 review, N1 + finding 1): `preflightItems` is
+// agent-transcribed, and an omitted, empty OR PARTIAL list would leave the missing item's answer out of the owed set
+// and erase it into a `complete: true` over a lost answer. The reconcile now drops only an entry whose id is STILL
+// published (a genuine withdrawal keeps the ⚠ item with `resolution: null`); an id absent from the published set is
+// kept. No verifier this session yet, so the release set is empty.
 unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
-  owedResolutionPairs(state.preflightItems, state.unitKeys), new Set(), preflightItemsPresent(state))
+  owedResolutionPairs(state.preflightItems, state.unitKeys), new Set(), publishedResolutionIds(state.preflightItems))
 // THE ONCE-PER-UNIT REPAIR GRANT SURVIVES THE PROCESS TOO (PR #128 review, RC-8 + N2). `resolutionsReopened` is the ONLY
 // gate against re-granting a unit its single answer-channel repair round (`reportResolutionAccounting` returns early on
 // `.has(unit.key)`), and `resolutionsPending` ⊆ it is the subset still owed that round's dispatch. Both now RIDE THE
@@ -4242,13 +4260,16 @@ while (true) {
     }
     if (!resolutionsReopened.has(c.unit)) { resolutionsReopened.add(c.unit); resolutionsPending.add(c.unit) }
   }
-  // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier confirmed
+  // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier RELEASED
   // (PR #128 review). The only place a verifier-sourced entry is cleared, and the only place an entry whose question
-  // has gone away is dropped -- both jobs the per-dispatch clear structurally could not do. FAILS CLOSED on an absent
-  // item list (N1), same as the seed above: an under-reported `preflightItems` must not silently erase the set here.
+  // has gone away is dropped -- both jobs the per-dispatch clear structurally could not do. FAILS CLOSED per entry on
+  // an under-reported item list (N1 + finding 1): an id absent from the published set is kept, not erased. And a
+  // verifier row is released by a FRESH non-refuting read this round -- `yes` OR `unknown` (finding 2): a rule-shaped
+  // answer whose effect the page body cannot show can only ever score `unknown` after its rebuild, so requiring a `yes`
+  // to clear it would block `complete` for ever once the unit went green and stopped being re-verified.
   unconsumed = reconcileUnconsumed(unconsumed,
     owedResolutionPairs(state.preflightItems, state.unitKeys),
-    confirmedResolutionPairs(lastVerifier?.resolutionChecks), preflightItemsPresent(state))
+    releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))
   // IN-CONTEXT PARKS FIRST (ENG-95469): a unit whose builder spent its one bounded fix and stayed short parks after
   // ONE round, with its own gate's open rows as the reason — before the round-budget park runs, so the same unit is
   // never double-parked and its reason names the bounded fix rather than a round count. Confirmed against the fresh

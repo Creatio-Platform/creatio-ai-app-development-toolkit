@@ -168,7 +168,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   // where its claim disagrees with the verifier's read of the page.
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
   // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
-  "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed", "preflightItemsPresent", "runComplete",
+  "pairKey", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds", "runComplete",
   "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
@@ -1734,31 +1734,64 @@ check("PR #128 review: an UNANSWERED item is owed by nobody — `owedResolutionP
   () => wf.owedResolutionPairs([{ id: RC_A, pageKey: "main", kind: KIND_LIST_COLS, item: "i", resolution: null }], ["main"]).size === 0,
   () => "an unanswered item is not owed");
 
-check("PR #128 review: `confirmedResolutionPairs` counts ONLY an explicit `yes` — `unknown` is the verifier saying it could not tell, which must never clear a record, and treating it as a confirmation would silently drop the answer",
-  () => { const c = wf.confirmedResolutionPairs([
+const rcPub = () => wf.publishedResolutionIds(rcItems);
+check("PR #128 review (finding 2): `releasedResolutionPairs` counts a FRESH non-refuting read — `yes` (it confirmed the effect) OR `unknown` (it looked and could not tell) — because both WITHDRAW an earlier `no`; a `no` releases nothing and an ABSENT read releases nothing",
+  () => { const r = wf.releasedResolutionPairs([
       { unit: "main", id: RC_A, shows: SHOWS.SHOWS_YES },
       { unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "rules are not in the page body" }]);
-    return c.size === 1 && c.has(wf.pairKey("main", RC_A)) && !c.has(wf.pairKey("main", RC_B)); },
-  () => [...wf.confirmedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }])]);
+    return r.size === 2 && r.has(wf.pairKey("main", RC_A)) && r.has(wf.pairKey("main", RC_B))
+      && wf.releasedResolutionPairs([{ unit: "main", id: RC_A, shows: SHOWS.SHOWS_NO }]).size === 0
+      && wf.releasedResolutionPairs([]).size === 0 && wf.releasedResolutionPairs(undefined).size === 0; },
+  () => [...wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }])]);
+check("PR #128 review (finding 1): `publishedResolutionIds` is the set of ids the plan publishes this run, ANSWERED OR NOT — the discriminator that tells an under-reported list (id gone entirely) from a withdrawal (id present, answer nulled)",
+  () => { const p = wf.publishedResolutionIds(rcItems);
+    return p.size === 2 && p.has(wf.idKey(RC_A)) && p.has(wf.idKey(RC_B))
+      && wf.publishedResolutionIds([]).size === 0 && wf.publishedResolutionIds(undefined).size === 0; },
+  () => [...wf.publishedResolutionIds(rcItems)]);
 
-check("PR #128 review: an entry whose question is NO LONGER OWED is dropped — the operator withdrew the answer, or a re-plan shifted the id; before the reconcile existed such an entry was immortal and `complete` was unreachable for the folder",
-  () => { const kept = wf.reconcileUnconsumed([rcEntry(RC_A, "dispatch")], rcOwed(), new Set());
-    const gone = wf.reconcileUnconsumed([rcEntry("main#confirm:list-columns:WITHDRAWN", "dispatch")], rcOwed(), new Set());
+check("PR #128 review: an entry STILL PUBLISHED but NO LONGER OWED is dropped — the operator withdrew the answer (`resolution: null`) while the ⚠ item stayed in the plan; before the reconcile existed such an entry was immortal and `complete` was unreachable for the folder",
+  () => { const withdrawn = [{ ...rcItems[0], resolution: null }, rcItems[1]];   // RC_A withdrawn, RC_B still answered
+    const owed = wf.owedResolutionPairs(withdrawn, ["main"]);                     // RC_B only
+    const pub = wf.publishedResolutionIds(withdrawn);                             // RC_A + RC_B (item kept)
+    const kept = wf.reconcileUnconsumed([rcEntry(RC_B, "dispatch")], owed, new Set(), pub);
+    const gone = wf.reconcileUnconsumed([rcEntry(RC_A, "dispatch")], owed, new Set(), pub);
     return kept.length === 1 && gone.length === 0; },
-  () => wf.reconcileUnconsumed([rcEntry("main#confirm:gone", "dispatch")], rcOwed(), new Set()));
-check("PR #128 review: a VERIFIER-sourced entry is cleared by the verifier that CONFIRMS the effect, and by nothing else — the independent read is what recorded it, so only an independent read retracts it",
-  () => { const confirmed = new Set([wf.pairKey("main", RC_B)]);
-    return wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), confirmed).length === 0
-      && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), new Set()).length === 1; },
-  () => "a verifier-confirmed pair clears its own entry and an unconfirmed one does not");
-check("PR #128 review: a verifier reporting `unknown` does NOT clear a verifier-sourced entry — 'I cannot tell' is not a retraction, and letting it clear would turn the honest answer into a silent drop",
-  () => wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(),
-    wf.confirmedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }])).length === 1,
-  () => "unknown retracts nothing");
+  () => "a withdrawn answer whose item is still published drops; a still-owed one is kept");
+check("PR #128 review (finding 1): the fail-closed discriminator is PER ENTRY — an id ABSENT from the published list is KEPT (a possible under-report), an id PRESENT but unanswered is DROPPED (a genuine withdrawal). `owed` alone cannot tell them apart, and treating an under-report as a withdrawal erases a real answer into `complete: true`",
+  () => { const e = [rcEntry(RC_B, "dispatch")];
+    // (a) UNDER-REPORT: the item carrying RC_B was dropped from `preflightItems` entirely (a partial transcription).
+    const underReport = wf.reconcileUnconsumed(e, wf.owedResolutionPairs([rcItems[0]], ["main"]), new Set(),
+      wf.publishedResolutionIds([rcItems[0]]));
+    // (b) WITHDRAWAL: the RC_B item stays in the list with its answer nulled.
+    const withdrawn = [rcItems[0], { ...rcItems[1], resolution: null }];
+    const withdrawal = wf.reconcileUnconsumed(e, wf.owedResolutionPairs(withdrawn, ["main"]), new Set(),
+      wf.publishedResolutionIds(withdrawn));
+    return underReport.length === 1 && withdrawal.length === 0; },
+  () => "under-report keeps, withdrawal drops");
+check("PR #128 review (finding 1): an EMPTY or ABSENT published set keeps EVERY entry — the total-omission end of the same under-report spectrum, and what subsumes the old whole-list `itemsPresent` guard",
+  () => wf.reconcileUnconsumed([rcEntry(RC_A, "dispatch"), rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], new Set(), new Set(), new Set()).length === 2
+    && wf.reconcileUnconsumed([rcEntry(RC_A, "dispatch")], rcOwed(), new Set(), undefined).length === 1,
+  () => "empty/absent published set fails closed");
+check("PR #128 review: a VERIFIER-sourced entry is cleared by a verifier that CONFIRMS the effect (`yes`), and left standing when the verifier said nothing this round — the independent read recorded it, only an independent read retracts it",
+  () => { const released = new Set([wf.pairKey("main", RC_B)]);
+    return wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), released, rcPub()).length === 0
+      && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), new Set(), rcPub()).length === 1; },
+  () => "a released verifier pair clears its entry and an unreleased one does not");
+check("PR #128 review (finding 2): a FRESH `unknown` read this round RELEASES a verifier-sourced entry, and an ABSENT read does not — a rule-shaped answer's effect can only ever score `unknown` after its rebuild (it lives in `BusinessRule_*`, invisible to `viewConfig`), so requiring `yes` blocks `complete` for ever once the unit went green and stopped being re-verified",
+  () => { const byUnknown = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(),
+      wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "rules live in BusinessRule_* schemas" }]), rcPub());
+    const byAbsent = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(),
+      wf.releasedResolutionPairs([]), rcPub());
+    return byUnknown.length === 0 && byAbsent.length === 1; },
+  () => "a fresh unknown releases the stale verifier row; an absent read does not");
+check("PR #128 review (finding 2): a fresh `unknown` releases ONLY a verifier-sourced row — a DISPATCH-sourced entry (the builder itself said `applied: false`) is untouched by the verifier's read and clears only on its own owed/withdrawal path",
+  () => wf.reconcileUnconsumed([rcEntry(RC_B, "dispatch")], rcOwed(),
+      wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }]), rcPub()).length === 1,
+  () => "unknown does not release a dispatch-sourced row");
 check("PR #128 review: `reconcileUnconsumed` tolerates the empty and absent shapes — a first round has nothing to reconcile and must not throw on the run's own startup path",
-  () => wf.reconcileUnconsumed([], rcOwed(), new Set()).length === 0
-    && wf.reconcileUnconsumed(undefined, rcOwed(), new Set()).length === 0
-    && wf.reconcileUnconsumed(null, new Set(), new Set()).length === 0,
+  () => wf.reconcileUnconsumed([], rcOwed(), new Set(), rcPub()).length === 0
+    && wf.reconcileUnconsumed(undefined, rcOwed(), new Set(), rcPub()).length === 0
+    && wf.reconcileUnconsumed(null, new Set(), new Set(), new Set()).length === 0,
   () => "empty and absent are both []");
 
 /* ===================================================================================================
@@ -1810,10 +1843,10 @@ check("PR #128 review: the carry block instructs the writer to persist `unconsum
 check("PR #128 review: Reconcile can REPORT the record back — a field the schema does not carry cannot round-trip, so the seeding below would read `undefined` on every resume no matter what the writer wrote",
   /unconsumedResolutions: \{[\s\S]{0,400}?required: \['unit', 'id'\]/.test(wfSrc)
     && /source: \{ type: 'string' \}/.test(wfSrc));
-check("PR #128 review: the seed RECONCILES what it rehydrates instead of trusting it — a persisted entry whose question has since been withdrawn or re-keyed must not come back from the dead and hold a finished folder open",
-  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\), preflightItemsPresent\(state\)\)/.test(wfSrc));
-check("PR #128 review: the round tail reconciles the WHOLE set once, AFTER the verifier — the per-dispatch clear could reach neither a stale entry nor a verifier-confirmed one, which is why both defects were invisible to a per-unit pin",
-  /unconsumed = reconcileUnconsumed\(unconsumed,\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*\n?\s*confirmedResolutionPairs\(lastVerifier\?\.resolutionChecks\), preflightItemsPresent\(state\)\)/.test(wfSrc));
+check("PR #128 review: the seed RECONCILES what it rehydrates instead of trusting it — a persisted entry whose question has since been withdrawn or re-keyed must not come back from the dead and hold a finished folder open; and it fails closed per entry on the published-id set (finding 1)",
+  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\), publishedResolutionIds\(state\.preflightItems\)\)/.test(wfSrc));
+check("PR #128 review: the round tail reconciles the WHOLE set once, AFTER the verifier — the per-dispatch clear could reach neither a stale entry nor a verifier-released one, which is why both defects were invisible to a per-unit pin; the release set is `releasedResolutionPairs` (yes OR unknown, finding 2) and the fail-closed guard is `publishedResolutionIds` (finding 1)",
+  /unconsumed = reconcileUnconsumed\(unconsumed,\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*\n?\s*releasedResolutionPairs\(lastVerifier\?\.resolutionChecks\), publishedResolutionIds\(state\.preflightItems\)\)/.test(wfSrc));
 
 /* --- RC-4: "cannot tell" is a state of its own, in the schema AND in the words the verifier reads. --- */
 check("PR #128 review: the verifier's `shows` field is the THREE-value vocabulary and not a boolean — with two values an effect the page cannot show had to be reported as a refutation, so a false contradiction was the EXPECTED outcome for this ticket's own new `lookup-value` id",
@@ -1894,20 +1927,18 @@ check("PR #128 review (N2): the hydration seeds BOTH sets straight from the pers
   /for \(const k of state\.resolutionsReopened \|\| \[\]\) resolutionsReopened\.add\(k\)\s*\n\s*for \(const k of state\.resolutionsPending \|\| \[\]\) resolutionsPending\.add\(k\)/.test(wfSrc)
     && !/for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc));
 
-// N1 — an under-reported `preflightItems` must not silently erase `unconsumed` into a false `complete: true`.
-check("PR #128 review (N1): `reconcileUnconsumed` FAILS CLOSED on an absent item list — with `itemsPresent: false` it returns the entries untouched, so an under-reported `preflightItems` cannot erase a real unconsumed answer into a green run",
+// N1 + finding 1 — an under-reported `preflightItems` must not silently erase `unconsumed` into a false
+// `complete: true`. N1 caught only the TOTAL-omission case (empty list); finding 1 extends the guard to a PARTIAL
+// under-report by keying the drop on per-entry id presence (`publishedResolutionIds`) rather than a whole-list boolean.
+check("PR #128 review (N1 + finding 1): `reconcileUnconsumed` fails closed PER ENTRY — an id NOT in the published set is kept whether the set is empty (total omission) or merely missing that id (partial under-report); an id that IS present but not owed is dropped",
   () => { const e = [{ unit: "main", id: "x", source: "dispatch" }];
-    return wf.reconcileUnconsumed(e, new Set(), new Set(), false).length === 1        // no owed set, but items absent ⇒ keep
-      && wf.reconcileUnconsumed(e, new Set(), new Set(), true).length === 0            // items present, not owed ⇒ drop
-      && wf.reconcileUnconsumed(e, new Set(), new Set()).length === 0; },              // default itemsPresent=true ⇒ drop (back-compat)
-  () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "x" }], new Set(), new Set(), false)));
-check("PR #128 review (N1): `preflightItemsPresent` is true ONLY for a non-empty array — absent, non-array and `[]` all read false, which is exactly the discriminator that keeps a genuine withdrawal (item kept, answer nulled) on the normal drop path",
-  () => wf.preflightItemsPresent({ preflightItems: [{ id: "a" }] }) === true
-    && wf.preflightItemsPresent({ preflightItems: [] }) === false
-    && wf.preflightItemsPresent({}) === false
-    && wf.preflightItemsPresent(undefined) === false);
-check("PR #128 review (N1): both reconcile sites pass `preflightItemsPresent(state)` — the seed and the round tail are the two places an under-reported list erases the set, so both fail closed",
-  () => (wfSrc.match(/reconcileUnconsumed\([\s\S]*?preflightItemsPresent\(state\)\)/g) || []).length === 2);
+    return wf.reconcileUnconsumed(e, new Set(), new Set(), new Set()).length === 1                    // id absent (empty set) ⇒ keep
+      && wf.reconcileUnconsumed(e, new Set(), new Set(), new Set(["y", "z"])).length === 1            // id absent (partial list) ⇒ keep
+      && wf.reconcileUnconsumed(e, new Set(), new Set(), new Set(["x"])).length === 0                 // id present, not owed ⇒ drop
+      && wf.reconcileUnconsumed(e, new Set(), new Set()).length === 1; },                             // absent publishedIds ⇒ keep (fail closed)
+  () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "x" }], new Set(), new Set(), new Set(["y"]))));
+check("PR #128 review (finding 1): both reconcile sites pass `publishedResolutionIds(state.preflightItems)` — the seed and the round tail are the two places an under-reported list would erase the set, so both fail closed per entry",
+  () => (wfSrc.match(/reconcileUnconsumed\([\s\S]*?publishedResolutionIds\(state\.preflightItems\)\)/g) || []).length === 2);
 
 // RC-9 — a dispatch-sourced miss for a pair a verifier-sourced row already covers is NOT re-appended. The per-unit
 // clear drops only dispatch-sourced rows, so a verifier-confirmed contradiction survives it; without this filter the

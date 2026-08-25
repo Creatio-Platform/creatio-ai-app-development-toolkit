@@ -23,10 +23,16 @@ effect; and anything left over is returned in `unconsumedResolutions` and **bloc
 `built.evidence` or closes a row — the direction is one way, toward stricter.
 
 `resolutionChecks[].shows` is `"yes"` / `"no"` / `"unknown"`, and only `"no"` refutes the builder. `"unknown"` means
-the verifier could not determine the effect and is read exactly like an absent row — unconfirmed, and not a defect.
-That distinction is load-bearing for any answer about BUSINESS RULES, whose effect lives in separate
+the verifier could not determine the effect: it raises no contradiction, exactly like an absent row — unconfirmed, and
+not a defect. That distinction is load-bearing for any answer about BUSINESS RULES, whose effect lives in separate
 `BusinessRule_*` schemas invisible to `viewConfig`: the verifier reads `pages[<key>].businessRules` or calls
 `read-page-business-rules` rather than reporting a page-body zero as a refutation.
+One place a FRESH `"unknown"` is NOT like an absent row: when this round's verifier re-reads a page whose answer an
+earlier round recorded unconsumed on a `"no"`, a later `"yes"` OR `"unknown"` for that pair RELEASES the record — a
+non-refuting read of the same page is the earlier refutation withdrawn. An ABSENT read (the verifier never looked)
+releases nothing. Without this, a rule-shaped answer whose rebuilt effect the page body can never positively show
+would block `complete` for ever, because once its unit is green it is never re-verified and the confirming `"yes"`
+can never arrive.
 
 The leftovers are not process-local. They are persisted at the root of this file under `unconsumedResolutions` and
 re-seeded next run, so an answer that reached a builder and died there still blocks `complete` after a usage limit,
