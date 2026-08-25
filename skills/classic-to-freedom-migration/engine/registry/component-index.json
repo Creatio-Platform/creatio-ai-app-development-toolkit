@@ -42,29 +42,34 @@
    },
    {
     "version": "latest",
-    "sha256": "f6cad4ef71a0c4d49abc92375db3a69bd2a52c7a70750cbaca384bc3d16a3a3c",
-    "bytes": 647995
+    "sha256": "3378ede466bae323e79c74ef67605303fdedab1e40516535a062d28b12c35f95",
+    "bytes": 660164
    }
   ],
-  "componentCount": 205,
+  "componentCount": 207,
   "taxonomyCount": 8,
   "generator": "scripts/build-registry-index.mjs",
   "note": "Generated from the CDN component registries. Do not hand-edit: regenerate with --src <static-files checkout>."
  },
  "baseInputs": {
   "classes": {
+   "v": 127,
    "type": "array"
   },
   "id": {
+   "v": 127,
    "type": "string"
   },
   "loading": {
+   "v": 31,
    "type": "boolean"
   },
   "name": {
+   "v": 127,
    "type": "string"
   },
   "shape": {
+   "v": 127,
    "type": "string",
    "values": [
     "default",
@@ -72,12 +77,15 @@
    ]
   },
   "styles": {
+   "v": 127,
    "type": "Record"
   },
   "tabIndex": {
+   "v": 127,
    "type": "number"
   },
   "type": {
+   "v": 127,
    "type": "string"
   }
  },
@@ -523,7 +531,9 @@
      "v": 127
     },
     "selectedRowsChange": {
-     "v": 127
+     "v": 127,
+     "deprecated": true,
+     "deprecationReason": "Use `selectionStateChange` output instead."
     },
     "selectionStateChange": {
      "v": 127
@@ -627,13 +637,17 @@
      "v": 127
     },
     "leftPanelButtonClicked": {
-     "v": 120
+     "v": 120,
+     "deprecated": true,
+     "deprecationReason": "Used only in sidebar legacy mode and for the legacy sidebar group."
     },
     "navigationPanelVisibleChange": {
      "v": 127
     },
     "rightPanelButtonClicked": {
-     "v": 127
+     "v": 127,
+     "deprecated": true,
+     "deprecationReason": "Used only in sidebar legacy mode and for the legacy sidebar group."
     }
    }
   },
@@ -825,6 +839,11 @@
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
+    "attachmentMenuItems": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
     "channelSelector": {
      "v": 127,
      "type": "TemplateRef<unknown>"
@@ -1021,6 +1040,21 @@
       "menu"
      ],
      "default": "default"
+    },
+    "clickRateLimitMode": {
+     "v": 64,
+     "type": "string",
+     "values": [
+      "none",
+      "debounce",
+      "throttle"
+     ],
+     "default": "none"
+    },
+    "clickRateLimitTime": {
+     "v": 64,
+     "type": "number",
+     "default": 500
     },
     "color": {
      "v": 127,
@@ -2534,6 +2568,11 @@
      "v": 127,
      "type": "FormControl"
     },
+    "disableAlpha": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
+    },
     "disabled": {
      "v": 127,
      "type": "boolean",
@@ -2581,6 +2620,11 @@
     "selectedColor": {
      "v": 127,
      "type": "`#${string}` | ''"
+    },
+    "showColorValue": {
+     "v": 64,
+     "type": "boolean",
+     "default": false
     },
     "tooltip": {
      "v": 127,
@@ -2762,7 +2806,8 @@
    },
    "outputs": {
     "addRecord": {
-     "v": 127
+     "v": 127,
+     "deprecated": true
     },
     "blurred": {
      "v": 127
@@ -2774,7 +2819,8 @@
      "v": 127
     },
     "goToSource": {
-     "v": 127
+     "v": 127,
+     "deprecated": true
     },
     "keyDown": {
      "v": 127
@@ -3664,7 +3710,9 @@
      "v": 127
     },
     "selectedRowsChange": {
-     "v": 127
+     "v": 127,
+     "deprecated": true,
+     "deprecationReason": "Use `selectionStateChange` output instead."
     },
     "selectionStateChange": {
      "v": 127
@@ -4131,6 +4179,11 @@
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
+    "attachmentSources": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    },
     "bcc": {
      "v": 127,
      "type": "array"
@@ -4772,6 +4825,11 @@
    "compositeOnly": false,
    "taxonomy": {},
    "inputs": {
+    "alignItems": {
+     "v": 64,
+     "type": "string",
+     "default": "stretch"
+    },
     "ariaLabel": {
      "v": 127,
      "type": "string"
@@ -4884,6 +4942,11 @@
     "tooltip": {
      "v": 127,
      "type": "string"
+    },
+    "visible": {
+     "v": 64,
+     "type": "boolean",
+     "default": true
     },
     "visiblePadding": {
      "v": 127,
@@ -5633,7 +5696,9 @@
      "v": 127
     },
     "selectedRowsChange": {
-     "v": 127
+     "v": 127,
+     "deprecated": true,
+     "deprecationReason": "Use `selectionStateChange` output instead."
     },
     "selectionStateChange": {
      "v": 127
@@ -5696,6 +5761,10 @@
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {
+    "applyConfirmation": {
+     "v": 64,
+     "type": "string | ConfirmationMessageDialogData"
+    },
     "applyFiltersAutomatically": {
      "v": 112,
      "type": "boolean",
@@ -5705,6 +5774,10 @@
      "v": 64,
      "type": "boolean",
      "default": true
+    },
+    "clearConfirmation": {
+     "v": 64,
+     "type": "string | ConfirmationMessageDialogData"
     },
     "closeButtonVisible": {
      "v": 96,
@@ -5730,6 +5803,11 @@
      "default": {
       "width": 328
      }
+    },
+    "resizable": {
+     "v": 64,
+     "type": "boolean",
+     "default": true
     },
     "schemaName": {
      "v": 120,
@@ -6303,10 +6381,20 @@
      "type": "boolean",
      "default": false
     },
+    "counts": {
+     "v": 64,
+     "type": "ForecastHierarchyBuilderCounts",
+     "default": null
+    },
     "entitySchemaName": {
      "v": 96,
      "type": "string",
      "default": ""
+    },
+    "filter": {
+     "v": 64,
+     "type": "string | Record<string, unknown> | null",
+     "default": null
     },
     "hierarchyColumnName": {
      "v": 96,
@@ -6345,6 +6433,9 @@
     },
     "nodeRemoveRequested": {
      "v": 96
+    },
+    "recordCountChanged": {
+     "v": 64
     },
     "selectionRequested": {
      "v": 96
@@ -8883,7 +8974,9 @@
    },
    "outputs": {
     "createRecord": {
-     "v": 127
+     "v": 127,
+     "deprecated": true,
+     "deprecationReason": "Don't use this property. It will be removed in the future. Emits create record event."
     },
     "deleteSelectedItems": {
      "v": 127
@@ -9716,6 +9809,11 @@
       "color": "dark-blue"
      }
     },
+    "dynamicFilter": {
+     "v": 64,
+     "type": "Record",
+     "default": null
+    },
     "hideTitle": {
      "v": 96,
      "type": "boolean"
@@ -9820,6 +9918,11 @@
      "v": 127,
      "type": "string",
      "default": ""
+    },
+    "attachmentMenuItems": {
+     "v": 64,
+     "type": "array",
+     "default": []
     },
     "autocomplete": {
      "v": 127,
@@ -11521,6 +11624,35 @@
    "compositeOnly": true,
    "taxonomy": {},
    "inputs": {},
+   "outputs": {}
+  },
+  "crt.ThemePaletteRamp": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "shades": {
+     "v": 64,
+     "type": "array",
+     "default": []
+    }
+   },
+   "outputs": {}
+  },
+  "crt.ThemePreview": {
+   "v": 64,
+   "compositeOnly": true,
+   "taxonomy": {},
+   "inputs": {
+    "css": {
+     "v": 64,
+     "type": "unknown"
+    },
+    "fontUrls": {
+     "v": 64,
+     "type": "unknown"
+    }
+   },
    "outputs": {}
   },
   "crt.Timeline": {

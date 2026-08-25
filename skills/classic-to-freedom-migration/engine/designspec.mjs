@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
-import { featureVerifyType, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -1789,6 +1789,12 @@ function buildCoverageRows(cs, pm, result) {
     const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
     cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
+    // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
+    // gated row PER HALF, same as the DCM case-progress-bar/next-steps split a few lines below. Before this, the
+    // second half lived only in `notes` prose, and a build that added just the list read identically to one that
+    // added both — twice, on the same feature, in real runs (see FEATURE_SECOND_HALF in mapping-table.mjs).
+    for (const extra of featureVerifyExtraTypes(f))
+      cover.push({ label: `${esc(f)} — second required component (\`${extra}\`)`, vk: { type: "feature", ftype: extra } });
   }
   if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
     cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } }, { label: "DCM Next steps", vk: { type: "dcm-next" } });
@@ -1943,6 +1949,17 @@ function buildListItems(pm, section, result, isMain) {
     const cond = ra.condition ? ` (conditional: \`${esc(ra.condition)}\`)` : "";
     items.push(listRow(`Row action — \`${esc(ra.name)}\`${cond}`, "rowaction", ra.name, 1, [ra.name]));
   }
+  // ENG-95470 (defect 3) — the list page's OWN template, mirroring the Form-template row above (`vk: { type:
+  // "template", ... }`, resolved by the shared `resolveTemplateVk`). Before this row a plan/built mismatch (e.g.
+  // `ListPageV2FreedomTemplate` planned, `ListPageV3Template` actually built) surfaced only as free-text inside a
+  // judge rejection — nothing machine-checked it. Added ONLY when the list page is ALREADY gated by another row
+  // (`items.some((r) => r.vk)`, computed above `--` never on `pm.listTemplate` alone): a plan with nothing else
+  // resolved for the list page must stay UNGATED (ENG-95218 — withholding a page nobody builds must not publish an
+  // unclosable `list` unit), and adding a template-only vk here would flip that decision by itself. This row lives
+  // in `listRows`, gated on `LIST_PAGE_KEY`, so `ctx.page` resolves to `built.pages["list"]`, never `main`'s.
+  if (pm.listTemplate && items.some((r) => r.vk)) {
+    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\``, vk: { type: "template", exp: pm.listTemplate } });
+  }
   return items;
 }
 // ONE checklist group, stamped with the page it belongs to. `pageKey` stays RAW on the group and on every row —
@@ -1976,9 +1993,12 @@ function pageGroup(pageKey, title, rows) {
 // a caption carrying a backtick or a pipe would yield an id the caller could not reproduce to file its evidence
 // under. `requires` is the UI gate for "this record is complete" and rides on the row so `--units` can publish it.
 export const EVIDENCE_REQUIRES = ["referencePage", "components"];
-function evidenceRow(id, label, extra = {}) {
-  const { vkExtra, ...rest } = extra;
-  return { label, id, ...rest, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES, ...vkExtra } };
+// `vkExtra` rides straight onto `vk` (never onto the outer row) — ENG-95859 needs a `part` discriminator there so
+// two DIFFERENT rows can share the SAME evidence id (see `qualityGateRows`) without the resolver losing which half
+// it is answering for. ENG-95471 rides `allowNoDiff` the same way, so a row that accepts "diffed and found already
+// compliant" can say so without spreading the concession onto `EVIDENCE_REQUIRES` generally.
+function evidenceRow(id, label, extra = {}, vkExtra = {}) {
+  return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES, ...vkExtra } };
 }
 // The ⚠ Confirm worklist — the same items as the Confirm section (kinds without a section of their own). Removals are not
 // decisions. Own fn so `checklistGroups` gains no branch of its own (Sonar CC 15).
@@ -1995,11 +2015,27 @@ function confirmWorklistRows(pageKey, cs) {
 // row: visible, tallied in nothing, closable by asserting it in prose — which is exactly how "native components →
 // style parity is inherent" waved it through. It is now an EVIDENCE row: it closes only on a filed record naming
 // the reference page + the components checked AND a judge that found that record convincing.
+//
+// ENG-95859 — TWO rows, ONE id. "A record was filed naming the reference page + components" and "an independent
+// judge found that record convincing" are different facts (a run that did the design work and a run that skipped
+// it must not read identically), so each gets its OWN row/status via the `part` discriminator on `vk` — but they
+// still file under the SAME `${pageKey}#quality-gates` id: the executor's filing contract
+// (`references/01-evidence-records.md` in freedom-build-executor, the migration skill's steps 7/8) names ONE id
+// per page, and splitting the id itself would be a build-agent-facing contract change this ticket does not need.
+// `evidenceRows`/`evidenceIds` below dedupe by id so `--units` still publishes exactly one id per page.
 function qualityGateRows(pageKey) {
+  const id = `${pageKey}#quality-gates`;
   // `allowNoDiff` (ENG-95471): the ONLY evidence kind where "diffed and found nothing to fix" is a real outcome —
   // a `#confirm`/`#childpage`/list-page record proves something was BUILT, which an empty answer never can, so
-  // the concession stays scoped to this row and is not spread onto `EVIDENCE_REQUIRES` generally.
-  return [evidenceRow(`${pageKey}#quality-gates`, "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". A page diffed and found ALREADY compliant is a valid pass too — file it with an empty `components` list and a `noChangesReason` naming what was compared, never with a vague `components` list padded to look non-empty. NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above.", { vkExtra: { allowNoDiff: true } })];
+  // the concession stays scoped to this row and is not spread onto `EVIDENCE_REQUIRES` generally. It applies to
+  // BOTH halves below: the FILED half is what accepts the empty `components` + `noChangesReason` shape, and the
+  // JUDGED half needs it too — not to close on it (that row closes on the judge verdict), but so its "not judged
+  // yet" wording doesn't call a valid no-diff record incomplete while it waits for a judge to look at it.
+  const base = "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". A page diffed and found ALREADY compliant is a valid pass too — file it with an empty `components` list and a `noChangesReason` naming what was compared, never with a vague `components` list padded to look non-empty. NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema.";
+  return [
+    evidenceRow(id, `${base} **This row: the design pass RAN** — a record naming the reference page and the components checked was filed under \`${esc(id)}\`.`, {}, { part: "filed", allowNoDiff: true }),
+    evidenceRow(id, `${base} **This row: the design pass was INDEPENDENTLY JUDGED** — a separate reviewer found the filed record convincing. A record nobody reviewed does not close this row, even when the row above is ✅.`, {}, { part: "judged", allowNoDiff: true }),
+  ];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -2438,6 +2474,28 @@ function pageUnit(key, node, rows) {
     componentTypes: componentTypesOf(rows),
   };
 }
+// THE PAGE TEMPLATE SCHEMA NAMES THIS PLAN ASSERTS, deduped (ENG-95468). The template axis of exactly the question
+// `componentTypes` asks about components: does the name the plan uses exist on the TARGET stand? A template name is
+// an assertion like any other — `ListPageV2FreedomTemplate` reached a real build, and the page came out on
+// `ListPageV3Template`, because nothing between the plan and the first write ever asked the stand about the name.
+// Published as a root-level union (not per page) for the same reason `componentTypes` is unioned by the executor:
+// the resolution is one read-only lookup per DISTINCT name, and a name repeated across ten pages is one question.
+// `planMeta.listTemplate` is folded in DELIBERATELY, and it is NOT redundant with the list page's own template row
+// (ENG-95470): that row is CONDITIONAL — `buildListItems` adds it only when the list page is already gated by
+// another row, because a list page nothing else resolved must stay ungated (ENG-95218). So a plan can name a list
+// template that reaches no `pages[].expectedTemplate` at all, which is exactly the case that went wrong. Folding the
+// planMeta name in makes the CHECKED set independent of whether that row happened to be emitted; a plan where both
+// apply names the same string twice and the dedupe collapses it. Note the two answer different questions and both
+// are wanted: this set asks the STAND, before the first write, whether the name exists at all; the checklist row
+// asks the BUILT page, afterwards, whether it came out on the template the plan named.
+// Pure in its inputs (the already-built page units + planMeta), so `--units` stays deterministic.
+export function templateNamesOf(pages, opts = {}) {
+  const out = new Set();
+  const add = (v) => { if (typeof v === "string" && v.trim()) out.add(v.trim()); };
+  for (const p of pages || []) add(p?.expectedTemplate);
+  add(opts.planMeta?.listTemplate);
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
 // The five REACHABILITY keys, each with its applicability decided HERE: `appliesWhen: true` iff this run actually
 // emits a gated row for it, so the executor can neither invent an obligation nor miss one. `reuseBindings` is
 // published like the rest — it is gated by the engine and was documented nowhere, so a migration with a reused
@@ -2621,6 +2679,10 @@ export function pageUnits(result, opts = {}) {
   // with the unmatched report below, so the two cannot disagree about what matched.
   const resIndex = asResolutionIndex(opts.resolutions);
   const preflight = preflightUnits(evidence.filter((r) => r.confirm), resIndex);
+  // Built BEFORE the return object rather than inline in it, because `templateNames` below is derived FROM these
+  // units — the template each page expects is already decided here, and re-deriving it from the rows a second time
+  // is how one source of truth becomes two that agree only until someone edits one of them.
+  const pages = [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || listUnitNode(k, opts), r));
   return {
     entity: result.entity || null,
     // The version the `--plan` artifact printed, republished here so the executor never has to parse it back out
@@ -2638,7 +2700,10 @@ export function pageUnits(result, opts = {}) {
     // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
     // approved app instead of resolving one off the stand.
     applicationCode: opts.applicationCode || null,
-    pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || listUnitNode(k, opts), r)),
+    pages,
+    // The template names this plan asserts, for the pre-build stand check (ENG-95468). Root-level and deduped, like
+    // the executor's `componentTypes` union: one lookup per distinct name, before the first write.
+    templateNames: templateNamesOf(pages, opts),
     reachability: reachabilityUnits(rows),
     // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so
     // it is closed through `--built.evidence`/`.judge` exactly like any other evidence row — republished here with
@@ -2650,7 +2715,10 @@ export function pageUnits(result, opts = {}) {
     resolutionsConflicts: resolutionConflicts(resIndex, preflight),
     // Answers matching no question this plan asks — published so the CLI reports them rather than dropping them.
     resolutionsUnmatched: unmatchedResolutions(resIndex, preflight),
-    evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
+    // ENG-95859 — dedupe by id: `qualityGateRows` now publishes TWO rows (`part: "filed"` / `"judged"`) sharing
+    // ONE evidence id, so a naive `.map` here would publish that id twice. The build-agent filing contract
+    // (`references/01-evidence-records.md` in freedom-build-executor) names ONE id per page — keep that true.
+    evidenceRows: [...new Map(evidence.map((r) => [r.vk.id, { id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] }])).values()],
     // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
     // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
     // an order naming a key with no entry would send the executor to build a page it was never given.
@@ -3000,6 +3068,15 @@ const onstandNames = (v) => {
   const names = Array.isArray(v?.names) ? v.names.filter((x) => typeof x === "string" && x.trim()) : [];
   return names.length ? ` (${names.map((x) => esc(x)).join(", ")})` : "";
 };
+// ENG-95470 (defect 4 review) — WHERE THE COUNT CAME FROM, as structure rather than prose. Verify may carry a
+// build unit's OWN claimed count forward into this field on a round where its own independent on-stand check is
+// skipped or missed — necessary so the row does not stay stuck at `reachability: {}` forever, but it means the
+// count in `n` is sometimes a self-report rather than something Verify itself confirmed. Absent `source` on an
+// older payload defaults to `"verified"` (this field did not exist before this ticket, and every payload written
+// before it came only from Verify's own count).
+function onstandSource(v) {
+  return v && typeof v === "object" && v.source === "carried-forward" ? "carried-forward" : "verified";
+}
 // The count-gated form of an `onstand` row. Its own fn so `resolveOnstandVk` stays under Sonar CC 15 and the boolean
 // path below is provably untouched for every row that declares no `expectCount`.
 // A bare `true` is NOT acceptance here, deliberately: it is exactly the answer that hid the second binding, so it
@@ -3014,9 +3091,17 @@ function resolveOnstandCountVk(vk, v) {
       ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
       : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
   }
-  if (n === want) return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
+  if (n === want) return resolveOnstandExactMatch(want, v);
   if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["❌ MISSING", `bound to ${n} workplaces${onstandNames(v)}, expected exactly ${want} — a registration only ADDS, so the previous binding is still there; unbind all but the intended one (this row REPORTS it, the build does not undo it on its own)`, "missing"];
+}
+// ENG-95470 (defect 4 review) — split out of `resolveOnstandCountVk` so that function stays under Sonar CC 15.
+// The count matches what the row wants; whether that closes the row depends on WHERE the count came from.
+function resolveOnstandExactMatch(want, v) {
+  if (onstandSource(v) === "carried-forward") {
+    return ["⚠ verify", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)} — but this count is CARRIED FORWARD from the build unit's own claim, not independently confirmed by Verify this round; re-run the on-stand check to close this row for real`, "unverified"];
+  }
+  return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
 }
 function resolveOnstandVk(vk, ctx) {
   const v = reachabilityValue(ctx.root, vk.evidence);
@@ -3077,6 +3162,13 @@ function resolveChildPageVk(vk, ctx) {
 // self-asserted "done" can no longer close it; `convincing: false` (or a `false` record) is a hard MISSING.
 function resolveEvidenceVk(vk, ctx) {
   if (vk.type !== "evidence") return unknownVk();
+  // ENG-95859 — `part` routes to the split verdict (see `qualityGateRows`). Every OTHER evidence row (a ⚠ Confirm
+  // item, an unfolded child page) carries no `part` and keeps the original combined behavior unchanged below.
+  if (vk.part === "filed") return resolveEvidenceFiledPart(vk, ctx);
+  if (vk.part === "judged") return resolveEvidenceJudgedPart(vk, ctx);
+  return resolveEvidenceCombinedVk(vk, ctx);
+}
+function resolveEvidenceCombinedVk(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const judged = ctx.root?.judge?.[vk.id]?.convincing;
   const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}) + an independent judge verdict`;
@@ -3100,6 +3192,38 @@ function resolveEvidenceVk(vk, ctx) {
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
   return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
+}
+// ENG-95859 — the FILED half in isolation: did the verifier file a complete record? Deliberately silent about the
+// judge (that is the other row's question) — reusing `resolveEvidenceCombinedVk`'s wording would have this row's
+// status swing on a fact it does not claim to check.
+function resolveEvidenceFiledPart(vk, ctx) {
+  const rec = ctx.root?.evidence?.[vk.id];
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")})`;
+  if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
+  if (evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
+  return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
+}
+// ENG-95859 — the JUDGED half in isolation: did an independent reviewer find the filed record convincing? A run
+// that filed a complete record but was never reviewed reads ⚠ HERE (not ✅, the way the old combined row could
+// look identical to a run that skipped the design pass) — distinct from "not judged because there is nothing yet
+// to judge", which points the reader at the row above instead of at the judge.
+function resolveEvidenceJudgedPart(vk, ctx) {
+  const rec = ctx.root?.evidence?.[vk.id];
+  const judged = ctx.root?.judge?.[vk.id]?.convincing;
+  const why = ctx.root?.judge?.[vk.id]?.why;
+  const need = `\`${esc(vk.id)}\``;
+  if (rec === false) {
+    let contradiction = "";
+    if (judged === true) {
+      const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
+      contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page.`;
+    }
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
+  }
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
+  if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
+  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified"];
+  return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
 }
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
 // The earlier predicate ended in `v != null`, so `components: false`, `components: {}` and `referencePage: 0` all
