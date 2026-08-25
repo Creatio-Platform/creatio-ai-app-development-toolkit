@@ -1443,6 +1443,13 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
 // `GATE_KIND.COMPOSITE` in `skills/classic-to-freedom-migration/engine/mapping-table.mjs` — the two must stay equal,
 // and `run-infra.mjs` pins that equality by reading the engine's exported value and asserting this literal matches.
 const GATE_COMPOSITE = 'composite'
+// ENG-95683 — the ONE predicate for "carries a well-formed gated composite" (kind 'composite' + a non-blank string
+// `id`), shared by the carry-through in `componentTypeMismatches` and by `gatedComposite` (which
+// `componentReplanClause` branches on) so the two classifications cannot drift to different rules — the same
+// single-home discipline the GATE_COMPOSITE mirror itself follows. It only CLASSIFIES; `componentTypeMismatches`
+// still owns the normalization (`id.trim()`). Because it tests `c.id.trim()` truthiness it reads a raw resolution
+// entry and an already-normalized mismatch identically (a trimmed non-blank id passes either way).
+const isWellFormedGate = (c) => !!(c && c.kind === GATE_COMPOSITE && typeof c.id === 'string' && c.id.trim())
 function componentTypeMismatches(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
@@ -1454,7 +1461,7 @@ function componentTypeMismatches(componentResolution, publishedTypes) {
     .map((c) => ({
       type: c.type,
       note: (typeof c.note === 'string' && c.note.trim()) ? c.note : 'does not resolve on the target stand',
-      ...(c.kind === GATE_COMPOSITE && typeof c.id === 'string' && c.id.trim()
+      ...(isWellFormedGate(c)
         ? { kind: GATE_COMPOSITE, id: c.id.trim(), ...(typeof c.feature === 'string' && c.feature.trim() ? { feature: c.feature.trim() } : {}) }
         : {}),
     }))
@@ -1479,7 +1486,7 @@ const componentMismatchList = (mismatches) => (mismatches || []).map((c) => '`' 
 // fabricated `crt.*`, or a component the plan named that this stand simply lacks) keeps the original re-plan text.
 // Mixed sets get both clauses. An UNGATED set reproduces the pre-ENG-95683 wording verbatim, so the pre-build/mid-run
 // tail tests that pin that text still hold.
-const gatedComposite = (c) => c && c.kind === GATE_COMPOSITE && typeof c.id === 'string' && !!c.id
+const gatedComposite = isWellFormedGate // a mismatch is "gated" iff it carries a well-formed gate — one home, no drift
 const componentReplanClause = (mismatches) => {
   const list = mismatches || []
   const ungated = list.filter((c) => !gatedComposite(c))
