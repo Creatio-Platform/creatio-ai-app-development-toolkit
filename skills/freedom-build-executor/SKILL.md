@@ -292,6 +292,22 @@ primary package and could not host a section at all. What each mode changes here
   here may infer a section nobody confirmed, and the absence of a record is never read as ownership.
   It is written by the app unit itself, on the branch where the unit closes (and as `false` on the
   branch where it is short), so it is never a claim about work that was not done.
+
+  **This table also settles an INCONCLUSIVE `packageState` (ENG-95884).** `target-package-unknown` used to fire
+  whenever the live `list-packages`/`find-app` sweep came back `'unknown'`, even when this very table's own record
+  named the package — an inconclusive stand check is not stronger evidence than the run's own memory of having
+  minted the thing. `packagePreconditionStop` now resolves `packageState: 'unknown'` to `'exists'` whenever
+  `packageCreatedByRun` names the SAME package, before any row above is evaluated — so a resumed round with a
+  matching record runs this table instead of stopping on `target-package-unknown`. A CONFIDENT `'absent'` is never
+  overridden this way (that would mean the package was removed after this run made it — a conflict worth its own
+  stop).
+
+  **"Nothing" is confirmed, not assumed.** Reconcile is one busy agent, and a resumed round can report "nothing"
+  simply because it dropped the field — not because the file is empty. Before either ownership stop
+  (`target-package-unknown`, `new-app-over-existing-package`) fires on "nothing", the script runs one dedicated
+  single-purpose re-read of the state file to confirm the record is genuinely absent. That re-read failing outright
+  (the file could not be opened) is reported as `packageRecordUnread: true` and worded as "not read", never as a
+  confirmed absence — re-running costs nothing, since no round was spent on it.
 - **`pages-only-no-menu`** — no section is registered anywhere. If a package still has to be created,
   the `app` unit creates the application (the only route to a package) but is told NOT to call
   `create-app-section`, and it closes on the package alone; `main` then builds its own page. The

@@ -1995,7 +1995,8 @@ function pageGroup(pageKey, title, rows) {
 export const EVIDENCE_REQUIRES = ["referencePage", "components"];
 // `vkExtra` rides straight onto `vk` (never onto the outer row) — ENG-95859 needs a `part` discriminator there so
 // two DIFFERENT rows can share the SAME evidence id (see `qualityGateRows`) without the resolver losing which half
-// it is answering for.
+// it is answering for. ENG-95471 rides `allowNoDiff` the same way, so a row that accepts "diffed and found already
+// compliant" can say so without spreading the concession onto `EVIDENCE_REQUIRES` generally.
 function evidenceRow(id, label, extra = {}, vkExtra = {}) {
   return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES, ...vkExtra } };
 }
@@ -2024,10 +2025,16 @@ function confirmWorklistRows(pageKey, cs) {
 // `evidenceRows`/`evidenceIds` below dedupe by id so `--units` still publishes exactly one id per page.
 function qualityGateRows(pageKey) {
   const id = `${pageKey}#quality-gates`;
-  const base = "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema.";
+  // `allowNoDiff` (ENG-95471): the ONLY evidence kind where "diffed and found nothing to fix" is a real outcome —
+  // a `#confirm`/`#childpage`/list-page record proves something was BUILT, which an empty answer never can, so
+  // the concession stays scoped to this row and is not spread onto `EVIDENCE_REQUIRES` generally. It applies to
+  // BOTH halves below: the FILED half is what accepts the empty `components` + `noChangesReason` shape, and the
+  // JUDGED half needs it too — not to close on it (that row closes on the judge verdict), but so its "not judged
+  // yet" wording doesn't call a valid no-diff record incomplete while it waits for a judge to look at it.
+  const base = "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". A page diffed and found ALREADY compliant is a valid pass too — file it with an empty `components` list and a `noChangesReason` naming what was compared, never with a vague `components` list padded to look non-empty. NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema.";
   return [
-    evidenceRow(id, `${base} **This row: the design pass RAN** — a record naming the reference page and the components checked was filed under \`${esc(id)}\`.`, {}, { part: "filed" }),
-    evidenceRow(id, `${base} **This row: the design pass was INDEPENDENTLY JUDGED** — a separate reviewer found the filed record convincing. A record nobody reviewed does not close this row, even when the row above is ✅.`, {}, { part: "judged" }),
+    evidenceRow(id, `${base} **This row: the design pass RAN** — a record naming the reference page and the components checked was filed under \`${esc(id)}\`.`, {}, { part: "filed", allowNoDiff: true }),
+    evidenceRow(id, `${base} **This row: the design pass was INDEPENDENTLY JUDGED** — a separate reviewer found the filed record convincing. A record nobody reviewed does not close this row, even when the row above is ✅.`, {}, { part: "judged", allowNoDiff: true }),
   ];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
@@ -2711,7 +2718,7 @@ export function pageUnits(result, opts = {}) {
     // ENG-95859 — dedupe by id: `qualityGateRows` now publishes TWO rows (`part: "filed"` / `"judged"`) sharing
     // ONE evidence id, so a naive `.map` here would publish that id twice. The build-agent filing contract
     // (`references/01-evidence-records.md` in freedom-build-executor) names ONE id per page — keep that true.
-    evidenceRows: [...new Map(evidence.map((r) => [r.vk.id, { id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] }])).values()],
+    evidenceRows: [...new Map(evidence.map((r) => [r.vk.id, { id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires], allowNoDiff: r.vk.allowNoDiff === true }])).values()],
     // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
     // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
     // an order naming a key with no entry would send the executor to build a page it was never given.
@@ -3164,7 +3171,7 @@ function resolveEvidenceVk(vk, ctx) {
 function resolveEvidenceCombinedVk(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const judged = ctx.root?.judge?.[vk.id]?.convincing;
-  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}) + an independent judge verdict`;
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""}) + an independent judge verdict`;
   // A record filed as `false` is the VERIFIER stating the deliverable is genuinely absent, so it is a hard
   // MISSING — the judge never overrides it, because a judge rules on records and does not create them.
   // But it must not be reported as the JUDGE's doing. A live run filed `false` here while the judge, having
@@ -3182,8 +3189,8 @@ function resolveEvidenceCombinedVk(vk, ctx) {
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
-  if (evidenceComplete(rec, vk.requires) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
-  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
+  if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
+  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
   return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
 }
 // ENG-95859 — the FILED half in isolation: did the verifier file a complete record? Deliberately silent about the
@@ -3191,9 +3198,9 @@ function resolveEvidenceCombinedVk(vk, ctx) {
 // status swing on a fact it does not claim to check.
 function resolveEvidenceFiledPart(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
-  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")})`;
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""})`;
   if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
-  if (evidenceComplete(rec, vk.requires)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
+  if (evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
   return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
 }
 // ENG-95859 — the JUDGED half in isolation: did an independent reviewer find the filed record convincing? A run
@@ -3215,7 +3222,7 @@ function resolveEvidenceJudgedPart(vk, ctx) {
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
-  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified"];
+  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified"];
   return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
 }
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
@@ -3225,14 +3232,21 @@ function resolveEvidenceJudgedPart(vk, ctx) {
 // (⇒ ⚠ unverified, never a silent pass). Extracted so `resolveEvidenceVk` stays under Sonar CC 15.
 const nonBlankString = (v) => typeof v === "string" && v.trim() !== "";
 const nonEmptyStringList = (v) => Array.isArray(v) && v.length > 0 && v.every(nonBlankString);
+// ENG-95471 — an evidence row that allows it (today, only `#quality-gates`) accepts an EMPTY `components` list
+// as complete, but ONLY paired with a non-blank `noChangesReason` on the same record: the empty list alone still
+// proves nothing (that is exactly the silence this shape used to let through), the reason is what earns the pass.
+// A row that does NOT set `allowNoDiff` never reaches this branch — `nonEmptyStringList` still gates it alone.
+const componentsFieldOk = (v, rec, allowNoDiff) =>
+  nonEmptyStringList(v) || (allowNoDiff === true && Array.isArray(v) && v.length === 0 && nonBlankString(rec?.noChangesReason));
 // Per-field shape for the fields the engine itself requires. A `requires` entry with no entry here falls back to
 // the STRICT generic shape (a non-blank string, or a non-empty list of non-blank strings) — deliberately not an
 // "unknown field ⇒ accept" escape, which would reintroduce the same hole under another name.
-const EVIDENCE_FIELD_SHAPE = { referencePage: nonBlankString, components: nonEmptyStringList };
-const evidenceFieldOk = (k, v) => (EVIDENCE_FIELD_SHAPE[k] || ((x) => nonBlankString(x) || nonEmptyStringList(x)))(v);
-function evidenceComplete(rec, requires) {
+const EVIDENCE_FIELD_SHAPE = { referencePage: nonBlankString, components: componentsFieldOk };
+const evidenceFieldOk = (k, v, rec, allowNoDiff) =>
+  (EVIDENCE_FIELD_SHAPE[k] || ((x) => nonBlankString(x) || nonEmptyStringList(x)))(v, rec, allowNoDiff);
+function evidenceComplete(rec, requires, allowNoDiff) {
   if (!rec || typeof rec !== "object" || Array.isArray(rec)) return false;
-  return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k]));
+  return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k], rec, allowNoDiff));
 }
 // LIST-PAGE deliverables, MEASURED off the built page. A column set and a filter bar are IN the page body, so they
 // are the same class of check as a form field and get the same treatment: match the expected identities against what

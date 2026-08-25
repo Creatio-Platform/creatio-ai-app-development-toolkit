@@ -725,6 +725,11 @@ const BUILD_PROPERTIES = {
       ran: { type: 'boolean' },
       referencePage: { type: 'string' },
       componentsDiffed: { type: 'array', items: { type: 'string' } },
+      // ENG-95471 — the diff came back EMPTY because the page already matched the guideline, a legitimate
+      // outcome the diff-list alone cannot express. `noChangesNeeded` names that outcome explicitly so it is
+      // never mistaken for an unanswered field, and `noChangesReason` carries what was compared to reach it.
+      noChangesNeeded: { type: 'boolean' },
+      noChangesReason: { type: 'string' },
       notRunWhy: { type: 'string' },
     },
   },
@@ -1365,7 +1370,26 @@ const ownPackageRecord = (rec, targetPackage) => {
   if (!name || !planned || name !== planned) return null
   return { package: name, appUnitComplete: rec.appUnitComplete === true, planVersion: rec.planVersion ?? null, sectionPage: rec.sectionPage ?? null }
 }
+// ENG-95884 — the RESOLVED package state, exposed as its own pure helper so every consumer that decides what to
+// SCHEDULE (`appUnitFor`/`isOpenApp`, not just this gate) can be handed the same fact `packagePreconditionStop`
+// already trusts, instead of re-reading the raw, unconfirmed report. Without this, a resumed run whose own record
+// proves the package exists clears the stop below while `appUnitFor` downstream still sees `packageState:
+// 'unknown'` and re-schedules `create-app` over a package the run's own record already proves is there.
+const resolvePackageState = (targetPackage, packageState, packageCreatedByRun) => {
+  const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+  return (own && packageState === 'unknown') ? 'exists' : packageState
+}
 function packagePreconditionStop(targetPackage, packageState, sectionHost, packageCreatedByRun) {
+  const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+  // ENG-95884 — an INCONCLUSIVE live check is not stronger evidence than the run's OWN record of having minted
+  // this exact package: `list-packages`/`find-app` can flake, time out, or simply not be reported, but this
+  // process's own prior write already proves the package is there. Measured: a resumed round reported
+  // `packageState: 'unknown'` while `standWrites.packageCreated` on disk named this very package — the record was
+  // right there and the live check being inconclusive is not evidence against it. Resolve 'unknown' to 'exists'
+  // when the record agrees, BEFORE any branch below runs, so a resumed run's own success is never re-litigated as
+  // "inconclusive". Deliberately NOT applied to a CONFIDENT 'absent': that would mean the package was removed
+  // after this run made it, which is a stand-vs-record conflict worth its own stop, never a silent resume.
+  const effectiveState = resolvePackageState(targetPackage, packageState, packageCreatedByRun)
   // `new-app` over a package that ALREADY exists is unsatisfiable by construction, so it is a stop rather than a
   // unit. `create-app` mints its OWN package, and the app unit's acceptance criterion is an exact equality with
   // the planned package name — no `create-app` can produce a package that is already there. The only route to an
@@ -1375,8 +1399,7 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
   // operator to decide: the app unit already closed on its full deliverable, so this is a RESUME and the run
   // continues. Without this branch a `new-app` plan could not survive its own success — the app unit sets
   // `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
-  if (sectionHost === 'new-app' && packageState === 'exists') {
-    const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+  if (sectionHost === 'new-app' && effectiveState === 'exists') {
     if (own && own.appUnitComplete) return null
     if (own) {
       return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\` and the target package \`${targetPackage || '(unnamed)'}\` is on the stand because THIS migration created it — but the state file records its app unit as INCOMPLETE (the package exists; the section on the migrated object and/or the removal of the stub \`create-app\` mints did not finish). \`create-app\` cannot be re-run over a package that is already there, and this run will not infer a section nobody confirmed. Two ways out, both yours to pick: (a) finish the app unit BY HAND — \`create-app-section --entity-schema-name <the migrated object>\` in that application, then \`delete-app-section\` for the stub — and re-run this build, which then resumes without a re-plan and without a second approval; or (b) re-plan with \`sectionHost: existing-app\` against the package that now exists. Nothing further has been built` }
@@ -1386,10 +1409,10 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
   // Anything that is not one of the three published states — absent, empty, misspelled — is UNKNOWN. The schema
   // requires the field; this is what makes a result that slipped through anyway stop the run instead of being read
   // as "go ahead and create it".
-  if (packageState !== 'exists' && packageState !== 'absent') {
+  if (effectiveState !== 'exists' && effectiveState !== 'absent') {
     return { stopped: 'target-package-unknown', next: 'the stand checks for the target package were inconclusive, so this run will neither create it (a second `create-app` over an existing application is not a no-op) nor assume it is there (which is what wasted the previous run) — check by hand with `list-packages` / `find-app`, then re-run; nothing has been built' }
   }
-  if (packageState === 'absent' && !targetPackage) {
+  if (effectiveState === 'absent' && !targetPackage) {
     return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
   }
   return null
@@ -1645,7 +1668,7 @@ function answeredNoteFor(batch, note) {
 // the source: a regex can show a block is interpolated somewhere in the function, never that it reaches the string
 // the agent is handed. Every block arrives already rendered; this only orders them.
 const GUIDELINES_RETURN = `
-  THEN RETURN \`guidelines\` — REQUIRED, and this unit does not close without it. \`evidenceId\`: your page's \`#quality-gates\` id, COPIED from \`--units.evidenceRows\`, never composed from your page key. \`ran: true\` takes \`referencePage\` (the shipped page you diffed) AND \`componentsDiffed\` (the ones you prop-diffed — NOT everything you built). Did not run it? \`ran: false\` plus \`notRunWhy\`; that is a valid ANSWER, not a pass — the record is filed as \`false\`, which is a hard \`❌ MISSING\`, and your unit stays open. Report it anyway: an omitted or half-filled answer is not valid at all, and a reference page you did not open is the one thing this field exists to stop.`
+  THEN RETURN \`guidelines\` — REQUIRED, and this unit does not close without it. \`evidenceId\`: your page's \`#quality-gates\` id, COPIED from \`--units.evidenceRows\`, never composed from your page key. \`ran: true\` takes \`referencePage\` (the shipped page you diffed) AND \`componentsDiffed\` (the ones you prop-diffed — NOT everything you built). Found NO drift worth fixing? That is a real outcome, not a shortcut: leave \`componentsDiffed\` empty and instead set \`noChangesNeeded: true\` with \`noChangesReason\` naming what you diffed and confirmed already matched — an empty \`componentsDiffed\` with neither flag is NOT filed as a pass. Did not run it? \`ran: false\` plus \`notRunWhy\`; that is a valid ANSWER, not a pass — the record is filed as \`false\`, which is a hard \`❌ MISSING\`, and your unit stays open. Report it anyway: an omitted or half-filled answer is not valid at all, and a reference page you did not open is the one thing this field exists to stop.`
 
 // `guidelinesReturn` is EMPTY for the app and reachability kinds: they own no page, carry no `#quality-gates` id,
 // and their schemas do not require the field. Only a page unit is held by it.
@@ -1744,6 +1767,15 @@ function notRunMiss(g, earnedIds) {
 // MISSING and the unit stays open.
 // `earnedIds` are ids already carrying an unrejected record: `ran: false` against one of those would overwrite
 // work that is done, so it is a miss rather than an answer.
+// THE `componentsDiffed` HALF, split out so `guidelinesCloseMiss` gains no nested branch (Sonar CC). A run
+// diffed AND found nothing to fix is answered by `noChangesNeeded: true` + a reason, never by an empty
+// `componentsDiffed` on its own — that shape is indistinguishable from a half-filled answer, which is exactly
+// the silence ENG-95471 exists to close off.
+function componentsMiss(g) {
+  if (Array.isArray(g.componentsDiffed) && g.componentsDiffed.filter(nonBlank).length) return null
+  if (g.noChangesNeeded === true) return nonBlank(g.noChangesReason) ? null : 'reported no changes needed, gave no `noChangesReason`'
+  return 'reported run, named no `componentsDiffed` and did not report `noChangesNeeded`'
+}
 function guidelinesCloseMiss(unit, res, evidenceIds, earnedIds) {
   if (!owesGuidelines(unit, evidenceIds)) return null
   const g = res?.guidelines
@@ -1752,8 +1784,7 @@ function guidelinesCloseMiss(unit, res, evidenceIds, earnedIds) {
   if (g.evidenceId !== qualityGateId(unit.key)) return `${JSON.stringify(g.evidenceId)} is not this unit's published quality-gates id`
   if (g.ran !== true) return notRunMiss(g, earnedIds)
   if (!nonBlank(g.referencePage)) return 'reported run, named no `referencePage`'
-  if (!Array.isArray(g.componentsDiffed) || !g.componentsDiffed.filter(nonBlank).length) return 'reported run, named no `componentsDiffed`'
-  return null
+  return componentsMiss(g)
 }
 // The UI-GUIDELINES answer as the verifier's instruction for that one id: file the record, file `false`, or file
 // NOTHING. It RENDERS the close-row decision and re-derives none of it, so the two surfaces cannot disagree and an
@@ -1769,7 +1800,11 @@ function guidelinesLine(g, miss, owes, fence) {
   if (miss) return `UI-guidelines: **NOT FILEABLE as returned** (${miss}) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
   const wrap = typeof fence === 'function' ? fence : String
   if (g.ran !== true) return `UI-guidelines: **reported NOT run** — file \`evidence[${JSON.stringify(g.evidenceId)}] = false\`. Reason given: ${wrap(String(g.notRunWhy ?? '').slice(0, 240))}`
-  const comps = g.componentsDiffed.filter(nonBlank)
+  const comps = (Array.isArray(g.componentsDiffed) ? g.componentsDiffed : []).filter(nonBlank)
+  if (!comps.length) {
+    if (!nonBlank(g.noChangesReason)) return `UI-guidelines: **NOT FILEABLE as returned** (noChangesReason is blank) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
+    return `UI-guidelines: RUN, NO CHANGES NEEDED — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": [], "noChangesReason": ${JSON.stringify(String(g.noChangesReason).slice(0, 400))} }\`.`
+  }
   return `UI-guidelines: RUN — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": ${JSON.stringify(comps)} }\`.`
 }
 // ENG-95470 / defect 4 — the `sectionRegistered` unit's OWN counted workplace bindings, rendered for Verify so it
@@ -2121,6 +2156,51 @@ async function reconcileAgent(roundNo, label) {
 // how two routes ended up with two views of one stand.
 const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. Nothing was built`
 
+// ENG-95884 — `packageCreatedByRun` is deliberately NOT required on RECONCILE_SCHEMA (ENG-95850: "an agent that
+// cannot read the file must be able to say nothing rather than guess"), so a Reconcile call that silently dropped
+// the field and a queue file that genuinely holds no `standWrites.packageCreated` record were indistinguishable —
+// both paid the SAME stop. Measured cost of that on a resumed round: 18 agents, 982K tokens, 144 tool calls, zero
+// progress, because the record WAS on disk. Before either package-ownership stop below is trusted with no record in
+// hand, this ONE single-purpose read confirms it — cheap, and bounded the same way Reconcile's own retry is.
+const PACKAGE_RECORD_READ_ATTEMPTS = 2
+const PACKAGE_RECORD_SCHEMA = {
+  type: 'object',
+  required: ['read', 'packageCreated'],
+  properties: {
+    read: { type: 'boolean' },   // true iff the file was actually opened and inspected — false only on a real I/O/parse failure
+    packageCreated: {
+      type: ['object', 'null'],
+      required: ['package', 'appUnitComplete'],
+      properties: {
+        package: { type: 'string' },
+        appUnitComplete: { type: 'boolean' },
+        planVersion: { type: ['string', 'null'] },
+        sectionPage: { type: ['string', 'null'] },
+      },
+    },
+  },
+}
+function packageRecordPrompt() {
+  return `A build is about to STOP because the baseline Reconcile report carried no \`standWrites.packageCreated\` record — before that stop is trusted, confirm it with ONE single-purpose read. This is NOT a repeat of Reconcile; do nothing else — no \`--units\`, no \`--verify\`, no stand read.
+
+Open ${QUEUE_FILE}.
+- If the file cannot be opened or parsed, return { "read": false, "packageCreated": null }.
+- Otherwise return { "read": true, "packageCreated": <the root key \`standWrites.packageCreated\`, VERBATIM, or null when the key is absent> }. Copy the object exactly as written — do NOT derive it from the stand, do NOT infer it from \`find-app\`/\`list-packages\`, and do not reshape it.
+
+Return the schema. Nothing else.`
+}
+async function confirmPackageRecordAbsent() {
+  for (let attempt = 1; attempt <= PACKAGE_RECORD_READ_ATTEMPTS; attempt += 1) {
+    const answer = await agent(packageRecordPrompt(), {
+      agentType: 'general-purpose', schema: PACKAGE_RECORD_SCHEMA, phase: 'Reconcile',
+      label: attempt === 1 ? 'reconcile:package-record' : `reconcile:package-record:retry-${attempt - 1}`,
+    })
+    if (answer?.read) return answer
+    if (attempt < PACKAGE_RECORD_READ_ATTEMPTS) log(`package-record re-read returned nothing usable on attempt ${attempt} of ${PACKAGE_RECORD_READ_ATTEMPTS} — retrying the SAME single-purpose read before trusting the stop`)
+  }
+  return { read: false, packageCreated: null }
+}
+
 let state = await reconcileAgent(round, 'reconcile:baseline')
 
 if (!state) {
@@ -2131,6 +2211,29 @@ if (!state) {
 // created the package the report cannot know yet — and the mid-run gate would otherwise stop the run on its own
 // success. Declared here, below `state`, so it can never be called inside its temporal dead zone.
 const ownPackageNow = () => standWrites.packageCreated || state?.packageCreatedByRun || null
+// ENG-95884 — the confirming half of the dedicated read declared above. Only the two stops that hinge on
+// OWNERSHIP (a record this run made vs. nobody's record at all) are worth a re-read; every other stop from
+// `packagePreconditionStop` (unnamed package, absent-with-no-name) has nothing a file read could change. Returns
+// the (possibly cleared) stop plus whether the record was actually confirmed absent or merely never read.
+async function confirmPackageStop(candidateStop, targetPackage, pkgState, sectionHost) {
+  if (!candidateStop || (candidateStop.stopped !== 'target-package-unknown' && candidateStop.stopped !== 'new-app-over-existing-package')) {
+    return { stop: candidateStop, unread: false, viaReread: false }
+  }
+  if (ownPackageNow()) return { stop: candidateStop, unread: false, viaReread: false }
+  log(`no standWrites.packageCreated on the baseline report — confirming with one dedicated read of ${QUEUE_FILE} before trusting ${candidateStop.stopped}`)
+  const record = await confirmPackageRecordAbsent()
+  if (record.read) {
+    state = { ...state, packageCreatedByRun: record.packageCreated || null }
+    const resolvedStop = packagePreconditionStop(targetPackage, pkgState, sectionHost, ownPackageNow())
+    // ENG-95884 review (thread 2) — flag rather than silently clear: a stop cleared via THIS path rests on
+    // one fresh agent's unverified report of the queue file (`confirmPackageRecordAbsent`), not on the
+    // baseline Reconcile-derived `own` record `ownPackageNow()` already had in hand above. No independent
+    // corroboration is added here — that would widen this fix past what ENG-95884 covers — but an operator
+    // auditing a resume can now see it hinged on this re-read, not on the baseline record.
+    return { stop: resolvedStop, unread: false, viaReread: !resolvedStop }
+  }
+  return { stop: candidateStop, unread: true, viaReread: false }
+}
 // WHETHER `create-app` IS BEHIND US (ENG-95468). The app/package identity check guards that one write, so on a
 // resume whose own app unit already closed on its full deliverable there is nothing left for it to protect — the
 // same record, and the same completeness bar, `packagePreconditionStop` reads to let such a resume continue.
@@ -2206,23 +2309,42 @@ const appIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, 
 if (state.sectionHost === 'new-app' && typeof state.schemaNamePrefix !== 'string') {
   log('NOTE — no `schemaNamePrefix` was reported, so the app/package identity check did NOT run (NOT gated — absence is not evidence). The `app` unit will read the prefix off the stand itself and its package read-back stays the backstop.')
 }
-const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+let stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+let packageRecordUnread = false
+let packageRecordViaReread = false
+;({ stop: stopOnPackage, unread: packageRecordUnread, viaReread: packageRecordViaReread } = await confirmPackageStop(stopOnPackage, state.targetPackage, state.packageState, state.sectionHost))
+// ENG-95884 (fix) — write the RESOLVED state back onto `state` as soon as ownership is settled (by the direct
+// record above or by `confirmPackageStop`'s re-read), so every later reader of `state.packageState` in this
+// closure — `appUnitFor`/`isOpenApp` at Hard Stop 4's checkpoint checks and at scheduling below — observes the
+// same resolved fact this stop just trusted, not the raw pre-confirmation 'unknown'.
+state = { ...state, packageState: resolvePackageState(state.targetPackage, state.packageState, ownPackageNow()) }
+// ENG-95884 review (thread 2) — an operator-visible audit trail: this resume proceeded on ONE fresh agent's
+// unverified re-read of the queue file, not on the baseline Reconcile-derived record. Minimum flag taken per
+// review; no independent corroboration added (out of this ticket's scope).
+if (packageRecordViaReread) log(`NOTE — the target package stop cleared via the dedicated ${QUEUE_FILE} re-read, not the baseline Reconcile record — this resume's ownership rests on that one unverified agent read`)
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
   const alsoTemplates = templateMismatchesNow.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : ''
   const alsoIdentity = appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : ''
   log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}${alsoTemplates}${alsoIdentity}`)
+  // ENG-95884 — distinguish "confirmed absent" from "not read": the second is not evidence of anything and must
+  // not read like a settled verdict, or an operator acts on a stop that a dead read produced.
+  const packageNext = packageRecordUnread
+    ? `${stopOnPackage.next} — NOTE: a dedicated re-read of ${QUEUE_FILE} could not confirm this after ${PACKAGE_RECORD_READ_ATTEMPTS} attempts. The record was NOT READ, which is NOT the same as confirmed absent. Nothing was spent on this attempt; simply re-run this build to retry the read.`
+    : stopOnPackage.next
   return runReturn({
     ...stopOnPackage,
     componentMismatches,
     templateMismatches: templateMismatchesNow,
     appIdentityMismatch: appIdentity,
     packageCreatedByRun: ownPackageNow(),
-    // `...stopOnPackage` carries the package fix in `next`; when the other axes ALSO fail, spell them out in the
-    // same human-readable field so the operator fixes ALL of them in one re-plan instead of hitting Hard Stop 3.5 as
-    // a second round-trip. The structured fields above are not enough — `next` is what an operator reads.
+    packageRecordUnread,
+    // `...stopOnPackage` carries the package fix in `packageNext` (which also folds in the unread-record note);
+    // when the other axes ALSO fail, spell them out in the same human-readable field so the operator fixes ALL of
+    // them in one re-plan instead of hitting Hard Stop 3.5 as a second round-trip. The structured fields above are
+    // not enough — `next` is what an operator reads.
     next: [
-      stopOnPackage.next,
+      packageNext,
       componentMismatches.length
         ? 'ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: ' + componentReplanClause(componentMismatches)
         : '',
@@ -3218,7 +3340,7 @@ WRITE THREE THINGS into ${BUILT_FILE}, and nothing else — the \`judge\` object
 2. \`reachability\` — for each applicable key, \`true\` ONLY after you confirmed the wiring on-stand, \`false\` when you confirmed it is absent, and OMIT the key when you did not check. Return what you wrote in \`reachabilityWritten\` as the strings 'true' / 'false' / 'unset'.
    - **\`sectionRegistered\` IS A COUNT, NOT A FLAG (ENG-95850 / B2).** Registering a section into a workplace does NOT unbind the one it was in, so \`true\` is the same answer for one binding and for two — and on a real run it hid a section left in BOTH "Recruiting" and "My applications". COUNT the workplace bindings this section actually has (its \`SysModuleInWorkplace\` rows) and write \`reachability.sectionRegistered = { "workplaces": <n>, "names": ["<workplace>", …], "source": "verified" }\`, \`n\` a real integer you counted, not a guess. The gate closes the row at exactly 1, reports 0 as unreachable, and reports 2+ by naming them. Write \`false\` only when you confirmed no registration exists, and OMIT the key if you could not count — an omitted key is ⚠ not-checked, which is honest; a \`true\` here is neither, and the row will ask you for the number anyway. **You COUNT and REPORT; you never unbind — removing a workplace binding is a stand deletion and not this run's to make.**
    - **CARRY THE BUILD UNIT'S OWN COUNT FORWARD (ENG-95470 / defect 4) — AND SAY SO IN \`source\`, NOT ONLY IN PROSE.** If the \`sectionRegistered\` unit ran this round, the claims block above (WHAT THE BUILD AGENTS CLAIMED) carries its OWN counted \`workplaceBindings\` line — write THAT count into \`reachability.sectionRegistered\` even when you could not (or did not get to) independently re-derive the count yourself this round: a run where ONLY your own on-stand check counted left the row at \`reachability: {}\` forever whenever that check was skipped or missed, despite the section being genuinely registered. When you do this, set \`"source": "carried-forward"\` on that same object — the gate reads this field and treats a carried-forward count as lower-trust than one you counted yourself, exactly because nobody independently confirmed it this round. If you DID independently count, set \`"source": "verified"\` regardless of what the claim said; if the two disagree, YOUR count wins and say so in \`notes\` (the claim is the build unit's report, not a second ground truth).
-3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. **FILE ONLY THE IDS THIS ROUND OWNS:** an id whose key the table lists under FETCH THIS ROUND, or an id with no record at all. An id under ALREADY ON FILE keeps the record it has — do not rewrite it and do not name it below; naming it is what sends it back to the judge. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
+3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. **Exception, \`#quality-gates\` ONLY (ENG-95471):** a page genuinely reviewed and found already compliant files \`components: []\` together with a non-blank \`noChangesReason\` — an empty list with neither \`false\` nor a reason is not a record, it is silence. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. **FILE ONLY THE IDS THIS ROUND OWNS:** an id whose key the table lists under FETCH THIS ROUND, or an id with no record at all. An id under ALREADY ON FILE keeps the record it has — do not rewrite it and do not name it below; naming it is what sends it back to the judge. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
 
 ${orphanBlock()}Then report \`discrepancies\`: where a builder CLAIMED a component and get-page does not show it, or the reverse. Record them — do not smooth them over.
 
@@ -3256,7 +3378,7 @@ EVIDENCE IDS TO RULE ON — every record filed in this run so far plus every rec
 For each id, READ the record under \`evidence["<id>"]\` and decide whether it actually proves the deliverable, then write \`judge["<id>"] = { "convincing": true|false, "why": "<one sentence>" }\`.
 
 WHAT "CONVINCING" MEANS — a real bar, not a formality:
-- a \`#quality-gates\` record must name a SHIPPED reference page AND the components that were prop-diffed against it. A claim about how a field BINDS — its control, its data-source path — is checkable against that page's viewModelConfig entry in the built file: read it before you accept or reject such a claim, and say which fields you checked. A live run rejected a record here because it claimed every field bound $PDS_<Column> while only 2 of 16 did; that rejection was only possible because the binding data was in the file. "Native components used", "style parity is inherent", "looks fine", "the template handles it", and a record covering only some of the pages are NOT acceptance — mark those \`false\`.
+- a \`#quality-gates\` record must name a SHIPPED reference page AND the components that were prop-diffed against it. A claim about how a field BINDS — its control, its data-source path — is checkable against that page's viewModelConfig entry in the built file: read it before you accept or reject such a claim, and say which fields you checked. A live run rejected a record here because it claimed every field bound $PDS_<Column> while only 2 of 16 did; that rejection was only possible because the binding data was in the file. "Native components used", "style parity is inherent", "looks fine", "the template handles it", and a record covering only some of the pages are NOT acceptance — mark those \`false\`. **An EMPTY \`components\` with a \`noChangesReason\` (ENG-95471) is a different, legitimate shape — a page diffed and found already compliant** — and is judged on whether the reason actually names what was compared against the reference page (specific props/containers, not a restated "looks fine"); a vague or generic reason is NOT convincing, mark it \`false\` the same as an unsupported diff claim.
 - a \`#confirm:<kind>:<item>\` record must ANSWER that specific decision with what was queried or built, not restate the question.
 - a \`#childpage\` record must name the reference page the unfolded child was built from and the components it carries.
 - a record naming a component the built page does not carry is \`false\` — UNLESS a DIFFERENT component on the page genuinely performs the SAME action (ENG-95470 / defect 2, see below).
@@ -3299,7 +3421,7 @@ if (pendingJudgeIds.size) {
   phase('Reconcile')
   const refreshed = await reconcileAgent(round, 'reconcile:after-preflight')
   if (refreshed) {
-    const stop = acceptReconciled(refreshed, 'the post-preflight Reconcile')
+    const stop = await acceptReconciled(refreshed, 'the post-preflight Reconcile')
     if (stop) {
       await persistPending('stopping after the post-preflight reconcile')
       return runReturn({ ...stop, rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet],
@@ -3442,7 +3564,7 @@ await refsStep()
 //
 // One place, so a fourth refresh site cannot invent a fourth set of rules. Returns a STOP when a guarantee is now
 // broken; the caller returns it, because none of them can be built out of.
-function acceptReconciled(next, whereFrom) {
+async function acceptReconciled(next, whereFrom) {
   markCarryPersisted()
   state = next
   mergeContinuationCounters(state.continuationOf)
@@ -3465,10 +3587,25 @@ function acceptReconciled(next, whereFrom) {
   // `ownPackageNow()` and not `state.packageCreatedByRun`: on the round that created the package this process holds
   // the record and the refreshed report cannot yet, so reading only the report would stop a `new-app` run on its own
   // app unit's success — which is exactly what it did before ENG-95850.
-  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+  let stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
+  let pkgRecordUnread = false
+  let pkgRecordViaReread = false
+  ;({ stop: stopPkg, unread: pkgRecordUnread, viaReread: pkgRecordViaReread } = await confirmPackageStop(stopPkg, state.targetPackage, state.packageState, state.sectionHost))
+  // ENG-95884 review (thread 2) — same audit trail as the baseline call site: a mid-run resume that hinged on
+  // the dedicated re-read, not the baseline Reconcile record, is worth an operator-visible note.
+  if (pkgRecordViaReread) log(`NOTE after ${whereFrom} — the target package stop cleared via the dedicated ${QUEUE_FILE} re-read, not the baseline Reconcile record — this resume's ownership rests on that one unverified agent read`)
   if (stopPkg) {
     log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
-    return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null, packageCreatedByRun: ownPackageNow() }
+    return {
+      ...stopPkg,
+      targetPackage: state.targetPackage || null,
+      packageState: state.packageState || null,
+      packageCreatedByRun: ownPackageNow(),
+      packageRecordUnread: pkgRecordUnread,
+      next: pkgRecordUnread
+        ? `${stopPkg.next} — NOTE: a dedicated re-read of ${QUEUE_FILE} could not confirm this after ${PACKAGE_RECORD_READ_ATTEMPTS} attempts. The record was NOT READ, which is NOT the same as confirmed absent. Nothing was spent on this attempt; simply re-run this build to retry the read.`
+        : stopPkg.next,
+    }
   }
   // The component-type gate (ENG-95468) is a mid-run GUARANTEE too, for the same reason the two stops above are:
   // a Reconcile can surface a `resolved: false` type that the BASELINE gate never saw — a resumed run whose baseline
@@ -3501,6 +3638,10 @@ function acceptReconciled(next, whereFrom) {
       next: planInvalidNextAll(midRunMismatches, midRunTemplates, midRunIdentity, 'Anything already built this run is on disk.'),
     }
   }
+  // ENG-95884 (fix) — same write-back as the baseline call site: resolve `state.packageState` against the now-
+  // confirmed ownership record BEFORE it feeds `appUnitFor` below, so a mid-run refresh that reports `'unknown'`
+  // over a package this run's own record already proves does not re-schedule `create-app` over it.
+  state = { ...state, packageState: resolvePackageState(state.targetPackage, state.packageState, ownPackageNow()) }
   packageState = state.packageState || packageState
   schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
   return null
@@ -3631,7 +3772,7 @@ while (true) {
       next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it`,
     })
   }
-  const stopAfterRound = acceptReconciled(next, `round ${round}'s Reconcile`)
+  const stopAfterRound = await acceptReconciled(next, `round ${round}'s Reconcile`)
   if (stopAfterRound) {
     await persistPending('stopping on a guarantee that no longer holds')
     return runReturn({ ...stopAfterRound, rounds: round, verdict: verdictOf(state.verify),
