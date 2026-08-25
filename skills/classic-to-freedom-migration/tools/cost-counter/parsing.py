@@ -30,6 +30,20 @@ def usage_of(obj: dict) -> Optional[dict]:
     return usage if isinstance(usage, dict) else None
 
 
+def message_id_of(obj: dict) -> Optional[str]:
+    """The API message id of a transcript object, if present.
+
+    One assistant turn is written to the transcript as several JSONL records
+    (one per content block: thinking / text / tool_use), and every record
+    repeats an identical copy of that turn's ``usage`` block under the same
+    ``message.id``. Callers use this to fold duplicate records back into one
+    turn instead of charging the same usage several times over (ENG-95856).
+    """
+    message = obj.get("message") or {}
+    msg_id = message.get("id")
+    return msg_id if isinstance(msg_id, str) and msg_id else None
+
+
 def cache_creation_ttl(usage: dict) -> tuple[int, int]:
     """(ephemeral_5m, ephemeral_1h) cache-write tokens from a usage block.
 

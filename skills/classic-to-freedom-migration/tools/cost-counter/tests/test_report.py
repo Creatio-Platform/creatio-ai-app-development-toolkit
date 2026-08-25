@@ -34,6 +34,21 @@ def _usage(inp=0, cw=0, cr=0, out=0, m5=None, h1=None):
     return u
 
 
+def _assistant_record(msg_id=None, usage=None, content=None):
+    """One JSONL record for an assistant turn, optionally carrying a
+    ``message.id`` -- the field ENG-95856's dedup keys on. A real turn is
+    split across several such records (thinking / text / tool_use), each
+    repeating the same ``message.id`` and (mostly) the same ``usage``."""
+    message = {"role": "assistant"}
+    if msg_id is not None:
+        message["id"] = msg_id
+    if usage is not None:
+        message["usage"] = usage
+    if content is not None:
+        message["content"] = content
+    return _line({"message": message})
+
+
 class ExportFixture:
     """Builds a minimal but structurally faithful export under a temp dir."""
 
@@ -208,6 +223,39 @@ class NormalizationTest(unittest.TestCase):
         self.assertEqual(report.built_pages, {"Applicant_FormPage"})
         # sorted() over the set must not raise.
         self.assertEqual(report.summary()["built_pages"], ["Applicant_FormPage"])
+
+    def test_page_count_defaulted_is_false_when_a_page_was_built(self):
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        self.assertFalse(report.summary()["page_count_defaulted"])
+
+    def test_page_count_defaulted_is_false_with_an_explicit_override(self):
+        # An override means the caller supplied the count on purpose --
+        # never "silently fell back to 1", even with no built page recorded.
+        empty_fx = ExportFixture()
+        self.addCleanup(empty_fx.cleanup)
+        empty_fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cr=100, out=1),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Read"}]}}),
+        ])
+        report = Report(export_mod.discover(empty_fx.root), metrics.CostConfig(),
+                         pages_override=4)
+        self.assertFalse(report.summary()["page_count_defaulted"])
+
+    def test_page_count_defaulted_is_true_with_no_built_page_and_no_override(self):
+        # No journal recording a built page, and no --pages override: the
+        # fallback to page_count()==1 must be reported explicitly rather than
+        # read as a real single-page run (Done-criterion #4, ENG-95856).
+        empty_fx = ExportFixture()
+        self.addCleanup(empty_fx.cleanup)
+        empty_fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cr=100, out=1),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Read"}]}}),
+        ])
+        report = Report(export_mod.discover(empty_fx.root), metrics.CostConfig())
+        self.assertEqual(report.page_count(), 1)
+        self.assertTrue(report.summary()["page_count_defaulted"])
 
 
 class MultiSessionTest(unittest.TestCase):
@@ -509,6 +557,80 @@ class SymlinkConfinementTest(unittest.TestCase):
         session = export_mod.discover(self.root)
         names = sorted(os.path.basename(p) for p in session.agent_files)
         self.assertEqual(names, ["agent-in.jsonl"])  # escaping symlink dropped
+
+
+class UsageDedupTest(unittest.TestCase):
+    """ENG-95856: one API message written to the transcript as several JSONL
+    records must be charged once, not once per record -- and the FINAL
+    record's ``output_tokens`` must win, since duplicates carry a provisional
+    value that grows to the final one (a first-wins dedup understates output
+    by roughly half)."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_duplicate_records_same_message_id_counted_once_last_output_wins(self):
+        # Same message.id, identical input/cache_* across all three records
+        # (as real duplicates do), but a provisional output_tokens growing
+        # 3 -> 3 -> 320 -- exactly the shape measured on the real defect.
+        lines = [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record("msg_1", _usage(inp=10, cw=100, cr=1000, out=3),
+                               content=[{"type": "thinking", "text": "..."}]),
+            _assistant_record("msg_1", _usage(inp=10, cw=100, cr=1000, out=3),
+                               content=[{"type": "text", "text": "..."}]),
+            _assistant_record("msg_1", _usage(inp=10, cw=100, cr=1000, out=320),
+                               content=[{"type": "tool_use", "id": "t1", "name": "Read"}]),
+        ]
+        self.fx.write_agent("aaa", lines)
+        agg = aggregate_transcript(os.path.join(self.fx.wf_dir, "agent-aaa.jsonl"))
+
+        self.assertEqual(agg.turns, 1)               # one message, not three records
+        self.assertEqual(agg.output, 320)             # FINAL value, not first (3) or sum (326)
+        self.assertEqual(agg.input, 10)               # not summed to 30
+        self.assertEqual(agg.cache_write, 100)        # not summed to 300
+        self.assertEqual(agg.cache_read, 1000)        # not summed to 3000
+        # Tool blocks are never deduplicated: each record's content is
+        # distinct, so the tool_use on the third record must still be seen.
+        self.assertEqual(agg.tool_calls["Read"], 1)
+
+    def test_first_wins_dedup_is_rejected(self):
+        # A dedup that kept the FIRST record per message.id (rather than the
+        # last) would report output=3, not 320 -- guard the direction.
+        lines = [
+            _assistant_record("msg_1", _usage(out=3)),
+            _assistant_record("msg_1", _usage(out=3)),
+            _assistant_record("msg_1", _usage(out=320)),
+        ]
+        self.fx.write_agent("aaa", lines)
+        agg = aggregate_transcript(os.path.join(self.fx.wf_dir, "agent-aaa.jsonl"))
+        self.assertNotEqual(agg.output, 3)
+        self.assertEqual(agg.output, 320)
+
+    def test_records_without_message_id_are_not_deduplicated(self):
+        # Pre-existing behaviour preserved: no id means no dedup key, so each
+        # usage-bearing record is still counted once, in file order.
+        lines = [
+            _assistant_record(None, _usage(cr=100)),
+            _assistant_record(None, _usage(cr=200)),
+        ]
+        self.fx.write_agent("aaa", lines)
+        agg = aggregate_transcript(os.path.join(self.fx.wf_dir, "agent-aaa.jsonl"))
+        self.assertEqual(agg.turns, 2)
+        self.assertEqual(agg.cache_read, 300)
+
+    def test_distinct_message_ids_both_counted(self):
+        lines = [
+            _assistant_record("msg_1", _usage(cr=100)),
+            _assistant_record("msg_2", _usage(cr=200)),
+        ]
+        self.fx.write_agent("aaa", lines)
+        agg = aggregate_transcript(os.path.join(self.fx.wf_dir, "agent-aaa.jsonl"))
+        self.assertEqual(agg.turns, 2)
+        self.assertEqual(agg.cache_read, 300)
 
 
 if __name__ == "__main__":
