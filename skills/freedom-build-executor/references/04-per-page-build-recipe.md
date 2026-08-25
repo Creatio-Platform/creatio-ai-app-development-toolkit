@@ -148,17 +148,28 @@ the verifier files that page's contents as this unit's evidence.
     catches a deliverable your slice *declared* but the build left short — a datasource-less grid, a
     component not on the page, a rule the slot does not carry — here, in your own context, instead of
     a whole round later. `get-page` YOUR page and write its `bundle.viewConfig` verbatim into a
-    self-check built file `{ "pages": { "<yourKey>": { "viewConfig": …, "parentSchemaName": …,
-    "schemaUId": … } } }` (add `businessRules` from `read-page-business-rules` if this page owns
-    rules — an absent slot reads ⚠ not-checkable, never a false ❌). Then run the SCOPED gate:
+    self-check built file `{ "pages": { "<yourKey>": { "viewConfig": …, "entitySchemaName": …,
+    "packageName": …, "parentSchemaName": …, "schemaUId": … } } }` — `entitySchemaName` is the object
+    the page's PRIMARY data source is bound to (off `modelConfig`, the source named by
+    `primaryDataSourceName`), and both it and `packageName` are builder-owned rows, so a payload
+    without them leaves the gate short on an otherwise complete page (add `businessRules` from
+    `read-page-business-rules` if this page owns rules — an absent slot reads ⚠ not-checkable, never
+    a false ❌). Then run the SCOPED gate:
     `migrate.mjs <manifest> --verify --built <self-built.json> --page <yourKey> --verify-json
     <self-verdict.json>`. It reconciles what your slice declared against what you built, for THIS
-    page only, and exits 2 when short. If NOT `complete`, you get **exactly one bounded fix attempt**
-    in this same context: read the verdict's `openRows` (each Evidence cell IS the repair), fix only
-    those, `get-page` again, and re-run the gate **once**. Do not loop. Return `selfCheck`
-    (`ran` / `complete` / `missing` / `unverified` / `fixAttempted` / `stillShortRows`), copying the
-    verdict verbatim. Still short after the one attempt is a valid outcome — the unit **parks**
-    (`./03-failure-and-park-policy.md`, the one-bounded-fix→park), it does not loop.
+    page only, and exits 2 when short — `buildComplete` (ENG-95901: the OWNER axis — false while any open row is yours) is what
+    the exit code reads, so a page whose only open rows are unfiled evidence exits 0. If NOT
+    `buildComplete`, you get **exactly one bounded fix attempt** in this same context: read the
+    verdict's `openRows` and act on every row whose `owner` is `"builder"` (each such row's
+    Evidence cell IS the repair) — NEVER a row whose `owner` is `"verifier"`, that is an
+    evidence/judge/reachability record a separate read-only agent files, not yours to close. Read
+    `owner`, not the `missing`/`unverified` status: a partially-built page reads `unverified` and is
+    still entirely your work. Fix your own rows, `get-page` again, and re-run the gate **once**. Do
+    not loop. Return `selfCheck`
+    (`ran` / `buildComplete` / `complete` / `missing` / `unverified` / `fixAttempted` /
+    `stillShortRows`), copying the verdict verbatim. Still `buildComplete: false` after the one
+    attempt is a valid outcome — the unit **parks** (`./03-failure-and-park-policy.md`, the
+    one-bounded-fix→park), it does not loop.
 11. **Append to the worklog and update the roadmap** — as part of closing THIS unit, not as a step
     at the end of the run. An interrupted run must not lose the history of what was built.
 
@@ -234,6 +245,7 @@ Structured, and it is a CLAIM, not evidence:
     "componentsDiffed": ["crt.ExpansionPanel", "crt.Input"] },
   "selfCheck": {
     "ran": true,
+    "buildComplete": true,
     "complete": true,
     "missing": 0,
     "unverified": 0,

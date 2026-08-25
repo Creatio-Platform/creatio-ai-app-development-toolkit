@@ -1126,8 +1126,29 @@ function diagnosticOwner(p, schema) {
     const item = el?.name || el?.bindTo || `diff[${seg[1]}]`;
     return { item, ownerNote: `element '${item}'` };
   }
-  if (DIAG_OWNER_ROOTS[seg[0]] && seg[1]) return { item: seg[1], ownerNote: `${DIAG_OWNER_ROOTS[seg[0]]} '${seg[1]}'` };
+  if (DIAG_OWNER_ROOTS[seg[0]] && seg[1])
+    return { item: seg[1], ownerNote: `${DIAG_OWNER_ROOTS[seg[0]]} '${seg[1]}'`, ownerKind: DIAG_OWNER_ROOTS[seg[0]] };
   return { item: p || "(root)", ownerNote: `\`${p || "(root)"}\`` };
+}
+// Member kinds whose ledger disposition already tracks `fromTemplate` AND whose diagnostics can actually REACH
+// this escalation. Each key reads the `eff.<kind>s` array of the same name.
+// Deliberately NOT listed: `detail` and `module` — unreachable, `isStructuralDiag` routes every `details.*` /
+// `modules.*` path through `reportedElsewhere` (they sit in `STRUCTURAL_ROOTS` and `seg[0] !== "diff"`
+// short-circuits to `true`), the same reason `businessRules`/`rules` are absent. Listing them would suggest a
+// generalization this code does not have. Partial mirror of `buildCoverage`'s SOURCES table, which additionally
+// counts an inert module (`INERT_MODULE_RX`) and a scaffolding method as template-owned.
+const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", mixin: "mixins" };
+// The set of member NAMES, per ownerKind, that no CLIENT schema touched (`fromTemplate`) — built once per run
+// from `eff`, the same source `buildCoverage` reads. A name in this set already gets ledger disposition `context`
+// (ENG-95412 follow-up: `disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
+// these to `needsDecision` would silently promote it out of `context` — asking a human to resolve a value that
+// belongs to the platform's own template, not to anything the client wrote).
+function templateOwnedNames(eff) {
+  const out = {};
+  for (const [kind, listKey] of Object.entries(TEMPLATE_OWNED_LIST_KEY)) {
+    out[kind] = new Set((eff[listKey] || []).filter((m) => m.fromTemplate).map((m) => m.name));
+  }
+  return out;
 }
 // Already reported in full by another surface: the mapping-property reporter above, or a named gate reason.
 // The structural arm MIRRORS the gate's own filter (`computeGate`: `d.role !== "section" && isStructuralDiag(d)`).
@@ -1184,13 +1205,23 @@ function markOwnerRowWithGap(changeSet, owner, gapPath) {
   }
 }
 
-function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet) {
+function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, templateOwned, templateOwnedTags) {
   const seen = new Set();                                        // one row per owner+kind+path+LAYER
   for (const d of parseDiagnostics) {
     const p = String(d.path || "");
     if (reportedElsewhere(d, p)) continue;
     const tag = diagTag(d.pkg, d.role);
-    const { item, ownerNote } = diagnosticOwner(p, schemaByTag.get(tag));
+    const { item, ownerNote, ownerKind } = diagnosticOwner(p, schemaByTag.get(tag));
+    // A member no CLIENT schema touched is inherited base-template content — the coverage ledger already counts
+    // it `context` (excluded by design, never a gap). Escalating its parse ambiguity to `needsDecision` would rank
+    // it `decision` instead (disposition() ranks decision above context) and hand a human a platform-owned value
+    // that isn't theirs to resolve and carries no new information — the exact defect ENG-95412's reopening found.
+    // `templateOwned` is built from `eff` (main + seed chain ONLY, see call site) and keyed by NAME alone — a
+    // detail/profile/section schema can declare its own member under a name that collides with an unrelated
+    // template-owned main-page member. `templateOwnedTags` gates the lookup to diagnostics that actually came
+    // from the main/seed chain `eff` was merged from, so a same-named member from a different layer never
+    // borrows another layer's disposition.
+    if (ownerKind && templateOwnedTags?.has(tag) && templateOwned?.[ownerKind]?.has(item)) continue;
     // The layer is part of the key, not just the text: two genuinely different occurrences at the same path in
     // different packages are two gaps, and collapsing them hides the base-layer one behind the client layer.
     const key = `${item}|${d.kind}|${p}|${tag}`;
@@ -2108,13 +2139,14 @@ export function runMigration(manifest, opts = {}) {
   reportDynamicMappingProps(schemas, changeSet);
   // …and every OTHER recorded diagnostic in the POOL, routed to its owning member. Keyed the same way
   // `parseDiagnostics` tags its entries, so a `diff.<n>` path resolves against the body it actually came from.
+  const mainChainTags = new Set([...schemas, ...seedTemplate].map((l) => diagTag(l.pkg)));
   const diagSchemaByTag = new Map([
     ...[...schemas, ...seedTemplate].map((l) => [diagTag(l.pkg), l]),
     ...Object.entries(detailSchemas).map(([name, d]) => [diagTag(`detail:${name}`), d]),
     ...Object.entries(profileSchemas).map(([name, p]) => [diagTag(`profile:${name}`), p]),
     ...sectionSchemas.map((l) => [diagTag(l.pkg, "section"), l]),
   ]);
-  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet);
+  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet, templateOwnedNames(eff), mainChainTags);
   // ENUM DRIFT, advisory arm. `computeGate` consumes `mismatches` (the arm that BLOCKS); this is the other severity
   // the drift guard is specified to have: a member only the STAND carries. It must NOT block — blocking would stop
   // every migration the day a platform release adds a member — but it must reach the plan, because it is the only
@@ -2688,10 +2720,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // THE IN-CONTEXT SINGLE-UNIT GATE (ENG-95469, A3). `--verify --page <key> --verify-json <file>` is no longer a
       // pure read: it runs the SAME detector the full sweep does, SCOPED to one page, so a build agent can gate its
       // own unit in its own context BEFORE reporting complete. `verifyUnit` supplies the machine verdict (the page's
-      // slice of the reconciliation — `{ complete, missing, unverified, openRows, planGaps }`), and the human table
-      // is the SCOPED `renderVerify` (this page's rows only). The exit gates on THIS page: incomplete ⇒ exit 2, the
-      // same hard done-gate the full `--verify` applies, so the builder's bounded self-check fails loudly rather than
-      // closing a short unit. Without `--verify-json` the `--page` path stays the pure built-slice read (below).
+      // slice of the reconciliation — `{ complete, buildComplete, missing, unverified, openRows, planGaps }`), and
+      // the human table is the SCOPED `renderVerify` (this page's rows only). ENG-95901 — the exit gates on THIS
+      // page's `buildComplete` (the OWNER axis — false while any open row is the builder's), NOT `complete`: a
+      // builder can never legitimately clear an evidence/judge/reachability row itself (a separate read-only
+      // verifier/judge files those), so gating the builder's OWN bounded self-check on the combined flag asked it to
+      // repair evidence it is contractually forbidden to touch. A page whose only open rows are unfiled evidence now
+      // exits 0 here — but a page short of its own deliverables still exits 2 whether the engine labelled the
+      // shortfall `missing` or `unverified`; the post-hoc full-sweep `--verify` below still
+      // reads the combined `complete` (AC7/AC8) — an unconfirmed row still blocks the human-facing "done" verdict.
+      // Without `--verify-json` the `--page` path stays the pure built-slice read (below).
       const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
       // `--page` is already guarded by `requirePublishedKey` above, so this normally cannot fire — but a `verifyUnit`
       // that returns an explicit `error` (an unknown/mismatched page key, PR review T4) must fail LOUDLY and
@@ -2702,7 +2740,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
       verifyRes = renderVerify(result, { ...checklistOpts(manifest), scopePageKey: pageArg }, built);
       output = verifyRes.markdown + "\n";
-      verifyIncomplete = !unitVerdict.complete;
+      verifyIncomplete = !unitVerdict.buildComplete;
     }
     else if (pageArg) {
       output = JSON.stringify(builtSlice(builtUnits, built, pageArg), null, 2) + "\n";
@@ -2764,8 +2802,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS
   // repairable on-stand. Until now `--verify` exited 2 with no stderr line at all, so the two were indistinguishable.
   if (verifyIncomplete) {
-    const pageGaps = Object.entries(verifyRes.pages).filter(([, p]) => !p.complete)
-      .map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
+    // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
+    // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
+    // breakdown, and the repair advice — must talk about the builder's own rows for that caller. Surfacing the
+    // verifier-owned figure here too (even just as a number, with no textual qualifier) reads as part of what this
+    // exit code is asking to be repaired, and an LLM builder given a count next to "This is repairable" has no
+    // signal that the count is not its responsibility. PR review — the number reported is `builderOpen`, not
+    // `missing`: a partially-built page resolves `unverified`, so `missing` would have printed "0 MISSING
+    // deliverable(s)" next to a non-zero exit. The UNSCOPED sweep still gates on the combined `complete` (AC7/AC8,
+    // unchanged), where the verifier-owned figure genuinely is part of what blocks "done", so only the scoped path
+    // narrows.
+    const pageGaps = pageArg
+      ? Object.entries(verifyRes.pages).filter(([, p]) => p.buildComplete !== true).map(([k, p]) => `${k}: ${p.builderOpen} open`)
+      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
     // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
     // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
     let overflow = "";
@@ -2773,7 +2822,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const where = verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict";
       overflow = ` | …and ${pageGaps.length - 6} more (${where})`;
     }
-    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s). ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: build the missing pieces / file the on-stand evidence, then re-verify.\n`);
+    const repairAdvice = pageArg ? "build / complete the pieces named in the rows, then re-verify" : "build the missing pieces / file the on-stand evidence, then re-verify";
+    const headline = pageArg
+      ? `${verifyRes.builderOpen} open deliverable(s) YOU OWN across ${pageGaps.length} page(s)`
+      : `${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
+    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }

@@ -139,36 +139,6 @@ const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
 const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
-// ENG-95503 / PR #128 review — the design literals the pure block reads, lifted from the SHIPPED source rather
-// than re-typed: `shows` is a three-value vocabulary a live verifier echoes back, and `UNCONSUMED_FROM_VERIFIER`
-// decides which entries a later dispatch may clear. A re-typed copy would let this suite pass while the run
-// compared against a different string, which is the exact failure the fixed-literal rule exists to prevent.
-const literalOf = (name) => {
-  const m = new RegExp(`const ${name} = '([^']*)'`).exec(wfSrc);
-  return m ? m[1] : null;
-};
-const SHOWS_NAMES = ["SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH"];
-const SHOWS = Object.fromEntries(SHOWS_NAMES.map((n) => [n, literalOf(n)]));
-check("ENG-95503 review fix: the `shows` vocabulary and the unconsumed-source tag are declared as single literals in the shipped source — a live verifier echoes these strings back, so a re-typed copy in this suite could drift from the one the run compares against",
-  () => SHOWS_NAMES.every((n) => typeof SHOWS[n] === "string" && SHOWS[n].length > 0)
-    && new Set(Object.values(SHOWS)).size === SHOWS_NAMES.length,
-  () => SHOWS);
-// PR #128 review (round 7): the CAP is a design literal too, and the schema's `maxLength` now reads the same
-// binding the record-time cap does. Lifted from the shipped source for the same reason the `shows` values are --
-// a re-typed 400 here would let this suite pass while the run bounded text at some other length.
-const CARRY_TEXT_CAP = Number(/const CARRY_TEXT_CAP = (\d+)/.exec(wfSrc)?.[1]);
-const CARRY_TEXT_TRUNCATED = /const CARRY_TEXT_TRUNCATED = '([^']*)'/.exec(wfSrc)?.[1];
-check("PR #128 review (round 7): the text cap is ONE declared literal in the shipped source, read by both `capCarryText` and `RECONCILE_SCHEMA`'s `maxLength` — a re-typed number in either place is the divergence the round-6 Minor was about, one level up",
-  () => Number.isInteger(CARRY_TEXT_CAP) && CARRY_TEXT_CAP > 0 && typeof CARRY_TEXT_TRUNCATED === "string"
-    && /maxLength: CARRY_TEXT_CAP/.test(wfSrc)
-    && !/maxLength: \d+/.test(wfSrc),
-  () => ({ CARRY_TEXT_CAP, CARRY_TEXT_TRUNCATED }));
-const INJECTED = [
-  ...SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`),
-  `const CARRY_TEXT_CAP = ${CARRY_TEXT_CAP};`,
-  `const CARRY_TEXT_TRUNCATED = ${JSON.stringify(CARRY_TEXT_TRUNCATED)};`,
-].join("\n");
-
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
@@ -190,36 +160,68 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "grantPairsToPersist", "seedGrantPairs",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
-  "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
-  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
-// Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
-// rather than a copy of it in this file.
-const BLOCK_CONSTS = ["GUIDELINES_RETURN", "RESOLUTIONS_RETURN"];
+  "selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock",
+  // The verifier's per-round read-back scope, and the judge-queue re-file guard.
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan"];
+// Non-function members of the same block. Exported so a prompt fragment — and the round budget's own DESIGN VALUE —
+// is asserted against the SHIPPED text rather than a copy of it in this file. `DEFAULT_MAX_ROUNDS` is exported for
+// exactly that reason: the park assertions below build their `localRounds` fixtures from it, and hard-coding a 3 here
+// would make them pass against a block whose default had drifted.
+// ENG-95503 — and the answers channel's DESIGN LITERALS for the same reason. They used to be injected into the slice
+// because the block was assembled from one flat file; now that the core is real modules and the block closes over
+// nothing, they are ordinary exported members and this suite reads the shipped values directly. A live verifier
+// echoes `shows` back and the clear keys on `source` exactly, so a copy re-typed here could drift from the run's.
+const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS", "RESOLUTIONS_RETURN",
+  "CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED", "UNCONSUMED_CARRY_WARN",
+  "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
-// construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
-// over, injected here at the design value.
+// construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
+// read off the host scope is a PARAMETER of every helper that needs it (`parkedKeys`/`parkableKeys`), which is what
+// lets the same helpers be imported directly by the core's own module suite.
 let wf = {};
 let tmpWf;
 try {
   tmpWf = mkdtempSync(path.join(os.tmpdir(), "wf-helpers-"));
   const modPath = path.join(tmpWf, "helpers.mjs");
-  // The block closes over the run's DESIGN LITERALS and nothing else. Injected here at their shipped values, the
-  // same contract `MAX_ROUNDS` has always had: the `shows` vocabulary and the entry-source tag are compared against
-  // by the pure helpers and echoed back by a live agent, so a copy re-typed in this file could drift from the one
-  // the run actually uses. `SHOWS_NAMES` below pins that these values ARE the shipped ones.
-  writeFileSync(modPath, `const MAX_ROUNDS = 3;\n${INJECTED}\n${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
+  writeFileSync(modPath, `${wfSrc.slice(from + BEGIN.length, to)}
+export { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };
+`);
   wf = await import(pathToFileURL(modPath).href);
 } catch (e) {
-  check("workflow: the pure-helper block loads as a standalone module (it closes over nothing but MAX_ROUNDS and the design literals)", false, e.message);
+  check("workflow: the pure-helper block loads as a standalone module (it closes over NOTHING — the round budget is a parameter)", false, e.message);
 } finally {
   if (tmpWf) rmSync(tmpWf, { recursive: true, force: true });
 }
 check("workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
   HELPERS.every((h) => typeof wf[h] === "function"), () => HELPERS.filter((h) => typeof wf[h] !== "function").join(", "));
-check("workflow: every block CONSTANT this suite asserts against is inside the markers too",
-  BLOCK_CONSTS.every((c) => typeof wf[c] === "string" && wf[c].length > 0),
-  () => BLOCK_CONSTS.filter((c) => typeof wf[c] !== "string").join(", "));
+// ENG-95503 — THE ANSWERS CHANNEL'S DESIGN LITERALS, read off the SHIPPED block itself. They used to be lifted out
+// of the source with a regex and re-injected into the slice, because the block was carved from one flat file and
+// closed over its host. Now that the core is real modules and the block closes over nothing, they are ordinary
+// exported members — so this suite reads the values the run actually compares against instead of a copy of them.
+// A live verifier echoes `shows` back and the per-unit clear keys on `source` exactly, which is why a re-typed
+// constant here would be a suite that passes while the run uses a different string.
+const SHOWS_NAMES = ["SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH"];
+const SHOWS = Object.fromEntries(SHOWS_NAMES.map((n) => [n, wf[n]]));
+const CARRY_TEXT_CAP = wf.CARRY_TEXT_CAP;
+const CARRY_TEXT_TRUNCATED = wf.CARRY_TEXT_TRUNCATED;
+check("ENG-95503: the `shows` vocabulary and the two unconsumed-source tags are EXPORTED members of the shipped block, each a distinct non-empty string — an absent export reads as `undefined`, which would make every comparison below silently vacuous",
+  () => SHOWS_NAMES.every((n) => typeof SHOWS[n] === "string" && SHOWS[n].length > 0)
+    && new Set(Object.values(SHOWS)).size === SHOWS_NAMES.length,
+  () => SHOWS);
+check("PR #128 review (round 7): the text cap is ONE exported literal, read by `capCarryText` AND by `RECONCILE_SCHEMA`'s `maxLength` — a re-typed number in either place is the divergence the round-6 Minor was about, one level up",
+  () => Number.isInteger(CARRY_TEXT_CAP) && CARRY_TEXT_CAP > 0 && typeof CARRY_TEXT_TRUNCATED === "string"
+    && /maxLength: CARRY_TEXT_CAP/.test(wfSrc)
+    && !/maxLength: \d+/.test(wfSrc),
+  () => ({ CARRY_TEXT_CAP, CARRY_TEXT_TRUNCATED }));
+// Present AND carrying a real value, per kind: an exported-but-empty constant would satisfy a bare `!== undefined`
+// while telling every assertion below nothing. The list holds a prompt fragment (a non-empty string) and the round
+// budget's design value (a positive finite number), so both kinds are checked rather than the union loosened.
+const blockConstIsReal = (v) => (typeof v === "string" ? v.length > 0 : Number.isFinite(v) && v > 0);
+check("workflow: every block CONSTANT this suite asserts against is inside the markers too, and carries a real value",
+  BLOCK_CONSTS.every((c) => blockConstIsReal(wf[c])),
+  () => BLOCK_CONSTS.filter((c) => !blockConstIsReal(wf[c])).map((c) => `${c}=${JSON.stringify(wf[c])}`).join(", "));
 
 // --- isOpenPage: the tri-state. Only an explicit `complete: true` closes a unit. ---
 check("isOpenPage: `complete: true` is the ONLY thing that closes a unit",
@@ -340,7 +342,9 @@ check("ENG-95469: the build phase relaxes 'a builder does not run --verify' ONLY
   && wfSrc.includes("IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE"));
 check("ENG-95469: a still-short-after-one-fix selfCheck is collected in buildRound (via `selfCheckStillShort`) and parked via applyInContextParks BEFORE the round-budget applyParks",
   /selfCheckStillShort\(sc\)/.test(wfSrc)
-  && /sc\.ran === true && sc\.complete === false && sc\.fixAttempted === true/.test(wfSrc)
+  // ENG-95901: the in-context PARK decision reads `buildComplete` (missing-only, via the legacy-shape-tolerant
+  // `selfCheckBuildComplete` derivation), not the combined `complete`.
+  && /sc\.ran === true && selfCheckBuildComplete\(sc\) === false && sc\.fixAttempted === true/.test(wfSrc)
   && /const inContextParked = applyInContextParks\(selfCheckShort\)/.test(wfSrc)
   && wfSrc.indexOf("applyInContextParks(selfCheckShort)") < wfSrc.indexOf("const newlyParked = applyParks()"));
 // Supplementary source pin (the double-guard itself is EXECUTED in the `inContextParkableKeys` cases below):
@@ -355,14 +359,63 @@ check("ENG-95469: applyInContextParks decides through the pure `inContextParkabl
 // ATTEMPTED self-check is a park candidate; a shortfall whose one bounded fix is NOT yet attempted is NOT collected
 // — the unit keeps its fix budget instead of being queued/parked prematurely. Proven distinct from the fixAttempted
 // case that IS collected.
-check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
-  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: true }) === true);
-check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
-  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: false }) === false);
-check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
-  () => wf.selfCheckStillShort({ ran: true, complete: true, fixAttempted: true }) === false
-    && wf.selfCheckStillShort({ ran: false, complete: false, fixAttempted: true }) === false
+check("ENG-95469/ENG-95901 T3: selfCheckStillShort {ran:true, buildComplete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: false, fixAttempted: true }) === true);
+check("ENG-95469/ENG-95901 T3: selfCheckStillShort {ran:true, buildComplete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: false, fixAttempted: false }) === false);
+check("ENG-95469/ENG-95901 T3: a BUILD-COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: true, fixAttempted: true }) === false
+    && wf.selfCheckStillShort({ ran: false, buildComplete: false, fixAttempted: true }) === false
     && wf.selfCheckStillShort(undefined) === false);
+check("ENG-95901 T3: selfCheckStillShort does NOT collect a page whose only open rows are unfiled evidence — `buildComplete:true` with the OLD conflated `complete:false` still present must never park the unit or ask it to repair a row it cannot legitimately file",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: true, complete: false, fixAttempted: true }) === false);
+// `buildComplete` is OPTIONAL in the selfCheck schema (only `ran` is required) — a builder that reports the OLDER
+// shape (`complete`/`missing`, no `buildComplete`) must not silently lose the fast in-context park it would have
+// gotten before this axis split existed. `derivedBuildComplete` (shared by `selfCheckBuildComplete` and
+// `verifierBuildComplete`) derives the axis from whatever the object actually carries: the new
+// field first; when absent, `missing` — the engine's DIRECT count — BEFORE the old conflated `complete` (which
+// folds in `unverified` too, so preferring it over `missing` would read a build-complete/evidence-unfiled shape,
+// `{complete:false, missing:0}`, as NOT build-complete — the exact ENG-95901 regression); `complete` is the LAST
+// resort, only when `missing` itself is absent. Never a self-graded claim, always arithmetic over the object's OWN
+// fields.
+check("ENG-95901: selfCheckBuildComplete prefers the NEW field when present, even over a conflicting old one",
+  () => wf.selfCheckBuildComplete({ buildComplete: true, complete: false }) === true
+    && wf.selfCheckBuildComplete({ buildComplete: false, complete: true }) === false);
+check("ENG-95901: selfCheckBuildComplete FALLS BACK to `missing === 0` — NOT the old conflated `complete` — when `buildComplete` is absent but `missing` is present (the build-complete/evidence-unfiled shape: {complete:false, missing:0} must read as build-complete, not short)",
+  () => wf.selfCheckBuildComplete({ complete: false, missing: 0 }) === true
+    && wf.selfCheckBuildComplete({ complete: true, missing: 2 }) === false);
+check("ENG-95901: selfCheckBuildComplete FALLS BACK to the old `complete` field only when `missing` itself is ALSO absent",
+  () => wf.selfCheckBuildComplete({ complete: false }) === false && wf.selfCheckBuildComplete({ complete: true }) === true);
+check("ENG-95901: selfCheckBuildComplete is `undefined` (unknown, never a false 'complete') when NONE of the three fields are present, or the self-check itself is absent",
+  () => wf.selfCheckBuildComplete({ ran: true }) === undefined && wf.selfCheckBuildComplete(undefined) === undefined);
+check("ENG-95901: selfCheckStillShort STILL fast-parks a genuinely short LEGACY-shaped self-report ({ran:true, complete:false, missing:3, fixAttempted:true}, no `buildComplete`) — the axis split must not regress a builder that has not adopted the new field name",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, missing: 3, fixAttempted: true }) === true);
+check("ENG-95901: selfCheckStillShort does NOT fast-park the DISCRIMINATING legacy shape ({ran:true, complete:false, missing:0, fixAttempted:true} — build done, only evidence unfiled, no `buildComplete`) — this is the exact case a wrong fallback order (complete before missing) would have regressed",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, missing: 0, fixAttempted: true }) === false);
+check("ENG-95901: derivedBuildComplete is the ONE shared derivation behind selfCheckBuildComplete and verifierBuildComplete's page-state reading — pin it directly so the two callers cannot drift onto different fallback orders again",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0 }) === true
+    && wf.derivedBuildComplete({ buildComplete: false, missing: 0 }) === false
+    && wf.derivedBuildComplete(undefined) === undefined);
+// PR review — the `missing === 0` fallback is LOSSY: a partially-built page resolves `unverified`, so `missing` is 0
+// while the page is short. When the payload carries its ROWS, their `owner` is read first — the same classification
+// the engine made — and only a payload with neither the field nor its rows falls through to the counts.
+check("ENG-95901 (review): derivedBuildComplete reads the ROWS before the lossy `missing` count — a legacy-shaped report with `missing: 0` but a BUILDER-owned open row is NOT build-complete",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Fields — 2 expected", status: "⚠ verify", evidence: "0/2 expected fields present", outcome: "unverified", owner: "builder" }] }) === false);
+check("ENG-95901 (review): the same shape with only VERIFIER-owned open rows still reads build-complete — the boundary the axis exists for is untouched",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Evidence", status: "⚠ verify", evidence: "no complete evidence record", outcome: "unverified", owner: "verifier" }] }) === true);
+check("ENG-95901 (review): an UNTAGGED open row counts as the BUILDER's — the engine tags only the four verifier-filed rows, so defaulting the other way would let an untagged shortfall pass as somebody else's problem",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified" }] }) === false);
+check("ENG-95901 (review): `stillShortRows` is read the same way as `openRows` — the self-report shape must not drift from the verdict shape",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    stillShortRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified", owner: "builder" }] }) === false);
+// The operator-facing texts must say the same thing (`migrate.mjs` was deliberately narrowed to strip the figure
+// from the scoped diagnostic; the workflow's own log line kept it until this review round).
+check("ENG-95901 (review): the in-context 'still short' log line carries NO count — a figure next to a repair instruction reads as part of what must be repaired, and `migrate.mjs`'s scoped diagnostic already drops it",
+  /is still short after its one bounded fix — it will park once the verifier confirms it open/.test(wfSrc)
+    && !/is still short after its one bounded fix \(\$\{/.test(wfSrc));
 
 // --- ENG-95469 (PR review T2): the in-context park's DOUBLE-GUARD, EXECUTED (not just source-pinned). The self-check
 // is the engine's own scoped arithmetic reported THROUGH the builder; a self-report of "still short" is parked ONLY
@@ -388,22 +441,48 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
 // first and adds its keys to `parkedSet`; `parkableKeys` now takes that set as `alreadyParked` and excludes it — so
 // the "parked once" property is a PURE composition of the two predicates, provable here rather than resting on the
 // impure `!parkedSet.has` guard inside `applyParks` alone.
+//
+// `alreadyParked` is the LAST parameter, AFTER `maxRounds`: the helpers module is imported directly now, so there is
+// no host scope to inherit the round budget from and every call site passes it. The budget is therefore stated
+// EXPLICITLY in each call below — handing a `Set` into the `maxRounds` slot makes `roundsRun(…) >= maxRounds` compare
+// a number against an object, which is always false, so the exclusion assertion would pass while excluding nothing.
 {
   const K = "child:A";
   const unitK = [{ key: K, kind: "page" }];
   const openVerify = { pages: {} };                    // absent verdict entry ⇒ OPEN, for BOTH predicates
-  const budgetSpent = { [K]: 3 };                      // localRounds ⇒ roundsRun === MAX_ROUNDS ⇒ budget spent
+  const BUDGET = wf.DEFAULT_MAX_ROUNDS;                // the design value the run passes as `MAX_ROUNDS`
+  const budgetSpent = { [K]: BUDGET };                 // localRounds ⇒ roundsRun === MAX_ROUNDS ⇒ budget spent
   const scShortK = [{ key: K, shortRows: [] }];
+  const budgetParks = (already) => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, { maxRounds: BUDGET, alreadyParked: already });
   const inContext = wf.inContextParkableKeys(scShortK, (k) => ({ key: k, kind: "page" }), openVerify, {}, undefined, new Set());
   check("ENG-95469 T2b: a unit eligible for BOTH park paths is selected by each in isolation — in-context (short AND independently open) and round-budget (budget spent AND still open)",
-    () => inContext.join(",") === K
-      && wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set()).join(",") === K,
-    () => ({ inContext, budget: wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set()) }));
+    () => inContext.join(",") === K && budgetParks(new Set()).join(",") === K,
+    () => ({ inContext, budget: budgetParks(new Set()) }));
   check("ENG-95469 T2b: once the in-context park has CLAIMED the unit (its key added to the parked set), the round-budget `parkableKeys` EXCLUDES it — the two paths park the unit exactly once, no duplicate record",
-    () => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set(inContext)).length === 0,
-    () => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, new Set(inContext)));
-  check("ENG-95469 T2b: `applyParks` HANDS `parkedSet` to `parkableKeys` as the alreadyParked filter — the pure dedup is actually wired, so a refactor cannot drop it and leave only the local guard",
-    /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, parkedSet\)/.test(wfSrc));
+    // Guarded against a vacuous pass: the SAME call with an empty set must still select the unit (asserted above),
+    // so a zero here is the exclusion doing its job and not the budget silently failing to apply.
+    () => budgetParks(new Set(inContext)).length === 0 && budgetParks(new Set()).length === 1,
+    () => ({ excluded: budgetParks(new Set(inContext)), notExcluded: budgetParks(new Set()) }));
+  check("ENG-95469 T2b: `applyParks` HANDS `parkedSet` to `parkableKeys` as the alreadyParked filter, WITH the configured round budget in front of it — the pure dedup is actually wired, so a refactor cannot drop it and leave only the local guard, and it cannot land the set in the `maxRounds` slot where it would silently disable the budget",
+    /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, \{ maxRounds: MAX_ROUNDS, alreadyParked: parkedSet \}\)/.test(wfSrc));
+}
+
+// ENG-95901 item 7 — a DELIBERATE scope cut, pinned so it cannot be silently reversed. An earlier version of this
+// ticket excluded a `buildComplete: true` page (build done, only unfiled evidence open) from the round-budget
+// park; that exclusion was reverted because `parkableKeys` is the ONLY mechanism bounding the outer round loop
+// (there is no separate global round ceiling) — excluding such a page would trade a bounded-but-imperfect park for
+// a run that never terminates if a separate verifier/judge round never confirms the evidence. This golden proves
+// the REVERTED state, not the fix: a `buildComplete: true` / `complete: false` page IS STILL round-budget
+// parkable today, on the SAME terms as any other open unit. A future change that reintroduces the exclusion
+// (silently "fixing" what looks like a bug) must fail THIS check, not slip through untested.
+{
+  const K = "child:A";
+  const unitK = [{ key: K, kind: "page" }];
+  const budgetSpentAgain = { [K]: 3 };
+  const evidenceOnlyOpenAgain = { pages: { [K]: { complete: false, buildComplete: true } } };
+  check("ENG-95901 item 7 (deliberately reverted): a page with `buildComplete: true` (build done, only evidence unfiled) IS round-budget parkable once its budget is spent — parkableKeys applies the SAME rule to every open unit, with no build-axis exclusion",
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, { maxRounds: wf.DEFAULT_MAX_ROUNDS, alreadyParked: new Set() }).join(",") === K,
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, { maxRounds: wf.DEFAULT_MAX_ROUNDS, alreadyParked: new Set() }));
 }
 
 // --- ENG-95469 (PR review T5): the INDEPENDENT-SIGNAL cross-check, EXECUTED. A builder's `selfCheck` is its own word
@@ -411,15 +490,27 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
 // independent post-hoc verifier and names the two ways they can disagree, for a unit the verifier finds still OPEN.
 {
   const unitFor = (k) => ({ key: k, kind: "page" });
-  const openVerify = { pages: { "child:A": { complete: false } } };   // the independent verifier finds child:A OPEN
-  const greenVerify = { pages: { "child:A": { complete: true } } };   // …and here it finds it COMPLETE
-  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, complete: true } }];
+  // ENG-95901: the outer "is this unit still open" filter stays on the COMBINED `complete` (unchanged, AC7/AC8 — a
+  // unit open only on unfiled evidence still belongs in this audit sweep); the MISMATCH branch itself now compares
+  // `buildComplete` to `buildComplete`, so each fixture below carries both fields deliberately.
+  const openVerify = { pages: { "child:A": { complete: false, buildComplete: false } } };   // verifier: OPEN, and a genuine MISSING deliverable
+  const openOnEvidenceOnly = { pages: { "child:A": { complete: false, buildComplete: true } } }; // verifier: OPEN, but build is done — only unfiled evidence
+  const greenVerify = { pages: { "child:A": { complete: true, buildComplete: true } } };   // …and here it finds it fully COMPLETE
+  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
   const notRun = [{ key: "child:A", sc: { ran: false, notRunWhy: "could not get-page" } }];
-  const honestComplete = [{ key: "child:A", sc: { ran: true, complete: true } }];
-  check("ENG-95469 T5: a builder that self-reports the gate PASSED on a page the INDEPENDENT verifier finds OPEN is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on complete:false), so the cross-check is the only independent signal",
+  const honestComplete = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
+  check("ENG-95901 T5: a builder that self-reports the BUILD axis PASSED on a page the INDEPENDENT verifier's OWN build axis is NOT true (a genuine MISSING deliverable) is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on buildComplete:false), so the cross-check is the only independent signal",
     () => { const m = wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].key === "child:A" && m[0].kind === "reported-complete-but-verifier-open"; },
     () => wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined));
+  check("ENG-95901 T5: a builder that HONESTLY self-reports `buildComplete:true` on a page still OPEN per the full sweep ONLY because of unfiled evidence (verifier's own buildComplete IS true) raises NO mismatch — the builder cannot legitimately file that evidence itself, so this must never be flagged (the exact case ENG-95901 exists to fix)",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, openOnEvidenceOnly, {}, undefined).length === 0);
+  // `verifierBuildComplete`'s own `missing === 0` fallback branch, exercised through the PUBLIC selfCheckMismatches
+  // API: a LEGACY verify page-state with no `buildComplete` but `missing: 0` must be read as build-complete on the
+  // verifier side too, so the same honest self-report raises no mismatch against it either.
+  const legacyOpenOnEvidenceOnly = { pages: { "child:A": { complete: false, missing: 0, unverified: 3 } } };
+  check("ENG-95901 T5: the SAME honest self-report raises NO mismatch against a LEGACY verify page-state (no `buildComplete`, `missing: 0`) — the verifier-side fallback must read `missing`, not default an absent field to 'still open'",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, legacyOpenOnEvidenceOnly, {}, undefined).length === 0);
   check("ENG-95469 T5: a `ran:false` self-check on a page the verifier finds OPEN is flagged `gate-not-run` — a builder cannot silently bypass the scoped gate; the skipped-and-still-open unit is surfaced",
     () => { const m = wf.selfCheckMismatches(notRun, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].kind === "gate-not-run"; },
@@ -430,19 +521,30 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
   check("ENG-95469 T5: no self-checks at all is an empty mismatch list, not a throw",
     () => wf.selfCheckMismatches([], unitFor, openVerify, {}, undefined).length === 0
       && wf.selfCheckMismatches(undefined, unitFor, openVerify, {}, undefined).length === 0);
-  // PR review RC-12: a schema-valid self-report of `{ran:true}` with `complete` ABSENT (the schema requires only
-  // `ran` inside selfCheck) escapes both `selfCheckStillShort` (needs complete===false) and the two branches above
-  // (complete is neither true nor false), so without a dedicated branch such a unit reaches NEITHER the fast park
-  // NOR the audit trail on a still-open unit. It must be flagged `ran-without-verdict`, and must NOT collide with
-  // the honest short case `{ran:true, complete:false}`, which stays a non-mismatch (builder and verifier agree).
+  // PR review RC-12 (extended by ENG-95901 to the new axis): a schema-valid self-report of `{ran:true}` with
+  // `buildComplete` ABSENT (the schema requires only `ran` inside selfCheck) escapes both `selfCheckStillShort`
+  // (needs buildComplete===false) and the two branches above (buildComplete is neither true nor false), so without a
+  // dedicated branch such a unit reaches NEITHER the fast park NOR the audit trail on a still-open unit. It must be
+  // flagged `ran-without-verdict`, and must NOT collide with the honest short case `{ran:true, buildComplete:false}`,
+  // which stays a non-mismatch (builder and verifier agree).
   const ranNoVerdict = [{ key: "child:A", sc: { ran: true } }];
-  const honestShort = [{ key: "child:A", sc: { ran: true, complete: false } }];
-  check("ENG-95469 T5 (RC-12): `{ran:true, complete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
+  const honestShort = [{ key: "child:A", sc: { ran: true, buildComplete: false } }];
+  check("ENG-95469/ENG-95901 T5 (RC-12): `{ran:true, buildComplete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
     () => { const m = wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].key === "child:A" && m[0].kind === "ran-without-verdict"; },
     () => wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined));
-  check("ENG-95469 T5 (RC-12): the honest short case `{ran:true, complete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
+  check("ENG-95469/ENG-95901 T5 (RC-12): the honest short case `{ran:true, buildComplete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
     () => wf.selfCheckMismatches(honestShort, unitFor, openVerify, {}, undefined).length === 0);
+  // PR review (ENG-95901 follow-up): `verifierBuildComplete` used to coerce "no page entry in `verify.pages` at
+  // all" (the page has not reached its first post-hoc verify pass yet) to `false`, indistinguishable from "the
+  // verifier ran and says NOT build-complete". That misread an honest `buildComplete:true` self-report as a
+  // MISMATCH on every page the verifier simply has not looked at yet. `isOpenPage` treats a missing entry as OPEN
+  // (so this unit is NOT filtered out before reaching the comparison), which is exactly what makes this case reach
+  // `selfCheckMismatches` at all.
+  const noVerifierEntryYet = { pages: {} };
+  check("ENG-95901 T5 (PR review): an HONEST `buildComplete:true` self-report on a page with NO entry in `verify.pages` (verifier has not run against it yet) raises NO mismatch — 'no data yet' must not read as 'verifier disagrees'",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, noVerifierEntryYet, {}, undefined).length === 0,
+    () => wf.selfCheckMismatches(honestComplete, unitFor, noVerifierEntryYet, {}, undefined));
 }
 // The T5 cross-check WIRING, pinned at the source level (the round loop drives live agents): buildRound returns the
 // per-unit self-reports, and the round loop cross-checks them against the FRESH post-hoc `state.verify` and records a
@@ -450,7 +552,10 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
 // The round's tallies live on one object that `dispatchUnit` records into, so the return names them off `r` rather
 // than as bare locals. Read off the buildRound slice with `includes` — the field must be RETURNED, not merely
 // mentioned somewhere in the file, and a slice says so without a backtracking regex (S8786).
-const buildRoundBody = wfSrc.slice(wfSrc.indexOf("async function buildRound(open)"), wfSrc.indexOf("const chargeBuildAttempt"));
+// The slice ENDS at the verifier, not at `chargeBuildAttempt`: the per-unit helpers were hoisted ABOVE `buildRound`
+// (they are declarations in one scope now, not nested closures), so anchoring on one of them yields an EMPTY slice
+// and every `includes` below reads false — a pin that fails for the wrong reason is as bad as one that passes for it.
+const buildRoundBody = wfSrc.slice(wfSrc.indexOf("function* buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("ENG-95469 T5: buildRound returns `selfChecks` and the round loop cross-checks them against the post-hoc verifier via `selfCheckMismatches`, recording each disagreement as a discrepancy",
   buildRoundBody.includes("selfCheckShort: r.selfCheckShort, selfChecks: r.selfChecks")
   && /selfCheckMismatches\(selfChecks, unitOf, state\.verify, state\.reachabilityState, packageState\)/.test(wfSrc)
@@ -481,6 +586,13 @@ check("ENG-95469 T5: the self-report is COLLECTED per page unit — `recordPageS
       const notRun = wf.selfCheckDiscrepancyText("gate-not-run");
       return /no boolean verdict/i.test(t.claim) && !/did NOT run/i.test(t.claim) && t.claim !== notRun.claim && t.label !== notRun.label; },
     () => ({ ranNoVerdict: wf.selfCheckDiscrepancyText("ran-without-verdict"), gateNotRun: wf.selfCheckDiscrepancyText("gate-not-run") }));
+  // ENG-95901: the branch this text describes tests `sc.buildComplete`, not `sc.complete` — pin the LITERAL field
+  // name in the claim text too, so a future field rename cannot leave this operator-facing string stale again
+  // (exactly the drift a code review caught: the predicate moved to `buildComplete` but the wording still said
+  // "complete absent").
+  check("ENG-95901: `ran-without-verdict`'s claim text names the field it ACTUALLY checks (`buildComplete`), not the retired `complete`",
+    () => /buildComplete absent/.test(wf.selfCheckDiscrepancyText("ran-without-verdict").claim),
+    () => wf.selfCheckDiscrepancyText("ran-without-verdict"));
   check("ENG-95469 RC-17: an UNRECOGNIZED kind throws loudly — a future kind added to `selfCheckMismatches` without a matching text entry cannot silently inherit stale wording",
     () => { try { wf.selfCheckDiscrepancyText("some-new-kind"); return false; } catch (e) { return /unknown selfCheck discrepancy kind/.test(e.message); } });
   // Every kind `selfCheckMismatches` can emit MUST have a text entry — the two lists cannot drift apart.
@@ -647,6 +759,30 @@ const reqOf = (re) => { const m = re.exec(wfSrc); return m ? m[1].split(",").map
 const missingReq = (obj, req) => (req || []).filter((k) => !(k in obj));
 const PAGE_REQ = reqOf(/const BUILD_SCHEMA_PAGE = \{[^}]*?required:\s*\[([^\]]*)\]/);
 const SC_REQ = reqOf(/selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\[([^\]]*)\]/);
+// ENG-95901 (PR review) — a bounded-window REGEX against `wfSrc` (below) only proves the text pattern still reads
+// a certain way; it does not prove the SHIPPED schema object actually declares the field, the way the VERIFY_RESULT
+// drift gate above does by loading the real module and reading the live object. Load `BUILD_PROPERTIES` the SAME
+// way (a standalone module slice + `import()`) and assert on the live object, so a reformatting that keeps the
+// regex passing while actually dropping the property (or nesting it one level off) cannot go unnoticed.
+let selfCheckMod;
+try {
+  const slice = wfSrc.slice(wfSrc.indexOf("const BUILD_PROPERTIES"), wfSrc.indexOf("const BUILD_SCHEMA_APP"));
+  const modPath = path.join(mkdtempSync(path.join(os.tmpdir(), "wf-selfcheck-schema-")), "selfcheck-schema.mjs");
+  writeFileSync(modPath, `${slice}\nexport { BUILD_PROPERTIES };\n`);
+  selfCheckMod = await import(pathToFileURL(modPath).href);
+} catch (e) {
+  check("ENG-95901: the `BUILD_PROPERTIES` schema slice loads as a standalone module", false, e.message);
+}
+check("ENG-95901: `BUILD_PROPERTIES.selfCheck`'s structured-output schema DECLARES `buildComplete: { type: 'boolean' }` on the LIVE shipped object — a builder's structured answer will not reproduce an undeclared field, so its absence here silently drops `buildComplete` from every self-report before `selfCheckStillShort`/`selfCheckMismatches` ever see it",
+  selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.properties?.buildComplete?.type === 'boolean',
+  () => selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.properties);
+// Declaring it is not enough on its own here either — but unlike VERIFY_RESULT's page-state, `selfCheck` MUST NOT
+// require `buildComplete`: `ran: false` (the builder genuinely could not get-page) is a documented, valid outcome
+// with no build-axis verdict at all, and `ran-without-verdict` exists specifically to surface a schema-valid
+// `{ran:true}` with `buildComplete` absent as its own discrepancy kind rather than a schema violation.
+check("ENG-95901: `BUILD_PROPERTIES.selfCheck` requires ONLY `ran` — `buildComplete` stays optional so `ran:false`/`ran-without-verdict` remain schema-valid self-reports, not violations",
+  JSON.stringify(selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.required) === JSON.stringify(['ran']),
+  () => selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.required);
 // The pre-PR 4-field page-unit shape (no `selfCheck`), and the current 5-field shape whose `selfCheck` uses the
 // documented `ran:false` + `notRunWhy` escape hatch the breaking-change argument leans on.
 const prePrPageResult = { unit: "main", claimedBuilt: ["crt.Input"], schemaName: "UsrMainPage",
@@ -702,6 +838,32 @@ check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list 
     && /reportGuidelinesMiss\(unit\.key, r\.claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
 check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
   !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
+// ENG-95901 — the REAL `inContextGateBlock` prompt text, pinned at the source level (the same convention this file
+// already applies to every other builder-facing prompt line, e.g. the T5/RC-16 checks above). This is the literal
+// instruction a LIVE build agent reads to decide what it may and may not touch; a silent regression here (reverting
+// to `complete`, or dropping the missing-only restriction) would ship undetected without this check, since the
+// local stub used elsewhere in this file (for an unrelated buildPrompt-wiring test) is a one-line marker, not the
+// real function's content.
+{
+  const gateBlockSlice = wfSrc.slice(wfSrc.indexOf("function inContextGateBlock(unit)"), wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"));
+  check("ENG-95901: inContextGateBlock names `buildComplete` as the axis the gate's exit code reads, and states that an unconfirmed-evidence-only page exits 0",
+    /buildComplete/.test(gateBlockSlice) && /exits 0/.test(gateBlockSlice));
+  // PR review — the restriction is keyed on the row's OWNER, not on its `missing`/`unverified` label. Pinning the
+  // label wording would re-pin the defect: a `0/N expected fields` row is `unverified` and entirely the builder's.
+  check("ENG-95901 (review): inContextGateBlock restricts the one bounded fix to rows whose `owner` is `\"builder\"`, forbids touching a `\"verifier\"` row, and says in words not to read the missing/unverified label instead",
+    gateBlockSlice.includes('act on every row whose \\`owner\\` is \\`"builder"\\`')
+    && gateBlockSlice.includes('NEVER attempt to "fix" a row whose \\`owner\\` is \\`"verifier"\\`')
+    && /Read \\`owner\\`, not the \\`missing\\`\/\\`unverified\\` status/.test(gateBlockSlice));
+  // PR review (Minor 3) — the self-check payload shape the builder is told to write. `entitySchemaName` and
+  // `packageName` are BUILDER-owned rows, so a three-key payload leaves the gate short on a page that is
+  // actually complete. Pinned here because the same shape is prescribed twice (this prompt and the recipe's
+  // step 10) and the two silently drifting apart is exactly what the review caught.
+  check("ENG-95901 (review): inContextGateBlock's self-check built-file shape carries entitySchemaName and packageName alongside viewConfig/parentSchemaName/schemaUId",
+    /"viewConfig"[\s\S]{0,200}"entitySchemaName"[\s\S]{0,120}"packageName"[\s\S]{0,120}"parentSchemaName"[\s\S]{0,80}"schemaUId"/.test(gateBlockSlice)
+    && /BUILDER-OWNED rows/.test(gateBlockSlice));
+  check("ENG-95901: inContextGateBlock's `selfCheck` reporting instructions include `buildComplete` in the copied-verbatim field list",
+    /Report \\`selfCheck\\` copying the verdict VERBATIM:[\s\S]{0,160}buildComplete/.test(gateBlockSlice));
+}
 check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
   /guidelines: res\.guidelines \|\| null/.test(wfSrc)
     && !/guidelinesRun: res\.guidelinesRun/.test(wfSrc) && !/guidelinesRun: \{ type/.test(wfSrc));
@@ -819,11 +981,13 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 
 // Source-level pins: the pure helpers above decide correctly, but the ROUND LOOP has to use them, and the three
 // places it does are all outside the pure block (they close over run state).
-// The slice must span the WHOLE function: the defer guard is at the top of the loop and the pause decision is at
-// the bottom, so a window that reaches only one of them passes on half the mechanism.
-const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("async function buildRound(open)"), wfSrc.indexOf("// The read-only VERIFIER."));
+// The slice must span the WHOLE ROUND MACHINERY, not one function: the defer guard is at the top of `buildRound`'s
+// loop while the pause decision, the continuation accounting and the per-unit recording live in the sibling
+// declarations hoisted above it (`claimFor` … `dispatchUnit`). A window that reaches only one of them passes on half
+// the mechanism — and one anchored on a single function would go EMPTY the moment another helper is extracted.
+const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function claimFor(unit, res, routed)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("async function buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+  wfSrc.includes("function* buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
     && /!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
 // ONLY a checkpoint terminates the round. A continuation in that guard truncated the round and deferred every other
@@ -1137,9 +1301,10 @@ check("ENG-95468: the pre-build gate and its mid-run twin are wired to all THREE
 // tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
 check("workflow: the REFS step is its OWN phase and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
-  /phase\('Refs'\)/.test(wfSrc) && /await refsStep\(\)/.test(wfSrc)
+  /phase\('Refs'\)/.test(wfSrc) && /yield\* refsStep\(\)/.test(wfSrc)
     && /FIRST, DECIDE WHICH CACHE TIERS ARE STILL VALID/.test(wfSrc)
-    && wfSrc.indexOf("await refsStep()") < wfSrc.indexOf("while (true) {"));
+    && wfSrc.indexOf("yield* refsStep()") > 0
+    && wfSrc.indexOf("yield* refsStep()") < wfSrc.indexOf("while (true) {"));
 check("ENG-95474 REFS: cache invalidation is tiered — a plan-version change rebuilds plan slices, not stable docs, CLI usage or component docs",
   /STABLE DOCS tier:[\s\S]*guidance-\*\.md[\s\S]*contracts\.md/.test(wfSrc)
     && /HOST tier:[\s\S]*cli-usage\.md/.test(wfSrc)
@@ -1190,7 +1355,9 @@ check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
-  /const mergeOk = !!\(merged && merged\.reportPath && merged\.indexPath\)/.test(bhSrc)
+  // Optional chaining now (the null-guard was spelled out longhand); the GUARANTEE is unchanged — the verdict
+  // requires a Merge that produced BOTH deliverables, not merely a coverage count.
+  /const mergeOk = !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(bhSrc)
     && /const complete = mergeOk && isComplete\(/.test(bhSrc));
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
@@ -1240,7 +1407,10 @@ check("workflow: the parent edge is COPIED from `--units`, and reconstructing it
   /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
 check("ENG-95474 C4: each sequential Build unit writes its own audit file AND appends the same entry to worklog.md, so no Close worklog agent is needed",
   /worklogFile\(unit\.key, unit\.kind\)/.test(wfSrc)
-    && /sharedWorklogPath: `\$\{input\.outDir\}\/worklog\.md`/.test(wfSrc)
+    // The shared path is composed ONCE, beside the per-unit names, and handed on by name — so both halves are
+    // pinned: the run's build prompt passes it, and it really is `<outDir>/worklog.md` and not something relative.
+    && /const sharedWorklogFile = `\$\{input\.outDir\}\/worklog\.md`/.test(wfSrc)
+    && /sharedWorklogPath: sharedWorklogFile,/.test(wfSrc)
     && /Build units run sequentially, so an append has no writer race/.test(wfSrc)
     && !/close:worklog/.test(wfSrc));
 // The append must be APPEND-ONLY. "preserving existing content" made the builder read a file that grows by one entry
@@ -1376,7 +1546,7 @@ check("ENG-95850 (A2): `standWrites` is declared ABOVE `runReturn` — every ret
 check("ENG-95850 (A2): a recorded `appUnitComplete: true` is MONOTONIC — a later partial report cannot walk the met deliverable back to `false`, because only a stand read could contradict it",
   /const complete = appUnitComplete === true \|\| standWrites\.packageCreated\?\.appUnitComplete === true/.test(wfSrc));
 check("ENG-95850 (A2): the app unit's stand write is persisted IMMEDIATELY after its dispatch, not at the round's Verify — every later unit in the round is a long killable agent, and this is the one carried fact whose loss is an irreversible stand change the next run cannot account for",
-  /await dispatchUnit\(unit, r\)\n(?:\s*\/\/[^\n]*\n)*\s*if \(unit\.kind === 'app' && standWrites\.packageCreated\) await persistPending\(/.test(wfSrc));
+  /yield\* dispatchUnit\(unit, r\)\n(?:\s*\/\/[^\n]*\n)*\s*if \(unit\.kind === 'app' && standWrites\.packageCreated\) yield\* persistPending\(/.test(wfSrc));
 check("ENG-95850 (A2): the record RIDES THE CARRY into the queue file at its ROOT — the package is not a page, and the next run's placement gate looks for it before any unit exists",
   /standWrites/.test(wfSrc)
     && /merge under the ROOT key \\`standWrites\\`/.test(wfSrc)
@@ -1388,25 +1558,76 @@ check("ENG-95850 (A2): Reconcile is told to read the provenance OFF THE FILE and
   /Return \\`packageCreatedByRun\\`/.test(wfSrc)
     && /do NOT derive it from the stand/.test(wfSrc)
     && /no stand read can say WHO created it/.test(wfSrc));
-check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper — a raw `agent(reconcilePrompt(...))` outside it is a call site the retry does not cover",
-  (wfSrc.match(/await reconcileAgent\(/g) || []).length === 3
-    && (wfSrc.match(/agent\(reconcilePrompt\(/g) || []).length === 1
-    && /async function reconcileAgent\(roundNo, label\)/.test(wfSrc));
+// THE THREE call sites are the baseline, the post-preflight refresh and the round tail. The retry is only a fix if
+// ALL of them go through it, so the pin counts both directions: three calls to the helper, and the prompt itself
+// built in exactly ONE place — its own definition plus the single dispatch INSIDE the helper. A fourth
+// `reconcilePrompt(...)` anywhere is a call site the retry does not cover, which is the regression.
+const reconcileAgentSrc = wfSrc.slice(wfSrc.indexOf("function* reconcileAgent(roundNo, id, label, note)"),
+  wfSrc.indexOf("const RECONCILE_FAILED_NEXT"));
+check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper — a `reconcilePrompt(...)` dispatched anywhere else is a call site the retry does not cover",
+  (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length === 3
+    && (wfSrc.match(/reconcilePrompt\(/g) || []).length === 2
+    && /function reconcilePrompt\(round\) \{/.test(wfSrc)
+    && reconcileAgentSrc.includes("reconcilePrompt(roundNo)")
+    && /function\* reconcileAgent\(roundNo, id, label, note\)/.test(wfSrc),
+  () => ({ helperCalls: (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length,
+    promptSites: (wfSrc.match(/reconcilePrompt\(/g) || []).length,
+    insideHelper: reconcileAgentSrc.includes("reconcilePrompt(roundNo)") }));
 // THE SCHEMA-SIZE BUDGET (A3). The rejection that cost the Applicant run its route was reported as "output schema too
 // large to classify safely" at this exact agent, and the host's threshold is not something this repo can reproduce —
 // so the retry above is the fix and this is the guardrail: the Reconcile schema's SERIALIZED size (what the classifier
 // sees; the JS comments around it are not part of it) stays inside a stated budget instead of drifting upward one
 // field at a time. Raising the ceiling is a deliberate act, which is the point.
-const RECONCILE_SCHEMA_BUDGET = 6000;
+// ENG-95503 raised this from 6000 to 6250, deliberately and once. The answers channel adds three REQUIRED
+// round-trip keys to this contract -- `unconsumedResolutions` (410 bytes), `resolutionsReopened` (152) and
+// `resolutionsPending` (63) -- and they cannot live anywhere else: a field this schema does not declare is
+// silently dropped on the agent-mediated path, which is exactly how an unconsumed answer went missing across
+// a resume in the first place. The alternative was trimming `kind`/`item`/`how` off the persisted row to fit,
+// i.e. degrading behaviour two review rounds settled in order to stay under a number -- the wrong trade to
+// make silently. The guard still does its job: it is a stated ceiling that a drift has to be raised past on
+// purpose, and this is that purpose, recorded.
+const RECONCILE_SCHEMA_BUDGET = 6250;
 let reconcileSchemaBytes = -1;
 let tmpSchema;
 try {
   tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
   const modPath = path.join(tmpSchema, "schema.mjs");
   const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
-  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA };\n`);
+  // ENG-95503 — the slice reads the answers channel's DESIGN LITERALS (the `shows` enum, the two source tags, and the
+  // text cap the `maxLength` bounds are built from), and those are declared with the pure helpers far above this
+  // window. Injected at their SHIPPED values, exactly as the helper-block slice does it, so this measures the real
+  // schema instead of failing to load — and they cannot drift, because they come off the imported block.
+  const SCHEMA_LITERALS = [`const CARRY_TEXT_CAP = ${JSON.stringify(CARRY_TEXT_CAP)};`,
+    ...SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`)].join("\n");
+  writeFileSync(modPath, `${SCHEMA_LITERALS}\n${slice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT };\n`);
   const mod = await import(pathToFileURL(modPath).href);
   reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
+  // ENG-95901 — the SCHEMA-DRIFT GATE. Every golden above constructs `{buildComplete: ...}` fixtures BY HAND and
+  // feeds them straight into the pure functions, bypassing the structured-output schema entirely — none of them
+  // would fail if `buildComplete` were silently dropped from VERIFY_RESULT (the exact regression a code review
+  // caught: an LLM constrained to an undeclared-field schema will not reproduce it, so the live agent-mediated path
+  // would lose the field even though every unit test still passes). Load the REAL schema object — not a copy — and
+  // assert the property is actually declared, the same way the byte-budget check above proves this schema's real
+  // shape rather than trusting a comment about it.
+  check("ENG-95901: VERIFY_RESULT's per-page schema DECLARES `buildComplete: { type: 'boolean' }` — an LLM transcribing `--verify-json` into `state.verify` will not reproduce an undeclared field, so its absence here silently drops `buildComplete` on the ONE path that feeds live runtime state",
+    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.buildComplete?.type === 'boolean',
+    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties);
+  // Declaring the property is not enough — only `required` forces an LLM to actually POPULATE it. Without this,
+  // the agent-mediated path could still legally transcribe a page as `{complete:false, unverified:3}` with
+  // `buildComplete` omitted, and `derivedBuildComplete` would silently fall back to the combined `complete`.
+  check("ENG-95901: VERIFY_RESULT's per-page schema also REQUIRES `buildComplete` (not merely typed) — a declared-but-optional field does not stop an LLM from omitting it",
+    (mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required || []).includes('buildComplete'),
+    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required);
+  // PR review — `builderOpen` is emitted by `verifyTally`/`verifyUnit`/`renderVerify`/`verifyDigest` alongside
+  // `buildComplete`, so it needs the same declaration for the same reason: an undeclared field is silently dropped
+  // on the agent-mediated transcription path, and this gate is exactly the blind spot a newly-emitted field falls
+  // into (it checks the fields that ARE declared). Typed, not required — unlike `buildComplete` it is a count a
+  // caller reads, not a flag any decision branches on, so an omission degrades a message rather than a verdict.
+  check("ENG-95901 (review): VERIFY_RESULT declares `builderOpen` at BOTH levels — per-page and on the top-level total — so the count that matches `buildComplete` survives the agent-mediated transcription the same way the flag does",
+    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.builderOpen?.type === 'integer'
+      && mod.VERIFY_RESULT?.properties?.builderOpen?.type === 'integer',
+    () => ({ page: mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties,
+      top: mod.VERIFY_RESULT?.properties?.builderOpen }));
 } catch (e) {
   check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
 } finally {
@@ -1416,10 +1637,192 @@ check(`ENG-95850 (A3): the Reconcile structured-output schema stays inside its s
   reconcileSchemaBytes > 0 && reconcileSchemaBytes <= RECONCILE_SCHEMA_BUDGET,
   () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET})`);
 check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fallback persistence only if Verify cannot confirm that write",
-  /lastVerifier = await verifyRound\(builtThisRound, claims, carryNow\(\)\)/.test(wfSrc)
+  /lastVerifier = yield\* verifyRound\(builtThisRound, claims, carryNow\(\)\)/.test(wfSrc)
     && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
     && /Verify did not confirm the queue carry write/.test(wfSrc)
-    && /await persistPending\(`recording what round \$\{round\}'s builders reported after verify`\)/.test(wfSrc));
+    && /yield\* persistPending\(`recording what round \$\{round\}'s builders reported after verify`\)/.test(wfSrc)
+    // …and the fallback really is a FALLBACK: it sits on the else of the confirmation, so a confirmed write costs
+    // no extra agent. Pinned because dropping the branch would silently restore the per-round persistence agent.
+    && /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,600}?\} else \{[\s\S]{0,300}?yield\* persistPending\(`recording what round/.test(wfSrc));
+
+// --- THE VERIFIER'S PER-ROUND READ-BACK SCOPE. A repair round used to re-read every published page and re-file
+// its evidence, which sent records that were already settled back to the judge with nothing underlying them
+// changed. The scope is a pure decision, so it is exercised here rather than asserted from the prompt text. ---
+const scopeKeys = ["main", "list", "sectionRegistered"];
+const scopeSchemas = { main: "UsrApplicant_FormPage", list: "UsrApplicant_ListPage", sectionRegistered: "UsrApplicantSection" };
+const scopeAllRecorded = ["main", "list", "sectionRegistered"];
+const fetched = (built, recorded) => wf.verifyFetchKeys({ touchedThisRound: built, unitKeys: scopeKeys, schemas: scopeSchemas, pagesRecorded: recorded }).join(",");
+check("verifyFetchKeys: a recorded key the round did not build is NOT re-fetched (the whole point: an unchanged page was being re-read every round)",
+  () => fetched(["main"], scopeAllRecorded) === "main");
+check("verifyFetchKeys: a recorded key the round DID build IS fetched, because it just changed",
+  () => fetched(["main", "list"], scopeAllRecorded) === "main,list");
+check("verifyFetchKeys: a NEVER-recorded key is fetched even when the round did not build it (absent = nobody looked, and skipping it would leave it absent forever)",
+  () => fetched([], ["main"]) === "list,sectionRegistered");
+check("verifyFetchKeys: `pagesRecorded` undefined or empty fetches EVERY key: the old whole-section sweep, never a silent skip",
+  () => fetched([], undefined) === "main,list,sectionRegistered" && fetched([], []) === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key with no recorded Freedom schema is never fetched, even when the round built it",
+  () => wf.verifyFetchKeys({ touchedThisRound: ["orphan"], unitKeys: [...scopeKeys, "orphan"], schemas: scopeSchemas, pagesRecorded: [] }).join(",") === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key that is only a SUBSTRING of a `builtThisRound` entry does not count as built (exact match, as the judge-queue predicate also requires)",
+  () => fetched(["child:main"], scopeAllRecorded) === "");
+check("verifyFetchKeys: an empty Reconcile report yields no keys rather than throwing",
+  () => wf.verifyFetchKeys({ touchedThisRound: [], unitKeys: undefined, schemas: scopeSchemas, pagesRecorded: [] }).length === 0);
+
+// The table renders three groups, and TWO different empty states share the FETCH list: nothing recorded
+// anywhere, and everything recorded with nothing to fetch this round. A round whose builders all returned
+// nothing produces the second, and one label for both contradicts the ALREADY ON FILE list printed under it.
+check("fetchTableGroups: with nothing to fetch and every key on file, the FETCH list does not claim nothing is recorded",
+  () => {
+    const g = wf.fetchTableGroups([], scopeKeys, scopeSchemas);
+    return g.known.length === 0 && g.keep.length === 3 && wf.fetchListEmptyLabel(g.keep.length).includes("already on file");
+  });
+check("fetchTableGroups: with nothing recorded anywhere the FETCH list still says none recorded yet",
+  () => wf.fetchTableGroups([], scopeKeys, {}).keep.length === 0 && wf.fetchListEmptyLabel(0) === "- (none recorded yet)");
+check("fetchTableGroups: the three rendered groups PARTITION the published keys, with no key in two of them and none dropped",
+  () => {
+    const g = wf.fetchTableGroups(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    const all = [...g.known, ...g.keep, ...g.unknown];
+    return g.known.join() === "main" && g.keep.join() === "list,sectionRegistered" && g.unknown.join() === "orphan"
+      && all.length === new Set(all).size && all.length === 4;
+  });
+
+// A builder that answered nothing may still have WRITTEN to the stand before it died, so its page is read back
+// even though it never reached `builtThisRound` — which stays as it is, because the judge-queue predicate
+// discriminates on real build activity.
+check("touchedKeys: a unit whose builder answered nothing counts as touched",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }]).join() === "main,list");
+check("touchedKeys: a unit that reported normally is not duplicated, and absent claims yield just the built list",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }]).join() === "main" && wf.touchedKeys(["main"], undefined).join() === "main");
+
+// The rejected-record loop: `isSettledAndUnitUntouched` covers only an id EARNED before the round, and a
+// rejected record is not earned, so it came back to Judge every round no matter what happened to its unit.
+check("isRefiledForUntouchedUnit: a REJECTED record whose unit was not touched is not re-queued",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main"]) === true);
+check("isRefiledForUntouchedUnit: the same record IS re-queued once its unit is touched again",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main", "list"]) === false);
+check("isRefiledForUntouchedUnit: a FIRST-EVER record is never suppressed, so nothing unjudged is hidden",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(), ["main"]) === false);
+check("isRefiledForUntouchedUnit: an id with no `#` uses the whole id as its owner",
+  () => wf.isRefiledForUntouchedUnit("sectionRegistered", new Set(["sectionRegistered"]), ["main"]) === true);
+
+// The two guards are checked IN ORDER and are not interchangeable: the first asks EARNED + BUILT, the second
+// only RECORDED + TOUCHED. Each is covered above in isolation; these drive the composition over a mixed list.
+const earned = new Set(["main#quality-gates"]);
+const filed = new Set(["main#quality-gates", "list#quality-gates", "list#listpage:columns"]);
+const skipWhy = (id, built, touchedUnits) => wf.requeueSkipReason(id, earned, filed, built, touchedUnits);
+check("requeueSkipReason: an EARNED id whose unit was not built is skipped as settled, not as refiled",
+  () => skipWhy("main#quality-gates", ["list"], ["list"]) === "settled");
+check("requeueSkipReason: a REJECTED id (filed, never earned) whose unit was not touched is skipped as refiled",
+  () => skipWhy("list#quality-gates", ["main"], ["main"]) === "refiled");
+check("requeueSkipReason: an id whose unit WAS built goes through both guards to the judge",
+  () => skipWhy("list#quality-gates", ["list"], ["list"]) === null);
+check("requeueSkipReason: a no-answer unit is TOUCHED but not BUILT — its earned id stays settled while its rejected id goes through",
+  () => skipWhy("main#quality-gates", [], ["main"]) === "settled" && skipWhy("list#quality-gates", [], ["list"]) === null);
+check("requeueSkipReason: a FIRST-EVER id is never skipped, whichever guard is asked",
+  () => skipWhy("sectionRegistered#reach", [], []) === null);
+check("requeueSkipReason: an id with no `#` owner resolves against the whole id",
+  () => wf.requeueSkipReason("sectionRegistered", new Set(["sectionRegistered"]), new Set(["sectionRegistered"]), [], []) === "settled");
+check("requeueSkipReason: over a mixed list, every id resolves to exactly one outcome and the order holds",
+  () => ["main#quality-gates", "list#quality-gates", "list#listpage:columns", "child:X#childpage"]
+    .map((id) => skipWhy(id, ["child:X"], ["child:X", "list"])).join(",") === "settled,,,");
+
+// The round loop derives `touchedThisRound` and `filedBeforeRound` from `claims` and `state.evidenceFiled`, then
+// feeds them per id. Testing the predicates alone left that wiring uncovered: passing `builtThisRound` where
+// `touchedThisRound` belongs, or swapping the two lists, would have passed every case above.
+const wroteThisRound = ["main#quality-gates", "list#quality-gates", "child:X#childpage", "sectionRegistered#reach"];
+const roundClaims = [{ unit: "main" }, { unit: "list", noAnswer: true }];
+const filedOnFile = ["main#quality-gates", "list#quality-gates", "child:X#childpage"];
+const decide = (built, claimsIn) => wf.requeueDecisions({ evidenceWritten: wroteThisRound, earnedBeforeRound: new Set(["main#quality-gates", "child:X#childpage"]), evidenceFiled: filedOnFile, builtThisRound: built, claims: claimsIn })
+  .map((d) => d.id + "=" + (d.why || "queue")).join(" ");
+check("requeueDecisions: derives both lists from the round inputs and returns one verdict per filed id",
+  () => decide(["main"], roundClaims) === "main#quality-gates=queue list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide(["main"], roundClaims));
+check("requeueDecisions: a no-answer unit is TOUCHED but not BUILT — its rejected id is released while an earned id elsewhere stays settled",
+  () => decide([], roundClaims) === "main#quality-gates=settled list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], roundClaims));
+check("requeueDecisions: with no claims at all, a unit that did not build keeps its filed record out of the queue",
+  () => decide([], undefined) === "main#quality-gates=settled list#quality-gates=refiled child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], undefined));
+check("requeueDecisions: an empty or absent `evidenceWritten` decides nothing rather than throwing",
+  () => wf.requeueDecisions({ evidenceWritten: undefined, earnedBeforeRound: new Set(), evidenceFiled: [], builtThisRound: [], claims: [] }).length === 0 && wf.requeueDecisions({ evidenceWritten: [], earnedBeforeRound: new Set(), evidenceFiled: [], builtThisRound: [], claims: [] }).length === 0);
+
+// The table is the artifact the Verify agent reads, so its rendered text is asserted, not only the partition
+// logic behind it: a group under the wrong header, or the wrong empty-state branch, misinforms that agent.
+const renderTable = (fetchKeys, keys, schemas) => wf.verifierSchemaTable(fetchKeys, keys, schemas);
+check("verifierSchemaTable: the fetched keys render under FETCH THIS ROUND and the untouched ones under ALREADY ON FILE, each in its own group",
+  () => {
+    const t = renderTable(["main"], scopeKeys, scopeSchemas);
+    const fetchPart = t.slice(0, t.indexOf("ALREADY ON FILE"));
+    return fetchPart.includes("`main` → get-page `UsrApplicant_FormPage`")
+      && !fetchPart.includes("`list`")
+      && t.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+      && t.slice(t.indexOf("ALREADY ON FILE")).includes("`list`, `sectionRegistered`");
+  },
+  () => renderTable(["main"], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing to fetch with every key on file renders the already-on-file label, never `(none recorded yet)`",
+  () => {
+    const t = renderTable([], scopeKeys, scopeSchemas);
+    return t.includes("nothing to fetch this round") && !t.includes("(none recorded yet)") && t.includes("ALREADY ON FILE");
+  },
+  () => renderTable([], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing recorded anywhere renders `(none recorded yet)` with no ALREADY ON FILE group",
+  () => {
+    const t = renderTable([], scopeKeys, {});
+    return t.includes("(none recorded yet)") && !t.includes("ALREADY ON FILE") && t.includes("NO FREEDOM SCHEMA IS RECORDED FOR");
+  },
+  () => renderTable([], scopeKeys, {}));
+check("verifierSchemaTable: a key with no schema renders only under the unknown-schema line, never as a fetch target",
+  () => {
+    const t = renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    return t.slice(t.indexOf("NO FREEDOM SCHEMA IS RECORDED FOR")).includes("`orphan`")
+      && !t.slice(0, t.indexOf("ALREADY ON FILE")).includes("`orphan`");
+  },
+  () => renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas));
+
+// The read-back call site derived `touched`, `fetchKeys`, the log list and the table itself, so the helpers above
+// were covered while that threading was not. The plan does the derivation from round-shaped state instead.
+const planFor = (builtThisRound, claims, pagesRecorded) => wf.verifyFetchPlan({
+  unitKeys: scopeKeys, schemas: scopeSchemas, pagesRecorded, builtThisRound, claims,
+});
+check("verifyFetchPlan: derives touched, fetchKeys and the not-read-back list from round-shaped state in one pass",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }], scopeAllRecorded);
+    return p.touched.join() === "main" && p.fetchKeys.join() === "main" && p.notReRead.join() === "list,sectionRegistered";
+  },
+  () => JSON.stringify(planFor(["main"], [{ unit: "main" }], scopeAllRecorded)));
+check("verifyFetchPlan: a no-answer claim widens the read-back without widening the built list",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }], scopeAllRecorded);
+    return p.touched.join() === "main,list" && p.fetchKeys.join() === "main,list" && p.notReRead.join() === "sectionRegistered";
+  },
+  () => JSON.stringify(planFor(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }], scopeAllRecorded)));
+check("verifyFetchPlan: an absent `pagesRecorded` reads back every key and leaves nothing on the not-read-back list",
+  () => {
+    const p = planFor([], [], undefined);
+    return p.fetchKeys.join() === "main,list,sectionRegistered" && p.notReRead.length === 0;
+  });
+check("verifyFetchPlan: the table it returns is the one the round's own fetch set produces, groups and all",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }], scopeAllRecorded);
+    return p.table === wf.verifierSchemaTable(p.fetchKeys, scopeKeys, scopeSchemas)
+      && p.table.includes("FETCH THIS ROUND") && p.table.includes("ALREADY ON FILE");
+  });
+
+// The read-back scope is a cost decision made from a report this script cannot verify, so it is logged.
+check("workflow: the read-back scope names the pages it did NOT re-read, and says so when it narrowed nothing",
+  wfSrc.includes("already on file and untouched — not read back")
+    && wfSrc.includes("no pages reported on file — reading back every key with a schema"));
+
+// The predicates decide the set; these clauses are what make the verifier ACT on it. Any one of them reverting
+// puts the whole-section re-read back while every case above still passes.
+check("workflow: the verifier `pages` instruction is scoped to the FETCH THIS ROUND list, and the table names the keys it is NOT fetching",
+  wfSrc.includes("for every key the table above lists under FETCH THIS ROUND")
+    && wfSrc.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+    && wfSrc.includes("do NOT re-file their evidence"));
+check("workflow: the verifier `evidence` instruction files only the ids this round owns, because naming an untouched id is what sends it back to Judge",
+  wfSrc.includes("**FILE ONLY THE IDS THIS ROUND OWNS:**"));
+check("workflow: Reconcile is asked for `pagesRecorded`, without which the read-back scope degrades to the old sweep",
+  wfSrc.includes("Also return \\`pagesRecorded\\`")
+    && wfSrc.includes("pagesRecorded: { type: 'array', items: { type: 'string' } }"));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -1737,7 +2140,9 @@ check("ENG-95503 review fix: a verifier-confirmed contradiction is APPENDED to `
 // the `!res` early return so a dead build agent does not burn a findings round; this one used to sit ABOVE it, so a
 // builder that died returning `null` spent the answer's only attempt on a dispatch where nothing was ever built.
 check("ENG-95503 review fix: the answer channel's repair round is consumed BELOW the `!res` guard, beside the findings channel's — above it, a build agent that returned nothing burned the answer's one and only repair attempt without building anything",
-  /if \(!res\) \{[\s\S]*?\n  \}\n[\s\S]{0,2000}?if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)/.test(wfSrc)
+  // The closing brace is matched on `\s*`, not two literal spaces: the host-neutral core (ENG-95770) nests this
+  // inside `buildRound`, so the shipped indentation is no longer top-level. The ORDER is what this pins.
+  /if \(!res\) \{[\s\S]*?\n\s*\}\n[\s\S]{0,2000}?if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)/.test(wfSrc)
     && !/if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)[\s\S]{0,400}?if \(!res\) \{/.test(wfSrc));
 check("ENG-95503 wiring: the verifier is told an answer closes NO row and files NO evidence — the invariant this ticket must not break in the other direction, stated where the agent that files records reads it",
   /You file NO evidence record for these and you close NO row with them/.test(wfSrc));
@@ -2281,7 +2686,10 @@ check("PR #128 review (round 8): the unconsumed carry is SIZE-REPORTED, never tr
     // ANCHORED AT THE START OF THE STATEMENT. `out.push(` as a bare substring still matched after an
     // `if (carry.unconsumed.length)` was prepended -- the mutation that makes the write conditional, which is
     // exactly the regression the "write it EVEN WHEN []" rule exists to prevent, and it stayed green.
-    && wfSrc.split("\n").some((l) => l.startsWith("  out.push(") && l.includes("UNCONSUMED OPERATOR ANSWERS")
+    // The push must START its line — a prepended `if (carry.unconsumed.length)` is the mutation this catches, and a
+    // bare `out.push(` substring did not. Matched on leading whitespace rather than two literal spaces because the
+    // host-neutral core (ENG-95770) nests `carryBlock` one level deeper than the flat file did.
+    && wfSrc.split("\n").some((l) => /^\s*out\.push\(/.test(l) && l.includes("UNCONSUMED OPERATOR ANSWERS")
       && l.includes("EVEN WHEN IT IS")));
 check("PR #128 review (round 8): the warn threshold is a NAMED constant, and it is not the text cap — conflating the two would tie an operator-visibility threshold to a per-field truncation bound and make one of them wrong whenever the other moved",
   /const UNCONSUMED_CARRY_WARN = \d+/.test(wfSrc)
@@ -2443,13 +2851,22 @@ const BP_END_MARKER = "// OPERATOR FINDINGS from an earlier checkpoint";
 // `buildPrompt` only DISPATCHES by `unit.kind` — the prose per kind (including the app/reach/page prose this
 // file's checks match on below) lives in these named pure functions instead. Sliced in alongside `buildPrompt`
 // itself so `buildPromptSrc` still carries every string these checks were written against.
+// The closing brace is matched at the FUNCTION'S OWN INDENTATION, not column 0: `unitNo` and friends are top-level
+// (module-scope helpers, inlined unindented), but the per-kind block functions live inside `run()`'s generator body
+// and are indented — a bare `"\n}\n"` search runs past their real end into whatever top-level `}` comes next
+// (`run()`'s own closing brace), swallowing every function after them and producing a "already declared" collision
+// when the swallowed text is re-sliced on its own.
 const sliceFn = (name) => {
   const at = wfSrc.indexOf(`function ${name}(`);
-  return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
+  if (at < 0) return "";
+  const lineStart = wfSrc.lastIndexOf("\n", at) + 1;
+  const indent = wfSrc.slice(lineStart, at);
+  const closeAt = wfSrc.indexOf(`\n${indent}}\n`, at);
+  return wfSrc.slice(at, closeAt + indent.length + 2);
 };
 const KIND_BLOCK_FN_NAMES = ["appKindBlock", "appSectionHostNoMenuBlock", "appSectionHostMigrationBlock", "reachKindBlock", "pageKindBlock"];
 const buildPromptSrc = KIND_BLOCK_FN_NAMES.map(sliceFn).join("\n")
-  + "\n" + wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER));
+  + "\n" + wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER, wfSrc.indexOf("function buildPrompt(unit, st, roundNo)")));
 check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
   buildPromptSrc.length > 200
     && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
@@ -2529,7 +2946,10 @@ check("workflow: Reconcile is asked for BOTH lists the filter needs, off the bui
 // const its body names must be declared BEFORE that call.
 const topLevelConstAt = (name) => wfSrc.search(new RegExp(`^const ${name}\\b`, "m"));
 function topLevelFnBody(name) {
-  const at = wfSrc.indexOf(`function ${name}(`);
+  // `function* ${name}(` first (a generator, e.g. `acceptReconciled` since ENG-95884), then the plain form —
+  // never both matched blindly, since a plain-function name is a substring of no generator declaration here.
+  let at = wfSrc.indexOf(`function* ${name}(`);
+  if (at < 0) at = wfSrc.indexOf(`function ${name}(`);
   if (at < 0) return "";
   const end = wfSrc.indexOf("\n}", at);
   return end < 0 ? wfSrc.slice(at) : wfSrc.slice(at, end + 2);
@@ -3388,6 +3808,8 @@ const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
   cbaFrom >= 0 && cbaTo > cbaFrom, () => `BEGIN at ${cbaFrom}, END at ${cbaTo}`);
+// The generated workflow inlines the whole host-neutral core between the sentinels, so the slice still
+// carries every decision helper — that is what keeps this offline suite reading the artifact that SHIPS.
 const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete", "digestKeyOf", "retryOnDeath", "critiqueDeathLine", "isCritiqueShape"];
 let cba = {};
 let tmpCba;
@@ -3408,7 +3830,9 @@ check("cba workflow: every helper this suite covers is inside the markers (a mov
 // --- round 6. Four of the five were in code added earlier in this same branch, and three shared one shape: a
 // guarantee established at the head of the run and not re-applied when a LATER Reconcile replaced the state.
 check("workflow: EVERY refreshed state goes through one acceptance path that re-checks the approval, the package state and the entity — three guarantees were first-pass only, so a mid-run re-plan could build a version nobody approved",
-  /function acceptReconciled\(next, whereFrom\)/.test(wfSrc)
+  // `function*` (ENG-95884): the acceptance path may suspend on ONE dedicated package-record re-read
+  // (`confirmPackageStop`) before trusting a stop, so it is a generator rather than a plain function.
+  /function\*? acceptReconciled\(next, whereFrom\)/.test(wfSrc)
     && /approvalStop\(state\.approval \|\| approval, state\.planVersion/.test(wfSrc)
     // Both calls are matched WITHOUT their closing paren: the guarantee under test is that the acceptance path
     // re-runs them on the refreshed state, not how many facts they consult (placement added a third argument to
@@ -3516,7 +3940,10 @@ check("workflow: every path in a generated engine command is SHELL-QUOTED — a 
 // which is the point: the cases above check that the mechanisms do what they were built to do, not that the intent
 // survives an edit. All three P1s are false-success paths — the run finishes and reports fine.
 check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short-circuiting on a green gate made the operator findings channel dead in exactly the case it exists for (a ported handler the gate cannot see)",
-  /\n\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)
+  // `[ \t]*`, never `\s*`: `\s` matches the line terminator too, so the quantifier overlaps the `\n` it follows
+  // and the match backtracks super-linearly across a file this size. Indentation is also what this MEANS — the
+  // body is nested inside `run()` now (the same lesson this file already records for the `critiqueRan` pin).
+  /\n[ \t]*\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
@@ -3618,14 +4045,14 @@ check("cba workflow: the repair set is built by `repairKeys` off all three lists
 // The retry BEHAVIOUR is asserted executably against `retryOnDeath` further down — this pin only keeps the call
 // site WIRED to that helper. Source-matching alone was the whole defect: it proved the loop's shape was in the
 // file and nothing about whether a second attempt ever fires (PR#88 review, Major).
-check("cba workflow: the Critique call site goes through the executable `retryOnDeath` helper, handing it the `agent()` attempt as a thunk AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
-  /const \{ result: critique, ran: critiqueReturned \} = await retryOnDeath\(/.test(cbaSrc)
-    && /agent\(critiquePrompt/.test(cbaSrc)
+check("cba workflow: the Critique call site DELEGATES to the executable `retryOnDeath` helper, handing it the work STEP per attempt AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
+  /const \{ result: critique, ran: critiqueReturned \} = yield\* retryOnDeath\(/.test(cbaSrc)
+    && /critiqueStep,/.test(cbaSrc)
     && /log\(critiqueDeathLine\(attempt, error, willRetry\)\)/.test(cbaSrc));
 // Both legs must read the helper's `ran`, never `critique`'s truthiness: a falsy-but-present Critique result would
 // otherwise be reported as a phase that never ran, marking a real answer UNCHECKED (PR#88 review, Major).
 check("cba workflow: a Critique that never ran is LOUD and machine-readable — the log says coverage.complete is arithmetic-only, and the result carries `critiqueRan` so the caller sees it without reading logs",
-  /if \(!critiqueRan\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
+  /if \(!ran\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
     // `[ \t]*`, never `\s*`: `\s` matches the line terminator too, so under `/m` the quantifier overlaps the `^`
     // it follows and the match backtracks super-linearly across a source file this size. Indentation is also what
     // this actually means — a leading newline was never part of the shape being pinned.
@@ -3636,145 +4063,23 @@ check("cba workflow: NEITHER leg re-derives 'did it run' from the result's truth
 // direction: a non-nullish non-critique stops the retry loop legitimately, but reporting it as a pass that ran
 // claims `conflicts`/`settledElsewhere` are verified-empty for a pass that checked nothing.
 check("cba workflow: the REPORTED `critiqueRan` narrows the helper's `ran` through `isCritiqueShape` — `ran` alone would sell a non-critique return as an adversarial pass with no conflicts found",
-  /const critiqueRan = critiqueReturned && isCritiqueShape\(critique\)/.test(cbaSrc));
+  // The narrowing lives in `reportCritique` now (one home for the boolean AND its two log lines); the call site
+  // reads the answer instead of re-deriving it. Both halves are pinned: the narrowing itself, and that the caller
+  // takes it from there.
+  /const ran = critiqueReturned && isCritiqueShape\(critique\)/.test(cbaSrc)
+    && /const critiqueRan = reportCritique\(critique, critiqueReturned, log\)/.test(cbaSrc));
 check("cba workflow: a return that is present but NOT a critique gets its own log line — 'returned something unusable' and 'the host never answered' need different repairs, and one line for both made the first read as a clean pass",
-  /if \(critiqueReturned && !critiqueRan\) \{/.test(cbaSrc)
+  /if \(critiqueReturned && !ran\) \{/.test(cbaSrc)
     && /treating the pass as dead/.test(cbaSrc));
-/* ---- the Critique retry, EXECUTED ------------------------------------------------------------------------
-   This is new error-handling control flow on a path that was previously a silent failure, and control flow that
-   is only regex-matched can be a no-op in production while every test stays green. These run the loop for real
-   against a stubbed attempt: the counted calls are the evidence that a second attempt actually fires.
-
-   AWAITED EAGERLY, NOT PASSED TO `check` AS A THUNK. `check` evaluates a function condition synchronously and
-   tests it for truthiness — an `async` thunk returns a Promise, which is ALWAYS truthy, so the house idiom used
-   everywhere else in this file would make every assertion below pass unconditionally. Await first, then assert
-   the value. The whole block is wrapped because eager awaits give up check's throw-capture: without this, a
-   helper that vanished from the markers would throw at module top level and kill the runner BEFORE the
-   `INFRA GOLDEN: N passed` summary printed, turning a one-line red into a silent abort. */
-try {
-  const calls = [];
-  const fails = [];
-  const note = (attempt, error, willRetry) => fails.push({ attempt, msg: error ? (error.message || String(error)) : null, willRetry });
-  const reset = () => { calls.length = 0; fails.length = 0; };
-
-  reset();
-  const rSecond = await cba.retryOnDeath((n) => { calls.push(n); return n === 1 ? null : { ok: true }; }, note);
-  check("retryOnDeath: an attempt that dies FIRES a real second attempt, and the second attempt's success is the result — the retry the source regex could never prove",
-    calls.length === 2 && calls[0] === 1 && calls[1] === 2 && rSecond.result?.ok === true && rSecond.ran === true
-      && fails.length === 1 && fails[0].attempt === 1 && fails[0].willRetry === true,
-    () => JSON.stringify({ calls, rSecond, fails }));
-
-  reset();
-  const rDead = await cba.retryOnDeath((n) => { calls.push(n); return null; }, note);
-  check("retryOnDeath: both attempts dead ⇒ `{result:null, ran:false}` (which is what makes the caller's `critiqueRan:false` and its loud log fire), exactly TWO attempts, and the last failure does not advertise a retry that will not happen",
-    rDead.result === null && rDead.ran === false && calls.length === 2 && fails.length === 2 && fails[1].willRetry === false,
-    () => JSON.stringify({ calls, rDead, fails }));
-
-  reset();
-  let threw = false, rReject = "unset";
-  try { rReject = await cba.retryOnDeath((n) => { calls.push(n); throw new Error(`529 overloaded #${n}`); }, note); } catch { threw = true; }
-  check("retryOnDeath: a REJECTING host collapses into the SAME dead outcome and never throws past the caller — the motivating 529 failure, which used to end the run with no contradiction check at all",
-    !threw && rReject.result === null && rReject.ran === false && calls.length === 2,
-    () => JSON.stringify({ threw, rReject, calls }));
-  check("retryOnDeath: the caught error's message reaches the notifier per attempt, so a dead pass reports the CAUSE and not merely the fact",
-    fails.length === 2 && /529 overloaded #1/.test(fails[0].msg || "") && /529 overloaded #2/.test(fails[1].msg || ""),
-    () => JSON.stringify(fails));
-
-  reset();
-  // Rejects on a LATER TICK (after the await), which is the shape a real `agent()` failure has — and distinct from
-  // the synchronous throw above. `throw` inside an `async` function rejects the returned promise; it does not
-  // propagate synchronously, so this stays the async case without a `Promise.reject` (sonar S7746).
-  const rAsync = await cba.retryOnDeath(async (n) => { calls.push(n); await Promise.resolve(); throw new Error("host refused"); }, note);
-  check("retryOnDeath: an ASYNC rejection is caught too — `agent()` hands back a promise, so a guard that only caught synchronous throws would miss the real failure shape entirely",
-    rAsync.result === null && rAsync.ran === false && calls.length === 2 && /host refused/.test(fails[0].msg || ""),
-    () => JSON.stringify({ calls, fails }));
-
-  reset();
-  const rFirst = await cba.retryOnDeath((n) => { calls.push(n); return { ok: true }; }, note);
-  check("retryOnDeath: a first-attempt success spends exactly ONE agent and reports no failure — the retry must not cost a second agent on the happy path",
-    calls.length === 1 && rFirst.result?.ok === true && rFirst.ran === true && fails.length === 0,
-    () => JSON.stringify({ calls, fails }));
-
-  reset();
-  const rNoNotifier = await cba.retryOnDeath((n) => { calls.push(n); return null; }, undefined);
-  check("retryOnDeath: a missing notifier does not throw — the helper degrades to a plain retry rather than turning a dead phase into a crashed run",
-    rNoNotifier.result === null && rNoNotifier.ran === false && calls.length === 2,
-    () => JSON.stringify({ calls }));
-
-  /* `ran` is the helper's OWN answer, not the caller's `!!result`. Death is a NULLISH return per the `agent()`
-     contract, so a falsy-but-PRESENT value is a result: under the old truthiness inference each of these spent a
-     second agent re-running a phase that had already answered, then reported `critiqueRan:false` and marked a real
-     answer UNCHECKED downstream. The current CRITIQUE_SCHEMA (`type:'object'`) makes that unreachable at the one
-     call site — this pins the helper so the next caller, or a schema that admits a scalar, cannot reintroduce it
-     (PR#88 review, Major). */
-  // Labels are spelled out, never derived: `JSON.stringify(NaN)` is the STRING "null" and `String("")` is empty,
-  // so a derived label would print this NaN case as "(null) counts as RAN" directly above the check asserting that
-  // null IS death — two green lines reading as contradictions, with the wrong one the more believable.
-  for (const [falsy, label] of [[0, "0"], ["", '""'], [false, "false"], [Number.NaN, "NaN"]]) {
-    reset();
-    const rFalsy = await cba.retryOnDeath((n) => { calls.push(n); return falsy; }, note);
-    check(`retryOnDeath: a falsy-but-PRESENT result (${label}) counts as RAN — exactly one attempt, no failure reported, and the value is handed back intact`,
-      rFalsy.ran === true && Object.is(rFalsy.result, falsy) && calls.length === 1 && fails.length === 0,
-      () => JSON.stringify({ falsy: String(falsy), rFalsy: { ran: rFalsy.ran, result: String(rFalsy.result) }, calls, fails }));
-  }
-
-  reset();
-  const rUndef = await cba.retryOnDeath((n) => { calls.push(n); return undefined; }, note);
-  check("retryOnDeath: `undefined` is DEATH, not a result — a thunk that falls off its end returned nothing, which is the same terminal shape as an explicit null",
-    rUndef.ran === false && rUndef.result === null && calls.length === 2,
-    () => JSON.stringify({ calls, rUndef }));
-
-  /* The MESSAGE a dead attempt logs — the actual deliverable of the cause-reporting fix, and the thing that had
-     no test of any kind while it was an inline lambda. Asserted on the produced string, not on its source. */
-  const lineRejected = cba.critiqueDeathLine(1, new TypeError("529 overloaded"), true);
-  check("critiqueDeathLine: a REJECTION names the attempt, the error TYPE and its message, and announces the retry — a `critiqueRan:false` run must carry the reason, not only the fact",
-    /attempt 1/.test(lineRejected) && /TypeError/.test(lineRejected) && /529 overloaded/.test(lineRejected)
-      && lineRejected.endsWith(" — retrying once"),
-    () => lineRejected);
-
-  const lineNull = cba.critiqueDeathLine(2, null, false);
-  check("critiqueDeathLine: a NULL return says so explicitly and cites the contract — 'returned nothing' must not read as an unknown error",
-    /attempt 2/.test(lineNull) && /returned nothing \(terminal death/.test(lineNull) && !/Error/.test(lineNull),
-    () => lineNull);
-
-  check("critiqueDeathLine: only a NON-FINAL attempt advertises the retry — the last failure promising a retry that never comes is exactly the misreport this log exists to prevent",
-    cba.critiqueDeathLine(1, null, true).endsWith(" — retrying once") && !/retrying/.test(lineNull),
-    () => JSON.stringify({ willRetry: cba.critiqueDeathLine(1, null, true), final: lineNull }));
-
-  // Deliberately degenerate input: an Error whose message is EMPTY, which is what exercises the fallback half of
-  // `error.message || String(error)`. Blanked after construction rather than written as `new Error("")` or
-  // `new Error()` — sonar S7722 ("built-in error objects should have meaningful messages") flags BOTH of those
-  // constructor forms, and it is right about production code; this is test input that must not carry a message.
-  const blankMessage = new Error("blanked on the next line");
-  blankMessage.message = "";
-  check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a message-less Error must not render as `undefined`",
-    !/undefined/.test(cba.critiqueDeathLine(1, blankMessage, false))
-      && !/undefined/.test(cba.critiqueDeathLine(1, "boom", false)),
-    () => JSON.stringify([cba.critiqueDeathLine(1, blankMessage, false), cba.critiqueDeathLine(1, "boom", false)]));
-
-  /* `isCritiqueShape` — the narrowing between the retry loop's `ran` and the `critiqueRan` the caller reads. Every
-     falsy-but-present value that `retryOnDeath` correctly treats as RAN is a value the CALLER must NOT report as a
-     completed adversarial pass: `critique?.conflicts || []` renders it as "checked, none found". Asserted on both
-     sides of that line so the two questions cannot silently merge back into one (PR#88 review). */
-  const fullCritique = { uncovered: [], conflicts: [], settledElsewhere: [] };
-  check("isCritiqueShape: the schema-valid shape (all three arrays) is the ONLY thing that counts as a completed pass — this is the reachable case today, and it must stay true",
-    cba.isCritiqueShape(fullCritique) === true
-      && cba.isCritiqueShape({ ...fullCritique, uncovered: [{ key: "m" }] }) === true,
-    () => JSON.stringify(fullCritique));
-  for (const notCritique of [0, "", false, Number.NaN, 7, "done", true, [], [1, 2], null, undefined]) {
-    const shown = Array.isArray(notCritique) ? `[${notCritique}]` : String(notCritique);
-    check(`isCritiqueShape: \`${shown}\` is NOT a completed pass — it stops the retry loop legitimately, but reporting it as one claims conflicts/settledElsewhere were verified empty when nothing was checked`,
-      cba.isCritiqueShape(notCritique) === false,
-      () => `${typeof notCritique}: ${String(notCritique)}`);
-  }
-  check("isCritiqueShape: a PARTIAL critique is dead too — the repair round still reads `uncovered` either way, so the only thing refused is a claim that the MISSING field was verified",
-    cba.isCritiqueShape({ uncovered: [], conflicts: [] }) === false
-      && cba.isCritiqueShape({ uncovered: [], conflicts: [], settledElsewhere: "none" }) === false,
-    () => JSON.stringify([cba.isCritiqueShape({ uncovered: [], conflicts: [] }), cba.isCritiqueShape({ uncovered: [], conflicts: [], settledElsewhere: "none" })]));
-} catch (e) {
-  check("cba workflow: the executable retry/message block ran to completion — a helper missing from the PURE DECISION HELPERS markers must be ONE red check, not an aborted runner with no summary",
-    false, () => `${e?.name || "Error"}: ${e?.message || String(e)}`);
-}
+/* ---- the Critique retry, EXECUTED — MOVED --------------------------------------------------------------
+   `retryOnDeath`, `critiqueDeathLine` and `isCritiqueShape` now live in the host-neutral core
+   (skills/_workflow-core/behaviour-analysis/helpers.mjs), and the retry is a DELEGATING GENERATOR: it asks the
+   driver for one more attempt instead of calling `agent()` itself. Their executable goldens moved with them, to
+   `engine-tests/classic-to-freedom/run-workflow-core.mjs` — driven there against the real generator, plus the
+   same checks through the real core (a rejecting Critique retried once, `critiqueRan:false`, the CAUSE in the
+   log) and through the SHIPPED generated file. Both runners run in CI.
+   What stays HERE is the call-site pin above: the source-level guarantee that the shipped workflow still routes
+   the Critique through that helper with its notifier, which is the half a unit test cannot see. */
 
 check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
   /MIXIN ROWS NAMING ONLY A WIRING CARD/.test(cbaSrc) && /MIXIN ROWS STILL NAMING ONLY A WIRING CARD/.test(cbaSrc)
@@ -3805,16 +4110,18 @@ check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const SLICE_DIR"), wfSrc.indexOf("const SLICE_DIR") + 200));
 check("ENG-95472: NO per-PAGE file is named from the page key alone — slices by the unit number, spec and worklog by a readable half PLUS that number, because a key sanitised into a filename is many-to-one and any two non-Latin captions collapse to one name (a NON-page unit has no such number — see the reopen checks below)",
-  /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(state\.unitKeys, key\)/.test(wfSrc)
+  /const unitNoOf = \(key\) => \{/.test(wfSrc) && /return unitNo\(unitKeys, key\)/.test(wfSrc)
     && /queue-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc) && /built-\$\{unitNoOf\(key\)\}\.json/.test(wfSrc)
     && /spec-\$\{unitFileStem\(key, 'page'\)\}\.md/.test(wfSrc)
     && /worklog\/\$\{unitFileStem\(key, kind\)\}\.md/.test(wfSrc)
     && !/sliceFileName/.test(dsSrc),
   () => wfSrc.split("\n").filter((l) => /^const (unitNoOf|unitFileStem|specFile|worklogFile|queueSliceFile|builtSliceFile)/.test(l)));
 check("ENG-95472: and there is ONE numbering rule, not one per file family — every file helper reads the same bound `unitNoOf`",
-  (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length === 1
+  // Matched WITH `return `: the helper's own signature (`function unitNo(unitKeys, key)`) is now inlined into the
+  // same file, so the bare call shape appears twice and only one of them is a CALL.
+  (wfSrc.match(/return unitNo\(unitKeys, key\)/g) || []).length === 1
     && (wfSrc.match(/indexOf\(key\)/g) || []).length === 1,
-  () => ({ bound: (wfSrc.match(/unitNo\(state\.unitKeys, key\)/g) || []).length,
+  () => ({ bound: (wfSrc.match(/return unitNo\(unitKeys, key\)/g) || []).length,
     indexOf: (wfSrc.match(/indexOf\(key\)/g) || []).length }));
 // REOPEN (2026-08-22): the numbering rule was TOTAL over pages and undefined for every other unit class the
 // schedule produces, so the first file named for a reachability unit threw and killed the run after 12 agents.
@@ -3830,7 +4137,9 @@ check("ENG-95472 reopen: ONE naming entry point, and it is KIND-driven — the `
 // caller told the wrong one goes hunting an inconsistency that does not exist.
 check("ENG-95472: an ABSENT key list gets its own message, distinct from the key-not-in-list one — `unitNo`'s own error would misdiagnose it as a schedule mismatch",
   () => { const m = /no published key list in run state yet/.test(wfSrc);
-    const guard = /if \(!state\?\.unitKeys\?\.length\)/.test(wfSrc);
+    // The key list arrives as an argument now (`makePaths(ctx, () => state?.unitKeys)`), read at CALL time —
+    // the guard is the same refusal, on the resolved value.
+    const guard = /if \(!unitKeys\?\.length\)/.test(wfSrc) && /makePaths\(ctx, \(\) => state\?\.unitKeys\)/.test(wfSrc);
     return m && guard; },
   () => wfSrc.slice(wfSrc.indexOf("const unitNoOf"), wfSrc.indexOf("const unitNoOf") + 420));
 
@@ -4011,7 +4320,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
 {
   const BP_HEAD = "function buildPrompt(unit, st, roundNo)";
   const bpStart = wfSrc.indexOf(BP_HEAD);
-  const bpEnd = wfSrc.indexOf("\n" + BP_END_MARKER);
+  const bpEnd = wfSrc.indexOf(BP_END_MARKER, bpStart);   // no leading newline: the body is indented inside `run()`
   // The markers are ordinary source text, so a rename moves them. Own check, and the render is SKIPPED when it
   // fails: a truncated body throws before any tally is printed.
   const markersOk = bpStart >= 0 && bpEnd > bpStart;
@@ -4054,6 +4363,12 @@ const findingsPromptBlock = () => ""
 const checkFirstPromptBlock = () => ""
 const guidelinesReturnFor = () => ""
 const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "")
+const SLICE_DIR = "/m/slices"
+const q = (v) => JSON.stringify(String(v))
+// The sliced names block is a closure body in the core: it takes its paths off ctx and asks
+// getUnitKeys() for the published list instead of closing over state directly.
+const getUnitKeys = () => state.unitKeys
+const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
 `;
     // THE REAL PER-UNIT FILE NAMES, not stubs. A stub of `worklogFile` is exactly what hid the reopened defect:
     // it took the key alone and could not throw, so this harness rendered a reachability prompt while the shipped
@@ -4066,7 +4381,10 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
     const namesSrc = nFrom >= 0 && nTo > nFrom ? wfSrc.slice(nFrom + NAMES_BEGIN.length, nTo) : "";
     // ONE source of truth for what is stubbed: the names are read back out of the declarations above, so the
     // guard below cannot drift from them.
-    const stubbed = new Set([...`${STUBS}\n${namesSrc}`.matchAll(/^const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
+    // `[ \t]*`, not `\s*` (Sonar S8786): `\s` also matches `\n`, so with the `m` flag a run of blank lines let the
+    // engine re-try the same span from every `^` inside it — polynomial, not the single pass a same-line indent scan
+    // needs. Indentation is spaces/tabs only, never a literal newline, so the semantics are unchanged.
+    const stubbed = new Set([...`${STUBS}\n${namesSrc}`.matchAll(/^[ \t]*const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
     // A free variable with no stub FAILS here; auto-stubbing would swallow the typo this check exists to catch.
     // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an

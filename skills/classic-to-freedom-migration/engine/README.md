@@ -37,9 +37,12 @@ needs its row.
 
 **`--verify --page <key>` alone is a pure READ** (this page's row of the built file, exit 0, gates nothing). **Adding
 `--verify-json <file>` turns it into the IN-CONTEXT SINGLE-UNIT GATE** (ENG-95469): it runs the SAME detector the
-full sweep does, SCOPED to that one page, writes the per-unit verdict `{ pageKey, complete, missing, unverified,
-openRows, planGaps }` to `<file>`, and drives the HARD done-gate on THIS page — a short page is **exit 2**, exactly
-like the full `--verify`, so a build agent can gate its own unit in its own context before reporting it complete. A
+full sweep does, SCOPED to that one page, writes the per-unit verdict `{ pageKey, complete, buildComplete, missing,
+unverified, openRows, planGaps }` to `<file>`, and drives the HARD done-gate on THIS page. ENG-95901 — the exit code
+reads `buildComplete` (the OWNER axis — false while any open row is the builder's), NOT the combined `complete`: a page whose only open rows are
+unfiled evidence (a separate read-only verifier/judge's to file, never the builder's) is **exit 0** here, even
+though `complete` still reads `false` for it. A page with a genuine MISSING deliverable is **exit 2**, exactly like
+the full `--verify`, so a build agent can gate its own unit in its own context before reporting it complete. A
 `<key>` this plan does not publish fails LOUDLY (exit 1 with a distinct message), never a false-green complete
 verdict.
 
@@ -62,12 +65,19 @@ string the `decisions.md` approval entry names, and the string the delegated bui
 `plan.md` is engine-WRITTEN, so nothing else can put a version in it and survive the next `--plan --out`.
 
 `--verify-json <file>` (only with `--verify`) writes the verdict a CALLER computes on:
-`{ complete, missing, unverified, planGaps, pages: { "<key>": { missing, unverified, complete, openRows: [ { n,
-deliverable, status, evidence, outcome, id? } ] } } }`. It is ADDITIVE — stdout and `--out` still carry the
-Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at all, and
-the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open rows).
-`planGaps` is the other half of exit 2 (D12): non-empty means the PLAN is short — not buildable-out-of — and it
-is independent of `complete`, so a run can have nothing left to build and still exit 2. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
+`{ complete, missing, unverified, planGaps, pages: { "<key>": { missing, unverified, complete, buildComplete,
+openRows: [ { n, deliverable, status, evidence, outcome, id? } ] } } }`. It is ADDITIVE — stdout and `--out` still
+carry the Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at
+all, and the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open
+rows). `planGaps` is the other half of exit 2 (D12): non-empty means the PLAN is short — not buildable-out-of —
+and it is independent of `complete`, so a run can have nothing left to build and still exit 2. ENG-95901 —
+`complete` here is the COMBINED axis (`missing === 0 && unverified === 0`), unchanged: the whole-tree `--verify`
+still treats an unconfirmed evidence row as a reason not to call the run done. `buildComplete` (no open row the
+BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate above reads for ITS exit code — the
+two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
+each row's `owner` (`"builder"` / `"verifier"`), NOT on its `missing`/`unverified` label: `unverified` is also what a
+PARTIAL or unread build resolves to (`0/N expected fields`, `k/N components`, "no `--built.pages` entry"), all of
+them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
 creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each with its expected template, target
 package and `expect` counts (including
 `expect.fieldNames`, the element names the fields check matches on), plus the five reachability keys with
