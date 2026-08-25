@@ -1492,6 +1492,16 @@ try {
   check("ENG-95901: VERIFY_RESULT's per-page schema also REQUIRES `buildComplete` (not merely typed) — a declared-but-optional field does not stop an LLM from omitting it",
     (mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required || []).includes('buildComplete'),
     () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required);
+  // PR review — `builderOpen` is emitted by `verifyTally`/`verifyUnit`/`renderVerify`/`verifyDigest` alongside
+  // `buildComplete`, so it needs the same declaration for the same reason: an undeclared field is silently dropped
+  // on the agent-mediated transcription path, and this gate is exactly the blind spot a newly-emitted field falls
+  // into (it checks the fields that ARE declared). Typed, not required — unlike `buildComplete` it is a count a
+  // caller reads, not a flag any decision branches on, so an omission degrades a message rather than a verdict.
+  check("ENG-95901 (review): VERIFY_RESULT declares `builderOpen` at BOTH levels — per-page and on the top-level total — so the count that matches `buildComplete` survives the agent-mediated transcription the same way the flag does",
+    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.builderOpen?.type === 'integer'
+      && mod.VERIFY_RESULT?.properties?.builderOpen?.type === 'integer',
+    () => ({ page: mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties,
+      top: mod.VERIFY_RESULT?.properties?.builderOpen }));
 } catch (e) {
   check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
 } finally {

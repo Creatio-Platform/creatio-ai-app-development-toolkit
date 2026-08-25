@@ -356,6 +356,9 @@ const VERIFY_RESULT = {
     complete: { type: 'boolean' },
     missing: { type: 'integer' },
     unverified: { type: 'integer' },
+    // ENG-95901 (PR review) — the count that MATCHES `buildComplete`: how many open rows the builder owns. Declared
+    // for the same reason `buildComplete` is: an undeclared field is silently dropped on the agent-mediated path.
+    builderOpen: { type: 'integer' },
     planGaps: { type: 'array', items: { type: 'string' } }, // D12: non-empty ⇒ the PLAN is short, not the build
     pages: {
       type: 'object',
@@ -369,6 +372,7 @@ const VERIFY_RESULT = {
         properties: {
           complete: { type: 'boolean' },
           buildComplete: { type: 'boolean' },
+          builderOpen: { type: 'integer' },
           missing: { type: 'integer' },
           unverified: { type: 'integer' },
           // Every row that is not ✅, as the engine emitted it: the same Deliverable / Status /
@@ -770,6 +774,7 @@ const BUILD_PROPERTIES = {
       complete: { type: 'boolean' },
       missing: { type: 'integer' },
       unverified: { type: 'integer' },
+      builderOpen: { type: 'integer' },
       fixAttempted: { type: 'boolean' },
       stillShortRows: {
         type: 'array',
