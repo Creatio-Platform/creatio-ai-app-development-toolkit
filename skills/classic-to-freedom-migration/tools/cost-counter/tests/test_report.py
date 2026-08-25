@@ -226,7 +226,7 @@ class NormalizationTest(unittest.TestCase):
 
     def test_page_count_defaulted_is_false_when_a_page_was_built(self):
         report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
-        self.assertEqual(report.summary()["page_count_defaulted"], False)
+        self.assertFalse(report.summary()["page_count_defaulted"])
 
     def test_page_count_defaulted_is_false_with_an_explicit_override(self):
         # An override means the caller supplied the count on purpose --
@@ -240,7 +240,7 @@ class NormalizationTest(unittest.TestCase):
         ])
         report = Report(export_mod.discover(empty_fx.root), metrics.CostConfig(),
                          pages_override=4)
-        self.assertEqual(report.summary()["page_count_defaulted"], False)
+        self.assertFalse(report.summary()["page_count_defaulted"])
 
     def test_page_count_defaulted_is_true_with_no_built_page_and_no_override(self):
         # No journal recording a built page, and no --pages override: the
@@ -255,7 +255,7 @@ class NormalizationTest(unittest.TestCase):
         ])
         report = Report(export_mod.discover(empty_fx.root), metrics.CostConfig())
         self.assertEqual(report.page_count(), 1)
-        self.assertEqual(report.summary()["page_count_defaulted"], True)
+        self.assertTrue(report.summary()["page_count_defaulted"])
 
 
 class MultiSessionTest(unittest.TestCase):

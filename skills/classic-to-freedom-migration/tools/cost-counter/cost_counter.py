@@ -540,22 +540,7 @@ def _compare_text(base: dict, cand: dict, same_section: bool,
     return "\n".join(lines)
 
 
-def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
-        fmt: str = "text") -> int:
-    session = export_mod.discover(export_dir)
-    if not session.main_transcript and not session.workflows:
-        print(f"no transcripts found under {export_dir!r} -- is this a session export?",
-              file=sys.stderr)
-        return 2
-    report = Report(session, cfg, pages_override=pages_override)
-
-    if fmt == "json":
-        print(render_json(report, section))
-        return 0
-    if fmt == "md":
-        print(render_markdown(report, section))
-        return 0
-
+def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
     if section != "summary":
         # "summary" prints its own counter-version line inside _print_summary.
         print(f"counter version: {COUNTER_VERSION}")
@@ -592,6 +577,25 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
         _print_check(report)
         print()
         _print_normalization(report)
+
+
+def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
+        fmt: str = "text") -> int:
+    session = export_mod.discover(export_dir)
+    if not session.main_transcript and not session.workflows:
+        print(f"no transcripts found under {export_dir!r} -- is this a session export?",
+              file=sys.stderr)
+        return 2
+    report = Report(session, cfg, pages_override=pages_override)
+
+    if fmt == "json":
+        print(render_json(report, section))
+        return 0
+    if fmt == "md":
+        print(render_markdown(report, section))
+        return 0
+
+    _run_text(report, section, cfg)
     return 0
 
 

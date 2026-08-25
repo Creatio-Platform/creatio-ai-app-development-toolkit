@@ -106,6 +106,22 @@ def _apply_tool_blocks(agg: TranscriptAgg, content: list, id_to_tool: dict,
             agg.tool_bytes[tool_name] += _result_bytes(block.get("content"), offloaded_dir)
 
 
+def _record_usage(usage: dict, msg_id: Optional[str],
+                   pending_usage: list, index_by_msg_id: dict) -> None:
+    """Append ``usage`` in file order, collapsing repeats of the same
+    ``message.id`` to the last-seen value in place -- see
+    ``aggregate_transcript``'s docstring for why the last record wins."""
+    if msg_id is None:
+        pending_usage.append(usage)
+        return
+    index = index_by_msg_id.get(msg_id)
+    if index is None:
+        index_by_msg_id[msg_id] = len(pending_usage)
+        pending_usage.append(usage)
+    else:
+        pending_usage[index] = usage
+
+
 def aggregate_transcript(path: str, offloaded_dir: Optional[str] = None) -> TranscriptAgg:
     """Single pass over one transcript: usage, tool calls and tool-result bytes.
 
@@ -131,16 +147,7 @@ def aggregate_transcript(path: str, offloaded_dir: Optional[str] = None) -> Tran
     for obj in parsing.iter_jsonl(path):
         usage = parsing.usage_of(obj)
         if usage:
-            msg_id = parsing.message_id_of(obj)
-            if msg_id is None:
-                pending_usage.append(usage)
-            else:
-                index = index_by_msg_id.get(msg_id)
-                if index is None:
-                    index_by_msg_id[msg_id] = len(pending_usage)
-                    pending_usage.append(usage)
-                else:
-                    pending_usage[index] = usage
+            _record_usage(usage, parsing.message_id_of(obj), pending_usage, index_by_msg_id)
         content = (obj.get("message") or {}).get("content")
         if isinstance(content, list):
             _apply_tool_blocks(agg, content, id_to_tool, offloaded_dir)
