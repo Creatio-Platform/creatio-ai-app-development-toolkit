@@ -3568,6 +3568,14 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
       blockedItems = [...blockedItems, { unit: unit.key, what: RESOLUTIONS_BLOCKED_WHAT, why: miss }]
     }
   }
+  // WHAT GATES vs WHAT IS ONLY SURFACED (PR #128 review, Minor 3). The `miss` above files a visibility-only `blocked`
+  // row — and one miss shape, an `applied: true` with no `how`, is DELIBERATELY not carried into `gone` below and so
+  // does not gate `complete` or buy a repair. `how` is the builder's PROSE about what it built; its absence is a
+  // report-quality signal, not proof the answer went nowhere. `unconsumedResolutions` (→ `gone`) filters `applied !==
+  // true`, so it holds exactly the answers that produced nothing — and the AUTHORITATIVE check on an `applied: true`
+  // is the read-only verifier's `resolutionChecks`, which is handed a claim row for the answer regardless of `how`.
+  // Gating on the prose would conflate a missing description with a lost answer AND block `complete` for ever on a
+  // rule-shaped answer whose effect the page body can never positively show — the immortality class finding 2 removed.
   // DEDUPED AGAINST A SURVIVING VERIFIER ROW (PR #128 review, RC-9). The clear above drops only THIS unit's
   // DISPATCH-sourced rows, so a verifier-confirmed contradiction for the same `(unit, id)` from an earlier round is
   // still here — and it is the higher-trust record (an independent read of the page, not the builder's own word).

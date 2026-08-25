@@ -344,6 +344,11 @@ nowhere, because nothing asked. So:
 - a build agent handed answers MUST return `resolutionsApplied` — one `{ id, applied, how?, why? }` per answer it was
   given. The field is `required` on exactly those dispatches, so an omission is a schema failure the agent retries,
   not a silence discovered a phase later. `applied: false` with a `why` is a valid answer; leaving a row out is not.
+  An `applied: true` should carry `how` (what you built because of the answer); an `applied: true` with no `how` is
+  surfaced as a report-quality `blocked` row but does NOT gate `complete` on its own — `how` is descriptive prose, and
+  the authoritative check on whether the effect is real is the verifier's page read below, which sees the answer's
+  claim regardless of `how`. What DOES hold the run open is an answer that produced nothing (`applied: false`, or an
+  omitted/malformed account), never a missing description of one that did.
 - the read-only VERIFIER returns `resolutionChecks` — whether the page it just fetched actually shows what each
   answer asked for. A builder's `applied: true` that the verifier contradicts is recorded as a `discrepancy` and the
   answer counts as unconsumed: `applied: true` is the builder's own word about its own work, the same class of claim

@@ -1541,6 +1541,25 @@ check("ENG-95503 accounting: `applied: true` with no `how` is a MISS — a claim
 check("ENG-95503 accounting: a COMPLETE, well-formed account passes — the gate must have a green path, or it is a gate that fails every build rather than one that catches a dropped answer",
   () => wf.resolutionAccountingMiss(accRouted, accOk) === null,
   () => wf.resolutionAccountingMiss(accRouted, accOk));
+// PR #128 review (Minor 3): an `applied: true` with no `how` is SURFACED (a `resolutionAccountingMiss` string → a
+// visibility-only `blocked` row) but deliberately does NOT gate `complete` and is NOT `unconsumed`. `how` is the
+// builder's PROSE describing what it built; its absence is a report-quality signal, not proof the answer went
+// nowhere. The AUTHORITATIVE check on whether the effect is real is the read-only verifier's `resolutionChecks` page
+// read, which is handed a claim row for the answer REGARDLESS of `how` — so the backstop still runs. Gating on the
+// prose instead would (a) conflate a missing description with a lost answer and (b) block `complete` for ever on a
+// rule-shaped answer whose effect the page body can never positively show — the immortality class finding 2 removed.
+const acHowless = { resolutionsApplied: [
+  { id: ACC_ID_A, applied: true, how: "six PDS columns in the DataTable" }, { id: ACC_ID_B, applied: true }] };
+check("PR #128 review (Minor 3): an `applied: true` with no `how` is SURFACED as a miss but is NOT `unconsumed` (so it does not gate `complete`), and its claim row STILL reaches the verifier — `how` is prose, the verifier's page read is the backstop, and gating on prose would recreate the finding-2 immortality for a rule-shaped answer",
+  () => { const surfaced = wf.resolutionAccountingMiss(accRouted, acHowless);
+    const gone = wf.unconsumedResolutions(accRouted, acHowless, "main");
+    const claims = wf.resolutionClaimRows(accRouted, acHowless);
+    const b = claims.find((r) => r.id === ACC_ID_B);
+    return typeof surfaced === "string" && /no `how`/.test(surfaced)   // surfaced (visibility-only blocked row)
+      && gone.length === 0                                             // NOT unconsumed → does not gate `complete`
+      && !!b && b.applied === true && b.how === null;                 // still handed to the verifier to check the page
+    },
+  () => ({ surfaced: wf.resolutionAccountingMiss(accRouted, acHowless), gone: wf.unconsumedResolutions(accRouted, acHowless, "main") }));
 check("ENG-95503 unconsumed: an answer the builder declined is recorded WITH the operator's text and the builder's reason — the report has to name the decision that went nowhere, not just an id a reader must go look up",
   () => { const gone = wf.unconsumedResolutions(accRouted, { resolutionsApplied: [
       { id: ACC_ID_A, applied: true, how: "columns" }, { id: ACC_ID_B, applied: false, why: "no such lookup on this object" }] }, "main");
@@ -1633,7 +1652,11 @@ check("ENG-95503 prompt: the rendered answers block CARRIES the return obligatio
     // conjuncts before it already prove the constant is interpolated. What it could pin instead is the ORDER: the
     // return obligation must render AFTER the "an answer is an INPUT, not evidence" sentence, so a builder reads
     // what an answer is NOT before it reads what to hand back about one.
+    // PR #128 review (Minor 4): the ORDER conjunct alone passes VACUOUSLY if the "an answer is an INPUT" sentence is
+    // DELETED — `indexOf` then returns `-1`, and `-1 < indexOf("THEN RETURN")` is true — so the builder-side monotone
+    // invariant (an answer is an input, not evidence) had no independent guard. Assert its PRESENCE before the order.
     return text.includes("resolutionsApplied") && /applied: false/.test(text) && /UNCONSUMED/.test(text)
+      && text.includes("An answer is an INPUT, not evidence")
       && text.indexOf("An answer is an INPUT, not evidence") < text.indexOf("THEN RETURN"); },
   () => wf.resolutionsBlockText(wf.resolutionsForUnit(ac4Items, "list", new Set(["main", "list"])), ac4Fence).slice(-500));
 
