@@ -2689,10 +2689,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // own unit in its own context BEFORE reporting complete. `verifyUnit` supplies the machine verdict (the page's
       // slice of the reconciliation — `{ complete, buildComplete, missing, unverified, openRows, planGaps }`), and
       // the human table is the SCOPED `renderVerify` (this page's rows only). ENG-95901 — the exit gates on THIS
-      // page's `buildComplete` (the `missing`-only axis), NOT `complete`: a builder can never legitimately clear an
-      // `unverified` row itself (a separate read-only verifier/judge files it), so gating the builder's OWN bounded
-      // self-check on the combined flag asked it to repair evidence it is contractually forbidden to touch. A page
-      // whose only open rows are unfiled evidence now exits 0 here; the post-hoc full-sweep `--verify` below still
+      // page's `buildComplete` (the OWNER axis — false while any open row is the builder's), NOT `complete`: a
+      // builder can never legitimately clear an evidence/judge/reachability row itself (a separate read-only
+      // verifier/judge files those), so gating the builder's OWN bounded self-check on the combined flag asked it to
+      // repair evidence it is contractually forbidden to touch. A page whose only open rows are unfiled evidence now
+      // exits 0 here — but a page short of its own deliverables still exits 2 whether the engine labelled the
+      // shortfall `missing` or `unverified`; the post-hoc full-sweep `--verify` below still
       // reads the combined `complete` (AC7/AC8) — an unconfirmed row still blocks the human-facing "done" verdict.
       // Without `--verify-json` the `--page` path stays the pure built-slice read (below).
       const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
@@ -2767,16 +2769,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS
   // repairable on-stand. Until now `--verify` exited 2 with no stderr line at all, so the two were indistinguishable.
   if (verifyIncomplete) {
-    // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (a genuine MISSING
-    // deliverable), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page breakdown, and
-    // the repair advice — must talk about `missing` only for that caller. Surfacing the `unverified` figure here
-    // too (even just as a number, with no textual qualifier) reads as part of what this exit code is asking to be
-    // repaired, and an LLM builder given a count next to "This is repairable" has no signal that the count is not
-    // its responsibility — the row is a separate read-only verifier/judge's to close. The UNSCOPED sweep still
-    // gates on the combined `complete` (AC7/AC8, unchanged), where the `unverified` figure genuinely is part of
-    // what blocks "done", so only the scoped path narrows.
+    // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
+    // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
+    // breakdown, and the repair advice — must talk about the builder's own rows for that caller. Surfacing the
+    // verifier-owned figure here too (even just as a number, with no textual qualifier) reads as part of what this
+    // exit code is asking to be repaired, and an LLM builder given a count next to "This is repairable" has no
+    // signal that the count is not its responsibility. PR review — the number reported is `builderOpen`, not
+    // `missing`: a partially-built page resolves `unverified`, so `missing` would have printed "0 MISSING
+    // deliverable(s)" next to a non-zero exit. The UNSCOPED sweep still gates on the combined `complete` (AC7/AC8,
+    // unchanged), where the verifier-owned figure genuinely is part of what blocks "done", so only the scoped path
+    // narrows.
     const pageGaps = pageArg
-      ? Object.entries(verifyRes.pages).filter(([, p]) => p.buildComplete !== true).map(([k, p]) => `${k}: ${p.missing} missing`)
+      ? Object.entries(verifyRes.pages).filter(([, p]) => p.buildComplete !== true).map(([k, p]) => `${k}: ${p.builderOpen} open`)
       : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
     // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
     // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
@@ -2785,9 +2789,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const where = verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict";
       overflow = ` | …and ${pageGaps.length - 6} more (${where})`;
     }
-    const repairAdvice = pageArg ? "build the missing pieces, then re-verify" : "build the missing pieces / file the on-stand evidence, then re-verify";
+    const repairAdvice = pageArg ? "build / complete the pieces named in the rows, then re-verify" : "build the missing pieces / file the on-stand evidence, then re-verify";
     const headline = pageArg
-      ? `${verifyRes.missing} MISSING deliverable(s) across ${pageGaps.length} page(s)`
+      ? `${verifyRes.builderOpen} open deliverable(s) YOU OWN across ${pageGaps.length} page(s)`
       : `${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
     process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
     const gaps = planGaps(result);

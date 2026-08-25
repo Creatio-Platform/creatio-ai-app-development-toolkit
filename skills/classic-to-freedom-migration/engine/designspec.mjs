@@ -2749,6 +2749,13 @@ export function renderChecklist(result, opts = {}) {
 // so a broken browser/SSO on the stand is NOT an excuse to skip this gate.
 // The verify-kind resolvers, split by category so each (and the dispatcher) stays under Sonar CC 15. Each returns
 // [mark, evidence, outcome] where outcome ∈ "ok" | "missing" | "unverified" | "skip" — the caller tallies counts.
+// A resolver MAY append a fourth element, `owner` ∈ "builder" | "verifier", naming WHOSE work closes the row.
+// Omitted means "builder": the overwhelming majority of open rows name a shortfall the builder can act on in its
+// own context. Only the rows a read-only verifier/judge files — the evidence record, the judge verdict, and the
+// two reachability rows — are `"verifier"`, and those are the ONLY ones `buildComplete` is allowed to ignore.
+// ENG-95901 first keyed that axis on the `missing`/`unverified` LABEL, which is the wrong proxy: `unverified` is
+// also what a PARTIAL or unreadable build resolves to (`0/N expected fields`, `k/N components`, "no `--built.pages`
+// entry", "re-run get-page and pass viewConfig VERBATIM"), all of them named, actionable, builder-owned.
 // D6's tri-state, for the rows that read this page's COMPONENTS: `false` = checked and genuinely absent (❌
 // MISSING) · a present-but-empty entry = checked and empty (❌ MISSING) · NO entry at all = nobody looked
 // (⚠ unverified). Only `resolveChildPageVk` implemented it; for a FOLDED sub-page an absent entry fell through
@@ -3008,7 +3015,7 @@ function resolveOnstandCountVk(vk, v) {
   if (n === null) {
     return ["⚠ verify", v === true
       ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
-      : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
+      : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified", "verifier"];
   }
   if (n === want) return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
   if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
@@ -3020,7 +3027,7 @@ function resolveOnstandVk(vk, ctx) {
   if (vk.expectCount) return resolveOnstandCountVk(vk, v);
   if (v === true) return ["✅ Done", `${vk.evidence} confirmed on-stand`, "ok"];
   if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
-  return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified"];
+  return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified", "verifier"];
 }
 const VK_ONSTAND = new Set(["onstand"]);
 // PACKAGE PLACEMENT — the built page's own package, read off THIS page's entry. A page saved into the wrong
@@ -3094,8 +3101,8 @@ function resolveEvidenceVk(vk, ctx) {
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
   if (evidenceComplete(rec, vk.requires) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
-  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
-  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
+  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
+  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
 }
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
 // The earlier predicate ended in `v != null`, so `components: false`, `components: {}` and `referencePage: 0` all
@@ -3328,19 +3335,27 @@ function verifyCtxFactory(root) {
 // `Y`", "filed but NOT judged"), and until now the only way to get it was to read the Markdown: the machine return
 // carried three integers per page and the stderr line carried at most six pages. A caller scheduling repair rounds
 // had to transcribe a table — the "verdict asserted, not computed" failure this gate exists to remove.
-// ENG-95901 — `complete` conflates two states that need opposite responses: a genuinely SHORT deliverable
-// (`missing`) and a row nobody has filed evidence for yet (`unverified` — filed by a separate read-only
-// verifier/judge, never by the builder). `buildComplete` is the build-only axis, driven by `missing` alone,
-// so a page whose sole open rows are unfiled evidence reports its BUILD as done while `unverified` stays
-// visible on its own. `complete` is kept exactly as before (missing||unverified) for the post-hoc `--verify`
-// CLI verdict (AC7/AC8), which still treats an unconfirmed row as a reason not to call the page done.
+// ENG-95901 — `complete` conflates two states that need opposite responses: a shortfall THIS BUILDER can close in
+// its own context, and a row only a separate read-only verifier/judge can file. `buildComplete` is the build-only
+// axis, so a page whose sole open rows are unfiled evidence reports its BUILD as done while those rows stay visible
+// on their own. `complete` is kept exactly as before (missing||unverified) for the post-hoc `--verify` CLI verdict
+// (AC7/AC8), which still treats an unconfirmed row as a reason not to call the page done.
+//
+// PR review: the axis is keyed on the row's OWNER, not on its `missing`/`unverified` label. Keying it on the label
+// was wrong in the dangerous direction — `resolveFieldsByIdentity` returns `unverified` for ANY field count below
+// expected including `0/N`, `resolveCountVk` returns it for any partial component count, and "no `--built.pages`
+// entry" / "re-run get-page and pass viewConfig VERBATIM" are `unverified` too. All of those are the builder's own,
+// named, actionable work, and a page with none of its expected fields reported `buildComplete: true`.
 function verifyTally() {
-  const t = { missing: 0, unverified: 0, pages: {} };
-  t.add = (pageKey, outcome, row) => {
-    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, complete: true, buildComplete: true, openRows: [] });
+  const t = { missing: 0, unverified: 0, builderOpen: 0, pages: {} };
+  t.add = (pageKey, outcome, row, owner) => {
+    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, builderOpen: 0, complete: true, buildComplete: true, openRows: [] });
     if (outcome !== "missing" && outcome !== "unverified") return;
     t[outcome]++; p[outcome]++; p.complete = false;
-    if (outcome === "missing") p.buildComplete = false;
+    // `builderOpen` is the count that matches the axis — how many open rows this builder can actually act on. The
+    // scoped exit-2 diagnostic reports THIS, not `missing`: a `0/N expected fields` page has `missing: 0` and would
+    // otherwise announce "0 MISSING deliverable(s)" while exiting 2, which reads as a broken gate.
+    if (owner !== "verifier") { p.buildComplete = false; p.builderOpen++; t.builderOpen++; }
     p.openRows.push(row);
   };
   return t;
@@ -3382,22 +3397,25 @@ export function renderVerify(result, opts = {}, built = {}) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
       const key = r.pageKey || g.pageKey || "main";
-      const [mark, ev, outcome] = r.na ? naRow(r) : resolveVk(r.vk, ctxFor(key));
+      const [mark, ev, outcome, owner] = r.na ? naRow(r) : resolveVk(r.vk, ctxFor(key));
       // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
       // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
       // one text, not a paraphrase of it.
       const rowNo = ++n;
-      tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, ...(r.id ? { id: r.id } : {}) });
+      // `owner` rides along on the open row too: a caller repairing from the JSON needs to know which rows are
+      // its own without re-deriving the classification the engine already made.
+      tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome,
+        owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }
-  const { missing, unverified, pages } = tally;
+  const { missing, unverified, builderOpen, pages } = tally;
   const verdict = verifyVerdict(missing, unverified);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),
     ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, complete: missing === 0 && unverified === 0, pages };
+  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages };
 }
 
 // THE IN-CONTEXT COMPLETENESS GATE'S OWN CALL SITE (ENG-95469, A3). The post-hoc `--verify` sweep above reconciles
@@ -3411,11 +3429,14 @@ export function renderVerify(result, opts = {}, built = {}) {
 // the plan does not publish — or a page that emitted no gated row — resolves to a COMPLETE-EMPTY verdict, never
 // another unit's shortfall: a scoped entrypoint must NARROW, so a caller asking about one page is never handed the
 // tree's numbers.
-// ENG-95901 — `buildComplete` is the axis THIS gate's exit code reads (`missing` only): a page whose sole open rows
-// are unfiled evidence is a complete BUILD, even though `complete` (kept for the post-hoc CLI verdict, AC7/AC8)
-// still reads `false` for it. The builder can never legitimately clear an `unverified` row itself (a separate
-// read-only verifier/judge files it), so gating the builder's own in-context check on `complete` asked it to repair
-// work it is contractually forbidden to touch — this is exactly what made the gate fire on round 1 by construction.
+// ENG-95901 — `buildComplete` is the axis THIS gate's exit code reads: it is false while ANY open row is
+// BUILDER-OWNED, and true only when every remaining open row is one a read-only verifier/judge files (the evidence
+// record, the judge verdict, the two reachability rows). `complete` (kept for the post-hoc CLI verdict, AC7/AC8)
+// still reads `false` for those. Gating the builder's own in-context check on `complete` asked it to repair work it
+// is contractually forbidden to touch — this is exactly what made the gate fire on round 1 by construction. Keying
+// the new axis on the `missing`/`unverified` LABEL instead of the row's owner (the first cut, caught on review) was
+// the mirror-image bug: a `0/N expected fields` page resolves `unverified`, so it would have reported its build
+// complete with none of its fields built.
 // `planGaps` rides along so the gate can tell a repairable BUILD gap (build the piece, re-check) from a PLAN gap
 // (not buildable-out-of — return it to the caller), the same split `verifyReport` makes for the full sweep.
 // `pageKey` is REQUIRED and has NO default (PR review RC-11): a default (`= "main"`) would reopen the exact
@@ -3436,10 +3457,10 @@ export function verifyUnit(result, opts = {}, built = {}, pageKey) {
     // (`error`, `complete: false`, `buildComplete: false`) instead so the caller / CLI fails distinctly rather than
     // reading a false green.
     const known = new Set(checklistGroups(result, opts).map((g) => g.pageKey));
-    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
-    return { pageKey, complete: true, buildComplete: true, missing: 0, unverified: 0, openRows: [], planGaps: gaps };
+    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
+    return { pageKey, complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
   }
-  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, openRows: p.openRows, planGaps: gaps };
+  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen, openRows: p.openRows, planGaps: gaps };
 }
 
 // The MACHINE-READABLE verdict (`--verify --verify-json <file>`). Everything `renderVerify` already computed —
@@ -3471,7 +3492,7 @@ export function verifyReport(result, v) {
 export function verifyDigest(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
-    pages[k] = p?.complete === true ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified } : p;
+    pages[k] = p?.complete === true ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen } : p;
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
 }

@@ -25,7 +25,7 @@ The verdict file already classifies them: `verify.json`'s `planGaps` holds the P
 and `complete` is the BUILD-side verdict (as opposed to `planGaps`, which is PLAN-level) — a run
 can be `complete: true` with a non-empty `planGaps`, which means there is nothing left to build and
 the run still stops. (`complete` itself still folds `missing` and `unverified` together; the
-`missing`-only axis is `buildComplete`, covered below.) stderr names each one for a human reader:
+builder-owned axis is `buildComplete`, covered below.) stderr names each one for a human reader:
 
 ```
 migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING + 2 unconfirmed …
@@ -70,7 +70,7 @@ but the build left short (a datasource-less grid, a component not on the page, a
 not carry) is caught **as the unit builds**, not a whole round later.
 
 Its park budget is different, and deliberately so. The gate allows **exactly one bounded fix** in
-the builder's own context: if `buildComplete` (ENG-95901 — the `missing`-only axis; `complete` is
+the builder's own context: if `buildComplete` (ENG-95901 — the OWNER axis; `complete` is
 kept only for the post-hoc CLI verdict and folds in unfiled evidence too) is not `true`, the builder
 repairs the rows the verdict's `openRows` name **whose `outcome` is `"missing"` only** — never a row
 whose `outcome` is `"unverified"`, since that is an evidence/reachability record a separate read-only

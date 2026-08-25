@@ -126,7 +126,7 @@ the verifier files that page's contents as this unit's evidence.
     rules — an absent slot reads ⚠ not-checkable, never a false ❌). Then run the SCOPED gate:
     `migrate.mjs <manifest> --verify --built <self-built.json> --page <yourKey> --verify-json
     <self-verdict.json>`. It reconciles what your slice declared against what you built, for THIS
-    page only, and exits 2 when short — `buildComplete` (ENG-95901: the `missing`-only axis) is what
+    page only, and exits 2 when short — `buildComplete` (ENG-95901: the OWNER axis — false while any open row is yours) is what
     the exit code reads, so a page whose only open rows are unfiled evidence exits 0. If NOT
     `buildComplete`, you get **exactly one bounded fix attempt** in this same context: read the
     verdict's `openRows`, but act ONLY on rows whose `outcome` is `"missing"` (each such row's

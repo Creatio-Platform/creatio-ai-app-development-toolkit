@@ -2593,9 +2593,11 @@ try {
     check("ENG-95901: the SAME built.json through the UNSCOPED, whole-tree `--verify` still exits 2 — AC7/AC8: the post-hoc CLI verdict is UNCHANGED and an unconfirmed row still blocks 'done'",
       vFull.status === 2 && fullVerdict.missing === 0 && fullVerdict.unverified > 0 && fullVerdict.complete === false && fullVerdict.pages.main.buildComplete === true,
       () => ({ status: vFull.status, fullVerdict }));
-    // ENG-95901 — a page with BOTH a genuine MISSING deliverable AND unfiled evidence: the scoped stderr diagnostic
-    // must talk ONLY about `missing` — no "unconfirmed" count, no "file the on-stand evidence" advice — so an LLM
-    // builder reading this exit-2 line is never handed a row it cannot legitimately close itself.
+    // ENG-95901 — a page with BOTH a genuine shortfall AND unfiled evidence: the scoped stderr diagnostic must talk
+    // ONLY about rows the BUILDER owns — no verifier-owned count, no "file the on-stand evidence" advice — so an LLM
+    // builder reading this exit-2 line is never handed a row it cannot legitimately close itself. PR review: the
+    // number is `builderOpen`, not `missing`, because a partial build resolves `unverified` and `missing` would have
+    // printed a zero next to a non-zero exit.
     const bareBuiltShortPath = path.join(os.tmpdir(), `c2f_bare_built_short_${process.pid}.json`);
     fs.writeFileSync(bareBuiltShortPath, JSON.stringify({
       pages: {
@@ -2606,9 +2608,9 @@ try {
     }));
     try {
       const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
-      check("ENG-95901: the SCOPED stderr diagnostic on a page with BOTH a genuine MISSING deliverable and unfiled evidence names ONLY `missing` — no 'unconfirmed' count, no 'file the on-stand evidence' advice, exit 2",
+      check("ENG-95901: the SCOPED stderr diagnostic on a page with BOTH a genuine shortfall and unfiled evidence counts ONLY the rows the BUILDER owns — a non-zero `builderOpen`, no 'unconfirmed' count, no 'file the on-stand evidence' advice, exit 2",
         vScopedShort.status === 2
-        && /\d MISSING deliverable\(s\)/.test(vScopedShort.stderr || "")
+        && /[1-9]\d* open deliverable\(s\) YOU OWN/.test(vScopedShort.stderr || "")
         && !/unconfirmed/.test(vScopedShort.stderr || "")
         && !/file the on-stand evidence/.test(vScopedShort.stderr || ""),
         () => ({ status: vScopedShort.status, stderr: vScopedShort.stderr }));
@@ -9894,6 +9896,76 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
       () => unit.openRows);
     check("ENG-95469 T1/R5: the datasource-short verdict matches the post-hoc sweep exactly",
       agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, builtNoGrid).pages.main }));
+  }
+
+  // ENG-95901 PR review — the BUILDER-OWNED `unverified` class, the one the first cut of `buildComplete` let through.
+  // `resolveCountVk` maps `b === 0` to `missing` but ANY partial count to `unverified`, and `resolveFieldsByIdentity`
+  // maps every field count below expected — `0/N` included — to `unverified`. The T1 fixture above happens to pick
+  // the single count shape (`0 of 4`) that still lands on `missing`, so it passed on the label axis by accident; each
+  // case below is short in a way the label calls `unverified` and the OWNER calls the builder's.
+  {
+    // PARTIAL component count — 1 of 4 grids. `missing` is 0; the page is plainly short.
+    const builtOneGrid = { pages: { main: { viewConfig: a3Body(1), businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit, agree } = parity(builtOneGrid);
+    check("ENG-95901 (review): a PARTIAL component count (1 of 4 crt.DataGrid) is NOT build-complete — `missing` is 0 and the row reads `unverified`, but the row is the BUILDER's, so the axis reads the owner",
+      unit.buildComplete === false && unit.missing === 0 && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && r.outcome === "unverified" && /1\/4/.test(r.evidence)),
+      () => unit.openRows);
+    check("ENG-95901 (review): the partial-count verdict matches the post-hoc sweep exactly", agree,
+      () => ({ unit, sweep: renderVerify(applicantR1, {}, builtOneGrid).pages.main }));
+  }
+  {
+    // ZERO of N expected fields by NAME — the reviewer's own reproduction: a form page built with one component that
+    // is not any of the expected fields. Every field row resolves `unverified`, so the label axis called this a
+    // complete build with none of its fields on the page.
+    const builtWrongNames = { pages: { main: { viewConfig: { items: [{ name: "SomethingElse", type: "crt.Input" },
+      ...Array.from({ length: 4 }, (_v, i) => ({ name: "Grid" + i, type: "crt.DataGrid" })),
+      { name: "Comm", type: "crt.CommunicationOptions" }] }, businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit } = parity(builtWrongNames);
+    check("ENG-95901 (review): a page whose components carry NONE of the expected field names is NOT build-complete — 0/N by identity is `unverified` on the label axis and the builder's own work on the owner axis",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && /0\/\d+ expected fields|expected fields present/.test(r.evidence)),
+      () => unit.openRows);
+  }
+  {
+    // PARTIAL fields by name — k of N present. Same class, non-zero k, so it cannot pass for the `b === 0` reason.
+    const someCols = A3_COLS.slice(0, 3);
+    const builtSomeFields = { pages: { main: { viewConfig: { items: [...someCols.map((c) => ({ name: c, type: "crt.Input" })),
+      ...Array.from({ length: 4 }, (_v, i) => ({ name: "Grid" + i, type: "crt.DataGrid" })),
+      { name: "Comm", type: "crt.CommunicationOptions" }] }, businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit } = parity(builtSomeFields);
+    check("ENG-95901 (review): k-of-N expected fields present is NOT build-complete either — a partial field set names the absent fields and they are the builder's to add",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && /expected fields present/.test(r.evidence)),
+      () => unit.openRows);
+  }
+  {
+    // ABSENT `--built.pages` entry for the page — "get-page this page", `unverified`, and unmistakably the builder's.
+    const builtNoEntry = { pages: { list: { viewConfig: { items: [] } } }, ...QG_EVIDENCE };
+    const unit = verifyUnit(applicantR1, {}, builtNoEntry, "main");
+    check("ENG-95901 (review): a page with NO `--built.pages` entry is NOT build-complete — 'get-page this page' is an instruction to the builder, not an evidence record somebody else files",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).every((r) => r.owner === "builder" || r.owner === "verifier"),
+      () => unit.openRows);
+  }
+  {
+    // ABSENT businessRules slot — "run read-page-business-rules for the page", literally step 1 of the gate prompt.
+    const builtNoRuleSlot = { pages: { main: { viewConfig: a3Body(4) } }, ...QG_EVIDENCE };
+    const unit = verifyUnit(applicantR1, {}, builtNoRuleSlot, "main");
+    check("ENG-95901 (review): an absent `businessRules` slot is NOT build-complete — reading the page's rules is the builder's own step 1, however the row is labelled",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && /read-page-business-rules/.test(r.evidence)),
+      () => unit.openRows);
+  }
+  {
+    // And the boundary the axis exists for, restated on the owner: with the build genuinely complete, the ONLY open
+    // rows are verifier-owned, and those alone keep `buildComplete` true while `complete` stays false.
+    const builtNoEvidence = { pages: { main: { viewConfig: a3Body(4), businessRules: a3Rules } } };
+    const unit = verifyUnit(applicantR1, {}, builtNoEvidence, "main");
+    check("ENG-95901 (review): the boundary still holds — a complete build whose only open rows are VERIFIER-owned reports buildComplete true, builderOpen 0, complete false",
+      unit.buildComplete === true && unit.builderOpen === 0 && unit.complete === false
+        && (unit.openRows || []).length > 0 && (unit.openRows || []).every((r) => r.owner === "verifier"),
+      () => unit.openRows);
   }
 
   // T2 (R3) — a component built but NOT wired to the parent record is flagged. The Communication-options component

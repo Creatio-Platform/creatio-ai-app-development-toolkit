@@ -369,6 +369,10 @@ const VERIFY_RESULT = {
                 status: { type: 'string' },
                 evidence: { type: 'string' },
                 outcome: { type: 'string' },
+                // ENG-95901 (PR review) — WHOSE work closes the row: "builder" or "verifier". This, not the
+                // `missing`/`unverified` label, is what `buildComplete` is keyed on and what the one bounded
+                // in-context fix is allowed to act on.
+                owner: { type: 'string' },
                 id: { type: 'string' },
               },
             },
@@ -725,7 +729,10 @@ const BUILD_PROPERTIES = {
         items: {
           type: 'object',
           required: ['deliverable', 'status', 'evidence'],
-          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' } },
+          // `outcome`/`owner` ride along so the tail cross-check can tell a builder-owned shortfall from a row the
+          // builder was never allowed to close, without re-deriving what the engine already decided.
+          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' },
+            outcome: { type: 'string' }, owner: { type: 'string' } },
         },
       },
       notRunWhy: { type: 'string' },
@@ -1093,9 +1100,21 @@ const isUnitOpen = (unit, verify, reachState, packageState) => {
 // build-complete, reintroducing the bug this ticket fixes); `complete` is the LAST resort, only when `missing`
 // itself is absent too. Returns `undefined` (never a false "not complete") when NONE of the three fields are
 // present, or the input itself is absent — arithmetic over the input's OWN fields, never an invented verdict.
+// PR review — the `missing === 0` fallback is LOSSY and is no longer the first one tried: `unverified` is also what
+// a partial or unread build resolves to, so a `0/N expected fields` page has `missing: 0` while being as short as a
+// page can be. When the payload carries its rows, they are read instead: each row's `owner` is the engine's own
+// classification, so the fallback answers the same question the primary field does. `missing`/`complete` stay as
+// last resorts for a legacy payload that carries neither the field nor its rows.
+// One open row this builder owns — the predicate `buildComplete` means. A row with no `owner` is treated as the
+// builder's: the engine tags only the four verifier/judge-filed rows, and defaulting the other way would let an
+// untagged shortfall pass as somebody else's problem.
+const isBuilderOwnedRow = (r) =>
+  (r?.outcome === 'missing' || r?.outcome === 'unverified') && r?.owner !== 'verifier' 
 function derivedBuildComplete(x) {
   if (!x) return undefined
   if (typeof x.buildComplete === 'boolean') return x.buildComplete
+  const rows = Array.isArray(x.openRows) ? x.openRows : Array.isArray(x.stillShortRows) ? x.stillShortRows : null
+  if (rows) return !rows.some(isBuilderOwnedRow)
   if (typeof x.missing === 'number') return x.missing === 0
   if (typeof x.complete === 'boolean') return x.complete
   return undefined
@@ -2451,8 +2470,8 @@ function inContextGateBlock(unit) {
 IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (ENG-95469). This is the ONE place you run \`--verify\`, and only for YOUR OWN page:
 1. After you have built and render-checked the page, get-page YOUR page's Freedom schema and write its \`bundle.viewConfig\` VERBATIM into \`${selfBuiltFile(unit.key)}\` as \`{ "pages": { "${unit.key}": { "viewConfig": <bundle.viewConfig>, "parentSchemaName": <template>, "schemaUId": <page.schemaUId> } } }\`. If this page owns business rules, run \`read-page-business-rules\` and add its \`{ count, rules }\` result under \`"businessRules"\` on that entry — a rule deliverable cannot be checked without it, and an ABSENT slot reads ⚠ not-checkable, not a false ❌.
 1b. CHECK YOUR OWN READ IS NOT STALE (ENG-95850 / B3). If the bundle's \`fetchedAt\` is OLDER than the page's \`modifiedOn\`, you were handed a cached response describing an earlier state — re-fetch ONCE before you write the file. A stale read makes a page you just built look short, and it would spend your one bounded fix attempt re-doing work that is already there. If it still disagrees, say so in \`notes\` and report \`selfCheck.ran: false\` with that as \`notRunWhy\` rather than gating on a read you cannot trust.
-2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, buildComplete, missing, unverified, openRows }\`. \`buildComplete\` is YOUR axis — it is \`missing\`-only, exit-code-gated, and true even while \`unverified\` rows sit unfiled (evidence a separate read-only verifier/judge files, never you). A non-zero exit (2) means your build is short — an unconfirmed-evidence-only page exits 0.
-3. If \`buildComplete\` is NOT true, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\`, but act ONLY on the rows whose \`outcome\` is \`"missing"\` — each such row's Evidence cell IS the repair (a field absent by name, a grid with no bound datasource, a component not on the page, a rule the slot does not carry). Fix ONLY those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check. NEVER attempt to "fix" a row whose \`outcome\` is \`"unverified"\` — that is an evidence/reachability record a separate agent files; it is not yours to close, and \`buildComplete\` does not require it.
+2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, buildComplete, missing, unverified, openRows }\`. \`buildComplete\` is YOUR axis — it is exit-code-gated and true only when NO open row is yours to close, while rows a separate read-only verifier/judge files (evidence, judge verdict, reachability) may still sit unfiled. A non-zero exit (2) means your build is short — an unfiled-evidence-only page exits 0.
+3. If \`buildComplete\` is NOT true, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` and act on every row whose \`owner\` is \`"builder"\` — each such row's Evidence cell IS the repair (a field absent by name, only some of the expected fields present, a grid with no bound datasource, a partial component count, a component not on the page, a rule the slot does not carry). Fix those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check. NEVER attempt to "fix" a row whose \`owner\` is \`"verifier"\` — the evidence record, the judge verdict and the reachability rows are filed by a separate agent; they are not yours to close, and \`buildComplete\` does not require them. Read \`owner\`, not the \`missing\`/\`unverified\` status: a partially-built page reads \`unverified\` and is still entirely your work.
 4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
 }
 
@@ -2866,7 +2885,10 @@ function recordPageSchema(unit, res, r) {
   r.selfChecks.push({ key: unit.key, sc })
   if (selfCheckStillShort(sc)) {
     r.selfCheckShort.push({ key: unit.key, shortRows: sc.stillShortRows || [] })
-    log(`in-context gate: \`${unit.key}\` is still short after its one bounded fix (${sc.missing ?? '?'} MISSING + ${sc.unverified ?? '?'} unconfirmed) — it will park once the verifier confirms it open`)
+    // The count is deliberately absent, matching `migrate.mjs`'s scoped diagnostic: a figure next to a repair
+    // instruction reads as part of what must be repaired, and the rows themselves are already carried in
+    // `selfCheckShort`. The two operator-facing texts say the same thing.
+    log(`in-context gate: \`${unit.key}\` is still short after its one bounded fix — it will park once the verifier confirms it open`)
   }
 }
 

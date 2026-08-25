@@ -235,7 +235,7 @@ report, `verify.json` is the verdict.
 }
 ```
 
-ENG-95901 — every page entry ALSO carries `buildComplete`: the `missing`-only axis, `true` even
+ENG-95901 — every page entry ALSO carries `buildComplete` (and `builderOpen`, the count that matches it): the OWNER axis, `true` even
 while `unverified` rows sit unfiled (evidence a separate read-only verifier/judge files, never the
 builder). `complete` (shown above) stays the COMBINED signal — `missing === 0 && unverified === 0`
 — for the round-scheduling / post-hoc "is this unit done" reads below; `buildComplete` is what the

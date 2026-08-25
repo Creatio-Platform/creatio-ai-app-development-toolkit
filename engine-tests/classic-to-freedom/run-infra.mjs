@@ -346,6 +346,26 @@ check("ENG-95901: derivedBuildComplete is the ONE shared derivation behind selfC
   () => wf.derivedBuildComplete({ complete: false, missing: 0 }) === true
     && wf.derivedBuildComplete({ buildComplete: false, missing: 0 }) === false
     && wf.derivedBuildComplete(undefined) === undefined);
+// PR review — the `missing === 0` fallback is LOSSY: a partially-built page resolves `unverified`, so `missing` is 0
+// while the page is short. When the payload carries its ROWS, their `owner` is read first — the same classification
+// the engine made — and only a payload with neither the field nor its rows falls through to the counts.
+check("ENG-95901 (review): derivedBuildComplete reads the ROWS before the lossy `missing` count — a legacy-shaped report with `missing: 0` but a BUILDER-owned open row is NOT build-complete",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Fields — 2 expected", status: "⚠ verify", evidence: "0/2 expected fields present", outcome: "unverified", owner: "builder" }] }) === false);
+check("ENG-95901 (review): the same shape with only VERIFIER-owned open rows still reads build-complete — the boundary the axis exists for is untouched",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Evidence", status: "⚠ verify", evidence: "no complete evidence record", outcome: "unverified", owner: "verifier" }] }) === true);
+check("ENG-95901 (review): an UNTAGGED open row counts as the BUILDER's — the engine tags only the four verifier-filed rows, so defaulting the other way would let an untagged shortfall pass as somebody else's problem",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified" }] }) === false);
+check("ENG-95901 (review): `stillShortRows` is read the same way as `openRows` — the self-report shape must not drift from the verdict shape",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    stillShortRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified", owner: "builder" }] }) === false);
+// The operator-facing texts must say the same thing (`migrate.mjs` was deliberately narrowed to strip the figure
+// from the scoped diagnostic; the workflow's own log line kept it until this review round).
+check("ENG-95901 (review): the in-context 'still short' log line carries NO count — a figure next to a repair instruction reads as part of what must be repaired, and `migrate.mjs`'s scoped diagnostic already drops it",
+  /is still short after its one bounded fix — it will park once the verifier confirms it open/.test(wfSrc)
+    && !/is still short after its one bounded fix \(\$\{/.test(wfSrc));
 
 // --- ENG-95469 (PR review T2): the in-context park's DOUBLE-GUARD, EXECUTED (not just source-pinned). The self-check
 // is the engine's own scoped arithmetic reported THROUGH the builder; a self-report of "still short" is parked ONLY
@@ -734,9 +754,12 @@ check("ENG-95471 review fix: the close-row log claims no enforcement the code le
   const gateBlockSlice = wfSrc.slice(wfSrc.indexOf("function inContextGateBlock(unit)"), wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"));
   check("ENG-95901: inContextGateBlock names `buildComplete` as the axis the gate's exit code reads, and states that an unconfirmed-evidence-only page exits 0",
     /buildComplete/.test(gateBlockSlice) && /exits 0/.test(gateBlockSlice));
-  check("ENG-95901: inContextGateBlock restricts the one bounded fix to rows whose `outcome` is `\"missing\"` and explicitly forbids touching an `\"unverified\"` row",
-    gateBlockSlice.includes('act ONLY on the rows whose \\`outcome\\` is \\`"missing"\\`')
-    && gateBlockSlice.includes('NEVER attempt to "fix" a row whose \\`outcome\\` is \\`"unverified"\\`'));
+  // PR review — the restriction is keyed on the row's OWNER, not on its `missing`/`unverified` label. Pinning the
+  // label wording would re-pin the defect: a `0/N expected fields` row is `unverified` and entirely the builder's.
+  check("ENG-95901 (review): inContextGateBlock restricts the one bounded fix to rows whose `owner` is `\"builder\"`, forbids touching a `\"verifier\"` row, and says in words not to read the missing/unverified label instead",
+    gateBlockSlice.includes('act on every row whose \\`owner\\` is \\`"builder"\\`')
+    && gateBlockSlice.includes('NEVER attempt to "fix" a row whose \\`owner\\` is \\`"verifier"\\`')
+    && /Read \\`owner\\`, not the \\`missing\\`\/\\`unverified\\` status/.test(gateBlockSlice));
   check("ENG-95901: inContextGateBlock's `selfCheck` reporting instructions include `buildComplete` in the copied-verbatim field list",
     /Report \\`selfCheck\\` copying the verdict VERBATIM:[\s\S]{0,160}buildComplete/.test(gateBlockSlice));
 }
