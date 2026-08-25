@@ -140,7 +140,7 @@ const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
+  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
   // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
   // app/package identity it promises is producible on this stand at all.
@@ -459,6 +459,19 @@ check("buildMode: the three modes are accepted, case- and whitespace-insensitive
   () => (wf.buildMode("auto") === "auto" && wf.buildMode(" Checkpoints ") === "checkpoints" && wf.buildMode("GUIDED") === "guided"));
 check("buildMode: an UNKNOWN mode THROWS — it must never fall back to `auto`, which would silently run unattended the one time the operator asked to watch",
   () => { try { wf.buildMode("semi"); return false; } catch (e) { return /unknown mode/i.test(e.message) && /checkpoints/.test(e.message); } });
+
+// ENG-95855 — the migration skill's verification-surface preflight, handed over as an explicit argument.
+// Unlike `buildMode`, absence is never guessed into one of the three tokens: a caller that omits the field
+// gets `null`, not a default tier, because guessing a tier nobody resolved is the exact "preference silently
+// drifted from what was resolved" failure this ticket exists to close.
+check("buildVerificationSurface: an absent value is `null` — never guessed into a tier",
+  () => (wf.buildVerificationSurface(undefined) === null && wf.buildVerificationSurface(null) === null && wf.buildVerificationSurface("") === null));
+check("buildVerificationSurface: the three tokens round-trip verbatim",
+  () => (wf.buildVerificationSurface("automatic:2") === "automatic:2" && wf.buildVerificationSurface("automatic:3") === "automatic:3" && wf.buildVerificationSurface("manual") === "manual"));
+check("buildVerificationSurface: accepted case- and whitespace-insensitively, matching buildMode's own normalization",
+  () => (wf.buildVerificationSurface(" Manual ") === "manual" && wf.buildVerificationSurface("AUTOMATIC:2") === "automatic:2"));
+check("buildVerificationSurface: an UNKNOWN token THROWS — a typo must not silently ship as a resolved tier",
+  () => { try { wf.buildVerificationSurface("automatic"); return false; } catch (e) { return /unknown verificationSurface/i.test(e.message) && /automatic:2/.test(e.message); } });
 
 check("unknownCheckpointKeys: a key `--units` does not publish is REPORTED — it matches no unit, so the run would never stop and the section would be built unwatched",
   () => (wf.unknownCheckpointKeys(["main", "child:Nope"], ["main", "child:Documents"]).join(",") === "child:Nope"));
@@ -1078,6 +1091,21 @@ check("workflow: the index is written LAST, so a half-built cache cannot read as
 check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
   /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
     && /Do not treat the missing file as a defect/.test(wfSrc));
+// ENG-95855 — the resolved verification surface has to reach the per-page prompt as literal text, or the
+// per-page recipe's "use the verificationSurface VALUE" instruction has nothing concrete to point at: a
+// documented hand-over that no prompt-building code actually threads is the exact defect a prior review round
+// caught in this ticket's own diff.
+check("workflow: VERIFICATION_SURFACE is threaded into the page unit's prompt, not left for the builder to read from decisions.md",
+  /const VERIFICATION_SURFACE = buildVerificationSurface\(input\.verificationSurface\)/.test(wfSrc)
+    && /VERIFICATION SURFACE FOR THIS BUILD:.*\$\{VERIFICATION_SURFACE\}/.test(wfSrc)
+    && /none was handed to this run \(.verificationSurface. was omitted\)/.test(wfSrc));
+// ENG-95855 — a reach unit closes by OPENING the surface its wiring governs, which is a per-unit render check
+// under a different deliverable. Threading the surface into the page prompt only left section registration —
+// the one deliverable a real run silently dropped — telling its agent to open a browser nobody resolved.
+check("workflow: the resolved verification surface is hoisted and reaches the REACH unit's prompt too, with a `blocked` path when the surface is unachievable",
+  /const VERIFICATION_SURFACE_NOTE = VERIFICATION_SURFACE/.test(wfSrc)
+    && /a saved record is not a working binding\.\$\{VERIFICATION_SURFACE_NOTE\}/.test(wfSrc)
+    && /If that surface turns out unachievable for this wiring/.test(wfSrc));
 check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
   /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
 check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",
@@ -3042,6 +3070,8 @@ const REF_BLOCK = "<refs>"
 const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
+const VERIFICATION_SURFACE = "automatic:2"
+const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automatic:2"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -3244,6 +3274,30 @@ export { buildPrompt };
   check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
+}
+
+// ENG-95855 — the hand-over has to have a documented channel on EVERY route, not just the Workflow one. A recipe
+// that tells routes 2 and 3 to use a value they were never given, forbids `decisions.md`, and names no fallback is
+// the same silent drift this ticket closes, one route down.
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const recipe08 = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/references/04-per-page-build-recipe.md"), "utf8");
+  const execSkillSrc = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/SKILL.md"), "utf8");
+  const migrationSkillSrc = readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+  check("ENG-95855: recipe step 8 has the null-surface clause — a surface nobody handed over is a `blocked[]` report, never a guessed tier",
+    /If NO `verificationSurface` reached this unit/.test(recipe08)
+      && /do not guess a tier and do not fall back to reading `decisions.md`/.test(recipe08),
+    () => recipe08.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: routes 2 and 3 name `verificationSurface` in their hand-over text, so no route is told to use a value it has no channel for",
+    /Hand `verificationSurface` to every unit prompt/.test(execSkillSrc)
+      && /Reach units get it too/.test(execSkillSrc)
+      && /so `verificationSurface` is already in context/.test(execSkillSrc),
+    () => execSkillSrc.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: tier 4 is stated as never recordable, and a `manual` outcome is pointed at `mode: checkpoints` — the place the render actually gets exercised",
+    /Tier 4 is never a recordable surface/.test(migrationSkillSrc)
+      && /There is no `automatic:4` token, by design/.test(migrationSkillSrc)
+      && /\*\*`mode: checkpoints`\*\* \(item 5\)/.test(migrationSkillSrc),
+    () => migrationSkillSrc.split("\n").filter((l) => /Tier 4|automatic:4/.test(l)).slice(0, 3).join("\n"));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);

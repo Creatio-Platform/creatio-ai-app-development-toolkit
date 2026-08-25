@@ -481,7 +481,11 @@ which applies here in full and is stricter for a build than for an analysis.
    path** — the script ships beside this file:
    `Workflow({ scriptPath: "./freedom-build-executor.workflow.js", args: {
    manifest, environment, outDir, planFile, engine, customizations, behaviourIndex,
-   sectionSchema } })`, resolved to its absolute path in the plugin dir.
+   sectionSchema, verificationSurface } })`, resolved to its absolute path in the plugin dir.
+   `verificationSurface` (`automatic:2` | `automatic:3` | `manual`) is the migration skill's
+   verification-surface preflight answer for this section (ENG-95855) — omit it only on a run that
+   predates the field, never to skip resolving it; a page unit built without it is told plainly that
+   no surface was handed over rather than left to assume one.
    `name: "creatio-freedom-build-executor"` resolves only where the installer has mirrored it, which
    on Claude Code is usually nowhere, so do not spend a call probing it first (see "Named-workflow
    availability" below). Resolve
@@ -513,6 +517,12 @@ which applies here in full and is stricter for a build than for an analysis.
    - **Write the state file, or the route is not interchangeable.** Everything contract rule 7 names
      goes into `build-queue.json`, `standWrites.packageCreated` included, as each unit closes. A route
      that builds without writing it hands the next run a stand it cannot account for.
+   - **Hand `verificationSurface` to every unit prompt** (`automatic:2` | `automatic:3` | `manual`) —
+     the same value route 1 passes in its args, quoted in the prompt text, because a sub-agent starts
+     with a fresh context and `decisions.md` never reaches it. Reach units get it too: their closing
+     "open the surface it governs" IS a render check. If the preflight answer is not available to
+     hand over, say so in the prompt instead of omitting it silently — the per-page recipe's step 8
+     then reports it in `blocked[]` rather than guessing a tier.
 
    **Do NOT switch routes mid-folder to get past a failure.** A rejection at the first agent looks
    deterministic and usually is not: two consecutive Workflow launches of the Applicant run were
@@ -525,7 +535,12 @@ which applies here in full and is stricter for a build than for an analysis.
    only **through the gate above** — never as a silent third choice. It costs the session's context
    and it loses the role separation for the verifier and the judge, which is a real weakening; on a
    multi-unit build it has not once reached a first closed unit before the context ended — say so in
-   worklog.md, and prefer 1 or 2 whenever either can run.
+   worklog.md, and prefer 1 or 2 whenever either can run. This route reads the recipe in the SAME
+   session that resolved the preference, so `verificationSurface` is already in context — state it
+   explicitly in worklog.md as the surface this build verifies on, and use THAT value for every
+   unit's step-8 render check. It is still the resolved value, never `decisions.md` re-read as prose
+   and never a tier picked per unit; if the preflight never produced one, step 8's `blocked[]` report
+   applies here as well.
 
 **Named-workflow availability — `scriptPath` is the primary call.** A name resolves ONLY from
 `~/.claude/workflows/` (user scope) or a project's `.claude/workflows/`; the plugin cache is never

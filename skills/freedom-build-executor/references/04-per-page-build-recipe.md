@@ -111,8 +111,35 @@ the verifier files that page's contents as this unit's evidence.
    a tab / card-toggle-panel caption needs `#ResourceString(<Key>)#` instead — a
    `$Resources.Strings.*` caption there does not render.
 8. **Render check.** A `success` from `validate-page` / `update-page` is not proof the page works;
-   clio returns `success` for bodies that fail at runtime. Open it, or run a runtime render check,
-   **before** anything depends on it.
+   clio returns `success` for bodies that fail at runtime. Use the `verificationSurface` VALUE this
+   build run was launched with (`automatic:2`, `automatic:3`, or `manual`) — never `decisions.md`:
+   that file's prose does not reach the builder, only the approval entry does, so the resolved
+   surface has to arrive as an argument, not a file you go read. `automatic:2` is a headless
+   **Playwright** run printing a PASS/FAIL verdict line and writing its artifacts to files,
+   `automatic:3` is real Chrome (`claude-in-chrome`), and `manual` means `--verify` alone — the
+   preflight found no automatic surface — **before** anything depends on it. Run this check HERE,
+   inside this unit's own build agent, immediately after building the page — never deferred to a
+   trailing phase after every unit is built: on a real run the same check, run last over a driver
+   context that never compacted, cost 62.7% of the whole run's cache-read for 198K tokens of new
+   content.
+   **If NO `verificationSurface` reached this unit** — the hand-over omitted it, whichever route
+   launched the build — do not guess a tier and do not fall back to reading `decisions.md`: report it
+   in `blocked[]` with `what` naming the missing verification surface and `why` that no value was
+   handed to this unit, exactly the way the unachievable-surface case below is reported. That is what
+   tells the caller to hand the resolved surface over rather than let this unit pick one.
+   **Tier 2's login is solved ONCE per stand, not per unit.** Capture `storageState` the first time
+   a headless Playwright check runs against this stand, in the SAME temporary directory as the
+   manifest (step 4.2's convention: outside the repo, never the versioned `outDir` — that folder is
+   committed to the client's own repo, and a live session credential does not belong in it) — every
+   later unit sharing that directory reuses it, whether it belongs to this section or, at
+   whole-package scope, a later one against the same stand.
+   If the surface itself turns out unachievable for this page (a login wall, a per-action approval,
+   a CLI that now errors) — the re-ask trigger the preflight paragraph names, and this unit has no
+   user to ask — report it in `blocked[]` with `what` naming the verification surface as
+   unachievable and `why` the reason, never a generic block and never silently opening the built-in
+   pane or skipping the check to route around it: that is what tells the caller — the migration
+   skill's step 7, relaying what comes back — to RE-ASK the preference rather than treat this like
+   any other parked row.
 9. **Run the `creatio-ui-guidelines` review** as a done-gate, tool-based: open a shipped reference
    page on the same template, run `get-component-info` on each component you added, diff the
    concrete props. Then return `guidelines` — **required, and this unit does not close without it**
@@ -215,6 +242,12 @@ Structured, and it is a CLAIM, not evidence:
   "blocked": [],
   "proposals": [] }
 ```
+
+**A `blocked[]` entry is `{ "what", "why" }` — both free text, both required.** Most entries are read
+by a human relaying the run; step 8's render-check case is the one the migration skill's step 7
+(item 7) also reads for its RE-ASK trigger — name the verification surface as unachievable in
+`what` (e.g. `"verification surface unachievable"`) and the concrete reason in `why`, so a reader
+relaying the run recognizes it without a separate machine-matched field.
 
 `claimedBuilt` is the field name the schema requires, and the name says what it is: a claim. For a
 **page** unit the required fields are `unit`, `claimedBuilt`, `schemaName`, `guidelines` **and
