@@ -1779,8 +1779,11 @@ function guidelinesLine(g, miss, owes, fence) {
   if (miss) return `UI-guidelines: **NOT FILEABLE as returned** (${miss}) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
   const wrap = typeof fence === 'function' ? fence : String
   if (g.ran !== true) return `UI-guidelines: **reported NOT run** — file \`evidence[${JSON.stringify(g.evidenceId)}] = false\`. Reason given: ${wrap(String(g.notRunWhy ?? '').slice(0, 240))}`
-  const comps = (g.componentsDiffed || []).filter(nonBlank)
-  if (!comps.length) return `UI-guidelines: RUN, NO CHANGES NEEDED — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": [], "noChangesReason": ${JSON.stringify(String(g.noChangesReason ?? '').slice(0, 400))} }\`.`
+  const comps = (Array.isArray(g.componentsDiffed) ? g.componentsDiffed : []).filter(nonBlank)
+  if (!comps.length) {
+    if (!nonBlank(g.noChangesReason)) return `UI-guidelines: **NOT FILEABLE as returned** (noChangesReason is blank) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
+    return `UI-guidelines: RUN, NO CHANGES NEEDED — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": [], "noChangesReason": ${JSON.stringify(String(g.noChangesReason).slice(0, 400))} }\`.`
+  }
   return `UI-guidelines: RUN — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": ${JSON.stringify(comps)} }\`.`
 }
 // ENG-95470 / defect 4 — the `sectionRegistered` unit's OWN counted workplace bindings, rendered for Verify so it

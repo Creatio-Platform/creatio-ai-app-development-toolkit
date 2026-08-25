@@ -2718,7 +2718,7 @@ export function pageUnits(result, opts = {}) {
     // ENG-95859 — dedupe by id: `qualityGateRows` now publishes TWO rows (`part: "filed"` / `"judged"`) sharing
     // ONE evidence id, so a naive `.map` here would publish that id twice. The build-agent filing contract
     // (`references/01-evidence-records.md` in freedom-build-executor) names ONE id per page — keep that true.
-    evidenceRows: [...new Map(evidence.map((r) => [r.vk.id, { id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] }])).values()],
+    evidenceRows: [...new Map(evidence.map((r) => [r.vk.id, { id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires], allowNoDiff: r.vk.allowNoDiff === true }])).values()],
     // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
     // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
     // an order naming a key with no entry would send the executor to build a page it was never given.
@@ -3171,7 +3171,7 @@ function resolveEvidenceVk(vk, ctx) {
 function resolveEvidenceCombinedVk(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const judged = ctx.root?.judge?.[vk.id]?.convincing;
-  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}) + an independent judge verdict`;
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""}) + an independent judge verdict`;
   // A record filed as `false` is the VERIFIER stating the deliverable is genuinely absent, so it is a hard
   // MISSING — the judge never overrides it, because a judge rules on records and does not create them.
   // But it must not be reported as the JUDGE's doing. A live run filed `false` here while the judge, having
@@ -3198,7 +3198,7 @@ function resolveEvidenceCombinedVk(vk, ctx) {
 // status swing on a fact it does not claim to check.
 function resolveEvidenceFiledPart(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
-  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")})`;
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""})`;
   if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
   return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
