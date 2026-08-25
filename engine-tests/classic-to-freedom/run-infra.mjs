@@ -1703,6 +1703,58 @@ check("PR #128 review (RC-10): the answers-blocked row is DEDUPED on `(unit, wha
   /if \(blockedItems\.some\(\(b\) => b\.unit === unit\.key && b\.what === RESOLUTIONS_BLOCKED_WHAT\)\) \{/.test(wfSrc)
     && /answers NOT accounted for AGAIN on/.test(wfSrc));
 
+/* ===================================================================================================
+   PR #128 THIRD-ROUND REVIEW — four findings that survived the round-2 fixes: the once-per-unit repair
+   grant did not survive a process resume; the mechanism-2 INPUT seam (`resolutionClaims`) was pinned on
+   neither source nor behaviour; a dispatch-sourced miss could duplicate a verifier-sourced row for one
+   `(unit, id)`; and `reopenKeys`'s actual UNION was source-pinned but never exercised with a key present
+   ONLY in the resolutions half. Each is asserted in both directions below.
+   =================================================================================================== */
+
+// RC-8 — the ONCE-PER-UNIT repair grant survives the process, the same way `unconsumed` does. `resolutionsReopened`
+// is the only gate on re-granting the round; it was process-local while the record that PROVES the grant was spent is
+// persisted and re-seeded. Delete the seed and every resume re-opens the grant for any unit carrying an unconsumed
+// entry — the exact "buys its unit ONE repair round" bound SKILL.md states unqualified, broken one resume along.
+check("PR #128 third-round review (RC-8): the once-per-unit repair grant is SEEDED from the persisted `unconsumed` on hydration — `resolutionsReopened` was process-local while `unconsumed` rides the carry, so without this every resume re-opened the once-only grant for any unit still carrying an unconsumed entry",
+  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions[\s\S]{0,1600}?for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc));
+// The OTHER direction: it must seed the GRANT gate (`resolutionsReopened`) and NOT the DISPATCH gate
+// (`resolutionsPending`) — seeding the latter would force a fresh repair dispatch on resume, which is the over-grant
+// this closes rather than the double-grant it prevents.
+check("PR #128 third-round review (RC-8): the seed touches `resolutionsReopened` (the grant gate) and NOT `resolutionsPending` (the dispatch gate) — seeding the dispatch gate would FORCE a fresh repair round on resume, the over-grant this fix exists to deny",
+  /for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc)
+    && !/for \(const u of unconsumed\) resolutionsPending\.add\(u\.unit\)/.test(wfSrc));
+
+// RC-9 — a dispatch-sourced miss for a pair a verifier-sourced row already covers is NOT re-appended. The per-unit
+// clear drops only dispatch-sourced rows, so a verifier-confirmed contradiction survives it; without this filter the
+// next dispatch's miss for the same `(unit, id)` carried a SECOND row for one answer into the operator report.
+check("PR #128 third-round review (RC-9): a dispatch-sourced miss is deduped against a SURVIVING verifier-sourced row for the same `(unit, id)` — the per-unit clear drops only dispatch rows, so without this filter one answer surfaced twice in the operator report and held the run open twice",
+  /const gone = unconsumedResolutions\(routed, res, unit\.key\)\s*\n?\s*\.filter\(\(g\) => !unconsumed\.some\(\(u\) => u\.unit === g\.unit && u\.id === g\.id\)\)/.test(wfSrc));
+
+// RC-15 — the MECHANISM-2 INPUT SEAM, pinned. `resolutionClaims: resolutionClaimRows(routed, res)` and its caller
+// `r.claims.push(claimFor(unit, res, routed))` are the ONLY things that populate `claims[].resolutionClaims` on a real
+// run, and both sit OUTSIDE the pure-helper block, so the harness cannot import them. Every executed test above builds
+// `resolutionClaims` by hand in a fixture. Drop the `routed` arg here (revert to `resolutionClaimRows(res)`, or drop
+// the third arg at the call site) and `resolutionClaims` is `[]` on every dispatch → `resolutionContradictions` returns
+// `[]` forever → mechanism 2 silently detects nothing while all three suites stay green. This is the upstream half the
+// RC-6a pin (the `unconsumed` append + reopen) left unguarded; the dropped-third-arg regression is the likelier one.
+check("PR #128 third-round review (RC-15): the mechanism-2 INPUT seam is pinned — `resolutionClaims: resolutionClaimRows(routed, res)` and `r.claims.push(claimFor(unit, res, routed))` are the only real-run feed into `claims[].resolutionClaims`, and dropping `routed` from either makes mechanism 2 a silent no-op the whole suite stays green over",
+  /resolutionClaims: resolutionClaimRows\(routed, res\)/.test(wfSrc)
+    && /r\.claims\.push\(claimFor\(unit, res, routed\)\)/.test(wfSrc));
+
+// RC-16 — the reopen UNION, exercised. The source pin above (`new Set([...findingsPending, ...resolutionsPending])`)
+// proves the union is CONSTRUCTED that way; this proves it WORKS with a key present only in the resolutions half —
+// the exact wiring this PR relies on to make an unconsumed answer re-open a machine-green unit. A break that left
+// `resolutionsPending` never populated on the path that matters would look correct by inspection but never route.
+check("PR #128 third-round review (RC-16): the reopen UNION re-opens a COMPLETE unit off a key present ONLY in the resolutions half — the answer channel's actual union (`reopenKeys()`), exercised through `isUnitOpenWithFindings`, not merely source-pinned",
+  () => {
+    const findingsPending = new Set();            // the findings half is EMPTY
+    const resolutionsPending = new Set(["main"]); // the key lives only in the resolutions half
+    const reopen = new Set([...findingsPending, ...resolutionsPending]); // the real reopenKeys() construction
+    return wf.isUnitOpenWithFindings({ key: "main", kind: "page" }, { pages: { main: { complete: true } } }, {}, reopen) === true
+      && wf.isUnitOpenWithFindings({ key: "other", kind: "page" }, { pages: { other: { complete: true } } }, {}, reopen) === false;
+  },
+  () => "a resolutions-only key re-opens its complete unit and leaves another complete unit closed");
+
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
    deciding WHICH batches receive it is executable logic — and as an inline expression nothing referenced it, so a

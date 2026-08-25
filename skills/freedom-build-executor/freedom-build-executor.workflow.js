@@ -2400,6 +2400,18 @@ pageSchemas = { ...state.pageSchemas }
 // or whose id a re-plan has shifted, must not come back from the dead and hold a finished folder open for ever.
 unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
   owedResolutionPairs(state.preflightItems, state.unitKeys), new Set())
+// THE ONCE-PER-UNIT REPAIR GRANT SURVIVES THE PROCESS TOO (PR #128 review, RC-8). `resolutionsReopened` is the ONLY
+// gate against re-granting a unit its single answer-channel repair round (`reportResolutionAccounting` returns early on
+// `.has(unit.key)`), yet it was process-local while `unconsumed` — the record that PROVES the grant was already spent —
+// is persisted and re-seeded just above. So every resume re-opened the once-only grant for any unit still carrying an
+// unconsumed entry, and SKILL.md states that bound unqualified ("buys its unit ONE repair round"), with no per-process
+// caveat. A persisted entry of EITHER source is only ever written in the same call that adds the unit to
+// `resolutionsReopened` (the dispatch path at `reportResolutionAccounting`, the verifier path at the round tail), so the
+// set of units carrying a reconciled unconsumed entry is exactly the set whose grant is already spent: seed it back.
+// NOT `resolutionsPending` — that channel FORCES a fresh repair dispatch, which is the very over-grant this closes; a
+// unit that genuinely produced no build action is still open on the engine gate and returns through the normal
+// schedule, where the seeded `resolutionsReopened` denies it a second grant.
+for (const u of unconsumed) resolutionsReopened.add(u.unit)
 
 packageState = state.packageState || null
 let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
@@ -3138,7 +3150,14 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
       blockedItems = [...blockedItems, { unit: unit.key, what: RESOLUTIONS_BLOCKED_WHAT, why: miss }]
     }
   }
+  // DEDUPED AGAINST A SURVIVING VERIFIER ROW (PR #128 review, RC-9). The clear above drops only THIS unit's
+  // DISPATCH-sourced rows, so a verifier-confirmed contradiction for the same `(unit, id)` from an earlier round is
+  // still here — and it is the higher-trust record (an independent read of the page, not the builder's own word).
+  // Re-appending a dispatch row for that pair would carry TWO rows for one answer into the operator report and hold
+  // the run short of `complete` twice on one question. The verifier append site already dedups the other direction
+  // (line ~3780); this closes the dispatch→verifier direction the per-unit clear structurally cannot.
   const gone = unconsumedResolutions(routed, res, unit.key)
+    .filter((g) => !unconsumed.some((u) => u.unit === g.unit && u.id === g.id))
   if (!gone.length) return
   unconsumed = [...unconsumed, ...gone]
   log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${gone.map((g) => `\`${g.id}\``).join(', ')} — the run cannot report complete while that stands`)
