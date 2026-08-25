@@ -47,14 +47,20 @@ import path from 'node:path';
 //             ignored and at worst read as a hook failure.
 const HOST = (process.env.CAADT_TELEMETRY_HOOK_HOST || 'claude').toLowerCase();
 const CLIO = process.env.CAADT_TELEMETRY_CLIO || 'clio';
+// Named once and reused everywhere this classification matters (the safety check right below, and
+// the cwd-pinning decision in dispatch()), rather than repeating the same regex at each call site —
+// two copies of a security-relevant test can drift if only one is ever updated (e.g. to also treat
+// `.`/`..` as path-like).
+function looksLikePath(value) {
+	return /[\\/]/.test(value);
+}
 // This hook runs automatically on every matching tool call, so the variable naming the executable is
 // a repeated code-execution primitive for anything that can set it before the host launches. It is
 // an install-time knob, and validating it costs nothing: a value that LOOKS like a path must resolve
 // to a real file, mirroring the `is_file()` guard `runtime/scripts/mcp_client.py` applies to
 // `CLIO_CMD`. A bare command name is left to PATH resolution, which is the documented default.
 const CLIO_IS_SAFE = (() => {
-	const looksLikePath = /[\\/]/.test(CLIO);
-	if (!looksLikePath) {
+	if (!looksLikePath(CLIO)) {
 		return true;
 	}
 	try {
@@ -129,12 +135,20 @@ const TOOL_CALL_ID = 2;
 // How much of the transcript's head is fingerprinted to decide whether a remembered byte offset
 // still refers to the same file. Enough to catch a rewrite, small enough to be free.
 const PREFIX_SAMPLE_BYTES = 4096;
+// Bumped whenever the scan record's shape changes, so a record left by an older version of this file
+// is discarded rather than half-understood.
+const SCAN_RECORD_VERSION = 1;
 // The floor is one event, so FLOOR_ATTEMPT_LIMIT bounds it. `session_usage` is a series and its
 // guard is "the transcript grew", which is true on nearly every response — so a clio that never
 // confirms a reading (an older clio rejecting the event, a broken binary) would re-read and re-parse
 // the whole transcript AND spawn a process on every remaining response of the session. The reading
 // itself stays retryable; what is bounded is how many unconfirmed ones a session pays for.
 const USAGE_ATTEMPT_LIMIT = 5;
+
+// How many candidate nonces claimUsageNonce() tries before giving up on this Stop. Generous relative
+// to the realistic collision window (two hook processes for the same session landing on the exact
+// same unconfirmed-count read at the exact same moment), never hit in normal operation.
+const USAGE_NONCE_CLAIM_ATTEMPTS = 8;
 
 // clio's telemetry surface: reminding a session that is already sending telemetry is circular, and
 // emitting a floor event in reaction to a floor event would recurse.
@@ -204,10 +218,23 @@ function readStdin() {
 //
 // `hasData` separates "read the transcript, it reported no usage" from "could not read it at all", so
 // callers can omit the counters instead of shipping zeros that look like a session that spent nothing.
-function readSessionUsage(payload) {
+// Shared by both the resumable-offset and the rewrite/compaction branches below: whichever way the
+// scan is restarted, what was already committed for this session carries forward as the baseline the
+// new bytes accumulate on top of. Kept as one function so a future change (a new carried field, a
+// different MODEL_TOKEN rule) cannot be applied to one branch and silently missed in the other.
+function carryForwardBaseline(usage, previous) {
+	usage.output_tokens = previous.output_tokens || 0;
+	usage.input_tokens = previous.input_tokens || 0;
+	usage.cached_input_tokens = previous.cached_input_tokens || 0;
+	usage.hasData = previous.hasData === true;
+	if (typeof previous.model === 'string' && MODEL_TOKEN.test(previous.model)) {
+		usage.model = previous.model;
+	}
+}
+
+function readSessionUsage(payload, knownSize) {
 	const sessionId = payload?.session_id;
-	const transcript = payload?.transcript_path
-		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
+	const transcript = transcriptPath(payload);
 	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false };
 	// Some hosts state the model in the payload itself (Cursor does), which is the only place it is
 	// available when the transcript is in a shape this reader does not parse. Validated like any other
@@ -215,11 +242,16 @@ function readSessionUsage(payload) {
 	if (typeof payload?.model === 'string' && MODEL_TOKEN.test(payload.model.toLowerCase())) {
 		usage.model = payload.model.toLowerCase();
 	}
-	let size;
-	try {
-		size = fs.statSync(transcript).size;
-	} catch {
-		return usage; // No transcript reachable: send the event without these fields.
+	// The caller almost always already has this from transcriptSize()'s own stat, taken moments ago
+	// to decide whether the transcript grew at all — a second stat of the same path would only ever
+	// confirm what that one already found. Only re-stat when no such reading was handed in.
+	let size = knownSize;
+	if (size === undefined) {
+		try {
+			size = fs.statSync(transcript).size;
+		} catch {
+			return usage; // No transcript reachable: send the event without these fields.
+		}
 	}
 
 	let handle;
@@ -234,22 +266,29 @@ function readSessionUsage(payload) {
 		// would make a remembered offset point into the middle of different content — silently
 		// under-reporting the session's consumption, which is the one number this event carries. So
 		// the offset is only trusted when a fingerprint of the file's first bytes still matches.
-		const prefix = fingerprint(handle, size);
 		const previous = readScan(sessionId);
-		const resumable = previous
-			&& previous.prefix === prefix
+		// Compared at the SAME prefix length that was hashed last time. Hashing `min(size, 4096)` and
+		// comparing the result folded the sample length into the value, so for any transcript under
+		// 4 KB — every transcript for the first minutes of a session — the value changed on every
+		// append and the offset was never once reused. The whole incremental path was dead code.
+		const resumable = previous !== null
+			&& fingerprint(handle, size, previous.prefixLength) === previous.prefix
 			&& size >= previous.size
-			&& previous.offset <= size;
+			&& previous.offset <= size
+			&& startsAtLineBoundary(handle, previous.offset);
 		let from = 0;
 		if (resumable) {
 			from = previous.offset;
-			usage.output_tokens = previous.output_tokens || 0;
-			usage.input_tokens = previous.input_tokens || 0;
-			usage.cached_input_tokens = previous.cached_input_tokens || 0;
-			usage.hasData = previous.hasData === true;
-			if (typeof previous.model === 'string' && MODEL_TOKEN.test(previous.model)) {
-				usage.model = previous.model;
-			}
+			carryForwardBaseline(usage, previous);
+		} else if (previous) {
+			// The file was REPLACED, not appended to — compaction rewrites a transcript shorter and
+			// with a different head. Re-parsing it alone would restart the totals from zero, and the
+			// monotonic gate in reportSessionUsage ("only report a total that grew") would then
+			// compare the small new total against the large old one and skip every remaining reading
+			// of the session. The series would look merely sparse while reporting nothing at all —
+			// the exact failure this whole tier exists to prevent. So what was already committed is
+			// carried forward as a baseline instead of being dropped.
+			carryForwardBaseline(usage, previous);
 		}
 		const appended = readFrom(handle, from, size);
 		// The last line of a live transcript usually has no trailing newline yet — including the turn
@@ -263,9 +302,11 @@ function readSessionUsage(payload) {
 		const trailing = appended.slice(complete.length);
 		accumulate(usage, complete);
 		writeScan(sessionId, {
+			v: SCAN_RECORD_VERSION,
 			size,
 			offset: from + Buffer.byteLength(complete, 'utf8'),
-			prefix,
+			prefix: fingerprint(handle, size, PREFIX_SAMPLE_BYTES),
+			prefixLength: Math.min(size, PREFIX_SAMPLE_BYTES),
 			output_tokens: usage.output_tokens,
 			input_tokens: usage.input_tokens,
 			cached_input_tokens: usage.cached_input_tokens,
@@ -307,7 +348,17 @@ function accumulate(usage, text) {
 		// event on a malformed token — so one such message after the last real turn used to cost the
 		// floor, the tier this design calls guaranteed, for the entire session. An unusable value is
 		// skipped rather than assigned, which keeps the last real model instead of overwriting it.
-		if (typeof message.model === 'string' && MODEL_TOKEN.test(message.model.toLowerCase())) {
+		if (typeof message.model === 'string' && !MODEL_TOKEN.test(message.model.toLowerCase())) {
+			// A line whose model is not a usable token is not a real turn — Claude Code writes these
+			// at turn boundaries (interrupt, API error, a no-op turn) with `model: "<synthetic>"` and
+			// an all-zero usage block. Skipping only the model and keeping the block set
+			// `hasData = true` and overwrote the two LATEST-READING fields with zeros, so a session
+			// that had spent hundreds of thousands of tokens reported
+			// `input_tokens: 0, cached_input_tokens: 0` and looked like a healthy reading. Measured:
+			// two and three such lines in real transcripts on the machine this was written on.
+			continue;
+		}
+		if (typeof message.model === 'string') {
 			usage.model = message.model.toLowerCase();
 		}
 		const consumed = message.usage;
@@ -324,17 +375,37 @@ function accumulate(usage, text) {
 
 // Cheap, non-cryptographic, and only ever compared against itself: it answers "are these the same
 // first bytes as last time", not "what are they".
-function fingerprint(handle, size) {
-	const sample = readFrom(handle, 0, Math.min(size, PREFIX_SAMPLE_BYTES));
+function fingerprint(handle, size, length) {
+	// `length ?? PREFIX_SAMPLE_BYTES`, not `length || …`: a transcript that was genuinely 0 bytes at
+	// the last scan has a legitimate `prefixLength: 0`, and `||` would treat that as "absent" and
+	// substitute 4096 — hashing up to 4 KB of the CURRENT file against a prefix taken from an empty
+	// sample, which always fails the resume check and forces a full re-parse.
+	const sample = readFrom(handle, 0, Math.min(size, length ?? PREFIX_SAMPLE_BYTES));
 	let hash = 5381;
 	for (let index = 0; index < sample.length; index += 1) {
-		hash = ((hash * 33) ^ sample.charCodeAt(index)) | 0;
+		hash = Math.imul(hash, 33) ^ sample.codePointAt(index);
 	}
-	// Deliberately NOT keyed on the file size: a transcript grows on every turn, and folding the size
-	// in would change the fingerprint every time and make the offset useless on exactly the files
-	// this exists for. What is fingerprinted is the CONTENT of the head, which a rewrite changes and
-	// an append does not.
-	return `${sample.length}:${hash}`;
+	// Just the hash. An earlier version returned `${sample.length}:${hash}`, which folded the sample
+	// length in — and since the sample IS the whole file until it reaches 4 KB, the value changed on
+	// every append and no offset was ever reused. The caller passes the length it hashed last time,
+	// so what is compared is the content of the same prefix: an append leaves it alone, a rewrite
+	// does not.
+	return String(hash);
+}
+
+// An offset is only meaningful at a line boundary, and by construction it always is: it is either 0
+// or one past a newline. Verified rather than assumed, because a rewrite that preserves the hashed
+// head and grows past the old size passes every other check — and a mid-line offset silently
+// mis-parses the rest of the session.
+function startsAtLineBoundary(handle, offset) {
+	if (offset === 0) {
+		return true;
+	}
+	try {
+		return readFrom(handle, offset - 1, offset) === '\n';
+	} catch {
+		return false;
+	}
 }
 
 function readFrom(handle, from, to) {
@@ -351,11 +422,25 @@ function readScan(sessionId) {
 	if (!sessionId) {
 		return null;
 	}
+	let record;
 	try {
-		return JSON.parse(fs.readFileSync(markerPath(sessionId, 'scan'), 'utf8'));
+		record = JSON.parse(fs.readFileSync(markerPath(sessionId, 'scan'), 'utf8'));
 	} catch {
 		return null;
 	}
+	// Validated, not trusted. Markers survive seven days, so a record written by an older version of
+	// this file will be read by a newer one: an unrecognised version, or a counter that arrives as a
+	// string, would flow straight into `+=` and be emitted as data. Rejecting a record costs one full
+	// re-parse, which is the same cost as having no record at all.
+	if (!record || record.v !== SCAN_RECORD_VERSION) {
+		return null;
+	}
+	const numbers = [record.size, record.offset, record.prefixLength,
+		record.output_tokens, record.input_tokens, record.cached_input_tokens];
+	if (!numbers.every(value => Number.isInteger(value) && value >= 0)) {
+		return null;
+	}
+	return record;
 }
 
 function writeScan(sessionId, scan) {
@@ -372,7 +457,12 @@ function writeScan(sessionId, scan) {
 // The host derives a project directory name from the working directory by replacing every path
 // separator and drive colon with a dash.
 function slugForCwd(cwd) {
-	return String(cwd || process.cwd()).replace(/[\\/:]/g, '-');
+	// Measured against the real directories under ~/.claude/projects on the machine this was written
+	// on: a cwd of `C:\Users\y.lypnytskyi\improve analytics` lives in
+	// `C--Users-y-lypnytskyi-improve-analytics`. Replacing only separators left the dot in a username
+	// and the space in a folder name, producing a path that does not exist — so the fallback silently
+	// found no transcript, which is the only situation the fallback exists for.
+	return String(cwd || process.cwd()).replace(/[^A-Za-z0-9]/g, '-');
 }
 
 // Mirrors clio's TelemetryStoragePaths so consent can be read without starting clio: spawning a
@@ -402,6 +492,19 @@ function consentGranted() {
 
 let sweptThisProcess = false;
 
+// POSIX-only: process.getuid does not exist on Windows, where the per-user temp directory's ACL is
+// the only backstop (see the comment at stateDir()'s mkdirSync call). lstat, not stat, so a symlink
+// planted at this path is caught rather than followed and reported as whatever it points to.
+function assertStateDirIsOurs(dir) {
+	if (typeof process.getuid !== 'function') {
+		return;
+	}
+	const info = fs.lstatSync(dir);
+	if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o700) {
+		throw new Error(`refusing to use telemetry state directory not owned/secured by this user: ${dir}`);
+	}
+}
+
 // The path alone, created by nobody. `UserPromptSubmit` and `Stop` have no matcher support in the
 // host — they fire on EVERY prompt and every response, including in sessions that never touch
 // Creatio — so the read paths those events take must not create a directory or sweep one.
@@ -416,6 +519,13 @@ function stateDir() {
 	// local user read them, or pre-plant a symlink where a marker is about to be written. The mode is
 	// advisory on Windows, where the ACL of the per-user temp directory is what actually applies.
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	// `recursive: true` is a silent no-op on a directory that already exists: it neither applies the
+	// requested mode nor checks who owns it. On a multi-user host that gap would let another local
+	// account pre-create — or symlink — this predictable path before the legitimate user's first hook
+	// invocation ever runs, landing every marker this file writes (including the ones just hardened
+	// to 0o600) somewhere an attacker controls. Failing closed here, like every other unsafe condition
+	// in this file, rather than trusting a directory this process did not just create.
+	assertStateDirIsOurs(dir);
 	// Every claim, read and release resolves a path through here, so an unconditional sweep ran a
 	// full directory listing plus a stat per file SEVERAL times per hook invocation, and the cost
 	// grew with every stale marker any session on the machine had ever left. Housekeeping does not
@@ -478,9 +588,30 @@ function sweepStaleMarkers(dir) {
 	}
 }
 
+// Shared sanitizer for turning a session_id into a filesystem-safe path component: session_id is
+// attacker-adjacent input (it rides in on the payload), so every place that builds a path from it —
+// markers here and the transcript path below — must strip it down first, never interpolate it raw.
+function sanitizeSessionId(sessionId) {
+	return String(sessionId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 128) || 'unknown';
+}
+
 function markerPath(sessionId, suffix) {
-	const safeId = String(sessionId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 128) || 'unknown';
+	const safeId = sanitizeSessionId(sessionId);
 	return path.join(stateDirPath(), `${safeId}.${suffix}`);
+}
+
+// Removes one dispatch's request/outcome file pair once its outcome is no longer needed — resolved
+// (recorded, unknown, or a promoted/abandoned refusal) rather than still pending. Best-effort: a
+// failed unlink costs nothing but leaving the pair for the once-a-week sweep, never a lost reading, so
+// it is never allowed to throw.
+function removeDispatchFiles(sessionId, kind, nonce) {
+	for (const suffix of ['request', 'outcome']) {
+		try {
+			fs.rmSync(markerPath(sessionId, `${kind}-${nonce}-${suffix}`), { force: true });
+		} catch {
+			// Left for sweepStaleMarkers; not a correctness problem, only a tidiness one.
+		}
+	}
 }
 
 // Called only where something is about to be WRITTEN, so a read of a marker that does not exist
@@ -500,7 +631,7 @@ function claimOnce(sessionId, suffix) {
 		return false;
 	}
 	try {
-		fs.writeFileSync(markerPath(sessionId, suffix), '', { flag: 'wx' });
+		fs.writeFileSync(markerPath(sessionId, suffix), '', { flag: 'wx', mode: 0o600 });
 		return true;
 	} catch {
 		return false;
@@ -514,29 +645,75 @@ function claimOnce(sessionId, suffix) {
 // A reading dispatched but not yet confirmed is held as `pending` and only becomes the reported
 // figure once clio says it stored it. Anything else — refused, or an answer still not written — leaves
 // the older confirmed figure in place, so the reading is sent again.
-function lastReported(sessionId) {
+// One read+parse of the 'usage' marker, and — if a reading is pending — one readOutcome call, per
+// Stop. lastReported() and inFlightReading() used to do this independently (each its own read/parse
+// pass over the same file), and rememberPending() read it a third time; Stop fires on every assistant
+// response for the life of a session, so tripling that cost bought nothing. Also performs the
+// promotion side effect lastReported() used to: once an outcome resolves, the pending record is
+// cleared from the marker either way (promoted into `reported` on success, simply dropped on refusal).
+function resolveAndPromoteUsageState(sessionId) {
 	let stored;
 	try {
 		stored = JSON.parse(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'));
 	} catch {
-		return { output: 0, size: 0 };
+		return { reported: { output: 0, size: 0 }, inFlight: null };
 	}
 	let reported = { output: stored.output || 0, size: stored.size || 0 };
+	let inFlight = null;
 	if (stored.pending) {
-		const outcome = readOutcome(sessionId, 'usage');
-		if (outcome === 'recorded') {
-			reported = { output: stored.pending.output || 0, size: stored.pending.size || 0 };
-			noteUsageAttempt(sessionId, true);
-		}
-		if (outcome !== 'pending') {
+		const outcome = readOutcome(sessionId, 'usage', stored.pending.nonce);
+		if (outcome === 'pending') {
+			inFlight = { output: stored.pending.output || 0, size: stored.pending.size || 0 };
+		} else {
+			if (outcome === 'recorded' || outcome === 'unknown') {
+				// `unknown` counts as delivered here, unlike on the floor path. A duplicate reading in
+				// a series whose meaning is its maximum costs nothing; re-sending forever because an
+				// answer was merely unfamiliar would end the series at the attempt limit, which costs
+				// the data.
+				reported = { output: stored.pending.output || 0, size: stored.pending.size || 0 };
+				noteUsageAttempt(sessionId, true);
+			}
 			writeUsageMarker(sessionId, reported, null);
+			// This nonce's request/outcome pair is done: promoted above, or abandoned as a refusal
+			// old enough that `outcome` is no longer 'pending'. Without this, the per-dispatch files
+			// this design switched to (up to USAGE_ATTEMPT_LIMIT per session, every session that ever
+			// touches clio) would only ever be reclaimed by the once-a-week sweep.
+			removeDispatchFiles(sessionId, 'usage', stored.pending.nonce);
 		}
 	}
-	return reported;
+	return { reported, inFlight };
+}
+
+function lastReported(sessionId) {
+	return resolveAndPromoteUsageState(sessionId).reported;
 }
 
 // How many readings this session has dispatched without clio confirming any of them. Reset on the
 // first confirmation, so a session that reports normally is never bounded — only one that is failing.
+// Monotonic per session, so two dispatches never share a filename. Derived from the attempt counter
+// rather than from a clock, because the clock is not available to this file's tests deterministically
+// and the counter already exists.
+function usageNonce(unconfirmedCount) {
+	return `u${unconfirmedCount}`;
+}
+
+// countUnconfirmedUsage() is a plain read: two hook processes for the same session racing on the same
+// Stop can read the identical count and, before this fix, would derive the identical nonce and collide
+// on request/outcome files opened with plain 'w' — the exact truncation class the per-dispatch-nonce
+// redesign existed to remove, just reappearing on the usage path. Claiming the nonce with the same
+// 'wx' exclusive-create claimOnce() already uses for the floor makes only the winning process able to
+// use a given count; a loser tries the next candidate instead of colliding. Returns null if every
+// candidate in range is already claimed — the caller skips this Stop's dispatch rather than risk one.
+function claimUsageNonce(sessionId, baseCount) {
+	for (let count = baseCount; count < baseCount + USAGE_NONCE_CLAIM_ATTEMPTS; count += 1) {
+		const nonce = usageNonce(count);
+		if (claimOnce(sessionId, `usage-claim-${nonce}`)) {
+			return nonce;
+		}
+	}
+	return null;
+}
+
 function countUnconfirmedUsage(sessionId) {
 	try {
 		return Number.parseInt(fs.readFileSync(markerPath(sessionId, 'usage-attempts'), 'utf8'), 10) || 0;
@@ -553,7 +730,7 @@ function noteUsageAttempt(sessionId, confirmed) {
 			return;
 		}
 		fs.writeFileSync(markerPath(sessionId, 'usage-attempts'),
-			String(countUnconfirmedUsage(sessionId) + 1));
+			String(countUnconfirmedUsage(sessionId) + 1), { mode: 0o600 });
 	} catch {
 		// Cannot count: leave the bound to the transcript-size guard rather than stopping the series.
 	}
@@ -562,15 +739,7 @@ function noteUsageAttempt(sessionId, confirmed) {
 // The reading already dispatched and not yet answered, if any. `null` once clio has answered either
 // way, so a refusal reopens the reading rather than suppressing it forever.
 function inFlightReading(sessionId) {
-	try {
-		const stored = JSON.parse(fs.readFileSync(markerPath(sessionId, 'usage'), 'utf8'));
-		if (stored.pending && readOutcome(sessionId, 'usage') === 'pending') {
-			return { output: stored.pending.output || 0, size: stored.pending.size || 0 };
-		}
-	} catch {
-		// No marker yet: nothing is in flight.
-	}
-	return null;
+	return resolveAndPromoteUsageState(sessionId).inFlight;
 }
 
 function writeUsageMarker(sessionId, reported, pending) {
@@ -578,22 +747,25 @@ function writeUsageMarker(sessionId, reported, pending) {
 	try {
 		fs.writeFileSync(markerPath(sessionId, 'usage'), JSON.stringify({
 			output: reported.output, size: reported.size, ...(pending ? { pending } : {})
-		}));
+		}), { mode: 0o600 });
 	} catch {
 		// A marker we cannot write costs one duplicate reading, never a lost one.
 	}
 }
 
-function rememberPending(sessionId, outputTokens, transcriptSize) {
-	// The dispatch just truncated this kind's outcome file, so the reading is unconfirmed by
-	// construction; lastReported promotes it on a later Stop once clio's answer is there.
-	writeUsageMarker(sessionId, lastReported(sessionId), { output: outputTokens, size: transcriptSize });
+function rememberPending(sessionId, reported, outputTokens, transcriptSize, nonce) {
+	// `reported` is passed in rather than re-read: the caller already resolved it this Stop (via
+	// resolveAndPromoteUsageState), and nothing between that read and this write touches the 'usage' marker —
+	// dispatch only writes the nonce-keyed request/outcome files. The dispatch just truncated this
+	// kind's outcome file, so the reading is unconfirmed by construction; a later Stop promotes it
+	// once clio's answer is there.
+	writeUsageMarker(sessionId, reported, { output: outputTokens, size: transcriptSize, nonce });
 }
 
 // Path the transcript is read from, resolved the same way `readSessionUsage` resolves it.
 function transcriptPath(payload) {
 	return payload?.transcript_path
-		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
+		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${sanitizeSessionId(payload?.session_id)}.jsonl`);
 }
 
 function transcriptSize(payload) {
@@ -613,7 +785,7 @@ function markTouchedClio(sessionId) {
 	// silently failed to appear on a fresh machine — leaving Stop silent for the whole session.
 	ensureStateDir();
 	try {
-		fs.writeFileSync(markerPath(sessionId, 'touched'), '');
+		fs.writeFileSync(markerPath(sessionId, 'touched'), '', { mode: 0o600 });
 	} catch {
 		// Unwritable state means Stop stays silent for this session: the conservative direction.
 	}
@@ -637,27 +809,37 @@ function releaseClaim(sessionId, suffix) {
 	}
 }
 
-// Give the floor claim back after a failed emit, up to a limit. The attempt counter is deliberately
-// separate from the claim itself: the claim keeps its exclusive-create semantics, so two racing hook
-// processes still cannot both emit, while the counter only bounds how many times a retry is allowed.
-function releaseFloorClaimForRetry(sessionId) {
-	ensureStateDir();
-	const file = markerPath(sessionId, 'attempts');
-	let attempts = 0;
+// Whether the floor may be attempted again after attempt `n`. Read-only by design: it asks what clio
+// said about that attempt's own dispatch, and never mutates a claim, so two processes asking at the
+// same time cannot between them produce two dispatches.
+//
+// `rejected` is retryable — a refused send stored nothing. `none` is retryable only once the claim has
+// aged past the grace period, which covers the process dying between claiming and dispatching: the
+// claim exists, no answer ever will, and without this the guaranteed event is lost for the session.
+// `recorded`, `unknown` and `pending` are all NOT retryable: the first two mean an event may well be
+// stored, and retrying on either duplicates it.
+function floorRetryable(sessionId, attempt) {
+	const outcome = readOutcome(sessionId, 'floor', floorNonce(attempt));
+	if (outcome === 'rejected') {
+		return true;
+	}
+	if (outcome !== 'none') {
+		return false;
+	}
 	try {
-		attempts = Number.parseInt(fs.readFileSync(file, 'utf8'), 10) || 0;
+		const claimed = fs.statSync(markerPath(sessionId, floorClaimSuffix(attempt))).mtimeMs;
+		return Date.now() - claimed >= OUTCOME_GRACE_MS;
 	} catch {
-		// No counter yet: this was the first attempt.
+		return false;
 	}
-	attempts += 1;
-	try {
-		fs.writeFileSync(file, String(attempts));
-	} catch {
-		return; // Cannot bound the retries, so do not open them.
-	}
-	if (attempts < FLOOR_ATTEMPT_LIMIT) {
-		releaseClaim(sessionId, 'claimed');
-	}
+}
+
+function floorClaimSuffix(attempt) {
+	return attempt === 0 ? 'claimed' : `claimed-${attempt}`;
+}
+
+function floorNonce(attempt) {
+	return `a${attempt}`;
 }
 
 // Tools that CHANGE the environment, by verb. A list of names would go stale against a clio release
@@ -682,6 +864,9 @@ const WRITE_VERBS = [
 ];
 
 function bareTool(toolName) {
+	// String() rather than a cast: a host that sends a non-string tool name would otherwise throw
+	// inside `includes`, and every throw on this path is swallowed — so the floor would go missing
+	// for that call and nothing anywhere would say why.
 	return String(toolName ?? '').split('__').pop() ?? '';
 }
 
@@ -718,7 +903,7 @@ function isWriteCall(payload) {
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
 // line-oriented and processes the messages in order, so the whole exchange is a single write and
 // needs no async client - which is what lets the call be handed off and left to finish on its own.
-function emitEvent(sessionId, usage, eventName) {
+function emitEvent(sessionId, usage, eventName, nonce) {
 	const request = [
 		{
 			jsonrpc: '2.0',
@@ -769,7 +954,7 @@ function emitEvent(sessionId, usage, eventName) {
 		.map(message => JSON.stringify(message))
 		.join('\n');
 
-	return dispatch(sessionId, eventName === 'session_usage' ? 'usage' : 'floor', request);
+	return dispatch(sessionId, eventName === 'session_usage' ? 'usage' : 'floor', nonce, request);
 }
 
 // Fire-and-forget, deliberately. This runs inside a PostToolUse hook, so anything awaited here is
@@ -783,21 +968,39 @@ function emitEvent(sessionId, usage, eventName) {
 // answer is redirected to a second file, so the outcome survives this process and the NEXT hook
 // invocation can act on it — that is what keeps the retry and the usage gating working without
 // waiting here for either.
-function dispatch(sessionId, kind, request) {
+function dispatch(sessionId, kind, nonce, request) {
 	if (!CLIO_IS_SAFE || !ensureStateDir()) {
 		return false;
 	}
 	let stdin;
 	let stdout;
 	try {
-		const requestFile = markerPath(sessionId, `${kind}-request`);
+		// One pair of files PER DISPATCH, keyed by a nonce the caller remembers alongside what it is
+		// waiting for. A single pair per kind meant a second dispatch truncated the request file a
+		// still-running child was reading as its stdin, and truncated the outcome file it was writing
+		// to — so one child's answer could be read as the other's, and a reading clio had accepted
+		// was promoted or discarded at random. The children are detached and never awaited, so
+		// overlap is normal, not exceptional: clio takes ~1.2s and a turn can end sooner than that.
+		const requestFile = markerPath(sessionId, `${kind}-${nonce}-request`);
 		fs.writeFileSync(requestFile, `${request}\n`, { mode: 0o600 });
 		stdin = fs.openSync(requestFile, 'r');
-		// Truncated on open, so a stale answer from an earlier dispatch is never read as this one's.
-		stdout = fs.openSync(markerPath(sessionId, `${kind}-outcome`), 'w');
+		// Same 0o600 as the request file above: this marker carries the session id and, once clio
+		// answers, the outcome of a usage/floor payload — the confidentiality intent stateDir()'s
+		// 0o700 states is undercut if the file inside it defaults to the umask-derived ~0o666.
+		stdout = fs.openSync(markerPath(sessionId, `${kind}-${nonce}-outcome`), 'w', 0o600);
 		const child = spawn(CLIO, ['mcp-server'], {
 			detached: true,
 			stdio: [stdin, stdout, 'ignore'],
+			// The bare default `clio` never reaches CLIO_IS_SAFE's file check — it is left to PATH
+			// resolution, and on Windows that resolution consults the current directory and PATHEXT
+			// (.bat/.cmd/.com) before PATH is exhausted, and Node does not honor
+			// NoDefaultCurrentDirectoryInExePath (nodejs/node#46264). An untrusted/cloned repo used as
+			// cwd could therefore supply its own `clio.bat` and have it run in place of the real tool.
+			// Pinning cwd to the fixed, non-project state directory closes that off. A
+			// `CAADT_TELEMETRY_CLIO` given as a path (how the suite substitutes a stub) already went
+			// through CLIO_IS_SAFE's statSync against the real working directory, so it is left
+			// resolving against that same directory here instead of being pinned.
+			cwd: looksLikePath(CLIO) ? undefined : stateDirPath(),
 			windowsHide: true
 		});
 		// An 'error' event with no listener THROWS. A missing or unrunnable binary emits one, and
@@ -858,7 +1061,6 @@ function parseRecorded(answer) {
 	// call success on its own, and not something to call a refusal either: null sends the caller to
 	// the substring fallback, which is what shipped before, so an unrecognised shape can never make
 	// the floor worse than it already was.
-	void seenResponse;
 	return null;
 }
 
@@ -889,6 +1091,23 @@ function telemetryStatus(result) {
 	return null;
 }
 
+// Whether the answer is a whole line rather than one being written right now. A half-written line
+// must stay `pending`, because calling it definite is what turned a live write into a false refusal.
+function looksComplete(answer) {
+	for (const line of answer.split('\n')) {
+		if (!line.startsWith('{')) {
+			continue;
+		}
+		try {
+			JSON.parse(line);
+			return true;
+		} catch {
+			// Keep looking: an earlier line may be complete even while the last one is not.
+		}
+	}
+	return false;
+}
+
 // What clio said about the PREVIOUS dispatch of this kind, read on a later invocation.
 //   'recorded'  clio stored the event.
 //   'rejected'  clio answered something else, or the spawn never produced an answer.
@@ -896,8 +1115,8 @@ function telemetryStatus(result) {
 //   'none'      nothing was ever dispatched.
 // Anything short of 'recorded' is retried, so an answer that arrives late costs a duplicate reading
 // rather than a lost one, which is the right way round for a series whose meaning is that it grows.
-function readOutcome(sessionId, kind) {
-	const file = markerPath(sessionId, `${kind}-outcome`);
+function readOutcome(sessionId, kind, nonce) {
+	const file = markerPath(sessionId, `${kind}-${nonce}-outcome`);
 	let stat;
 	let answer = '';
 	try {
@@ -910,11 +1129,23 @@ function readOutcome(sessionId, kind) {
 	if (parsed !== null) {
 		return parsed ? 'recorded' : 'rejected';
 	}
-	if (answer.includes('"recorded"')) {
-		// Last resort for a shape this code does not recognise: the check that shipped before. A
-		// structured status or an error object always wins over it, which is what removes the false
-		// success on a rejection whose prose happens to contain the word.
-		return 'recorded';
+	if (looksComplete(answer)) {
+		// Only a complete line reaches the substring fallback: a half-written line can contain the
+		// literal bytes "recorded" inside a field this code does not parse as status (e.g. an
+		// allowed-values list), and calling that terminal before the write finishes is the false
+		// success this ordering exists to prevent.
+		if (answer.includes('"recorded"')) {
+			// Last resort for a shape this code does not recognise: the check that shipped before. A
+			// structured status or an error object always wins over it, which is what removes the false
+			// success on a rejection whose prose happens to contain the word.
+			return 'recorded';
+		}
+		// An answer arrived, it parses as a complete JSON-RPC line, and it states neither a status
+		// this code reads nor an error. That is NOT a refusal: inside a JSON-encoded text block the
+		// bytes are \"recorded\", which the substring check above cannot see, so a recorded event
+		// whose shape is merely unfamiliar would otherwise be retried — up to the attempt limit,
+		// emitting the floor two more times and corrupting the denominator it exists to be.
+		return 'unknown';
 	}
 	// Nothing definite. Either the child has not answered yet, it is answering RIGHT NOW and this is
 	// half a line, or it never ran at all — a detached spawn reports neither exit code nor error
@@ -936,7 +1167,9 @@ function normalizePayload(payload) {
 		return payload;
 	}
 	const normalized = { ...payload };
-	if (!normalized.session_id && normalized.conversation_id) {
+	if (!normalized.session_id
+		&& typeof normalized.conversation_id === 'string'
+		&& normalized.conversation_id.trim()) {
 		normalized.session_id = normalized.conversation_id;
 	}
 	if (typeof normalized.tool_input === 'string') {
@@ -1004,28 +1237,35 @@ function reportSessionUsage(payload, sessionId) {
 	}
 	// Stop fires per response, so this runs many times per session. When the transcript has not grown
 	// since the last reading there is provably nothing new, so the file is not read or parsed at all —
-	// a stat instead of a full parse of a file that reaches megabytes. (Parsing only the appended tail
-	// would save more, but it needs a byte offset that survives truncation and partial lines; the
-	// growth check removes the repeated work on quiet turns without that state.)
+	// a stat instead of opening it at all. Everything past this point goes through the offset-based
+	// reader described at `readSessionUsage`, so a turn that DID grow the transcript parses only the
+	// bytes appended since the last reading; this check is what removes even that on a quiet turn.
 	const size = transcriptSize(payload);
-	const previous = lastReported(sessionId);
+	// One read of the 'usage' marker for both checks below, instead of lastReported() and
+	// inFlightReading() each re-reading and re-parsing it.
+	const { reported: previous, inFlight } = resolveAndPromoteUsageState(sessionId);
 	if (size !== 0 && size === previous.size) {
 		return;
 	}
-	// A reading for this exact transcript may already be in flight: the emit is handed off, so a Stop
-	// arriving before clio answers would otherwise send the same row again. Only while the answer is
-	// genuinely outstanding — once it comes back refused the reading is no longer in flight and is
-	// re-sent, which is what keeps a refused reading retryable.
-	const outstanding = inFlightReading(sessionId);
-	if (outstanding && outstanding.size === size) {
+	// A reading is already in flight: the emit is handed off, so a Stop arriving before clio answers
+	// would otherwise dispatch a second child over the first one's files. This used to also require
+	// `outstanding.size === size`, which made it decorative — the transcript grows on nearly every
+	// turn, so the sizes almost never matched and overlapping dispatches were the norm. Waiting is
+	// safe because the counters are running TOTALS: the next reading carries everything this one
+	// would have, so what is lost is resolution on fast turns, never a number. Once the answer comes
+	// back — refused or otherwise — the reading is no longer in flight and the series continues.
+	if (inFlight) {
 		return;
 	}
-	if (countUnconfirmedUsage(sessionId) >= USAGE_ATTEMPT_LIMIT) {
+	// Read once and reused below for the nonce: usageNonce() used to re-read this same marker file a
+	// second time to derive the identical count this check just obtained.
+	const unconfirmedCount = countUnconfirmedUsage(sessionId);
+	if (unconfirmedCount >= USAGE_ATTEMPT_LIMIT) {
 		// Every reading so far has gone unconfirmed. Reading the transcript again would cost a full
 		// parse and a process spawn to learn the same thing, so the series stops for this session.
 		return;
 	}
-	const usage = readSessionUsage(payload);
+	const usage = readSessionUsage(payload, size);
 	// An unchanged or unreadable total is not worth a reading: a row of zeroes is indistinguishable from
 	// a session that genuinely spent nothing, and a repeat says nothing in a series that means growth.
 	if (!usage.hasData || usage.output_tokens <= previous.output) {
@@ -1035,16 +1275,36 @@ function reportSessionUsage(payload, sessionId) {
 	// promoted to reported only once a later Stop sees clio confirm it. Marking a refused reading as
 	// delivered hides the failure behind a series that merely looks sparse, and a persistently
 	// refused field would end the series in silence.
-	if (emitEvent(sessionId, usage, 'session_usage')) {
-		rememberPending(sessionId, usage.output_tokens, size);
+	// The nonce ties this dispatch to the pending record, so a later invocation reads the answer to
+	// THIS reading rather than to whichever dispatch wrote last. Claimed, not just derived: see
+	// claimUsageNonce() for why a plain derivation let two concurrent processes collide.
+	const nonce = claimUsageNonce(sessionId, unconfirmedCount);
+	if (nonce === null) {
+		// Every candidate this Stop tried was already claimed by a concurrent process for this
+		// session. Nothing lost: the transcript only grows, so the next Stop reports the same total
+		// (or more) under a fresh nonce.
+		return;
+	}
+	if (emitEvent(sessionId, usage, 'session_usage', nonce)) {
+		rememberPending(sessionId, previous, usage.output_tokens, size, nonce);
 		noteUsageAttempt(sessionId, false);
 	}
 }
 
 // A clio MCP call: the floor event, and the routing the agent needs to build a funnel on top of it.
 function routeClioCall(payload, sessionId) {
-	const toolName = payload?.tool_name ?? '';
-	if (!toolName.includes('clio') || TELEMETRY_TOOLS.some(tool => toolName.endsWith(tool))) {
+	const toolName = String(payload?.tool_name ?? '');
+	if (!toolName.includes('clio')) {
+		return;
+	}
+	// Checked against the command the executor actually runs, not the tool name. `send-telemetry` is
+	// not advertised in `tools/list` — this file says so where it builds the request — so the agent's
+	// own telemetry arrives as `clio-run` with `command: "send-telemetry"`, and a name-suffix test
+	// never matched it. The consequence was small but backwards: a session whose only clio interaction
+	// was its own telemetry marked itself `touched`, spent its routing reminder on a telemetry call,
+	// and opened a `session_usage` series. Same class as the `modify-` verb that was missed once
+	// before: the verb that matters travels inside the executor's command.
+	if (TELEMETRY_TOOLS.some(tool => writeVerbSubject(payload) === tool || toolName.endsWith(tool))) {
 		return;
 	}
 	// Two independent claims, because the floor and the routing answer different questions.
@@ -1068,13 +1328,27 @@ function routeClioCall(payload, sessionId) {
 		// would interrupt the developer's task with a question they did not ask for.
 		return;
 	}
-	let floorClaimed = claimOnce(sessionId, 'claimed');
-	if (!floorClaimed && readOutcome(sessionId, 'floor') === 'rejected') {
-		// A dispatch this session already made came back refused, so the claim it spent bought
-		// nothing. Give it back and use it here rather than on some later call, so the floor - the
-		// tier this design calls guaranteed - is retried while the session is still running.
-		releaseFloorClaimForRetry(sessionId);
-		floorClaimed = claimOnce(sessionId, 'claimed');
+	// Each attempt is its own exclusively-created claim (`claimed`, `claimed-1`, `claimed-2`), so a
+	// retry never deletes a claim another process may have just taken. Releasing and re-claiming was
+	// two operations: two hook processes running in parallel — which Claude Code produces routinely by
+	// batching tool calls — could interleave them so that both ended up holding a claim and both
+	// dispatched a floor event. An over-counted floor is worse than an under-counted funnel, because
+	// every reliability ratio is computed against it.
+	let attempt = 0;
+	let floorClaimed = claimOnce(sessionId, floorClaimSuffix(attempt));
+	while (!floorClaimed && attempt + 1 < FLOOR_ATTEMPT_LIMIT) {
+		if (!floorRetryable(sessionId, attempt)) {
+			break;
+		}
+		// Deliberately NOT cleaned up here, unlike the usage path: floorRetryable() re-derives
+		// "was this attempt rejected" from THIS OUTCOME FILE on every call — there is no durable
+		// record of it anywhere else, since the floor has no equivalent of the usage marker's
+		// promoted-total write. Deleting it early would force later calls onto the weaker,
+		// GRACE-PERIOD-gated 'none' path instead, which is slower and (measured while writing this)
+		// stalls the retry loop entirely once a later attempt's claim file already exists. Left for
+		// the weekly sweep — at most FLOOR_ATTEMPT_LIMIT pairs per session, not per dispatch.
+		attempt += 1;
+		floorClaimed = claimOnce(sessionId, floorClaimSuffix(attempt));
 	}
 	const remind = claimOnce(sessionId, 'turn') || (isWriteCall(payload) && claimOnce(sessionId, 'write'));
 	if (!floorClaimed && !remind) {
@@ -1084,13 +1358,19 @@ function routeClioCall(payload, sessionId) {
 		// Dispatched whether or not the routing reaches the agent: if clio refuses the call (an older
 		// clio, a broken install), the agent's own stages are then the only telemetry there is. The
 		// outcome is read on a later call rather than awaited here — see dispatch().
-		if (!emitEvent(sessionId, readSessionUsage(payload), 'workflow_started')) {
-			releaseFloorClaimForRetry(sessionId);
-		}
+		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started', floorNonce(attempt));
 	}
 	const routing = remind ? routingOutput(sessionId) : null;
 	if (routing) {
-		process.stdout.write(routing);
+		// fs.writeSync, not process.stdout.write: the latter is buffered and asynchronous on macOS,
+		// and `process.exit(0)` below discards pending stdout writes — so the host could receive
+		// truncated JSON, which is exactly the "stdout the host could mistake for output" this file
+		// promises not to produce. The rest of the file already uses raw descriptors.
+		try {
+			fs.writeSync(1, routing);
+		} catch {
+			// A closed stdout is not a reason to fail the tool call.
+		}
 	}
 }
 

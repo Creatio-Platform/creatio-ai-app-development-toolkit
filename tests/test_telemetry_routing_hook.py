@@ -1,3 +1,4 @@
+import concurrent.futures
 import glob
 import json
 import re
@@ -43,6 +44,17 @@ REJECTED_REPLY = ("process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,resul
                   "{success:false,status:'rejected',error:{code:'invalid-token'}}}}));")
 # A clio that hangs: the point of the promptness test, since the hook must not wait for it.
 HANGING_REPLY = "setTimeout(() => {}, 30000);"
+# An answer that exists, parses, and states nothing this parser reads: no structured status, no error.
+# The point is that it must NOT be read as a refusal — a stored event retried up to the attempt limit
+# is a corrupted denominator, and the substring fallback cannot save it because inside a JSON-encoded
+# text block the bytes are an escaped "recorded".
+OPAQUE_REPLY = ("process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,result:"
+                "{content:[{type:'text',text:'the event was handled'}]}}));")
+# The other shape clio may answer with: the status inside a JSON text block rather than in
+# structuredContent. If this is what it really sends, every `recorded` assertion in CI would
+# otherwise be exercising a shape that never occurs in production.
+TEXT_RECORDED_REPLY = ("process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,result:{content:"
+                       "[{type:'text',text:JSON.stringify({success:true,status:'recorded'})}]}}));")
 # A refusal whose payload names a `recorded` field, so the raw bytes contain the quoted word
 # while the response is plainly an error. Read as a substring this is indistinguishable from
 # success; read as JSON-RPC it is a refusal.
@@ -79,13 +91,17 @@ def run_hook(
     host: str | None = None,
     capture: "Path | None" = None,
     capture_dir: str | None = None,
+    home: str | None = None,
 ):
     """Invoke the hook exactly as Claude Code does: JSON on stdin, JSON on stdout.
 
     `telemetry_home` redirects clio's telemetry storage, so a test controls the consent
     state and can never read or write the developer's real telemetry. `clio` defaults to a
     name that does not exist, which exercises the floor-emit failure path without spawning
-    anything; the integration test below points it at the real binary.
+    anything; the integration test below points it at the real binary. `home` redirects
+    Node's `os.homedir()` (both `HOME` and `USERPROFILE`, since the hook runs on Windows too),
+    so a test can exercise the transcript-path fallback without ever touching the developer's
+    real `~/.claude/projects`.
     """
     return subprocess.run(
         [NODE, str(HOOK)],
@@ -107,6 +123,7 @@ def run_hook(
             "CAADT_TELEMETRY_CLIO": clio,
             **({"CAADT_TELEMETRY_HOOK_HOST": host} if host else {}),
             **({"CAADT_STUB_CAPTURE": str(capture)} if capture else {}),
+            **({"HOME": home, "USERPROFILE": home} if home else {}),
         },
     )
 
@@ -134,6 +151,7 @@ def stub_clio(*, answers: str = "recorded") -> "tuple[str, Path]":
     # answers; a stub that prints nothing reproduces a rejection without restating clio's error shape.
     reply = {"recorded": RECORDED_REPLY, "rejected": REJECTED_REPLY,
              "hangs": HANGING_REPLY, "silent": "",
+             "opaque": OPAQUE_REPLY, "text-recorded": TEXT_RECORDED_REPLY,
              "echoes-recorded": ECHOES_RECORDED_REPLY}[answers]
     (directory / "mcp-server").write_text(
         STUB_CAPTURE_SOURCE + reply + NEWLINE, encoding="utf-8"
@@ -161,13 +179,43 @@ def await_payloads(capture: "Path", count: int, timeout: float = 20.0,
     return matching()
 
 
+def settled_payloads(capture: "Path", count: int, event_name: "str | None" = None,
+                     settle: float = 1.5) -> "list[dict]":
+    """Wait for `count` payloads, then keep watching to see whether more arrive.
+
+    `await_payloads` returns the moment the lower bound is met, so `assertEqual(len(...), 1)` could
+    not fail on a duplicate that landed 50 ms later — which is exactly what the tests about NOT
+    re-sending are for. This one is the assertion those tests need.
+    """
+    payloads = await_payloads(capture, count, event_name=event_name)
+    deadline = time.monotonic() + settle
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        payloads = [p for p in sent_payloads(capture)
+                    if event_name is None or p["event_name"] == event_name]
+    return payloads
+
+
+def outcome_files(session: str, kind: str) -> "list[Path]":
+    """Every answer file for this session and kind.
+
+    One file per DISPATCH, not per kind: a second dispatch used to truncate the file a still-running
+    child was writing to, so the files now carry a nonce and the tests have to look them all up.
+    """
+    state = Path(_TMP, "caadt-telemetry-routing")
+    if not state.exists():
+        return []
+    return sorted(state.glob(f"{session}.{kind}-*-outcome"))
+
+
 def await_outcome(session: str, kind: str, timeout: float = 20.0) -> str:
-    """Wait until clio's answer for a dispatch has been written, and return it."""
-    answer = Path(_TMP, "caadt-telemetry-routing", f"{session}.{kind}-outcome")
+    """Wait until clio's answer for the most recent dispatch has been written, and return it."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if answer.exists() and answer.read_text(encoding="utf-8").strip():
-            return answer.read_text(encoding="utf-8")
+        for answer in outcome_files(session, kind):
+            text = answer.read_text(encoding="utf-8")
+            if text.strip():
+                return text
         time.sleep(0.05)
     return ""
 
@@ -178,12 +226,20 @@ def age_out_outcome(session: str, kind: str) -> None:
     An empty answer is ambiguous — a child still starting looks exactly like a clio that never ran —
     so the hook resolves it by age. Backdating makes that deterministic instead of a sleep.
     """
-    answer = Path(_TMP, "caadt-telemetry-routing", f"{session}.{kind}-outcome")
-    answer.parent.mkdir(parents=True, exist_ok=True)
-    if not answer.exists():
-        answer.write_text("", encoding="utf-8")
+    state = Path(_TMP, "caadt-telemetry-routing")
+    state.mkdir(parents=True, exist_ok=True)
+    answers = outcome_files(session, kind)
+    if not answers:
+        # No dispatch has created one: stand in for the first attempt so the age check has a file.
+        nonce = "a0" if kind == "floor" else "u0"
+        answers = [state / f"{session}.{kind}-{nonce}-outcome"]
+        answers[0].write_text("", encoding="utf-8")
     old = time.time() - 60
-    os.utime(answer, (old, old))
+    for answer in answers:
+        os.utime(answer, (old, old))
+    # The claim file's own age is what makes an unanswered dispatch retryable, so it ages too.
+    for claim in Path(_TMP, "caadt-telemetry-routing").glob(f"{session}.claimed*"):
+        os.utime(claim, (old, old))
 
 
 def sent_payloads(capture: "Path") -> "list[dict]":
@@ -201,6 +257,43 @@ def sent_payloads(capture: "Path") -> "list[dict]":
         if arguments.get("command") == "send-telemetry":
             payloads.append(arguments["args"])
     return payloads
+
+
+PREFIX_SAMPLE_BYTES = 4096
+
+
+def write_large_transcript(turns: int = 4, pad_bytes: int = 6000) -> "tuple[Path, int]":
+    """A transcript whose head exceeds the hook's fingerprint sample, plus its expected output total.
+
+    The resume path is only taken when the hashed prefix stops changing, i.e. once the file is larger
+    than PREFIX_SAMPLE_BYTES. Every other fixture here is a few hundred bytes, so the offset was never
+    reused and the incremental reader had no coverage at all — the equivalence test compared one full
+    parse against another.
+    """
+    path = Path(tempfile.mkdtemp(prefix="caadt-large-transcript-", dir=_TMP), "session.jsonl")
+    # A padded first line, so the hashed head is stable while later lines are appended.
+    lines = [json.dumps({"type": "summary", "note": "x" * pad_bytes})]
+    total = 0
+    for turn in range(turns):
+        total += 3
+        lines.append(json.dumps({"message": {"model": "claude-opus-5", "usage": {
+            "input_tokens": 10 + turn, "output_tokens": 3,
+            "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0}}}))
+    path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+    assert path.stat().st_size > PREFIX_SAMPLE_BYTES, "fixture must exceed the fingerprint sample"
+    return path, total
+
+
+def append_turn(path: "Path", output_tokens: int, input_tokens: int = 20) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"message": {"model": "claude-opus-5", "usage": {
+            "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "cache_read_input_tokens": 200, "cache_creation_input_tokens": 0}}}) + chr(10))
+
+
+def scan_marker(session: str) -> dict:
+    return json.loads(
+        Path(_TMP, "caadt-telemetry-routing", f"{session}.scan").read_text(encoding="utf-8"))
 
 
 def write_transcript() -> str:
@@ -609,9 +702,9 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertGreaterEqual(len(readings), 2,
                                 "a reading clio did not accept must be re-sent, not remembered as sent")
         marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.usage")
-        if marker.exists():
-            self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 0,
-                             "nothing may be recorded as reported until clio confirms it")
+        self.assertTrue(marker.exists(), "a dispatched reading must leave a pending record")
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["output"], 0,
+                         "nothing may be recorded as reported until clio confirms it")
 
     def test_sweeps_stale_markers_but_not_on_every_call(self):
         # Marker files are per session and nothing removes them when a session ends, so they need a
@@ -701,9 +794,10 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
                       "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
             await_outcome(session, "usage")
 
-        readings = [p for p in sent_payloads(capture) if p["event_name"] == "session_usage"]
-        self.assertLessEqual(len(readings), 5, "bounded by USAGE_ATTEMPT_LIMIT")
-        self.assertGreater(len(readings), 1, "a few retries are the point; stopping at one is not")
+        # Exactly the limit. `<= 5` also accepted 2, 3 or 4 - that is, a series that ends EARLY,
+        # which is the direction that loses data and the thing this bound is written against.
+        readings = settled_payloads(capture, 5, event_name="session_usage")
+        self.assertEqual(len(readings), 5, "bounded by USAGE_ATTEMPT_LIMIT, and not lower")
 
     def test_an_executor_call_with_no_readable_command_counts_as_a_write(self):
         # `clio-run` alone is read/write-ambiguous, so an unreadable command used to be classified as
@@ -881,11 +975,19 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         # The latest turn's per-request figures, not a sum of them.
         self.assertEqual(readings[-1]["input_tokens"], 50)
 
-    def test_a_rewritten_transcript_is_read_from_scratch(self):
+    def test_a_rewritten_transcript_abandons_the_offset_without_losing_the_total(self):
         # Compaction rewrites the transcript. A remembered offset would then point into the middle of
         # different content and silently under-report the session — the failure that made this
         # optimisation risky at all, which is why the offset is trusted only while a fingerprint of
         # the file's head still matches.
+        #
+        # This test used to demand the total RESTART from zero on a rewrite, which is what the code
+        # did and is the more serious of the two bugs here: `session_usage` is a monotonic series, so
+        # a reading that goes backwards is suppressed by the growth gate — not for one turn, but for
+        # the rest of the session. The series went quiet rather than wrong, which is why neither this
+        # suite nor a dashboard would have called it out. The two cases are also indistinguishable
+        # from the file alone (both present a changed fingerprint), so the code can only serve one:
+        # it carries the committed total forward as a baseline and re-parses the new bytes on top.
         session = str(uuid.uuid4())
         home = telemetry_home("granted")
         stub, capture = stub_clio()
@@ -911,8 +1013,384 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
                   "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
 
         readings = await_payloads(capture, 2, event_name="session_usage")
-        self.assertEqual([r["output_tokens"] for r in readings], [7, 300],
-                         "a rewritten transcript must be re-read from the beginning")
+        # 307, not 300: every byte of the new file is re-parsed (the offset is discarded), and the 7
+        # already reported for this session is kept as the floor under it. 300 would mean the series
+        # stepped backwards and then stayed silent.
+        self.assertEqual([r["output_tokens"] for r in readings], [7, 307],
+                         "a rewrite must re-parse from byte zero without discarding what was reported")
+
+    def test_a_stop_event_without_transcript_path_falls_back_to_the_slugged_home_location(self):
+        # Every other Stop test supplies `transcript_path` directly, so the fallback that derives
+        # it from `~/.claude/projects/<slugged cwd>/<session_id>.jsonl` has never actually been
+        # exercised end-to-end — only unit-level, on the slug string itself.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        userhome = tempfile.mkdtemp(prefix="caadt-fallback-home-", dir=_TMP)
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub, "home": userhome}
+        cwd = str(Path(_TMP, "fallback project.dir"))
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": cwd},
+                 telemetry_home=home, **stubbed)
+
+        # Mirrors slugForCwd(): non-alphanumeric characters (including the dot and space a naive
+        # separator-only replace would leave behind) become '-'.
+        slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+        project_dir = Path(userhome, ".claude", "projects", slug)
+        project_dir.mkdir(parents=True, exist_ok=True)
+        transcript = project_dir / f"{session}.jsonl"
+        transcript.write_text(json.dumps({"message": {"model": "claude-opus-5", "usage": {
+            "input_tokens": 10, "output_tokens": 7}}}) + chr(10), encoding="utf-8")
+
+        run_hook({"session_id": session, "hook_event_name": "Stop", "cwd": cwd},
+                 telemetry_home=home, **stubbed)
+
+        readings = await_payloads(capture, 1, event_name="session_usage")
+        self.assertEqual(readings[0]["output_tokens"], 7,
+                         "omitting transcript_path must still find the transcript under the home fallback")
+
+    def test_the_resume_path_is_actually_taken_and_agrees_with_a_full_parse(self):
+        # The equivalence test this replaces compared a full parse against a full parse: every fixture
+        # was under the 4 KB fingerprint sample, so the sample WAS the whole file, its hash changed on
+        # every append, and the offset was never once reused. It would have passed with the entire
+        # resume branch deleted.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        transcript, expected = write_large_transcript()
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+        await_outcome(session, "usage")
+        first_offset = scan_marker(session)["offset"]
+        append_turn(transcript, output_tokens=11)
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+
+        readings = await_payloads(capture, 2, event_name="session_usage")
+        # The resume actually happened: a non-zero offset that advanced.
+        self.assertGreater(first_offset, 0, "the offset must be reused, not restarted at 0")
+        self.assertGreater(scan_marker(session)["offset"], first_offset)
+        # And it agrees with the arithmetic a full parse would produce.
+        self.assertEqual([r["output_tokens"] for r in readings], [expected, expected + 11])
+        self.assertEqual(readings[-1]["input_tokens"], 20, "latest reading, not a sum")
+
+    def test_a_compacted_transcript_does_not_end_the_series(self):
+        # Compaction rewrites the transcript shorter and with a different head, so the offset is
+        # correctly abandoned — but the accumulated totals were abandoned with it, and the monotonic
+        # gate ("only report a total that grew") then compared the small new total against the large
+        # old one and skipped every remaining reading. The series went silent while looking sparse,
+        # which is the exact failure this whole tier exists to prevent.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        transcript, expected = write_large_transcript()
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+        await_outcome(session, "usage")
+
+        # Compaction: a different, shorter file at the same path.
+        transcript.write_text(
+            json.dumps({"type": "summary", "note": "compacted"}) + chr(10)
+            + json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": 5, "output_tokens": 4}}}) + chr(10),
+            encoding="utf-8")
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+
+        readings = await_payloads(capture, 2, event_name="session_usage")
+        self.assertEqual(len(readings), 2, "a compaction must not end the series")
+        self.assertEqual(readings[1]["output_tokens"], expected + 4,
+                         "what was already committed must be carried forward, not restarted")
+
+    def test_a_scan_marker_from_another_version_is_discarded(self):
+        # Markers live for seven days, so a record written by an older version of the hook will be
+        # read by a newer one. Honouring its offset while misreading its fields would under-report the
+        # rest of the session permanently; one full re-parse is the correct price.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        transcript, expected = write_large_transcript()
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        marker = Path(_TMP, "caadt-telemetry-routing", f"{session}.scan")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({
+            "v": 99, "size": 10, "offset": 10, "prefix": "0", "prefixLength": 10,
+            "output_tokens": "not a number", "input_tokens": 0, "cached_input_tokens": 0,
+        }), encoding="utf-8")
+
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+
+        reading = await_payloads(capture, 1, event_name="session_usage")[0]
+        self.assertEqual(reading["output_tokens"], expected,
+                         "an unreadable record must produce a full re-parse, not a corrupt total")
+
+    def test_a_synthetic_turn_does_not_zero_the_latest_reading_fields(self):
+        # Measured on real transcripts: Claude Code writes turn-boundary messages with
+        # `model: "<synthetic>"` and an all-zero usage block. Skipping only the model token left the
+        # block, which set hasData and overwrote input_tokens/cached_input_tokens — the two
+        # LATEST-READING fields — with zeros, so a session that had spent hundreds of thousands of
+        # tokens reported zeros and looked like a healthy reading.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        transcript = Path(tempfile.mkdtemp(prefix="caadt-synth-tail-", dir=_TMP), "session.jsonl")
+        transcript.write_text(
+            json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": 4000, "output_tokens": 900,
+                "cache_read_input_tokens": 7000, "cache_creation_input_tokens": 0}}}) + chr(10)
+            + json.dumps({"message": {"model": "<synthetic>", "usage": {
+                "input_tokens": 0, "output_tokens": 0,
+                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}) + chr(10),
+            encoding="utf-8")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, clio=NODE, capture=capture, capture_dir=stub)
+
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)},
+                 telemetry_home=home, clio=NODE, capture=capture, capture_dir=stub)
+
+        reading = await_payloads(capture, 1, event_name="session_usage")[0]
+        self.assertEqual(reading["input_tokens"], 4000, "a synthetic turn must not zero this")
+        self.assertEqual(reading["cached_input_tokens"], 7000)
+        self.assertEqual(reading["output_tokens"], 900)
+        self.assertEqual(reading["model"], "claude-opus-5")
+
+    def test_exactly_one_floor_event_per_session(self):
+        # R2's central claim, and it was asserted only in the class that needs a real clio binary and
+        # is skipped by default — so CI never checked the one invariant the denominator depends on.
+        # A duplicate floor silently inflates it, which biases every ratio computed against it.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        await_outcome(session, "floor")
+        run_hook({"session_id": session, "hook_event_name": "UserPromptSubmit"},
+                 telemetry_home=home, **stubbed)
+        run_hook({"session_id": session, "tool_name": "mcp__clio__clio-run",
+                  "tool_input": {"command": "create-app"}}, telemetry_home=home, **stubbed)
+        result = run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                          telemetry_home=home, **stubbed)
+
+        self.assertEqual(result.returncode, 0)
+        floor = settled_payloads(capture, 1, event_name="workflow_started")
+        self.assertEqual(len(floor), 1, "the floor is the denominator: exactly one per session")
+
+    def test_no_second_floor_while_the_first_answer_is_outstanding(self):
+        # The retry must not fire on an answer that has not arrived. With a hanging clio nothing can
+        # have been answered, so a second dispatch would be unambiguously wrong — and this is the
+        # branch the fast recording stub reaches only by luck.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        hanging, capture = stub_clio(answers="hangs")
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": hanging}
+
+        for _ in range(3):
+            run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                     telemetry_home=home, **stubbed)
+
+        floor = settled_payloads(capture, 1, event_name="workflow_started")
+        self.assertEqual(len(floor), 1, "a pending answer is not a refusal")
+
+    def test_no_second_reading_while_the_first_answer_is_outstanding(self):
+        # Same for the series, and this one used to be guarded by comparing transcript SIZES — which
+        # differ on nearly every turn, so the guard was decorative and overlapping dispatches were the
+        # norm. Overlap is what let one child truncate another's files.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        hanging, capture = stub_clio(answers="hangs")
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": hanging}
+        transcript, _ = write_large_transcript()
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+        append_turn(transcript, output_tokens=50)
+        run_hook({"session_id": session, "hook_event_name": "Stop",
+                  "transcript_path": str(transcript)}, telemetry_home=home, **stubbed)
+
+        readings = settled_payloads(capture, 1, event_name="session_usage")
+        self.assertEqual(len(readings), 1,
+                         "a grown transcript must not start a second dispatch over the first's files")
+
+    def test_parallel_hook_processes_emit_one_floor_between_them(self):
+        # Claude Code batches tool calls, so two PostToolUse hooks on one session run concurrently as
+        # a matter of course. `claimOnce` is exclusive-create for exactly this reason, and nothing
+        # tested it: every other test here is strictly sequential.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        payload = {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = [pool.submit(run_hook, dict(payload), telemetry_home=home,
+                                   clio=NODE, capture=capture, capture_dir=stub)
+                       for _ in range(8)]
+            for future in results:
+                self.assertEqual(future.result().returncode, 0)
+
+        # `run_hook` returning only means the hook PROCESS exited — the detached child it spawned and
+        # unref'd (the one that actually writes the outcome file and, on the winning attempt, the
+        # payload) can still be running. Synchronizing on that outcome file first, rather than relying
+        # on `settled_payloads`' fixed settle window alone, removes most of the risk of a straggling
+        # child under CI load being read as "no further event landed" before it has actually run.
+        await_outcome(session, "floor")
+        floor = settled_payloads(capture, 1, event_name="workflow_started")
+        self.assertEqual(len(floor), 1, "eight racing processes must produce one floor event")
+
+    def test_an_unrecognised_answer_is_not_treated_as_a_refusal(self):
+        # clio's live response shape could not be captured while this was written, so the parser has a
+        # fallback for a shape it does not know. An unknown answer must NOT retry the floor: inside a
+        # JSON-encoded text block the bytes are an escaped "recorded", which the substring check
+        # cannot see, so a stored event would otherwise be emitted again up to the attempt limit.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        opaque, capture = stub_clio(answers="opaque")
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": opaque}
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        await_outcome(session, "floor")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        floor = settled_payloads(capture, 1, event_name="workflow_started")
+        self.assertEqual(len(floor), 1, "an answer that says nothing definite must not be retried")
+
+    def test_a_recorded_status_inside_a_text_block_counts_as_recorded(self):
+        # The other shape clio may answer with. If this is what it really sends, then every
+        # `recorded` path in CI would otherwise be testing a shape that never occurs.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        textual, capture = stub_clio(answers="text-recorded")
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": textual}
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        await_outcome(session, "floor")
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        floor = settled_payloads(capture, 1, event_name="workflow_started")
+        self.assertEqual(len(floor), 1, "a recorded event must never be re-emitted")
+
+    def test_a_bare_command_that_does_not_exist_surfaces_nothing(self):
+        # The path-shaped case is refused before `spawn` by the executable guard, so it never reached
+        # the 'error' listener the previous version of this test was entirely about. A BARE name does
+        # spawn, and its ENOENT arrives as an error event — which throws when unhandled.
+        session = str(uuid.uuid4())
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"),
+            clio="caadt-definitely-no-such-command",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "", "a stack trace on stderr is output too")
+        self.assertIn("workflow_started", result.stdout, "the routing still reaches the agent")
+
+    def test_a_path_shaped_executable_that_is_not_a_file_is_never_spawned(self):
+        # The security guard: a value that looks like a path must resolve to a real file, or nothing
+        # is dispatched at all. Asserted by the absence of the request file, since no child runs.
+        session = str(uuid.uuid4())
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"),
+            clio=str(Path(_TMP, "not-a-real-file", "clio.exe")),
+        )
+
+        self.assertEqual(result.returncode, 0)
+        state = Path(_TMP, "caadt-telemetry-routing")
+        self.assertEqual(list(state.glob(f"{session}.floor-*-request")), [],
+                         "a path-shaped value that is not a file must not be spawned")
+
+    def test_a_bare_clio_is_spawned_with_cwd_pinned_away_from_the_hooks_own_directory(self):
+        # The Windows PATHEXT/cwd hijack this closes: a bare `clio` is left to PATH resolution, and
+        # on Windows that resolution consults the process's OWN current directory before PATH is
+        # exhausted (nodejs/node#46264) — so an untrusted/cloned repository used as the hook's cwd
+        # could supply its own `clio`-shaped executable and have it run in place of the real tool.
+        # A prior version of this test only measured that ENOENT reached the error listener when no
+        # decoy was reachable at all; it could not have told a pinned cwd apart from an unpinned one,
+        # because both looked identical from here. This one can: a DECOY `mcp-server` sits in the
+        # hook's own process directory — standing in for the untrusted repo — configured to answer
+        # exactly like a real clio would. If cwd pinning were ever dropped, `node mcp-server` (spawned
+        # with the bare name "node") would resolve THIS file relative to the hook's inherited cwd and
+        # it would answer; with pinning in place, the spawned child's cwd is the fixed state
+        # directory instead, which has no such file, so the decoy is never reached and nothing is
+        # ever captured.
+        session = str(uuid.uuid4())
+        decoy_dir = Path(tempfile.mkdtemp(prefix="caadt-decoy-cwd-", dir=_TMP))
+        capture = decoy_dir / "captured.jsonl"
+        (decoy_dir / "mcp-server").write_text(
+            STUB_CAPTURE_SOURCE + RECORDED_REPLY + NEWLINE, encoding="utf-8"
+        )
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps"},
+            telemetry_home=telemetry_home("granted"),
+            clio="node", capture=capture, capture_dir=str(decoy_dir),
+        )
+
+        self.assertEqual(result.returncode, 0)
+        # Give a decoy that WOULD have answered within the same grace period a real chance to be
+        # captured before concluding it never ran.
+        time.sleep(1.5)
+        self.assertFalse(capture.exists(),
+                         "a bare CLIO must never spawn with cwd left at the hook's own directory")
+
+    def test_the_copilot_host_is_named_in_its_own_payload(self):
+        # R7 names Copilot, and the mapping exists in the payload code with nothing driving it.
+        session = str(uuid.uuid4())
+        stub, capture = stub_clio()
+
+        result = run_hook(
+            {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+            telemetry_home=telemetry_home("granted"),
+            clio=NODE, capture=capture, capture_dir=stub, host="copilot",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(await_payloads(capture, 1)[0]["coding_agent"], "GitHub Copilot CLI")
+        self.assertEqual(result.stdout, "", "Copilot has no routing channel this hook can use")
+
+    def test_the_agents_own_telemetry_call_does_not_start_a_session(self):
+        # `send-telemetry` is not advertised in tools/list, so the agent sends it through the executor
+        # as `clio-run` with `command: "send-telemetry"`. The self-exclusion matched tool names only,
+        # so a session whose sole clio interaction was its own telemetry marked itself touched, spent
+        # its routing reminder on a telemetry call and opened a usage series.
+        session = str(uuid.uuid4())
+        stub, capture = stub_clio()
+
+        result = run_hook(
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "tool_input": {"command": "send-telemetry", "args": {"event_name": "plan_approved"}},
+                "cwd": _TMP,
+            },
+            telemetry_home=telemetry_home("granted"),
+            clio=NODE, capture=capture, capture_dir=stub,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "", "a telemetry call must not earn a routing reminder")
+        self.assertEqual(settled_payloads(capture, 0), [], "and must not emit a floor of its own")
+        self.assertFalse(Path(_TMP, "caadt-telemetry-routing", f"{session}.touched").exists())
 
     def test_stays_silent_on_a_later_read_only_call_in_the_same_turn(self):
         # Repeating the routing on every clio call would turn it into noise the model learns
@@ -1098,6 +1576,97 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual([reading["output_tokens"] for reading in readings], [7, 18],
                          "a grown total must be reported, or every turn after the first goes unmeasured")
 
+    def test_an_unknown_usage_outcome_is_promoted_rather_than_retried(self):
+        # `unknown` counts as delivered on the session_usage path, unlike on the floor path: a
+        # duplicate reading in a series whose meaning is its maximum costs nothing, but re-sending
+        # forever because an answer was merely unfamiliar would end the series at the attempt limit,
+        # which costs the data. This exercises the branch directly: an opaque answer must resolve the
+        # first reading (not retry it) and let a later, grown total report normally on top of it.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        opaque, capture = stub_clio(answers="opaque")
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": opaque}
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+
+        transcript = write_transcript()
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
+            telemetry_home=home, **stubbed,
+        )
+        await_outcome(session, "usage")
+
+        grown = Path(tempfile.mkdtemp(prefix="caadt-hook-unknown-usage-", dir=_TMP), "session.jsonl")
+        grown.write_text(
+            Path(transcript).read_text(encoding="utf-8")
+            + "\n"
+            + json.dumps({"message": {"model": "claude-opus-5", "usage": {
+                "input_tokens": 5, "output_tokens": 11, "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0}}}),
+            encoding="utf-8",
+        )
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": str(grown)},
+            telemetry_home=home, **stubbed,
+        )
+
+        readings = settled_payloads(capture, 2, event_name="session_usage")
+        self.assertEqual([reading["output_tokens"] for reading in readings], [7, 18],
+                         "an unfamiliar-but-complete answer must be promoted, not re-sent, and the "
+                         "series must continue past it")
+
+        await_outcome(session, "usage")
+        # A third Stop on the SAME (grown) transcript: if the first reading's `unknown` outcome had
+        # been read as a refusal instead of a promotion, the unconfirmed-attempt counter would carry
+        # that failure forward and eventually end the series; promoting it resets the counter, so this
+        # turn — carrying no new total — dispatches nothing further.
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": str(grown)},
+            telemetry_home=home, **stubbed,
+        )
+        still = settled_payloads(capture, 2, event_name="session_usage")
+        self.assertEqual(len(still), 2, "an unchanged total must not produce a third reading")
+
+    def test_a_resolved_usage_reading_has_its_dispatch_files_removed(self):
+        # resolveAndPromoteUsageState() calls removeDispatchFiles() once a pending usage reading
+        # resolves, specifically so the nonce-keyed request/outcome pair is reclaimed promptly rather
+        # than left for the weekly sweep. Every other test in this file only asserts on the payload
+        # sent and the 'usage' marker's `output` field — nothing here has asserted the files
+        # themselves are actually gone, so a regression that silently dropped or mis-keyed the
+        # removeDispatchFiles() call would go unnoticed.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        stub, capture = stub_clio()
+        stubbed = {"clio": NODE, "capture": capture, "capture_dir": stub}
+        transcript = write_transcript()
+
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=home, **stubbed)
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
+            telemetry_home=home, **stubbed,
+        )
+        outcome = await_outcome(session, "usage")
+        self.assertIn("recorded", outcome)
+        state = Path(_TMP, "caadt-telemetry-routing")
+        first_nonce_files = list(state.glob(f"{session}.usage-*-outcome"))
+        self.assertEqual(len(first_nonce_files), 1,
+                         "the first dispatch must have left exactly one outcome file behind")
+
+        # A second Stop on the SAME transcript merely resolves the pending reading — it dispatches
+        # nothing new — but resolveAndPromoteUsageState() runs on every Stop, so this is what triggers
+        # the cleanup.
+        run_hook(
+            {"session_id": session, "hook_event_name": "Stop", "transcript_path": transcript},
+            telemetry_home=home, **stubbed,
+        )
+
+        self.assertFalse(first_nonce_files[0].exists(),
+                         "a resolved reading's outcome file must be removed, not left for the sweep")
+        request_file = Path(str(first_nonce_files[0]).replace("-outcome", "-request"))
+        self.assertFalse(request_file.exists(),
+                         "a resolved reading's request file must be removed alongside its outcome")
+
     def test_stays_silent_on_stop_when_the_session_never_touched_clio(self):
         # `Stop` carries no tool name, so it cannot take the `mcp__.*clio.*` matcher its PostToolUse
         # sibling has. Without an explicit scope check, EVERY session on EVERY project would spawn a
@@ -1276,6 +1845,21 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "")
+
+    def test_does_nothing_with_an_empty_conversation_id(self):
+        # The Cursor fallback requires `conversation_id` to be a non-empty string after trimming, not
+        # merely `typeof === 'string'` — an empty or whitespace-only value must be read exactly like a
+        # payload with no session id at all, not as a session named "".
+        for empty in ("", "   "):
+            result = run_hook(
+                {"conversation_id": empty, "tool_name": "mcp__clio__clio-run",
+                 "hook_event_name": "afterMCPExecution"},
+                telemetry_home=telemetry_home("granted"), host="cursor",
+            )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout.strip(), "",
+                             f"conversation_id={empty!r} must not be treated as a session id")
 
     def test_shapes_the_routing_per_host_and_stays_silent_where_it_cannot_speak(self):
         # Only the routing text is host-specific; the floor event is a side effect and
@@ -1489,3 +2073,13 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def tearDownModule():
+    """Remove the shared temp root.
+
+    Every test in this module shares `_TMP`, and nothing removed it — so each run left session
+    markers and captured payloads behind. Shared state that outlives a run is what hid the
+    fresh-state-directory bug once already.
+    """
+    shutil.rmtree(_TMP, ignore_errors=True)

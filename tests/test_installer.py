@@ -1272,6 +1272,77 @@ class McpConfigMergeTests(unittest.TestCase):
 
             self.assertEqual((cursor_home / "hooks.json").read_text(encoding="utf-8"), broken)
 
+    def test_merge_cursor_telemetry_hook_leaves_a_wrong_shaped_file_untouched(self):
+        # Valid JSON of an unexpected SHAPE — a bare list, null, or a string — parses without error,
+        # so it reaches the shape guard rather than the JSONDecodeError branch above. Without that
+        # guard, `config.setdefault("hooks", {})` on a non-dict raises AttributeError mid-install,
+        # after two rule files have already been written. Also covers `afterMCPExecution` ITSELF
+        # being the wrong shape (null, a number, a string, a dict) rather than one of its entries:
+        # iterating a non-list there raises TypeError (null/number) or silently iterates
+        # characters/keys and replaces the value with a corrupted list (string/dict) — the same
+        # half-finished-or-corrupted install the container-level shape check exists to prevent.
+        installer = load_installer()
+        broken_shapes = (
+            '[]', 'null', '"just a string"', '{"hooks": "not-a-dict"}',
+            '{"hooks": {"afterMCPExecution": null}}',
+            '{"hooks": {"afterMCPExecution": 7}}',
+            '{"hooks": {"afterMCPExecution": "not-a-list"}}',
+            '{"hooks": {"afterMCPExecution": {"command": "not-a-list-either"}}}',
+        )
+        for broken_shape in broken_shapes:
+            with tempfile.TemporaryDirectory() as temp:
+                cursor_home = Path(temp) / ".cursor"
+                cursor_home.mkdir()
+                (cursor_home / "hooks.json").write_text(broken_shape, encoding="utf-8")
+
+                installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+                self.assertEqual(
+                    (cursor_home / "hooks.json").read_text(encoding="utf-8"), broken_shape,
+                    f"shape {broken_shape!r} must be left untouched, not raise or be rewritten",
+                )
+
+    def test_merge_cursor_telemetry_hook_preserves_a_non_dict_entry_in_after_mcp_execution(self):
+        # A stray non-dict entry (left by a developer or another tool) must not make `item.get(...)`
+        # raise — the entries filter is written to tolerate it rather than assume every element is a
+        # hook definition.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            (cursor_home / "hooks.json").write_text(
+                json.dumps({"hooks": {"afterMCPExecution": ["not-a-hook-object"]}}),
+                encoding="utf-8",
+            )
+
+            installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            after = config["hooks"]["afterMCPExecution"]
+            self.assertIn("not-a-hook-object", after)
+            self.assertTrue(any("telemetry-routing.mjs" in str(item.get("command", ""))
+                                 for item in after if isinstance(item, dict)))
+
+    def test_merge_cursor_telemetry_hook_returns_quietly_when_the_write_fails(self):
+        # A read-only or locked hooks.json must not abort a Cursor install that has already written
+        # two rule files — the write is wrapped in the same "leave it alone" contract as a read
+        # failure.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+
+            real_write_text = Path.write_text
+
+            def raising_write_text(self, *args, **kwargs):
+                if self.name == "hooks.json":
+                    raise OSError("simulated read-only filesystem")
+                return real_write_text(self, *args, **kwargs)
+
+            with patch.object(Path, "write_text", raising_write_text):
+                installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+            # No exception propagated — that is the entire contract being tested.
+
     def test_render_cursor_telemetry_rule_delegates_the_vocabulary(self):
         # Cursor has no hook that can reach the agent, so this always-applied rule is its only
         # routing channel — and it must point at the guidance article rather than copy the stages,

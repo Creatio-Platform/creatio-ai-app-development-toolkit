@@ -852,19 +852,56 @@ def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> No
     if hooks_path.exists():
         try:
             config = json.loads(hooks_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as error:
             # A hand-broken hooks.json is the developer's file, not ours to silently
             # rewrite — leave it alone rather than replacing it with our single entry.
+            # Still worth a line on stderr: silently skipping the telemetry hook looks
+            # identical to it having registered, until someone notices the floor never fires.
+            print(f"Skipped Cursor telemetry hook registration — could not read {hooks_path}: "
+                  f"{error}", file=sys.stderr)
+            return
+        # Valid JSON of an unexpected SHAPE deserves the same answer. `[]`, `null` or a string all
+        # parse, and then `config.setdefault` raises AttributeError — an unhandled exception in the
+        # middle of an install that has already written two rule files, rather than the "leave it
+        # alone" this function promises.
+        if not isinstance(config, dict) or not isinstance(config.get("hooks", {}), dict):
+            print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+                  f"unexpected shape", file=sys.stderr)
             return
     config.setdefault("version", 1)
     hooks = config.setdefault("hooks", {})
+    # isinstance on the container itself, not only on each entry: `afterMCPExecution` set to
+    # `null`, a number, a string, or a dict would make the comprehension below raise (or, for
+    # a string/dict, silently iterate characters/keys and replace the value with a corrupted
+    # list) — the same half-finished/corrupted install the shape check above prevents.
+    existing_hooks = hooks.get("afterMCPExecution", [])
+    if not isinstance(existing_hooks, list):
+        print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+              f"unexpected shape", file=sys.stderr)
+        return
+    # isinstance on each ENTRY, not only on the container: an array holding strings would make
+    # `item.get` raise, which is the same half-finished install the shape check above prevents.
+    # An entry this function cannot read is carried through untouched rather than dropped.
+    #
+    # Matched on the exact rendered command, not a "telemetry-routing.mjs" substring: a developer's
+    # own hook at a different path that happens to contain that filename (a wrapper, a copy kept for
+    # comparison) would otherwise be silently dropped and replaced on every reinstall — exactly the
+    # data loss the shape guard above exists to prevent.
     existing = [
         item
-        for item in hooks.get("afterMCPExecution", [])
-        if "telemetry-routing.mjs" not in str(item.get("command", ""))
+        for item in existing_hooks
+        if not isinstance(item, dict) or item.get("command") != command
     ]
     hooks["afterMCPExecution"] = [*existing, entry]
-    hooks_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    try:
+        hooks_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        # Read failures already return quietly; a write failure has to as well, or a read-only
+        # or locked hooks.json aborts a Cursor install that has already written two rule files.
+        # A stderr line still goes out, matching the read-failure branch above.
+        print(f"Skipped Cursor telemetry hook registration — could not write {hooks_path}: "
+              f"{error}", file=sys.stderr)
+        return
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:
