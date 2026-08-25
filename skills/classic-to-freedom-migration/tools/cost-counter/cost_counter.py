@@ -26,6 +26,7 @@ import json
 import sys
 from pathlib import Path
 
+import attempts as attempts_mod
 import export as export_mod
 import metrics
 from report import COUNTER_VERSION, Report
@@ -87,18 +88,71 @@ def _print_ttl(report: Report) -> None:
         print("    (no cache-lifetime breakdown found in this export)")
 
 
+def _mark(ok: bool, comparable: bool = True) -> str:
+    """Cross-check cell: ok / n/a (not comparable) / MISMATCH."""
+    if not ok:
+        return "MISMATCH"
+    return "ok" if comparable else "n/a"
+
+
+def _reconcile_verdict(rows: list) -> str:
+    """Footer line for the cross-check table.
+
+    A suppressed check is never folded into an unqualified pass: a row rendering
+    ``n/a`` verified nothing, so the footer counts it rather than claiming every
+    workflow reconciled. A real MISMATCH outranks both.
+    """
+    if not all(row.agents_ok and row.tool_calls_ok for row in rows):
+        return "DISCREPANCIES ABOVE"
+    skipped = sum(1 for row in rows if not row.tool_calls_comparable)
+    if skipped:
+        return f"all comparable checks reconcile ({skipped} n/a)"
+    return "all workflows reconcile"
+
+
 def _print_check(report: Report) -> None:
     print("cross-checks vs workflow journals (R8):")
     print(f"    {'workflow':34} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
-    all_ok = True
-    for row in report.reconcile():
-        a_mark = "ok" if row.agents_ok else "MISMATCH"
-        t_mark = "ok" if row.tool_calls_ok else "MISMATCH"
-        all_ok = all_ok and row.agents_ok and row.tool_calls_ok
-        agents = f"{row.agents_meta}/{row.agents_seen} {a_mark}"
-        toolcalls = f"{row.tool_calls_meta}/{row.tool_calls_seen} {t_mark}"
+    rows = report.reconcile()
+    for row in rows:
+        # n/a, not ok: on an interrupted run nothing verifies the tool-call
+        # counts against each other, and "ok" would overclaim.
+        agents = f"{row.agents_meta}/{row.agents_seen} {_mark(row.agents_ok)}"
+        toolcalls = (f"{row.tool_calls_meta}/{row.tool_calls_seen} "
+                     f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
         print(f"    {row.workflow:34} {agents:>20} {toolcalls:>24}")
-    print(f"    => {'all workflows reconcile' if all_ok else 'DISCREPANCIES ABOVE'}")
+        if row.note:
+            print(f"    {'':34} {row.note}")
+    print(f"    => {_reconcile_verdict(rows)}")
+
+
+def _print_attempts(report: Report) -> None:
+    """Leftover-transcript block. Printed only for a resumed or killed export."""
+    if not report.interrupted:
+        return
+    summary = report.summary()["attempts"]
+    # ASCII only in the text renderer: this report is read on cp1252 Windows
+    # consoles, and _reconfigure_stdout() is best-effort.
+    print("resumed/killed run -- transcripts by what the run record claims:")
+    for label, attribution in report.attempt_rows():
+        counts = attribution.counts
+        print(f"    {label:34} {attribution.how}"
+              f" / {counts[attempts_mod.LIVE]} live"
+              f" / {counts[attempts_mod.REPLAYED]} replayed"
+              f" / {counts[attempts_mod.LEFTOVER]} leftover")
+        if attribution.total_tokens is not None:
+            print(f"    {'':34} run file totalTokens: {attribution.total_tokens:,}"
+                  " (surviving attempt's live agents, per the harness)")
+    print(f"    leftover weighted cost: {summary['leftover_weighted']:,.0f}"
+          f" of {summary['leftover_weighted'] + summary['surviving_weighted']:,.0f} total")
+    nothing = summary["produced_nothing_agents"]
+    if nothing is None:
+        print("    produced-nothing agents: unknown (no readable journal)")
+    else:
+        print(f"    produced-nothing agents: {nothing}"
+              " (started, no journal result -- spend with no output)")
+    print("    leftovers are counted in every total above; attempts are not"
+          " reconstructed (see README).")
 
 
 def _print_normalization(report: Report) -> None:
@@ -184,7 +238,13 @@ def _reconcile_payload(report: Report) -> list:
             "agents_ok": r.agents_ok,
             "tool_calls_meta": r.tool_calls_meta,
             "tool_calls_seen": r.tool_calls_seen,
-            "tool_calls_ok": r.tool_calls_ok,
+            # null, not true, when the comparison was suppressed: reading this
+            # key alone must never show a pass over a check that did not run.
+            # `tool_calls_comparable: false` rides along to say why. Neither
+            # appears unless the run was interrupted.
+            "tool_calls_ok": r.tool_calls_ok if r.tool_calls_comparable else None,
+            **({} if r.tool_calls_comparable else {"tool_calls_comparable": False}),
+            **({"note": r.note} if r.note else {}),
         }
         for r in report.reconcile()
     ]
@@ -269,14 +329,52 @@ def _reconcile_markdown(report: Report) -> str:
         "| workflow | agents (meta/seen) | toolCalls (meta/seen) |",
         "| :-- | --: | --: |",
     ]
-    all_ok = True
-    for r in report.reconcile():
-        all_ok = all_ok and r.agents_ok and r.tool_calls_ok
-        agents = f"{r.agents_meta}/{r.agents_seen} {'ok' if r.agents_ok else 'MISMATCH'}"
-        calls = f"{r.tool_calls_meta}/{r.tool_calls_seen} {'ok' if r.tool_calls_ok else 'MISMATCH'}"
-        lines.append(f"| {r.workflow} | {agents} | {calls} |")
+    rows = report.reconcile()
+    for r in rows:
+        agents = f"{r.agents_meta}/{r.agents_seen} {_mark(r.agents_ok)}"
+        calls = (f"{r.tool_calls_meta}/{r.tool_calls_seen} "
+                 f"{_mark(r.tool_calls_ok, r.tool_calls_comparable)}")
+        note = f" - {r.note}" if r.note else ""
+        lines.append(f"| {r.workflow} | {agents} | {calls}{note} |")
     lines.append("")
-    lines.append(f"_{'all workflows reconcile' if all_ok else 'DISCREPANCIES ABOVE'}_")
+    lines.append(f"_{_reconcile_verdict(rows)}_")
+    if report.interrupted:
+        lines.append("")
+        lines.append(_attempts_markdown(report))
+    return "\n".join(lines)
+
+
+def _attempts_markdown(report: Report) -> str:
+    """Leftover-transcript table. Empty string unless the run was interrupted."""
+    if not report.interrupted:
+        return ""
+    summary = report.summary()["attempts"]
+    lines = [
+        "### Resumed/killed run -- transcripts by what the run record claims",
+        "",
+        "| workflow | how | live | replayed | leftover | run file totalTokens |",
+        "| :-- | :-- | --: | --: | --: | --: |",
+    ]
+    for label, attribution in report.attempt_rows():
+        counts = attribution.counts
+        total_tokens = ("—" if attribution.total_tokens is None
+                        else f"{attribution.total_tokens:,}")
+        lines.append(
+            f"| {label} | {attribution.how} | {counts[attempts_mod.LIVE]} |"
+            f" {counts[attempts_mod.REPLAYED]} | {counts[attempts_mod.LEFTOVER]} |"
+            f" {total_tokens} |"
+        )
+    nothing = summary["produced_nothing_agents"]
+    nothing_label = ("unknown (no readable journal)" if nothing is None
+                     else f"{nothing} (started, no journal result)")
+    lines.extend([
+        "",
+        f"_leftover weighted cost {summary['leftover_weighted']:,.0f} of "
+        f"{summary['leftover_weighted'] + summary['surviving_weighted']:,.0f} total; "
+        f"produced-nothing agents: {nothing_label}. Leftovers are counted in every "
+        "total above. `totalTokens` is the harness's figure for the surviving "
+        "attempt's live agents and does not reconcile with transcript sums._",
+    ])
     return "\n".join(lines)
 
 
@@ -571,10 +669,14 @@ def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
         _print_ttl(report)
     if section == "check":
         _print_check(report)
+        _print_attempts(report)
 
     if section == "all":
         print(_section("cross-checks & normalization"))
         _print_check(report)
+        if report.interrupted:
+            print()
+            _print_attempts(report)
         print()
         _print_normalization(report)
 
