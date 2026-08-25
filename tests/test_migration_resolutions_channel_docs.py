@@ -230,6 +230,27 @@ class ConsumptionContractDocTests(unittest.TestCase):
         # And the reason they are persisted rather than derived -- the defect that made the first fix wrong.
         self.assertIn("WITHOUT spending the", doc)
 
+    def test_the_grant_example_shows_pairs_not_bare_unit_keys(self):
+        """`resolutionsReopened` is `{unit, id}` objects, and the doc's JSON example must show that.
+
+        PR #128 review (round 9): round 8 changed the shape from unit-key strings to `{unit, id}`
+        pairs in `RECONCILE_SCHEMA` and `carryNow`, and left this file's example as `["main"]` --
+        so a reconcile agent following the doc writes a shape the schema rejects, or, worse,
+        transcribes a half-conforming one. The prose said "every unit" for the same reason. The
+        example is data the agent copies, so pin the SHAPE, not just that the key is mentioned.
+        """
+        doc = read_text(EXECUTOR_FILES_DOC)
+        flat_doc = flat(doc)
+        # The example entry is an object with both members -- a bare string list must fail here.
+        self.assertIn('"resolutionsReopened": [{ "unit":', flat_doc)
+        self.assertNotIn('"resolutionsReopened": ["', flat_doc)
+        # And the prose names them pairs rather than unit keys.
+        self.assertIn("`resolutionsReopened` is a list of `{unit, id}` PAIRS", flat_doc)
+        self.assertNotIn("`resolutionsReopened` is every unit", flat_doc)
+        # `resolutionsPending` is genuinely a unit-key list and must NOT be re-described as pairs.
+        self.assertIn("`resolutionsPending` is", flat_doc)
+        self.assertNotIn('"resolutionsPending": [{', flat_doc)
+
     def test_the_docs_state_the_one_release_window_terminus(self):
         """The stale-`"no"` terminus is STATED in prose. This asserts the doc, not the runtime.
 

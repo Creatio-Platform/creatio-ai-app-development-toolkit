@@ -95,7 +95,7 @@ there is no "resume" command: there is one command, and it does the next undone 
       "item": "(1 lookup)", "answer": "restrict to Status IN {InProgress}",
       "why": "no lookupListConfig anywhere in viewConfig", "source": "verifier" }
   ],
-  "resolutionsReopened": ["main"],
+  "resolutionsReopened": [{ "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)" }],
   "resolutionsPending": [],
   "history": [
     { "round": 1, "units": ["child:VisaRequest", "child:Education", "mini:ApplicantMiniPage"], "at": "2026-08-07T11:04Z" }
@@ -180,9 +180,12 @@ Rules that make it trustworthy:
   rule as a promise that a later read will eventually arrive on its own, because for a green unit it will not.
 - **`resolutionsReopened` and `resolutionsPending` are at the ROOT, they are REQUIRED, and both are written on
   EVERY close — including when they are `[]`.** They are the answer-channel repair grants, and they are process
-  bookkeeping rather than operator content: do NOT judge, filter or tidy them. `resolutionsReopened` is every unit
-  that has already spent its ONE answer-channel repair round; drop an entry and the next resume RE-GRANTS a round
-  that was already spent, which is how a builder gives the same refusal twice at full cost. `resolutionsPending` is
+  bookkeeping rather than operator content: do NOT judge, filter or tidy them. `resolutionsReopened` is a list of
+  `{unit, id}` PAIRS — every ANSWER that has already spent its ONE answer-channel repair round, **not** every unit:
+  two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question,
+  and an answer that has never had a round must not be denied one by a neighbour that has. Drop an entry and the
+  next resume RE-GRANTS a round that was already spent, which is how a builder gives the same refusal twice at
+  full cost. `resolutionsPending` is
   the subset still owed that round's dispatch; drop an entry and a unit that was owed its repair is stranded — the
   grant is recorded as spent while the build it paid for never runs. Both are written even when empty for the same
   reason `unconsumedResolutions` is: an emptied set is how a resumed run learns a grant was finally consumed, and a
