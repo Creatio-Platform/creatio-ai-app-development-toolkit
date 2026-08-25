@@ -153,7 +153,21 @@ check("ENG-95503 review fix: the `shows` vocabulary and the unconsumed-source ta
   () => SHOWS_NAMES.every((n) => typeof SHOWS[n] === "string" && SHOWS[n].length > 0)
     && new Set(Object.values(SHOWS)).size === SHOWS_NAMES.length,
   () => SHOWS);
-const INJECTED = SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`).join("\n");
+// PR #128 review (round 7): the CAP is a design literal too, and the schema's `maxLength` now reads the same
+// binding the record-time cap does. Lifted from the shipped source for the same reason the `shows` values are --
+// a re-typed 400 here would let this suite pass while the run bounded text at some other length.
+const CARRY_TEXT_CAP = Number(/const CARRY_TEXT_CAP = (\d+)/.exec(wfSrc)?.[1]);
+const CARRY_TEXT_TRUNCATED = /const CARRY_TEXT_TRUNCATED = '([^']*)'/.exec(wfSrc)?.[1];
+check("PR #128 review (round 7): the text cap is ONE declared literal in the shipped source, read by both `capCarryText` and `RECONCILE_SCHEMA`'s `maxLength` — a re-typed number in either place is the divergence the round-6 Minor was about, one level up",
+  () => Number.isInteger(CARRY_TEXT_CAP) && CARRY_TEXT_CAP > 0 && typeof CARRY_TEXT_TRUNCATED === "string"
+    && /maxLength: CARRY_TEXT_CAP/.test(wfSrc)
+    && !/maxLength: \d+/.test(wfSrc),
+  () => ({ CARRY_TEXT_CAP, CARRY_TEXT_TRUNCATED }));
+const INJECTED = [
+  ...SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`),
+  `const CARRY_TEXT_CAP = ${CARRY_TEXT_CAP};`,
+  `const CARRY_TEXT_TRUNCATED = ${JSON.stringify(CARRY_TEXT_TRUNCATED)};`,
+].join("\n");
 
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
@@ -168,7 +182,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   // where its claim disagrees with the verifier's read of the page.
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
   // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
-  "pairKey", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds", "runComplete",
+  "pairKey", "pairParts", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds", "runComplete",
   "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
   // PR #128 review (round 5) — the record-time text cap the carry depends on, and the one `(unit, id)` dedup rule.
   "capCarryText", "hasUnconsumedPair",
@@ -1696,8 +1710,9 @@ check("ENG-95503 review fix: the per-unit clear runs ABOVE the `routed`-empty ea
 check("ENG-95503 review fix: the per-unit clear is scoped to DISPATCH-sourced rows — a verifier-confirmed contradiction must survive the next build, or an untrusted `applied: true` erases the record that exists to disbelieve it",
   /unconsumed = unconsumed\.filter\(\(u\) => !\(idKey\(u\.unit\) === idKey\(unit\.key\) && u\.source !== UNCONSUMED_FROM_VERIFIER\)\)/.test(wfSrc));
 check("ENG-95503 wiring: an unaccounted answer buys its unit ONE repair round and no more — the same bound the findings channel has, and without it a builder that keeps refusing the contract would loop forever in `auto` mode",
-  /if \(resolutionsReopened\.has\(idKey\(unit\.key\)\)\) return/.test(wfSrc)
-    && /resolutionsReopened\.add\(idKey\(unit\.key\)\)[\s\S]{0,100}resolutionsPending\.add\(idKey\(unit\.key\)\)/.test(wfSrc)
+  /const ungranted = gone\.filter\(\(g\) => !resolutionsReopened\.has\(pairKey\(unit\.key, g\.id\)\)\)/.test(wfSrc)
+    && /if \(!ungranted\.length\) return/.test(wfSrc)
+    && /for \(const g of ungranted\) resolutionsReopened\.add\(pairKey\(unit\.key, g\.id\)\)\s*\n\s*resolutionsPending\.add\(idKey\(unit\.key\)\)/.test(wfSrc)
     && /if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)/.test(wfSrc));
 check("ENG-95503 wiring: the two re-open channels stay SEPARATE at the source — `findings` is the operator re-opening a unit the gate called complete, and overloading it as the answers channel is the workaround this ticket exists to end",
   /const resolutionsPending = new Set\(\)/.test(wfSrc)
@@ -1715,7 +1730,7 @@ check("ENG-95503 wiring: the VERIFIER is asked for `resolutionChecks` and the ro
 // PR exists to close. The repair-budget pin does not reach here either: it matches on `unit.key`, not `c.unit`.
 check("ENG-95503 review fix: a verifier-confirmed contradiction is APPENDED to `unconsumed` — carrying its `source` tag (RC-2) — and RE-OPENS its unit; being called is not being believed, and without these two lines mechanism 2 is a log line that gates nothing",
   /unconsumed = \[\.\.\.unconsumed, \{ unit: c\.unit, id: c\.id, kind: c\.kind, item: c\.item, answer: c\.answer, how: c\.how, source: c\.source, why: c\.found \}\]/.test(wfSrc)
-    && /if \(!resolutionsReopened\.has\(idKey\(c\.unit\)\)\) \{ resolutionsReopened\.add\(idKey\(c\.unit\)\); resolutionsPending\.add\(idKey\(c\.unit\)\) \}/.test(wfSrc));
+    && /if \(!resolutionsReopened\.has\(pairKey\(c\.unit, c\.id\)\)\) \{ resolutionsReopened\.add\(pairKey\(c\.unit, c\.id\)\); resolutionsPending\.add\(idKey\(c\.unit\)\) \}/.test(wfSrc));
 // PR #128 review (RC-3) — WHERE the answer channel spends its ONE repair round. `findingsPending.delete` sits below
 // the `!res` early return so a dead build agent does not burn a findings round; this one used to sit ABOVE it, so a
 // builder that died returning `null` spent the answer's only attempt on a dispatch where nothing was ever built.
@@ -1757,6 +1772,19 @@ check("PR #128 review: `pairKey` separates unit from id with a byte that CANNOT 
 check("PR #128 review: the shipped workflow source contains NO raw NUL byte — a literal NUL is invisible in every editor and diff view AND makes GitHub classify the file as binary, which is how this file's diff went unreviewed",
   () => !wfSrc.includes("\u0000"),
   () => `raw NUL count: ${[...wfSrc].filter((c) => c === "\u0000").length}`);
+
+// PR #128 review (round 7): THE SAME GUARD OVER THIS SUITE. The workflow source was pinned; these files were not --
+// and while writing the round-7 checks a raw NUL landed HERE, inside the very test asserting that the pair is split
+// before it is written. GitHub would then classify this file binary and serve `patch: null` for it, which is exactly
+// how the mechanism's own diff went unreviewed and was approved unseen. Every file this PR ships is guarded now,
+// not only the one that happened to be caught the first time.
+const SUITE_FILES = ["run.mjs", "run-mapper.mjs", "run-infra.mjs"]
+  .map((f) => ({ f, abs: path.join(path.dirname(fileURLToPath(import.meta.url)), f) }));
+const NUL_CHAR = String.fromCharCode(0);
+const nulSuiteHits = SUITE_FILES.filter((s) => existsSync(s.abs) && readFileSync(s.abs, "utf8").includes(NUL_CHAR));
+check("PR #128 review (round 7): NO engine-test suite file carries a raw NUL byte either — the workflow source had this pin and the tests did not, and a NUL here makes GitHub serve `patch: null` for the file that PROVES the fix, which is the same blindness one level up",
+  () => nulSuiteHits.length === 0 && SUITE_FILES.every((s) => existsSync(s.abs)),
+  () => ({ hits: nulSuiteHits.map((s) => s.f), missing: SUITE_FILES.filter((s) => !existsSync(s.abs)).map((s) => s.f) }));
 
 check("PR #128 review: `owedResolutionPairs` derives the still-owed set from the SAME routing call the prompt uses — a separately-derived list would let the obligation and the question disagree about which answers a unit was asked",
   () => { const owed = rcOwed();
@@ -1855,7 +1883,7 @@ check("PR #128 review (RC-3): EXACTLY TWO sites decide `complete` through `runCo
 // RC-4 — a build agent that never ran records the rows for the report but does NOT spend the one repair grant.
 check("PR #128 review (RC-4): the `!res` path passes `dispatched: false` and the reopen grant is guarded by `if (!dispatched) return` — a transient death (a documented `401`) records the unconsumed rows but must not burn the answer's one repair round before the builder's genuine first attempt",
   /reportResolutionAccounting\(unit, routed, null, false\)/.test(wfSrc)
-    && /if \(!dispatched\) return[\s\S]{0,80}?if \(resolutionsReopened\.has\(idKey\(unit\.key\)\)\) return/.test(wfSrc));
+    && /if \(!dispatched\) return[\s\S]{0,140}?const ungranted = gone\.filter\(/.test(wfSrc));
 
 // RC-5 — a repeated miss REWRITES the persisted reason in place, keeping the (unit, what) dedup its neighbour has.
 check("PR #128 review (RC-5): a repeated accounting miss REWRITES the persisted `why` in place instead of only logging — the unaccounted id can change between rounds and the row is re-seeded across resumes, so a stale round-1 reason would outlive the miss it named",
@@ -1947,16 +1975,20 @@ check("PR #128 review (RC-10): the answers-blocked row is DEDUPED on `(unit, wha
 // that derivation over-marked those units and denied them their one repair round. Both grant sets now RIDE THE CARRY
 // and are seeded straight from the queue, exactly like `unconsumed` — the fact is exact instead of inferred.
 check("PR #128 review (N2): both repair-grant sets RIDE THE CARRY — `carryNow` and `carryFingerprint` carry `resolutionsReopened`/`resolutionsPending`, so the grant fact survives a resume by persistence, not by a lossy derivation from `unconsumed`",
-  /const carryNow = \(\) => \(\{[^}]*unconsumed, resolutionsReopened: \[\.\.\.resolutionsReopened\], resolutionsPending: \[\.\.\.resolutionsPending\] \}\)/.test(wfSrc)
+  /const carryNow = \(\) => \(\{[^}]*unconsumed, resolutionsReopened: \[\.\.\.resolutionsReopened\]\.map\(pairParts\), resolutionsPending: \[\.\.\.resolutionsPending\] \}\)/.test(wfSrc)
+    // The pair leaves the process as `{unit, id}`, never as the NUL-delimited composite -- a NUL in a JSON file an
+    // agent writes and a human reads is the defect this PR spent a Blocker on, and it must not come back by the side door.
+    && /const pairParts = \(key\) => \{ const i = String\(key\)\.indexOf\(/.test(wfSrc)
+    && /return \{ unit: String\(key\)\.slice\(0, i\), id: String\(key\)\.slice\(i \+ 1\) \}/.test(wfSrc)
     && /carryFingerprint = \(\) => JSON\.stringify\(\[[\s\S]*?unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\]\]\)/.test(wfSrc));
 check("PR #128 review (N2): the carry block instructs the writer to persist BOTH grant sets EVEN WHEN `[]`, and the queue-read step reads them back — a dropped `resolutionsReopened` re-grants a spent round, a dropped `resolutionsPending` strands one owed",
   /ANSWER-CHANNEL REPAIR GRANTS[\s\S]{0,260}?resolutionsReopened[\s\S]{0,120}?resolutionsPending[\s\S]{0,200}?EVEN WHEN \\`\[\]\\`/.test(wfSrc)
     && /- \\`resolutionsReopened\\` and \\`resolutionsPending\\` — the two answer-channel repair-grant arrays the file holds/.test(wfSrc));
 check("PR #128 review (N2): `RECONCILE_SCHEMA` both CARRIES the two grant arrays and REQUIRES them — a field the schema drops cannot round-trip, and one it does not require can be silently omitted straight back into the over-grant",
-  /resolutionsReopened: \{ type: 'array', items: \{ type: 'string' \} \},\s*\n\s*resolutionsPending: \{ type: 'array', items: \{ type: 'string' \} \}/.test(wfSrc)
+  /resolutionsReopened: \{ type: 'array', items: \{ type: 'object', required: \['unit', 'id'\],\s*\n\s*properties: \{ unit: \{ type: 'string' \}, id: \{ type: 'string' \} \} \} \},\s*\n\s*resolutionsPending: \{ type: 'array', items: \{ type: 'string' \} \}/.test(wfSrc)
     && /'preflightItems', 'resolutionsReopened', 'resolutionsPending'\]/.test(wfSrc));
 check("PR #128 review (N2): the hydration seeds BOTH sets straight from the persisted state, and the lossy derive-from-`unconsumed` loop is GONE — the `!res` path proved that derivation over-marked a never-granted unit",
-  /for \(const k of state\.resolutionsReopened \|\| \[\]\) resolutionsReopened\.add\(idKey\(k\)\)\s*\n\s*for \(const k of state\.resolutionsPending \|\| \[\]\) resolutionsPending\.add\(idKey\(k\)\)/.test(wfSrc)
+  /for \(const r of state\.resolutionsReopened \|\| \[\]\) if \(r && r\.unit && r\.id\) resolutionsReopened\.add\(pairKey\(r\.unit, r\.id\)\)\s*\n\s*for \(const k of state\.resolutionsPending \|\| \[\]\) resolutionsPending\.add\(idKey\(k\)\)/.test(wfSrc)
     && !/for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc));
 
 // N1 + finding 1 — an under-reported `preflightItems` must not silently erase `unconsumed` into a false
@@ -2070,16 +2102,18 @@ check("PR #128 review (round 6): unit keys are matched through `idKey` like ids 
     return s.has(wf.idKey("main")) && s.has(wf.idKey("main  ")) && wf.idKey(" child:Education ") === "child:Education"; },
   () => "a padded persisted unit key must still match");
 check("PR #128 review (round 6): EVERY grant-Set operation goes through `idKey` in the shipped source — a single bare `.has(unit.key)` or `.add(c.unit)` left behind is the whole finding, and it is invisible to any behavioural test because the harness cannot reach these sites",
-  /resolutionsReopened\.has\(idKey\(unit\.key\)\)/.test(wfSrc)
-    && /resolutionsReopened\.add\(idKey\(unit\.key\)\)/.test(wfSrc)
+  // `resolutionsReopened` is keyed by PAIR (round 7), `resolutionsPending` by UNIT -- both normalised, neither raw.
+  /resolutionsReopened\.has\(pairKey\(unit\.key, g\.id\)\)/.test(wfSrc)
+    && /resolutionsReopened\.add\(pairKey\(unit\.key, g\.id\)\)/.test(wfSrc)
+    && /resolutionsReopened\.has\(pairKey\(c\.unit, c\.id\)\)/.test(wfSrc)
+    && /resolutionsReopened\.add\(pairKey\(c\.unit, c\.id\)\)/.test(wfSrc)
+    && /resolutionsReopened\.add\(pairKey\(r\.unit, r\.id\)\)/.test(wfSrc)
     && /resolutionsPending\.add\(idKey\(unit\.key\)\)/.test(wfSrc)
+    && /resolutionsPending\.add\(idKey\(c\.unit\)\)/.test(wfSrc)
     && /resolutionsPending\.delete\(idKey\(unit\.key\)\)/.test(wfSrc)
-    && /resolutionsReopened\.has\(idKey\(c\.unit\)\)/.test(wfSrc)
-    && /resolutionsReopened\.add\(idKey\(c\.unit\)\); resolutionsPending\.add\(idKey\(c\.unit\)\)/.test(wfSrc)
-    && /resolutionsReopened\.add\(idKey\(k\)\)/.test(wfSrc)
     && /resolutionsPending\.add\(idKey\(k\)\)/.test(wfSrc)
-    // and no raw survivor anywhere
-    && !/resolutions(Reopened|Pending)\.(has|add|delete)\((unit\.key|c\.unit|k)\)/.test(wfSrc));
+    // and no raw survivor on either set
+    && !/resolutions(Reopened|Pending)\.(has|add|delete)\((unit\.key|c\.unit|k|r\.unit)\)/.test(wfSrc));
 check("PR #128 review (round 6): the per-unit clear and the blocked-row dedup compare unit keys through `idKey` on BOTH sides — `u.unit` and `b.unit` come off persisted, agent-transcribed lists, so a padded key means the clear silently never fires and the row duplicates every round",
   /idKey\(u\.unit\) === idKey\(unit\.key\) && u\.source !== UNCONSUMED_FROM_VERIFIER/.test(wfSrc)
     && /blockedItems\.some\(\(b\) => idKey\(b\.unit\) === idKey\(unit\.key\)/.test(wfSrc)
@@ -2127,6 +2161,100 @@ check("PR #128 review (round 6, Minor): `reopenKeys()` is called ONCE PER `openN
 check("PR #128 review (round 6, Minor): the `resolution-not-applied` claim caps `c.how` through `capCarryText`, not a re-typed `400` — a bare literal keeps truncating to the old value if `CARRY_TEXT_CAP` ever moves, and nothing would catch the divergence",
   /\$\{c\.how \? ` — \$\{capCarryText\(c\.how\)\}` : ''\}/.test(wfSrc)
     && !/\$\{String\(c\.how\)\.slice\(0, 400\)\}/.test(wfSrc));
+/* ===================================================================================================
+   PR #128 SEVENTH-ROUND REVIEW — the repair grant is per ANSWER, the cap binds on rehydration, the
+   last raw unit-key comparisons are gone, and the composed howless+unknown outcome is finally
+   asserted end to end instead of being inferred from two isolated unit tests.
+   =================================================================================================== */
+
+// Round-7 Major (G1) — the grant is per `(unit, id)`. Keyed on the unit alone, a unit that spent its round
+// declining answer A could never be re-opened for a verifier contradiction that landed later on answer B,
+// and a verifier-sourced row is releasable ONLY by a fresh read that a never-rescheduled unit never gets.
+check("PR #128 review (round 7, G1): the repair grant is keyed on `(unit, id)`, so a SECOND answer on the same page still earns its own one round — keyed on the unit alone, answer B was denied its first and only round because answer A had spent the page's grant, and B's verifier-sourced row is released only by a read that then never comes",
+  () => { const granted = new Set([wf.pairKey("main", "id-A")]);
+    // B on the same unit is NOT yet granted; A is. That is the whole distinction the unit-keyed guard could not make.
+    return !granted.has(wf.pairKey("main", "id-B")) && granted.has(wf.pairKey("main", "id-A"))
+      // and the pair still normalises, so a padded persisted key cannot re-grant a spent round
+      && granted.has(wf.pairKey("  main  ", " id-A ")); },
+  () => "one page, two answers, two grants");
+check("PR #128 review (round 7, G1): a pair round-trips through `pairParts` byte for byte — the grant leaves the process as `{unit, id}` objects, never as the NUL-delimited composite, because a NUL in an agent-written JSON file is the defect this PR already spent a Blocker on",
+  () => { const k = wf.pairKey("child:Education@Via", 'main#confirm:entity-filter:(1 lookup) "x"');
+    const p = wf.pairParts(k);
+    return p.unit === "child:Education@Via" && p.id === 'main#confirm:entity-filter:(1 lookup) "x"'
+      && wf.pairKey(p.unit, p.id) === k
+      // and the serialised form carries no raw NUL -- splitting the pair before it is written is the whole point
+      && !/[\u0000]/.test(JSON.stringify(p)); },
+  () => JSON.stringify(wf.pairParts(wf.pairKey("a", "b"))));
+
+// Round-7 Major (G2) — the cap binds on the way IN. `unconsumed` is rehydrated from an agent-written file,
+// so the record-time caps bind nothing that arrives by that route.
+check("PR #128 review (round 7, G2): `reconcileUnconsumed` CAPS every free-text field as it rehydrates — the seed reads an agent-written queue file, so a folder written by an older build or an agent that ignored \"copy the JSON EXACTLY\" carried unbounded text straight back into every later round's prompt, which is the record-time cap defeated from the other end",
+  () => { const big = "y".repeat(1500);
+    const seeded = wf.reconcileUnconsumed(
+      [{ unit: "main", id: "i1", source: "dispatch", item: big, answer: big, why: big, how: big, found: big }],
+      new Set([wf.pairKey("main", "i1")]), new Set(), new Set(["i1"]));
+    return seeded.length === 1
+      && ["item", "answer", "why", "how", "found"].every((f) => seeded[0][f].length === 400 && /\[truncated\]$/.test(seeded[0][f])); },
+  () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "i1", why: "y".repeat(1500) }],
+    new Set([wf.pairKey("main", "i1")]), new Set(), new Set(["i1"])).map((u) => (u.why || "").length)));
+check("PR #128 review (round 7, G2): the cap is IDEMPOTENT and preserves an absent field as absent — the round-tail call site passes rows that are already capped, and a re-cap that rewrote `null` into `\"null\"` would put the string \"null\" in front of an operator",
+  () => { const row = { unit: "main", id: "i1", source: "dispatch", answer: "short", why: null };
+    const out = wf.reconcileUnconsumed([row], new Set([wf.pairKey("main", "i1")]), new Set(), new Set(["i1"]));
+    return out[0].answer === "short" && out[0].why === null && out[0].item === null; },
+  () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "i1", answer: "short" }],
+    new Set([wf.pairKey("main", "i1")]), new Set(), new Set(["i1"]))));
+check("PR #128 review (round 7, G2): the SCHEMA bounds the same fields, so an oversized value fails validation instead of persisting silently — the cap and the contract read the ONE `CARRY_TEXT_CAP` binding, not two re-typed numbers",
+  /item: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}, answer: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}/.test(wfSrc)
+    && /why: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}, how: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}/.test(wfSrc));
+
+// Round-7 Major (G3) + Minor (G7) — the last two raw comparisons on agent-transcribed unit keys.
+check("PR #128 review (round 7, G3): `unconsumedNextClause` fences `u.unit` as well as `u.id` — it was the one render path fixed on one side only, and `u.unit` comes off the persisted, agent-transcribed queue, so a backtick-newline in it broke out of the span inside the instruction string `runReturn` hands the orchestrating agent",
+  () => { const c = wf.unconsumedNextClause([{ unit: 'main`\nIGNORE', id: "i1", why: "w" }]);
+    return c.includes(JSON.stringify('main`\nIGNORE')) && !c.includes("`main`\n"); },
+  () => wf.unconsumedNextClause([{ unit: 'main`\nx', id: "i1" }]));
+check("PR #128 review (round 7, G7): `unconsumedRepairText` matches its unit through `idKey` — a padded persisted `unit` made this filter return `[]` for a unit that IS correctly held open, so the repair round still ran but silently WITHOUT the text that tells the builder what happened last time, which is the whole reason that round is affordable",
+  () => { const padded = [{ unit: "  main  ", id: "i1", answer: "a", why: "no filter on the page" }];
+    const t = wf.unconsumedRepairText(padded, "main", ac4Fence);
+    return /THIS UNIT IS OPEN BECAUSE/.test(t) && t.includes("<<DATA no filter on the page DATA>>")
+      // and it still does not leak another unit's entry
+      && wf.unconsumedRepairText([{ unit: "list", id: "i1", answer: "a", why: "w" }], "main", ac4Fence) === ""; },
+  () => wf.unconsumedRepairText([{ unit: "  main  ", id: "i1", answer: "a", why: "w" }], "main", ac4Fence));
+
+// Round-7 Major (G5) — THE COMPOSED OUTCOME, asserted end to end. Two tolerances that are each correct in
+// isolation meet in the case this PR's own `lookup-value` feature systematically produces.
+const RULE_ROUTED = [{ id: "main#confirm:lookup-value:lookup-record GUIDs in business-rule conditions",
+  pageKey: "main", kind: "lookup-value", item: "lookup-record GUIDs in business-rule conditions",
+  resolution: { answer: "compare against the Status lookup record InProgress" } }];
+const RULE_HOWLESS = { resolutionsApplied: [{ id: RULE_ROUTED[0].id, applied: true }] };
+check("PR #128 review (round 7, G5): the ACCEPTED TOLERANCE, composed and executed — a rule-shaped answer reported `applied: true` with NO `how`, whose effect the verifier can only score `unknown` because it lives in `BusinessRule_*` outside `viewConfig`, surfaces a report-quality `blocked` row and NOTHING ELSE: no unconsumed entry, no contradiction, and `runComplete` is TRUE. This is deliberate, not a re-opened silence — gating on `how` would conflate missing prose with a lost answer, and gating on `unknown` would hold a rule-shaped answer open FOR EVER (the immortality class finding 2 removed). The price is that this one shape can close unconfirmed; the SKILL doc names it as the thing to watch on a live run",
+  () => { const claims = [{ unit: "main", resolutionClaims: wf.resolutionClaimRows(RULE_ROUTED, RULE_HOWLESS) }];
+    const checksBack = [{ unit: "main", id: RULE_ROUTED[0].id, shows: SHOWS.SHOWS_UNKNOWN,
+      found: "business rules are not in the page body" }];
+    const miss = wf.resolutionAccountingMiss(RULE_ROUTED, RULE_HOWLESS);
+    const gone = wf.unconsumedResolutions(RULE_ROUTED, RULE_HOWLESS, "main");
+    const bad = wf.resolutionContradictions(claims, checksBack);
+    return typeof miss === "string" && /no `how`/.test(miss)   // surfaced as a visibility-only blocked row
+      && gone.length === 0                                      // NOT unconsumed
+      && bad.length === 0                                       // NOT a contradiction
+      && wf.runComplete(true, [], gone) === true;               // and the run may therefore close
+    },
+  () => ({ miss: wf.resolutionAccountingMiss(RULE_ROUTED, RULE_HOWLESS),
+    gone: wf.unconsumedResolutions(RULE_ROUTED, RULE_HOWLESS, "main").length,
+    complete: wf.runComplete(true, [], []) }));
+check("PR #128 review (round 7, G5): the same composition with the verifier reading `no` instead of `unknown` DOES hold the run open — the tolerance above is scoped to \"cannot tell\", not to \"applied: true with no how\", so a page the verifier can actually read still catches the lie",
+  () => { const claims = [{ unit: "main", resolutionClaims: wf.resolutionClaimRows(RULE_ROUTED, RULE_HOWLESS) }];
+    const bad = wf.resolutionContradictions(claims,
+      [{ unit: "main", id: RULE_ROUTED[0].id, shows: SHOWS.SHOWS_NO, found: "no such condition on the page" }]);
+    return bad.length === 1 && wf.runComplete(true, [], bad) === false; },
+  () => "a readable refutation must still gate");
+
+// Round-7 Major (G6) — the terminus is pinned on the CONTROL FLOW, not only on prose. The grant sites sit
+// outside the exported block, so this is a source pin — but it names the adjacency a reorder would hide.
+check("PR #128 review (round 7, G6): the one-round terminus is pinned on the SHIPPED CONTROL FLOW, adjacent to the append site — the doc pin in `test_migration_resolutions_channel_docs.py` asserts prose and cannot see a reorder. The guard short-circuits BEFORE any second grant for a pair already granted, at BOTH sites, and the verifier site's guard sits in the same statement as its `resolutionsPending.add` so a reformat cannot separate the check from the grant it protects",
+  /if \(!ungranted\.length\) return\s*\n\s*for \(const g of ungranted\) resolutionsReopened\.add\(pairKey\(unit\.key, g\.id\)\)/.test(wfSrc)
+    && /if \(!resolutionsReopened\.has\(pairKey\(c\.unit, c\.id\)\)\) \{ resolutionsReopened\.add\(pairKey\(c\.unit, c\.id\)\); resolutionsPending\.add\(idKey\(c\.unit\)\) \}/.test(wfSrc)
+    // the release set is the ONLY thing that clears a verifier row, so the terminus depends on it staying yes-or-unknown
+    && /c\.shows === SHOWS_YES \|\| c\.shows === SHOWS_UNKNOWN/.test(wfSrc));
 
 // O3 — the `resolution-not-applied` audit `claim` wraps its untrusted halves like the sibling `resolutionClaimsLine`
 // does. Only ever re-enters a prompt JSON-encoded (via `carryBlock`), so this is defense-in-depth/consistency, not a

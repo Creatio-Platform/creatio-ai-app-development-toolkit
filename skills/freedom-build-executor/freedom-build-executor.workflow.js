@@ -427,6 +427,13 @@ const SHOWS_UNKNOWN = 'unknown'
 // to match and two copies of that rule drift.
 const UNCONSUMED_FROM_VERIFIER = 'verifier'
 
+// A DESIGN LITERAL, declared here with `MAX_ROUNDS` and the `shows` vocabulary rather than beside
+// `capCarryText` in the pure block: `RECONCILE_SCHEMA` below reads it for its `maxLength` bounds and is
+// evaluated at module load, so a `const` in the block would be in its temporal dead zone. One literal,
+// read by the record-time cap AND by the schema that rejects an oversized value a writer sends back.
+const CARRY_TEXT_CAP = 400
+const CARRY_TEXT_TRUNCATED = ' …[truncated]'
+
 const RECONCILE_SCHEMA = {
   type: 'object',
   required: ['approval', 'planVersion', 'unitKeys', 'buildOrder', 'reachabilityState', 'verify', 'planGaps', 'roundOf',
@@ -613,7 +620,11 @@ const RECONCILE_SCHEMA = {
     // `resolutionsReopened` = units that have spent their one repair round; `resolutionsPending` ⊆ it = the subset
     // still owed that round's dispatch. Persisted directly rather than derived from `unconsumedResolutions`, because
     // the `!res` path files an unconsumed row without spending the grant, so the derivation mis-marked those units.
-    resolutionsReopened: { type: 'array', items: { type: 'string' } },
+    // `resolutionsReopened` is per `(unit, id)` (PR #128 review, round 7) and therefore an OBJECT array; the grant is
+    // per ANSWER because the "a second round is a loop" bound is about the question, not the page. `resolutionsPending`
+    // stays a UNIT-key array: it feeds `reopenKeys()`, and what a round re-opens is a unit.
+    resolutionsReopened: { type: 'array', items: { type: 'object', required: ['unit', 'id'],
+      properties: { unit: { type: 'string' }, id: { type: 'string' } } } },
     resolutionsPending: { type: 'array', items: { type: 'string' } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
@@ -686,8 +697,13 @@ const RECONCILE_SCHEMA = {
       items: {
         type: 'object',
         required: ['unit', 'id'],
+        // `maxLength` on every free-text field (PR #128 review, round 7): the run caps these at record time, so a
+        // value arriving longer than the cap did not come from a compliant writer, and accepting it silently is how
+        // an oversized row re-enters every later prompt. A schema failure is retried by the tool layer instead.
         properties: { unit: { type: 'string' }, id: { type: 'string' }, kind: { type: 'string' },
-          item: { type: 'string' }, answer: { type: 'string' }, why: { type: 'string' }, source: { type: 'string' } },
+          item: { type: 'string', maxLength: CARRY_TEXT_CAP }, answer: { type: 'string', maxLength: CARRY_TEXT_CAP },
+          why: { type: 'string', maxLength: CARRY_TEXT_CAP }, how: { type: 'string', maxLength: CARRY_TEXT_CAP },
+          source: { type: 'string' } },
       },
     },
     // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
@@ -1785,8 +1801,6 @@ function rowsById(rows) {
 // comparison and the verifier's echoed `resolutionChecks[].id` all key on it byte for byte, so truncating it would
 // turn a long question into a permanently unmatchable one, which is the accounting miss RC-13 exists to prevent.
 // `item` carries no such duty on this row -- it is the question text a reader sees beside the id -- so it is capped.
-const CARRY_TEXT_CAP = 400
-const CARRY_TEXT_TRUNCATED = ' …[truncated]'
 function capCarryText(value) {
   if (typeof value !== 'string') return value ?? null
   if (value.length <= CARRY_TEXT_CAP) return value
@@ -1912,6 +1926,10 @@ function unconsumedResolutions(routed, res, unitKey) {
 // keeps the delimiter exactly as unambiguous (no unit key or evidence id can contain a NUL) while leaving the
 // source plain ASCII that a reviewer can actually read.
 const pairKey = (unit, id) => `${idKey(unit)}\u0000${idKey(id)}`
+// The inverse, for the ONE place a pair leaves the process: `resolutionsReopened` is persisted as `{unit, id}`
+// objects rather than as these composite strings, because the delimiter is a NUL and a NUL has no business in a
+// JSON file an agent writes and a human reads -- this file already paid for that lesson once (see the note above).
+const pairParts = (key) => { const i = String(key).indexOf('\u0000'); return { unit: String(key).slice(0, i), id: String(key).slice(i + 1) } }
 
 // PR #128 review (round 5) -- THE TWO `unconsumed` DEDUP SITES GO THROUGH `pairKey`, like every other `(unit, id)`
 // comparison in this file. Both compared `u.unit === x.unit && u.id === x.id` RAW while every lookup against a
@@ -1980,8 +1998,18 @@ function publishedResolutionIds(items) {
 // published but no longer owed (`resolution: null`, or a `list-*` item re-routed to another unit by a newly published
 // `list` key) is a genuine drop. A re-keyed id that has genuinely left the plan is kept, not dropped — the safe
 // direction when its presence cannot be confirmed; the operator clears it by withdrawing the answer.
+// CAPPED ON THE WAY IN AS WELL AS THE WAY OUT (PR #128 review, round 7). This is the SEED path: `unconsumed` is
+// rehydrated here from `state.unconsumedResolutions`, which is an AGENT-WRITTEN file, so the record-time caps at
+// `unconsumedResolutions` / `resolutionContradictions` bind nothing that arrives this way -- a folder written by an
+// older build, a hand-edited queue, or an agent that ignored "copy the JSON EXACTLY" carries whatever it carries,
+// straight back into `carry.unconsumed` and from there into the round-close prompt on EVERY round for the life of
+// the entry. That is the same context-exhaustion the record-time cap was added to close, reopened from the other
+// end. Capping HERE covers both call sites with one rule, and it is idempotent: an already-capped row is unchanged.
 function reconcileUnconsumed(entries, owed, released, publishedIds) {
-  const list = entries || []
+  const list = (entries || []).map((u) => (u && typeof u === 'object'
+    ? { ...u, item: capCarryText(u.item), answer: capCarryText(u.answer), why: capCarryText(u.why),
+        how: capCarryText(u.how), found: capCarryText(u.found) }
+    : u))
   const present = publishedIds instanceof Set ? publishedIds : new Set(publishedIds || [])
   return list.filter((u) => {
     if (!present.has(idKey(u.id))) return true
@@ -2007,7 +2035,11 @@ const runComplete = (verifyComplete, parked, unconsumed) =>
 // operator saw. This is the most expensive thing the ticket adds; spending it on a retry that says nothing new is
 // how a builder gives the same refusal twice.
 function unconsumedRepairText(entries, unitKey, fence) {
-  const mine = (entries || []).filter((u) => u.unit === unitKey)
+  // PR #128 review (round 7) -- `idKey` HERE TOO. `entries` is `unconsumed`, seeded on a resume from the
+  // agent-transcribed queue file, so a padded `unit` makes this filter return `[]` for a unit that IS correctly
+  // held open (`resolutionsPending` is normalised on read) -- the repair round still runs, but silently without
+  // the one thing that makes it worth its cost: the text telling the builder what happened last time.
+  const mine = (entries || []).filter((u) => idKey(u.unit) === idKey(unitKey))
   if (!mine.length) return ''
   const wrap = typeof fence === 'function' ? fence : String
   const lines = mine.map((u) => `- ${JSON.stringify(u.id)} — the answer was: ${wrap(String(u.answer ?? '').slice(0, 400))}\n  WHAT HAPPENED LAST TIME: ${wrap(String(u.why ?? '').slice(0, 400))}`).join('\n')
@@ -2023,7 +2055,12 @@ Build the answer, or return \`applied: false\` with a \`why\` that is a REASON r
 // explaining why. The closing log names them; `next` is what a caller reads.
 function unconsumedNextClause(entries) {
   if (!(entries || []).length) return ''
-  const ids = entries.map((u) => `\`${u.unit}\`/${JSON.stringify(u.id)}`).join(', ')
+  // PR #128 review (round 7) -- `u.unit` IS FENCED TOO. It was the only half of this pair left raw while `u.id`
+  // beside it was already `JSON.stringify`d, and it is the same class of data: it comes off the persisted,
+  // agent-transcribed `unconsumedResolutions`, not off a fixed literal. A backtick plus a newline in it closed
+  // this code span inside the instruction string `runReturn` hands the orchestrating agent -- the RC-5/O3 break
+  // in the one render path that had been fixed on one side only.
+  const ids = entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
   return ` ALSO: ${entries.length} operator answer(s) reached a build agent and produced NO build action — ${ids}. The engine gate has no row for this and never will; put each one to the user with its \`why\` from \`unconsumedResolutions\`, then either fix the build or record the decision to drop the answer.`
 }
 
@@ -2399,7 +2436,7 @@ function carryBlock(carry) {
   // `resolutionsPending` ⊆ it = the subset still owed that round's dispatch (keep them open until it runs). Written
   // EVEN WHEN `[]`, for the same reason the list above is — an emptied set is how a resumed run learns a grant was
   // finally consumed, and a stale non-empty one would strand a settled unit.
-  out.push(`\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is every unit that has already spent its ONE answer-channel repair round; a dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is the subset still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
+  out.push(`\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, not every unit: two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question. A dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
   if (carry.preflightEvidence && Object.keys(carry.preflightEvidence).length) {
     out.push(`\nPREFLIGHT EVIDENCE — merge these id/value pairs into \`${BUILT_FILE}.evidence\` exactly. A DIFFERENT FILE from the queue merge above, so it needs its own answer: RETURN \`evidenceWritten\` = every id you actually merged there. \`queueWritten\` says nothing about this write, and this run drops exactly the ids you name — one you file but do not report is re-sent to the next writer (harmless, the merge is idempotent); one you report but do not file is lost. A record object goes in as that object; the literal \`false\` goes in as \`false\`, NOT as \`{}\`. Keep existing evidence and judge entries that are already in the file:\n${j(carry.preflightEvidence)}`)
   }
@@ -2509,7 +2546,7 @@ function mergeContinuationCounters(continuationOf) {
     if (Number.isInteger(count) && count > 0) continuations[key] = Math.max(continuations[key] ?? 0, count)
   }
 }
-const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, resolutionsReopened: [...resolutionsReopened], resolutionsPending: [...resolutionsPending] })
+const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, resolutionsReopened: [...resolutionsReopened].map(pairParts), resolutionsPending: [...resolutionsPending] })
 
 // ENG-95850 (A3) — RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later
 // phase depends on it, so a transient failure there costs the whole run: measured on the Applicant baseline, two
@@ -2869,7 +2906,7 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
 // through a transcription the convention is weaker still, and the failure is worse than a missed dedup: a padded
 // `resolutionsReopened` entry misses `.has(unit.key)` and RE-GRANTS a repair round already spent, while a padded
 // `resolutionsPending` entry never matches its `.delete(unit.key)` and forces its unit open for ever.
-for (const k of state.resolutionsReopened || []) resolutionsReopened.add(idKey(k))
+for (const r of state.resolutionsReopened || []) if (r && r.unit && r.id) resolutionsReopened.add(pairKey(r.unit, r.id))
 for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
 
 packageState = state.packageState || null
@@ -3644,14 +3681,22 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   if (!gone.length) return
   unconsumed = [...unconsumed, ...gone]
   log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${gone.map((g) => `\`${g.id}\``).join(', ')} — the run cannot report complete while that stands`)
-  // ONE re-open per unit. A second would be a loop: the same builder, the same prompt, the same refusal.
+  // ONE re-open per ANSWER, not per unit (PR #128 review, round 7). The bound exists because a second round for
+  // THE SAME question is a loop -- the same builder, the same prompt, the same refusal -- and that argument is
+  // about the question, not the page. Keyed on the unit alone it also swallowed a DIFFERENT answer's first and
+  // only round: a unit that spent its grant declining answer A could never be re-opened for a verifier
+  // contradiction that landed later on answer B, and B's verifier-sourced row is releasable only by a fresh read
+  // that now never comes -- so `complete` was unreachable for that folder with no operator action that helped.
+  // The repair prompt is already per-answer (`unconsumedRepairText` renders THIS unit's entries), so a round
+  // bought by B genuinely says something a round bought by A did not. `MAX_ROUNDS` still bounds the total.
   // NOT ON A BUILD THAT NEVER RAN (PR #128 review, RC-4). A `!res` dispatch — a transient death this file documents
   // (`401 OAuth access token has expired`) — records the rows above for the report, but must NOT spend the answer's
   // one repair grant: the builder never got its genuine first attempt. The unit stays open on the gate (a page that
   // never built is never green), so it comes back next round, where a real miss then earns the reopen.
   if (!dispatched) return
-  if (resolutionsReopened.has(idKey(unit.key))) return
-  resolutionsReopened.add(idKey(unit.key))
+  const ungranted = gone.filter((g) => !resolutionsReopened.has(pairKey(unit.key, g.id)))
+  if (!ungranted.length) return
+  for (const g of ungranted) resolutionsReopened.add(pairKey(unit.key, g.id))
   resolutionsPending.add(idKey(unit.key))
 }
 // The `what` string for the blocked entry, a constant so the report and any dedup match on one literal.
@@ -4323,7 +4368,10 @@ while (true) {
       // without the tag a verifier-confirmed row could never be retracted by a later `shows: "yes"` either.
       unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
     }
-    if (!resolutionsReopened.has(idKey(c.unit))) { resolutionsReopened.add(idKey(c.unit)); resolutionsPending.add(idKey(c.unit)) }
+    // PER `(unit, id)` (PR #128 review, round 7): keyed on the unit alone, a contradiction on answer B was denied
+    // its one round whenever answer A had already spent the unit's grant -- and a verifier-sourced row is released
+    // only by a fresh read, which a unit that is never re-scheduled never gets.
+    if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
   }
   // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier RELEASED
   // (PR #128 review). The only place a verifier-sourced entry is cleared, and the only place an entry whose question

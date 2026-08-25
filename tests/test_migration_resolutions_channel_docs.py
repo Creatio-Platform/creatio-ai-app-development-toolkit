@@ -230,8 +230,17 @@ class ConsumptionContractDocTests(unittest.TestCase):
         # And the reason they are persisted rather than derived -- the defect that made the first fix wrong.
         self.assertIn("WITHOUT spending the", doc)
 
-    def test_a_verifier_sourced_entry_has_exactly_one_release_window(self):
-        """The stale-`"no"` terminus is stated, not left to be inferred from the release rule.
+    def test_the_docs_state_the_one_release_window_terminus(self):
+        """The stale-`"no"` terminus is STATED in prose. This asserts the doc, not the runtime.
+
+        PR #128 review (round 7) was right that the previous name over-claimed: this module reads
+        Markdown, so it can only pin that the contract is written down. The runtime half -- that the
+        grant guard short-circuits before a second reopen for a pair already granted -- lives in
+        `reportResolutionAccounting` and the verifier-contradiction append site, outside the exported
+        pure-helper block, and is pinned on control flow by the "round 7, G6" check in
+        `engine-tests/classic-to-freedom/run-infra.mjs`. Neither check substitutes for the other:
+        this one fails if the contract stops being documented, that one fails if the code stops
+        matching it.
 
         PR #128 review (round 6) asked whether a verifier-sourced entry can ever be released once its
         unit goes green. It can, exactly once: the contradiction grants the unit its repair round, the
