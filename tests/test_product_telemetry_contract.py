@@ -53,6 +53,43 @@ BANNED_PER_FLOW_NAMES = [
 ]
 
 
+# The app-creation-only names the flow-agnostic vocabulary replaced. Named only as "do NOT
+# send this" negative examples across the doc surfaces now — legitimately present as prose,
+# never as an emission instruction. Shared with the reverse-direction scan below so a name
+# mentioned for exactly this reason is not flagged as an undocumented one.
+DEPRECATED_EVENT_NAMES = [
+    "session_started",
+    "pre_plan_clarification_requested",
+    "pre_plan_user_input_received",
+    "business_plan_generated",
+    "business_plan_regenerated",
+    "business_plan_generation_skipped",
+    "business_plan_feedback_received",
+    "business_plan_approved",
+    "implementation_started",
+    "implementation_completed",
+    "implementation_failed",
+]
+
+
+# snake_case backtick tokens across these surfaces that name something other than a stage —
+# Analytics Context fields this contract also documents, or blocker-report categories from
+# AGENTS.md's own vocabulary. Anything snake_case in backticks that is NOT one of these and NOT
+# in STAGE_EVENTS is either a typo'd stage name or a new one this list has not caught up with.
+ALLOWED_NON_STAGE_IDENTIFIERS = {
+    "coding_agent",
+    "plugin_version",
+    "clio_mcp_issue",
+    "environment_issue",
+    "instruction_issue",
+    "orchestration_tool_failure",
+    "support_mode_active",
+    "workflow_dispatch",
+    "exit_plan_mode",
+    "plan_style_guide",
+}
+
+
 # Each skill must map the shared stages onto its OWN gates and name its own
 # workflow value. Telemetry previously lived only in the app orchestrator, which
 # is why every other flow reported nothing.
@@ -162,19 +199,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
         """
         agents = read("AGENTS.md")
 
-        for deprecated in (
-            "session_started",
-            "pre_plan_clarification_requested",
-            "pre_plan_user_input_received",
-            "business_plan_generated",
-            "business_plan_regenerated",
-            "business_plan_generation_skipped",
-            "business_plan_feedback_received",
-            "business_plan_approved",
-            "implementation_started",
-            "implementation_completed",
-            "implementation_failed",
-        ):
+        for deprecated in DEPRECATED_EVENT_NAMES:
             self.assertNotIn(deprecated, agents)
 
         # And it delegates rather than re-listing the replacements.
@@ -325,6 +350,36 @@ class ProductTelemetryContractTests(unittest.TestCase):
                     users,
                     f"stage {stage} is in the vocabulary but no skill says when to emit it",
                 )
+
+    def test_no_documented_event_name_is_outside_the_vocabulary(self):
+        # The previous test catches a stage that exists but is never mentioned; this one catches
+        # the opposite — a name that IS mentioned, in a place that reads as an emission point, but
+        # is not (or no longer) in STAGE_EVENTS. Because the vocabulary is delegated rather than
+        # restated here, nothing before this test asserted that a name typo'd into AGENTS.md,
+        # this contract, a SKILL.md, or the Cursor rule would fail anywhere but at runtime against
+        # a live clio — which rejects it silently into the hook's own `rejected`/retry path, not a
+        # CI failure a reviewer would see.
+        surfaces = {
+            "AGENTS.md": read("AGENTS.md"),
+            "product-telemetry.md": read("context", "product-telemetry.md"),
+            "cursor-rule": read("rules", "creatio-app-orchestrator.mdc"),
+        }
+        for name in ("creatio-app-orchestrator", *SKILL_WORKFLOWS):
+            surfaces[name] = read("skills", name, "SKILL.md")
+
+        # snake_case only: every WORKFLOW_VALUES entry is hyphenated, so this pattern already
+        # excludes them without needing an explicit allowlist for that half of the vocabulary.
+        token_pattern = re.compile(r"`([a-z]+(?:_[a-z]+)+)`")
+        allowed = set(STAGE_EVENTS) | set(DEPRECATED_EVENT_NAMES) | ALLOWED_NON_STAGE_IDENTIFIERS
+        for surface_name, text in surfaces.items():
+            for token in set(token_pattern.findall(text)):
+                with self.subTest(surface=surface_name, token=token):
+                    self.assertIn(
+                        token, allowed,
+                        f"`{token}` in {surface_name} is not a known stage, a documented "
+                        "deprecated name, or an allowed non-stage identifier — likely a typo'd "
+                        "stage name that would only be caught at runtime against a live clio",
+                    )
 
     def test_orchestrator_emits_build_started_for_targeted_edits_too(self):
         # Uniformity is the point of a flow-agnostic vocabulary: if a targeted edit

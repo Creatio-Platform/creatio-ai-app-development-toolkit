@@ -1970,7 +1970,20 @@ class CursorTelemetryHookWiringTests(unittest.TestCase):
 
 @unittest.skipIf(NODE is None or CLIO is None, "node and clio are both required")
 class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
-    """The floor is the whole point: it must actually reach clio, not just be described."""
+    """The floor is the whole point: it must actually reach clio, not just be described.
+
+    Gated on a real `CAADT_TEST_CLIO` binary, and so skipped by default, ONLY because these two
+    tests check that a live clio actually accepts the new flow-agnostic vocabulary
+    (`workflow_started`, `session_usage`) into its allow-list — something no stub can answer, and
+    something today's released clio does not yet do (see docs/telemetry-transport-decision.md and
+    clio#1081/ENG-92551). What is NOT gated behind a real binary, and runs unconditionally in
+    every default CI run via `TelemetryRoutingHookBehaviorTests` above, is the exactly-once
+    claim/release and retry-on-refusal state machine this vocabulary rides on: see in particular
+    `test_a_clio_that_never_records_stops_being_retried` (retry-on-refusal, bounded by
+    FLOOR_ATTEMPT_LIMIT) and `test_parallel_hook_processes_emit_one_floor_between_them` (claim
+    exclusivity across concurrent hook processes) — both exercised with a fake stub `clio`, no
+    live binary required.
+    """
 
     def test_records_an_unattributed_session_start_through_clio(self):
         # End to end against the real clio, writing into a throwaway telemetry home. This is
