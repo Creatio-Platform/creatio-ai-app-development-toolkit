@@ -9038,6 +9038,36 @@ try {
     && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions"),
     () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
 
+  // ENG-95683 (item 2/R1, negative control — the `enginePositioned` SKIP branch itself): a compositeOnly type the
+  // ENGINE positioned (a container/field it placed in `viewConfigDiff` / `tableElements` — and the MAJORITY of
+  // registry types are compositeOnly) must NOT reach needsDecision; only a compositeOnly type the build agent must
+  // place STANDALONE does. Without this control the skip clause `|| enginePositioned.has(a.componentType)` is
+  // untested: the R1 case above emits `crt.CommunicationOptions` as a standalone detail (never engine-positioned),
+  // so deleting the clause keeps every assertion green while the worklist floods with engine-picked types. Here a
+  // COMPLETE radio group emits `crt.IconRadioButton` into `viewConfigDiff` (values.type) — the engine positioned it —
+  // and marking it compositeOnly makes it a composite-only advisory candidate the skip must drop; the SAME run still
+  // emits the standalone `crt.CommunicationOptions` detail, which must still surface. So deleting the skip fails on
+  // IconRadioButton, and inverting it (skip the standalone, keep the positioned) fails on CommunicationOptions.
+  const engPosRun = gmRun([
+    `{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"},caption:{bindTo:"Resources.Strings.IsPrimaryCaption"}}}`,
+    `{operation:"insert",name:"OptYes",parentName:"IsPrimary",propertyName:"items",values:{value:true,caption:{bindTo:"Resources.Strings.YesCaption"}}}`,
+    `{operation:"insert",name:"OptNo",parentName:"IsPrimary",propertyName:"items",values:{value:false,caption:{bindTo:"Resources.Strings.NoCaption"}}}`,
+    compOnlyDetail,
+  ].join(","), compOnlyDetails,
+    { entityColumns: { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" } },
+      resources: { IsPrimaryCaption: "Is primary", YesCaption: "Yes", NoCaption: "No" },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [
+        { componentType: "crt.Input", inputs: {}, outputs: {} },
+        { componentType: "crt.IconRadioButton", compositeOnly: true, inputs: {}, outputs: {} },
+        { componentType: "crt.CommunicationOptions", compositeOnly: true, inputs: {}, outputs: {} }] } });
+  const engPosCompOnly = (item) => engPosRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === item);
+  check("ENG-95683 (item 2/R1, negative control): an ENGINE-POSITIONED compositeOnly type (crt.IconRadioButton, placed in viewConfigDiff) is dropped by the enginePositioned skip, while a STANDALONE compositeOnly type (crt.CommunicationOptions) in the same run still surfaces — deleting the skip clause fails here, inverting it fails on the standalone one",
+    engPosRun.changeSet.viewConfigDiff.some((o) => o.values?.type === "crt.IconRadioButton") // the type WAS engine-positioned (non-vacuous)
+    && !engPosCompOnly("crt.IconRadioButton")                                                 // ...so the skip drops it
+    && engPosCompOnly("crt.CommunicationOptions"),                                            // ...but the standalone one is untouched
+    () => ({ view: engPosRun.changeSet.viewConfigDiff.map((o) => ({ name: o.name, type: o.values?.type })),
+      registry: engPosRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")) }));
+
   // ---- ENG-95683 (item 1, R2): the durable resolved-gate set + its plan.md provenance mirror ---------------
   // A run whose emitted type is a gated composite the stand LACKS carries the resolved gate on `result.resolvedGates`
   // ([{componentType,kind,id,feature?,source}]) — the exact set the `--resolved-gates` artifact writes — and mirrors
