@@ -1801,6 +1801,43 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
 // which is the exact failure mode the fixed-literal rule exists to prevent. The pattern stays module-local — no
 // caller needs it, and `.test()` on a non-global regex keeps no state between calls.
 const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+// PR #128 review (round 8) — Creatio's `DataValueType.LOOKUP`. The scan below reads it to tell a lookup-record
+// reference from a GUID-shaped string that merely happens to sit in a comparison.
+const DVT_LOOKUP = 10;
+// EVERY OBJECT NODE in a mapped rule tree. The scoping that matters is NOT this walk -- it is that the test below
+// reads `node.value` and its sibling `node.dataValueType`, instead of the old
+// `LOOKUP_GUID.test(JSON.stringify(rules))` over the whole serialised blob. That blob matched a GUID ANYWHERE,
+// including in a field that is not a comparison at all; reading a named property cannot.
+// A `Object.hasOwn(node, "value")` guard was written here first and then deleted: it changes no outcome, because a
+// node without a `value` fails the GUID test on `undefined` regardless -- and shipping a clause whose deletion
+// leaves every test green is the exact defect eight rounds of this review have been about. It is gone rather than
+// kept with an apology.
+function* ruleNodes(node) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) { for (const x of node) yield* ruleNodes(x); return; }
+  yield node;
+  for (const v of Object.values(node)) yield* ruleNodes(v);
+}
+// FAIL-CLOSED ON AN UNKNOWN TYPE. A value is excluded ONLY on positive evidence that its field is not a lookup; an
+// ABSENT or unrecognised `dataValueType` still raises. Narrowing this into a false NEGATIVE would be the worse trade
+// by far: an unraised question has no id, so the operator's answer can never bind and lands in
+// `resolutionsUnmatched` -- this ticket's own founding failure, not a tidier version of it.
+// The reachable false positive this closes: a GUID-shaped value compared against a TEXT column (an external key, a
+// correlation id). A Confirm item gates the build, and this one tells the operator to "resolve each GUID to its
+// display name on-stand" -- for a text column there is nothing to resolve, so the build blocks on an unanswerable
+// question, and an operator taught to rubber-stamp it is worse off than one never asked.
+// EXPORTED so the narrowing is EXECUTED directly (PR #128 review, round 8) rather than only inferred from
+// end-to-end fixtures, whose rule shapes cannot reach every branch of it.
+export function comparesLookupGuid(...ruleSets) {
+  for (const rules of ruleSets) {
+    for (const n of ruleNodes(rules)) {
+      if (!LOOKUP_GUID.test(String(n.value ?? ""))) continue;
+      const dvt = n.dataValueType;
+      if (dvt === undefined || dvt === null || dvt === "" || Number(dvt) === DVT_LOOKUP) return true;
+    }
+  }
+  return false;
+}
 export const LOOKUP_VALUE_ITEM = "lookup-record GUIDs in business-rule conditions";
 
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
@@ -1830,7 +1867,7 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // it is about are built, it gets an id like every other kind and the answers channel can key on it.
   // The `item` is a FIXED LITERAL, exactly as `list-columns` learned to be: `item` is half the key an answer matches
   // on, so deriving it from the GUIDs found would give the same question a different key on every stand.
-  if (LOOKUP_GUID.test(JSON.stringify(pageBusinessRules)) || LOOKUP_GUID.test(JSON.stringify(entityBusinessRules))) {
+  if (comparesLookupGuid(pageBusinessRules, entityBusinessRules)) {
     needsDecision.push({ kind: "lookup-value", item: LOOKUP_VALUE_ITEM,
       reason: "business-rule conditions compare against lookup-record GUIDs (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly" });
   }

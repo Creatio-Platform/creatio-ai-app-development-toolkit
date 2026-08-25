@@ -2268,6 +2268,10 @@ export function checklistGroups(result, opts = {}) {
     const listConfirm = confirmWorklistRows(LIST_PAGE_KEY, result.listChangeSet || {});
     if (listConfirm.length) groups.push(pageGroup(LIST_PAGE_KEY, "⚠ Confirm worklist", listConfirm));
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY)));
+    // THE INVARIANT `pageUnitsSlice` NARROWS ON (PR #128 review, round 8). This assignment is the ONLY thing
+    // that makes "a list decision rides on `main` only when there is no `list` key" true, and the slice helper
+    // depends on it from another file with nothing but a comment connecting them. Named here so a refactor of
+    // this branch has to notice, and pinned by its own engine test rather than only by the slice's behaviour.
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.

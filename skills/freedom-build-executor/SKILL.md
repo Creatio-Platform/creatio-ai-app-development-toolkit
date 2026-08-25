@@ -376,12 +376,13 @@ nowhere, because nothing asked. So:
   the ONE outcome that leaves no other trace (an accounting miss files a `blocked` row, a verifier contradiction
   files a `discrepancies` row, a clean decline files neither), so re-running in the same folder on a green gate
   reported `complete: true` over a dropped answer — this channel's own failure, one session boundary later. The
-  **The repair GRANT is persisted too**, under the root keys `resolutionsReopened` (every unit that has spent its
-  one answer-channel repair round) and `resolutionsPending` (the subset still owed that round's dispatch), both
-  required and both written even when empty — a dropped `resolutionsReopened` re-grants a spent round on the next
-  resume, a dropped `resolutionsPending` strands a unit that was owed its repair. The
   repair round the answer buys is told WHY the unit re-opened, naming the answer and what became of it last time,
-  rather than being handed the previous round's prompt again. A rehydrated entry is re-checked against the
+  rather than being handed the previous round's prompt again.
+  **The repair GRANT is persisted too**, under the root keys `resolutionsReopened` (every ANSWER that has spent
+  its one repair round, as `{unit, id}` pairs — two answers on one page each get their own round, because the
+  bound exists to stop re-asking the SAME question) and `resolutionsPending` (the unit keys still owed that
+  round's dispatch), both required and both written even when empty — a dropped `resolutionsReopened` re-grants
+  a spent round on the next resume, a dropped `resolutionsPending` strands a unit that was owed its repair. A rehydrated entry is re-checked against the
   questions the plan still asks, so an answer the operator has since withdrawn, or one whose id a re-plan moved,
   drops out instead of holding the folder open.
 This never softens the invariant above, only tightens it: the verifier files NO evidence record for an answer and

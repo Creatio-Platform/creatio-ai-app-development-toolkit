@@ -2255,6 +2255,22 @@ check("PR #128 review (round 7, G6): the one-round terminus is pinned on the SHI
     && /if \(!resolutionsReopened\.has\(pairKey\(c\.unit, c\.id\)\)\) \{ resolutionsReopened\.add\(pairKey\(c\.unit, c\.id\)\); resolutionsPending\.add\(idKey\(c\.unit\)\) \}/.test(wfSrc)
     // the release set is the ONLY thing that clears a verifier row, so the terminus depends on it staying yes-or-unknown
     && /c\.shows === SHOWS_YES \|\| c\.shows === SHOWS_UNKNOWN/.test(wfSrc));
+// Round-8 (H1) — the unconsumed carry REPORTS its size instead of being trimmed. The review asked for a ceiling;
+// a silent one is unavailable here because this text is the persist instruction, so a rendered subset becomes a
+// persisted subset. Making the growth visible is the part that can be done without losing rows.
+check("PR #128 review (round 8): the unconsumed carry is SIZE-REPORTED, never trimmed — the block is the persist instruction (\"copying the JSON EXACTLY... EVEN WHEN []\"), so rendering fewer rows makes the writer persist fewer rows and the omitted answers leave the folder for ever, which is the silent loss this ticket exists to end. The log names the byte count and the entry count so an unbounded carry is an operator-facing fact rather than a slowly-rising bill",
+  /const unconsumedBytes = j\(carry\.unconsumed\)\.length/.test(wfSrc)
+    && /if \(unconsumedBytes > UNCONSUMED_CARRY_WARN\) \{/.test(wfSrc)
+    && /is re-sent every round — nothing is dropped/.test(wfSrc)
+    // the block itself is still unconditional and still says EXACTLY / EVEN WHEN []
+    // ANCHORED AT THE START OF THE STATEMENT. `out.push(` as a bare substring still matched after an
+    // `if (carry.unconsumed.length)` was prepended -- the mutation that makes the write conditional, which is
+    // exactly the regression the "write it EVEN WHEN []" rule exists to prevent, and it stayed green.
+    && wfSrc.split("\n").some((l) => l.startsWith("  out.push(") && l.includes("UNCONSUMED OPERATOR ANSWERS")
+      && l.includes("EVEN WHEN IT IS")));
+check("PR #128 review (round 8): the warn threshold is a NAMED constant, and it is not the text cap — conflating the two would tie an operator-visibility threshold to a per-field truncation bound and make one of them wrong whenever the other moved",
+  /const UNCONSUMED_CARRY_WARN = \d+/.test(wfSrc)
+    && !/UNCONSUMED_CARRY_WARN = CARRY_TEXT_CAP/.test(wfSrc));
 
 // O3 — the `resolution-not-applied` audit `claim` wraps its untrusted halves like the sibling `resolutionClaimsLine`
 // does. Only ever re-enters a prompt JSON-encoded (via `carryBlock`), so this is defense-in-depth/consistency, not a

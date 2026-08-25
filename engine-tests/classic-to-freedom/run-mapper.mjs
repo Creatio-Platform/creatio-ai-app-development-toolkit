@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
-  LIST_DECISION_KINDS, LOOKUP_VALUE_ITEM } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+  LIST_DECISION_KINDS, LOOKUP_VALUE_ITEM, comparesLookupGuid } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
@@ -1935,6 +1935,25 @@ check("ENG-95503: a `list-*` question rides on a key OTHER than `list` only on a
   () => ({ withheldElsewhere: listKeyedElsewhere(lpSliceUnits).map((p) => p.pageKey + " " + p.kind),
     withheldListSlice: pageUnitsSlice(lpSliceUnits, "list"),
     publishedElsewhere: listKeyedElsewhere(pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE })).map((p) => p.pageKey) }));
+/* PR #128 review (round 8) — THE INVARIANT ITSELF, pinned on its own. The check below it asserts the same fact
+   but also exercises `pageUnitsSlice`, so a reader could not tell which half was load-bearing, and a refactor that
+   broke the invariant while leaving the narrowing intact would show up as a confusing slice failure rather than as
+   "the mutual exclusivity is gone". This one touches no slice function: it is purely the correlation the comment
+   at the `listConfirmOnMain = []` assignment in designspec.mjs claims, stated where a maintainer of THAT branch
+   would look for it. The assignment now names this test in return, so the dependency is written down at both ends. */
+check("PR #128 review (round 8): the list-decision invariant, standalone — publishing the `list` page group and riding a `list-*` question on another key are MUTUALLY EXCLUSIVE. `listConfirmOnMain = []` in the publishing branch is the only thing making that true, it lives in a different file from the narrowing that depends on it, and its failure mode is a subtly wrong slice rather than a throw",
+  () => { const withheld = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+    const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE });
+    const hasList = (u) => (u.pages || []).some((p) => p.key === "list");
+    const elsewhere = (u) => (u.preflight || []).filter((p) => LIST_DECISION_KINDS.includes(p.kind) && p.pageKey !== "list").length;
+    // Neither run may be in the forbidden quadrant: a `list` unit published AND a list question keyed elsewhere.
+    return !(hasList(withheld) && elsewhere(withheld) > 0)
+      && !(hasList(published) && elsewhere(published) > 0)
+      // and both quadrants that ARE legal must be genuinely represented, or the check passes vacuously on two empty runs
+      && (!hasList(withheld) && elsewhere(withheld) > 0)
+      && (hasList(published) && elsewhere(published) === 0); },
+  () => ({ withheld: { list: (pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).pages || []).some((p) => p.key === "list") },
+    published: { list: (pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE }).pages || []).some((p) => p.key === "list") } }));
 check("ENG-95503: when the `list` unit IS published its slice carries its own ⚠ Confirm questions, answers included — the narrowing is correct for the case that actually has a list builder to read it",
   () => { const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE });
     const slice = pageUnitsSlice(published, "list");
@@ -1982,6 +2001,56 @@ check("ENG-95503: a page whose rules compare no GUID raises NO `lookup-value` qu
   () => lookupValueOf(lpEmptySection.changeSet || {}).length === 0
     && lookupValueOf(lpRun.changeSet || {}).length === 0,
   () => ({ empty: lookupValueOf(lpEmptySection.changeSet || {}), run: lookupValueOf(lpRun.changeSet || {}) }));
+/* PR #128 review (round 8) — THE SCAN IS SCOPED TO COMPARISON VALUES. It used to be
+   `LOOKUP_GUID.test(JSON.stringify(rules))` over the whole serialised tree. The review's stated case (an unrelated
+   GUID-shaped field such as a rule `uId`) turns out NOT to be reachable — the mapper copies only
+   `action`/`element`/`conditions`/`note`/`provenance` forward, so raw ids never survive — and the first check below
+   pins that, so a future mapper that DOES carry an id through cannot quietly re-open it. The reachable false
+   positive was found while testing for that one, and it is the second check: a GUID-shaped value compared against a
+   TEXT column. A ⚠ Confirm item gates the build, and this one tells the operator to "resolve each GUID to its
+   display name on-stand" — for an external key or a correlation id there is nothing to resolve, so the build is
+   blocked on a question with no answer, and an operator who learns to rubber-stamp it is worse off than one who
+   was never asked. The third check pins the direction the narrowing must NOT take. */
+const guidUidRuleSchema = { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{uId:"11111111-2222-4333-8444-555555555555",enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"InProgress",dataValueType:1}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` };
+const resGuidUidCs = runMigration({ entity: "X", schemas: [guidUidRuleSchema] }, { baseDir: FIX });
+check("PR #128 review (round 8): a GUID-shaped string in a NON-comparison field (a rule's own `uId`) raises NO `lookup-value` question — the detector reads comparison VALUES, not every GUID-shaped substring in the serialised tree, so an internal id can never gate a build on a question that has nothing to confirm",
+  () => lookupValueOf(resGuidUidCs.changeSet || {}).length === 0,
+  () => ({ raised: lookupValueOf(resGuidUidCs.changeSet || {}), err: resGuidUidCs.error }));
+
+const guidTextColSchema = { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"ExternalKey"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:1}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` };
+const resGuidTextCs = runMigration({ entity: "X", schemas: [guidTextColSchema] }, { baseDir: FIX });
+check("PR #128 review (round 8): a GUID-shaped value compared against a TEXT column (`dataValueType: 1` — an external key, a correlation id) raises NO `lookup-value` question — this one WAS reachable before the narrowing, and the question it raised told the operator to resolve a lookup record that does not exist while the ⚠ Confirm item blocked the build",
+  () => lookupValueOf(resGuidTextCs.changeSet || {}).length === 0
+    // the rule itself still maps -- the narrowing must remove the QUESTION, not the rule
+    && (resGuidTextCs.changeSet?.pageBusinessRules || []).length === 1,
+  () => ({ raised: lookupValueOf(resGuidTextCs.changeSet || {}),
+    rules: (resGuidTextCs.changeSet?.pageBusinessRules || []).length, err: resGuidTextCs.error }));
+
+const guidNoDvtSchema = { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001"}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` };
+const resGuidNoDvtCs = runMigration({ entity: "X", schemas: [guidNoDvtSchema] }, { baseDir: FIX });
+check("PR #128 review (round 8): the narrowing FAILS CLOSED — a GUID-shaped comparison value with NO `dataValueType` at all still raises the question. A value is excluded only on positive evidence its field is not a lookup, because an unraised question has no id, so an operator's answer can never bind to it and lands in `resolutionsUnmatched` — which is this ticket's own founding failure, not a tidier version of it",
+  () => lookupValueOf(resGuidNoDvtCs.changeSet || {}).length === 1,
+  () => ({ raised: lookupValueOf(resGuidNoDvtCs.changeSet || {}), err: resGuidNoDvtCs.error }));
+/* PR #128 review (round 8) — THE NARROWING ITSELF, EXECUTED. The three end-to-end checks above cannot see the
+   `value`-only clause: today's mapper carries no GUID-shaped id forward, so walking every node behaves identically
+   and a mutation of that clause stayed green. That clause is defence against a mapper that LATER carries one
+   (a rule `uId`, a schema uid), which is precisely the case the review raised — so it needs a test that feeds the
+   detector rule objects directly rather than one that goes through a fixture the shape cannot reach. */
+check("PR #128 review (round 8): `comparesLookupGuid` reads COMPARISON VALUES only — a GUID-shaped string sitting in an id-like field of a rule object does not raise, while the same GUID as a lookup comparison value does. This is the clause the end-to-end fixtures cannot exercise, and the review's stated case is exactly the shape it guards",
+  () => comparesLookupGuid([{ action: "make-required", element: "Contact", conditions: [
+        { comparison: 3, left: { attribute: "Stage" }, right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 10 } }] }])
+    && !comparesLookupGuid([{ action: "make-required", element: "Contact",
+        uId: "11111111-2222-4333-8444-555555555555", ruleUId: "22222222-3333-4444-8555-666666666666",
+        conditions: [{ comparison: 3, left: { attribute: "Stage" }, right: { value: "InProgress", dataValueType: 1 } }] }]),
+  () => "an id-shaped GUID is not a comparison value");
+check("PR #128 review (round 8): `comparesLookupGuid` judges each value on ITS OWN `dataValueType` — a rule carrying both a text GUID and a lookup GUID still raises (the lookup one is real), and a rule carrying only the text one does not, so the narrowing cannot be satisfied by a neighbouring field's type",
+  () => comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } },
+        { right: { value: "aa11bb22-3344-4c55-8d66-000000000777", dataValueType: 10 } }] }])
+    && !comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } }] }])
+    && comparesLookupGuid([], undefined, null) === false,
+  () => "each value is judged on its own type");
 /* PR #128 review (RC-8a) — THE SECOND DISJUNCT, EXERCISED. `mapper.mjs` raises the question when a GUID appears in
    `pageBusinessRules` OR in `entityBusinessRules`, and every fixture above is a BINDPARAMETER rule, which lands in
    the PAGE list. `||` short-circuits, so the entity half never evaluated: deleting it left all four tests plus C2

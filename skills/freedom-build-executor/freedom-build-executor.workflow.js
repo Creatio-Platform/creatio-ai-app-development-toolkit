@@ -432,6 +432,9 @@ const UNCONSUMED_FROM_VERIFIER = 'verifier'
 // evaluated at module load, so a `const` in the block would be in its temporal dead zone. One literal,
 // read by the record-time cap AND by the schema that rejects an oversized value a writer sends back.
 const CARRY_TEXT_CAP = 400
+// The point at which the unconsumed carry is worth telling the operator about. NOT a truncation threshold --
+// see the note at the push site for why this block cannot be trimmed without losing rows from the folder.
+const UNCONSUMED_CARRY_WARN = 4000
 const CARRY_TEXT_TRUNCATED = ' …[truncated]'
 
 const RECONCILE_SCHEMA = {
@@ -2428,6 +2431,18 @@ function carryBlock(carry) {
   // list is load-bearing here: it is how a resumed run learns the last session's unconsumed answer was finally
   // built. Folding it into the conditional above would leave the file holding a stale non-empty list for ever,
   // which holds a FINISHED folder open -- the opposite failure and just as silent.
+  // PR #128 review (round 8) -- AN OVERSIZED CARRY IS REPORTED, NOT TRIMMED. The review asked for a ceiling on
+  // this block. It cannot be a silent one: this text is the PERSIST INSTRUCTION, not a display, so rendering a
+  // subset makes the writer persist a subset and the omitted rows leave the folder for ever -- trading a context
+  // cost for the exact silent loss this ticket exists to end. `id` cannot be capped either: it is the match key
+  // the operator's `resolutions.json`, the published preflight row and the verifier's echoed `resolutionChecks`
+  // all compare byte for byte. What is left is to make the growth VISIBLE, so it is an operator-facing fact
+  // instead of a slowly-rising bill nobody is told about. The real fix is to bound `item` where the id is
+  // composed, which changes the published id contract and belongs in its own change.
+  const unconsumedBytes = j(carry.unconsumed).length
+  if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
+    log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
+  }
   out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = the \`id\` of every row you wrote. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
   // PR #128 review (N2) — THE ANSWER-CHANNEL REPAIR GRANTS RIDE THE CARRY TOO. The grant markers used to be derived
   // from `unconsumedResolutions` on resume, but a transient build death (`!res`) files an unconsumed row WITHOUT
