@@ -1129,10 +1129,14 @@ function diagnosticOwner(p, schema) {
     return { item: seg[1], ownerNote: `${DIAG_OWNER_ROOTS[seg[0]]} '${seg[1]}'`, ownerKind: DIAG_OWNER_ROOTS[seg[0]] };
   return { item: p || "(root)", ownerNote: `\`${p || "(root)"}\`` };
 }
-// Member kinds whose ledger disposition already tracks `fromTemplate` (mirrors `buildCoverage`'s SOURCES table).
-// `module` reads `eff.moduleDeps`; every other key reads the `eff.<kind>s` array of the same name.
-const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", mixin: "mixins",
-  detail: "details", module: "moduleDeps" };
+// Member kinds whose ledger disposition already tracks `fromTemplate` AND whose diagnostics can actually REACH
+// this escalation. Each key reads the `eff.<kind>s` array of the same name.
+// Deliberately NOT listed: `detail` and `module` — unreachable, `isStructuralDiag` routes every `details.*` /
+// `modules.*` path through `reportedElsewhere` (they sit in `STRUCTURAL_ROOTS` and `seg[0] !== "diff"`
+// short-circuits to `true`), the same reason `businessRules`/`rules` are absent. Listing them would suggest a
+// generalization this code does not have. Partial mirror of `buildCoverage`'s SOURCES table, which additionally
+// counts an inert module (`INERT_MODULE_RX`) and a scaffolding method as template-owned.
+const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", mixin: "mixins" };
 // The set of member NAMES, per ownerKind, that no CLIENT schema touched (`fromTemplate`) — built once per run
 // from `eff`, the same source `buildCoverage` reads. A name in this set already gets ledger disposition `context`
 // (ENG-95412 follow-up: `disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
@@ -1141,7 +1145,7 @@ const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", 
 function templateOwnedNames(eff) {
   const out = {};
   for (const [kind, listKey] of Object.entries(TEMPLATE_OWNED_LIST_KEY)) {
-    out[kind] = new Set((eff[listKey] || []).filter((m) => m.fromTemplate).map((m) => m.name ?? m.key));
+    out[kind] = new Set((eff[listKey] || []).filter((m) => m.fromTemplate).map((m) => m.name));
   }
   return out;
 }

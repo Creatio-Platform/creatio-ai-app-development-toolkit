@@ -9118,24 +9118,63 @@ try {
     tplGapTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplAttr"),
     () => tplGapTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
 
-  // PR review follow-up: `templateOwnedNames(eff)` covers five owner kinds (attribute/message/mixin/detail/module),
-  // but the earlier fixtures above only exercised 'attribute'. `details` key by `.key` (not `.name`, unlike the
-  // other four) — a plausible spot for the Set lookup to silently miss. Prove the guard generalizes.
+  // PR review follow-up: the earlier fixtures only exercised 'attribute'. `TEMPLATE_OWNED_LIST_KEY` covers exactly
+  // the three owner kinds a diagnostic can REACH this escalation with — attribute, message, mixin. (A second review
+  // round showed `detail`/`module` are unreachable for the same reason as `businessRules`: `isStructuralDiag` puts
+  // `details`/`modules` in `STRUCTURAL_ROOTS`, so `reportedElsewhere` drops those diagnostics first. A detail
+  // fixture here asserted a generalization the code does not have and passed for an unrelated reason — the detail's
+  // gap HARD-BLOCKS the gate and never becomes a `parse-gap` either way, so the check stayed green even with the
+  // suppression made impossible. Replaced with the two reachable kinds that were genuinely untested.)
+  const tplGapMsgBase = `define("Base",[],function(){return{messages:{TplMsg:{mode:Terrasoft.Features.getIsEnabled("Widget"),direction:0}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapMsg = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMsgBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the suppression generalizes past 'attribute' — an unreadable `mode` on a MESSAGE no client schema touched raises no `parse-gap`",
+    !tplGapMsg.changeSet.needsDecision.some((d) => d.item === "TplMsg"),
+    () => tplGapMsg.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  const tplGapMsgTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",messages:{TplMsg:{mode:Terrasoft.Features.getIsEnabled("Widget"),direction:0}},diff:[${nameOp}]};});`;
+  const tplGapMsgTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMsgBase }],
+    schemas: [{ pkg: "P", body: tplGapMsgTouchedClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the SAME message still escalates once the CLIENT schema declares it — the message check above is not vacuous",
+    tplGapMsgTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplMsg"),
+    () => tplGapMsgTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  const tplGapMixBase = `define("Base",[],function(){return{mixins:{TplMix:Terrasoft.Features.getIsEnabled("Widget")},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapMix = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMixBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: same for the third reachable kind — an unreadable MIXIN value no client schema touched raises no `parse-gap`",
+    !tplGapMix.changeSet.needsDecision.some((d) => d.item === "TplMix"),
+    () => tplGapMix.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  const tplGapMixTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",mixins:{TplMix:Terrasoft.Features.getIsEnabled("Widget")},diff:[${nameOp}]};});`;
+  const tplGapMixTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMixBase }],
+    schemas: [{ pkg: "P", body: tplGapMixTouchedClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the SAME mixin still escalates once the CLIENT schema declares it — the mixin check above is not vacuous",
+    tplGapMixTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplMix"),
+    () => tplGapMixTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  // And the counterpart of the removed detail fixture, asserting what is actually true: a template-owned DETAIL's
+  // unreadable structural field never reaches `needsDecision` as a `parse-gap` at all — it blocks the gate, with or
+  // without the suppression, so `detail` has nothing to suppress and is correctly absent from the table.
   const tplGapDetailBase = `define("Base",[],function(){return{details:{TplDetail:{schemaName:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapDetailClient = `define("P",[],function(){return{entitySchemaName:"X",details:{TplDetail:{schemaName:Terrasoft.Features.getIsEnabled("Widget")}},diff:[${nameOp}]};});`;
   const tplGapDetail = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
     seed: [{ pkg: "Base", body: tplGapDetailBase }],
-    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
-  check("ENG-95412 follow-up: the suppression generalizes past 'attribute' — an unreadable value on a DETAIL no client schema touched also raises no `parse-gap`",
-    !tplGapDetail.changeSet.needsDecision.some((d) => d.item === "TplDetail"),
-    () => tplGapDetail.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
-  check("ENG-95412 follow-up: that detail's ledger row is `context` — proving the `.key`-keyed lookup (details don't carry `.name`) matches correctly",
-    tplGapDetail.coverage?.rows.find((r) => r.kind === "detail" && r.name === "TplDetail")?.disposition === "context",
-    () => tplGapDetail.coverage?.rows.filter((r) => r.kind === "detail"));
+    schemas: [{ pkg: "P", body: tplGapDetailClient }] }, { baseDir: FIX });
+  check("PR #125 review: a DETAIL's unreadable structural field raises no `parse-gap` even when the CLIENT schema declares it (suppression impossible) — it HARD-BLOCKS the gate instead, which is why `detail` is not in `TEMPLATE_OWNED_LIST_KEY`",
+    !tplGapDetail.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplDetail")
+    && tplGapDetail.gate.blocked
+    && tplGapDetail.gate.reasons.some((r) => /details\.TplDetail\.schemaName/.test(r)),
+    () => ({ needsDecision: tplGapDetail.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`), gate: tplGapDetail.gate.reasons }));
 
   // PR review follow-up: the PR body claims the fix "does not affect MobilePhone/Email/Skype (client's own Contact
   // attributes)". Those are attributes a CLIENT schema declares itself (never marked `fromTemplate`), so they must
   // keep escalating exactly as before — same shape as `tplGapTouched` above, named for the actual scenario.
-  const contactAttrsBase = `define("Base",[],function(){return{diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  // The seed declares the same three names with the same unreadable shape, so `fromTemplate` is genuinely in play:
+  // the client ALSO declaring them (`schemaTouched`) is what keeps them escalating, not the absence of a template
+  // member. Without the seed side this check only showed that a client attribute with no template counterpart
+  // escalates — a case `tplGapTouched` already covers.
+  const contactAttrsBase = `define("Base",[],function(){return{attributes:{MobilePhone:{value:Terrasoft.Features.getIsEnabled("Widget")},Email:{value:Terrasoft.Features.getIsEnabled("Widget")},Skype:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
   const contactAttrsClient = `define("P",[],function(){return{entitySchemaName:"Contact",attributes:{MobilePhone:{value:Terrasoft.Features.getIsEnabled("Widget")},Email:{value:Terrasoft.Features.getIsEnabled("Widget")},Skype:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[${nameOp}]};});`;
   const contactAttrs = runMigration({ entity: "Contact", entityColumns: { Name: { type: "ShortText" } },
     seed: [{ pkg: "Base", body: contactAttrsBase }],
@@ -9151,7 +9190,8 @@ try {
   // Fixed by gating the lookup on `templateOwnedTags` (the tags of the schemas `eff` actually merged).
   const crossTagDetailBody = `define("SomeDetail",[],function(){return{entitySchemaName:"SomeEntity",attributes:{TplAttr:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[]};});`;
   const crossTag = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
-    seed: [{ pkg: "Base", body: tplGapBase }], // declares its OWN, unrelated "TplAttr" — template-owned in the MAIN chain
+    // `Base` declares the template-owned "TplAttr" of the MAIN chain; the detail below declares its OWN, unrelated one.
+    seed: [{ pkg: "Base", body: tplGapBase }],
     schemas: [{ pkg: "P", body: tplGapClient }],
     detailSchemas: { SomeDetail: { body: crossTagDetailBody, entity: "SomeEntity" } } }, { baseDir: FIX });
   check("PR #125 review fix: a DETAIL schema's own same-named attribute is NOT suppressed by an unrelated main-page template-owned attribute of the same name — exactly one `TplAttr` parse-gap survives (the detail's), the main-page one stays suppressed",
