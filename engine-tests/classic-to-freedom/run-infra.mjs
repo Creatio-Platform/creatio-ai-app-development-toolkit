@@ -150,7 +150,9 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
-  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock",
+  // The verifier's per-round read-back scope, and the judge-queue re-file guard.
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -1275,6 +1277,77 @@ check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fa
     && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
     && /Verify did not confirm the queue carry write/.test(wfSrc)
     && /await persistPending\(`recording what round \$\{round\}'s builders reported after verify`\)/.test(wfSrc));
+
+// --- THE VERIFIER'S PER-ROUND READ-BACK SCOPE. A repair round used to re-read every published page and re-file
+// its evidence, which sent records that were already settled back to the judge with nothing underlying them
+// changed. The scope is a pure decision, so it is exercised here rather than asserted from the prompt text. ---
+const scopeKeys = ["main", "list", "sectionRegistered"];
+const scopeSchemas = { main: "UsrApplicant_FormPage", list: "UsrApplicant_ListPage", sectionRegistered: "UsrApplicantSection" };
+const scopeAllRecorded = ["main", "list", "sectionRegistered"];
+const fetched = (built, recorded) => wf.verifyFetchKeys(built, scopeKeys, scopeSchemas, recorded).join(",");
+check("verifyFetchKeys: a recorded key the round did not build is NOT re-fetched (the whole point: an unchanged page was being re-read every round)",
+  () => fetched(["main"], scopeAllRecorded) === "main");
+check("verifyFetchKeys: a recorded key the round DID build IS fetched, because it just changed",
+  () => fetched(["main", "list"], scopeAllRecorded) === "main,list");
+check("verifyFetchKeys: a NEVER-recorded key is fetched even when the round did not build it (absent = nobody looked, and skipping it would leave it absent forever)",
+  () => fetched([], ["main"]) === "list,sectionRegistered");
+check("verifyFetchKeys: `pagesRecorded` undefined or empty fetches EVERY key: the old whole-section sweep, never a silent skip",
+  () => fetched([], undefined) === "main,list,sectionRegistered" && fetched([], []) === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key with no recorded Freedom schema is never fetched, even when the round built it",
+  () => wf.verifyFetchKeys(["orphan"], [...scopeKeys, "orphan"], scopeSchemas, []).join(",") === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key that is only a SUBSTRING of a `builtThisRound` entry does not count as built (exact match, as the judge-queue predicate also requires)",
+  () => fetched(["child:main"], scopeAllRecorded) === "");
+check("verifyFetchKeys: an empty Reconcile report yields no keys rather than throwing",
+  () => wf.verifyFetchKeys([], undefined, scopeSchemas, []).length === 0);
+
+// The table renders three groups, and TWO different empty states share the FETCH list: nothing recorded
+// anywhere, and everything recorded with nothing to fetch this round. A round whose builders all returned
+// nothing produces the second, and one label for both contradicts the ALREADY ON FILE list printed under it.
+check("fetchTableGroups: with nothing to fetch and every key on file, the FETCH list does not claim nothing is recorded",
+  () => {
+    const g = wf.fetchTableGroups([], scopeKeys, scopeSchemas);
+    return g.known.length === 0 && g.keep.length === 3 && wf.fetchListEmptyLabel(g.keep.length).includes("already on file");
+  });
+check("fetchTableGroups: with nothing recorded anywhere the FETCH list still says none recorded yet",
+  () => wf.fetchTableGroups([], scopeKeys, {}).keep.length === 0 && wf.fetchListEmptyLabel(0) === "- (none recorded yet)");
+check("fetchTableGroups: the three rendered groups PARTITION the published keys, with no key in two of them and none dropped",
+  () => {
+    const g = wf.fetchTableGroups(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    const all = [...g.known, ...g.keep, ...g.unknown];
+    return g.known.join() === "main" && g.keep.join() === "list,sectionRegistered" && g.unknown.join() === "orphan"
+      && all.length === new Set(all).size && all.length === 4;
+  });
+
+// A builder that answered nothing may still have WRITTEN to the stand before it died, so its page is read back
+// even though it never reached `builtThisRound` — which stays as it is, because the judge-queue predicate
+// discriminates on real build activity.
+check("touchedKeys: a unit whose builder answered nothing counts as touched",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }]).join() === "main,list");
+check("touchedKeys: a unit that reported normally is not duplicated, and absent claims yield just the built list",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }]).join() === "main" && wf.touchedKeys(["main"], undefined).join() === "main");
+
+// The rejected-record loop: `isSettledAndUnitUntouched` covers only an id EARNED before the round, and a
+// rejected record is not earned, so it came back to Judge every round no matter what happened to its unit.
+check("isRefiledForUntouchedUnit: a REJECTED record whose unit was not touched is not re-queued",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main"]) === true);
+check("isRefiledForUntouchedUnit: the same record IS re-queued once its unit is touched again",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main", "list"]) === false);
+check("isRefiledForUntouchedUnit: a FIRST-EVER record is never suppressed, so nothing unjudged is hidden",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(), ["main"]) === false);
+check("isRefiledForUntouchedUnit: an id with no `#` uses the whole id as its owner",
+  () => wf.isRefiledForUntouchedUnit("sectionRegistered", new Set(["sectionRegistered"]), ["main"]) === true);
+
+// The predicates decide the set; these clauses are what make the verifier ACT on it. Any one of them reverting
+// puts the whole-section re-read back while every case above still passes.
+check("workflow: the verifier `pages` instruction is scoped to the FETCH THIS ROUND list, and the table names the keys it is NOT fetching",
+  wfSrc.includes("for every key the table above lists under FETCH THIS ROUND")
+    && wfSrc.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+    && wfSrc.includes("do NOT re-file their evidence"));
+check("workflow: the verifier `evidence` instruction files only the ids this round owns, because naming an untouched id is what sends it back to Judge",
+  wfSrc.includes("**FILE ONLY THE IDS THIS ROUND OWNS:**"));
+check("workflow: Reconcile is asked for `pagesRecorded`, without which the read-back scope degrades to the old sweep",
+  wfSrc.includes("Also return \\`pagesRecorded\\`")
+    && wfSrc.includes("pagesRecorded: { type: 'array', items: { type: 'string' } }"));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
