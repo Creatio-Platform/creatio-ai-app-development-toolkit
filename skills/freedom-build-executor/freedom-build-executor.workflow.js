@@ -1851,6 +1851,14 @@ function isRefiledForUntouchedUnit(id, filedBeforeRound, touchedThisRound) {
   const owner = String(id).split('#')[0]
   return filedBeforeRound.has(id) && !touchedThisRound.includes(owner)
 }
+// Why an id is NOT handed back to Judge, or null when it is. The two reasons are checked in this order and are not
+// interchangeable: 'settled' asks whether the id was EARNED and its unit BUILT, 'refiled' whether it merely had a
+// record and its unit TOUCHED. Composed here so the order is a tested decision rather than statement sequence.
+function requeueSkipReason(id, earnedBeforeRound, filedBeforeRound, builtThisRound, touchedThisRound) {
+  if (isSettledAndUnitUntouched(id, earnedBeforeRound, builtThisRound)) return 'settled'
+  if (isRefiledForUntouchedUnit(id, filedBeforeRound, touchedThisRound)) return 'refiled'
+  return null
+}
 
 // ---8<--- END PURE DECISION HELPERS ---8<---
 // ---------------------------------------------------------------------------
@@ -3180,6 +3188,10 @@ async function verifyRound(builtThisRound, claims, carry) {
   phase('Verify')
   const touched = touchedKeys(builtThisRound, claims)
   const fetchKeys = verifyFetchKeys(touched, state.unitKeys, pageSchemas, state.pagesRecorded)
+  // The scope is a cost decision made from a report this script cannot verify, so it is stated in the run log.
+  const notReRead = fetchTableGroups(fetchKeys, state.unitKeys, pageSchemas).keep
+  if (notReRead.length) log(`round ${round}: ${notReRead.length} page(s) already on file and untouched — not read back: ${notReRead.join(', ')}`)
+  if (!(state.pagesRecorded || []).length) log(`round ${round}: no pages reported on file — reading back every key with a schema`)
   return agent(
     `You are the VERIFY phase of a Freedom build run — round ${round}. You did NOT build these pages, and you do not fix them.
 
@@ -3573,14 +3585,14 @@ while (true) {
   // `touchedKeys` and not `builtThisRound`: a builder that answered nothing may still have written before it died.
   const touchedThisRound = touchedKeys(builtThisRound, claims)
   const filedBeforeRound = new Set(state.evidenceFiled || [])
+  const SKIP_WHY = {
+    settled: 'already carried an unrejected record and its unit was not built this round',
+    refiled: 'already had a record on file and its unit was not touched this round',
+  }
   for (const id of lastVerifier?.evidenceWritten || []) {
-    const owner = String(id).split('#')[0]
-    if (isSettledAndUnitUntouched(id, earnedBeforeRound, builtThisRound)) {
-      log(`round ${round}: \`${id}\` already carried an unrejected record and \`${owner}\` was not built this round — not re-queuing it for Judge (ENG-95470 defect 1)`)
-      continue
-    }
-    if (isRefiledForUntouchedUnit(id, filedBeforeRound, touchedThisRound)) {
-      log(`round ${round}: \`${id}\` already had a record on file and \`${owner}\` was not touched this round — not re-queuing it for Judge`)
+    const why = requeueSkipReason(id, earnedBeforeRound, filedBeforeRound, builtThisRound, touchedThisRound)
+    if (why) {
+      log(`round ${round}: \`${id}\` ${SKIP_WHY[why]} — not re-queuing it for Judge`)
       continue
     }
     pendingJudgeIds.add(id)

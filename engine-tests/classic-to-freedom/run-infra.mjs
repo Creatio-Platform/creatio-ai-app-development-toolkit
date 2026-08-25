@@ -152,7 +152,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock",
   // The verifier's per-round read-back scope, and the judge-queue re-file guard.
-  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit"];
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -1364,6 +1364,32 @@ check("isRefiledForUntouchedUnit: a FIRST-EVER record is never suppressed, so no
   () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(), ["main"]) === false);
 check("isRefiledForUntouchedUnit: an id with no `#` uses the whole id as its owner",
   () => wf.isRefiledForUntouchedUnit("sectionRegistered", new Set(["sectionRegistered"]), ["main"]) === true);
+
+// The two guards are checked IN ORDER and are not interchangeable: the first asks EARNED + BUILT, the second
+// only RECORDED + TOUCHED. Each is covered above in isolation; these drive the composition over a mixed list.
+const earned = new Set(["main#quality-gates"]);
+const filed = new Set(["main#quality-gates", "list#quality-gates", "list#listpage:columns"]);
+const skipWhy = (id, built, touchedUnits) => wf.requeueSkipReason(id, earned, filed, built, touchedUnits);
+check("requeueSkipReason: an EARNED id whose unit was not built is skipped as settled, not as refiled",
+  () => skipWhy("main#quality-gates", ["list"], ["list"]) === "settled");
+check("requeueSkipReason: a REJECTED id (filed, never earned) whose unit was not touched is skipped as refiled",
+  () => skipWhy("list#quality-gates", ["main"], ["main"]) === "refiled");
+check("requeueSkipReason: an id whose unit WAS built goes through both guards to the judge",
+  () => skipWhy("list#quality-gates", ["list"], ["list"]) === null);
+check("requeueSkipReason: a no-answer unit is TOUCHED but not BUILT — its earned id stays settled while its rejected id goes through",
+  () => skipWhy("main#quality-gates", [], ["main"]) === "settled" && skipWhy("list#quality-gates", [], ["list"]) === null);
+check("requeueSkipReason: a FIRST-EVER id is never skipped, whichever guard is asked",
+  () => skipWhy("sectionRegistered#reach", [], []) === null);
+check("requeueSkipReason: an id with no `#` owner resolves against the whole id",
+  () => wf.requeueSkipReason("sectionRegistered", new Set(["sectionRegistered"]), new Set(["sectionRegistered"]), [], []) === "settled");
+check("requeueSkipReason: over a mixed list, every id resolves to exactly one outcome and the order holds",
+  () => ["main#quality-gates", "list#quality-gates", "list#listpage:columns", "child:X#childpage"]
+    .map((id) => skipWhy(id, ["child:X"], ["child:X", "list"])).join(",") === "settled,,,");
+
+// The read-back scope is a cost decision made from a report this script cannot verify, so it is logged.
+check("workflow: the read-back scope names the pages it did NOT re-read, and says so when it narrowed nothing",
+  wfSrc.includes("already on file and untouched — not read back")
+    && wfSrc.includes("no pages reported on file — reading back every key with a schema"));
 
 // The predicates decide the set; these clauses are what make the verifier ACT on it. Any one of them reverting
 // puts the whole-section re-read back while every case above still passes.
