@@ -197,6 +197,13 @@ const MODE = buildMode(input.mode)
 // not reach a fresh-context build agent. `null` when the caller omitted it (an older invocation, or a run this
 // field predates); the per-page recipe's render check treats that as "not told" and reports so, never a guess.
 const VERIFICATION_SURFACE = buildVerificationSurface(input.verificationSurface)
+// Built ONCE and appended to EVERY unit prompt that carries a render check — page units and reach units alike.
+// A reach unit ends by opening the surface its wiring governs, which is the same per-unit render check under a
+// different deliverable, so leaving it out of `reachKindBlock` was the one place a surface stayed ASSUMED rather
+// than resolved (ENG-95855): section registration is precisely the deliverable a prior run silently dropped.
+const VERIFICATION_SURFACE_NOTE = VERIFICATION_SURFACE
+  ? ` VERIFICATION SURFACE FOR THIS BUILD: \`${VERIFICATION_SURFACE}\` — use it for this unit's render check exactly as the per-page recipe's step 8 describes.`
+  : ' VERIFICATION SURFACE FOR THIS BUILD: none was handed to this run (`verificationSurface` was omitted). Do not guess a tier — say so in `blocked` if the per-page recipe\'s step 8 needs one to proceed.'
 const CHECKPOINT_AFTER = Array.isArray(input.checkpointAfter)
   ? input.checkpointAfter.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim())
   : []
@@ -2471,7 +2478,7 @@ function reachKindBlock(unit) {
     ? ` REGISTER IT INTO THE APPROVED APPLICATION: \`${appCode}\` — that code comes from the approved plan's placement. Do NOT resolve an application by name/caption off the stand, and do NOT fall back to another one if this one errors: a \`create-app-section\` failure here is a REPORT (\`blocked\`), never a cue to pick a different app.`
     : ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.')
   const workplaceBindingsNote = unit.key !== 'sectionRegistered' ? '' : ` THEN COUNT THE WORKPLACE BINDINGS (ENG-95850 / B2): registering a section into a workplace does NOT unbind the one it was in, so after this unit the section can sit in TWO workplaces and look correct in the one you opened — that is exactly what a real run shipped. Count this section's \`SysModuleInWorkplace\` rows, report \`workplaceBindings: { count: <n>, names: [...] }\`, and if it is more than the one the plan approved, say so in \`proposals\` naming every workplace. **Do NOT unbind anything** — a workplace binding is a customer record, its removal is not this unit's decision, and the gate reports the extra binding for a human to settle. **REPORT IT EVEN WHEN IT IS 1 (ENG-95470 / defect 4):** this script carries \`workplaceBindings\` into the SAME round's Verify, which can now file \`reachability.sectionRegistered\` from it even if Verify's own independent on-stand count is skipped or missed — omitting it here because "it's just the expected 1" is exactly the gap that left the row at \`reachability: {}\` forever on a real run.`
-  return `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${workplaceBindingsNote}`
+  return `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${VERIFICATION_SURFACE_NOTE} If that surface turns out unachievable for this wiring (a login wall, a per-action approval, a CLI that now errors), report it in \`blocked\` with \`what\` naming the verification surface as unachievable and \`why\` the reason — never silently opening the built-in pane and never closing this unit on the saved record alone.${workplaceBindingsNote}`
 }
 
 function pageKindBlock(unit, known) {
@@ -2482,11 +2489,9 @@ function pageKindBlock(unit, known) {
     ? `YOUR PAGE'S SLICE IS ALREADY CUT — read it, do not go looking: \`${specFile(unit.key)}\` (this page's design spec plus the plan's \`Adjustments\` list in full). Do NOT grep \`${input.planFile}\` for your block: the slice is the same content, and the plan is hundreds of kilobytes of other pages.`
     : `THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected: this page was not folded — it reuses an existing Freedom page, or its Classic source was never resolved — so the engine has no design spec of its own to render for it. Work from its ROW in the approved plan (\`${input.planFile}\`) and from the checklist rows below. Do not treat the missing file as a defect and do not invent a spec.`
   // The per-page recipe's render-check step reads this VALUE, never `decisions.md` — a fresh-context build
-  // agent has no other way to learn the section's resolved surface. `null` (the caller omitted it) is said
-  // outright rather than silently treated as any one tier.
-  const verificationSurfaceNote = VERIFICATION_SURFACE
-    ? ` VERIFICATION SURFACE FOR THIS BUILD: \`${VERIFICATION_SURFACE}\` — use it for this page's render check exactly as the per-page recipe's step 8 describes.`
-    : ' VERIFICATION SURFACE FOR THIS BUILD: none was handed to this run (`verificationSurface` was omitted). Do not guess a tier — say so in `blocked` if the per-page recipe\'s step 8 needs one to proceed.'
+  // agent has no other way to learn the section's resolved surface. Hoisted, because reach units need the
+  // identical hand-over for the surface their wiring governs.
+  const verificationSurfaceNote = VERIFICATION_SURFACE_NOTE
   return `YOUR UNIT is the page \`${unit.key}\`.${schemaNote}${verificationSurfaceNote} ${REF_BLOCK}
 
 ${sliceNote}

@@ -1005,6 +1005,13 @@ check("workflow: VERIFICATION_SURFACE is threaded into the page unit's prompt, n
   /const VERIFICATION_SURFACE = buildVerificationSurface\(input\.verificationSurface\)/.test(wfSrc)
     && /VERIFICATION SURFACE FOR THIS BUILD:.*\$\{VERIFICATION_SURFACE\}/.test(wfSrc)
     && /none was handed to this run \(.verificationSurface. was omitted\)/.test(wfSrc));
+// ENG-95855 — a reach unit closes by OPENING the surface its wiring governs, which is a per-unit render check
+// under a different deliverable. Threading the surface into the page prompt only left section registration —
+// the one deliverable a real run silently dropped — telling its agent to open a browser nobody resolved.
+check("workflow: the resolved verification surface is hoisted and reaches the REACH unit's prompt too, with a `blocked` path when the surface is unachievable",
+  /const VERIFICATION_SURFACE_NOTE = VERIFICATION_SURFACE/.test(wfSrc)
+    && /a saved record is not a working binding\.\$\{VERIFICATION_SURFACE_NOTE\}/.test(wfSrc)
+    && /If that surface turns out unachievable for this wiring/.test(wfSrc));
 check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
   /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
 check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",
@@ -2841,6 +2848,7 @@ const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
 const VERIFICATION_SURFACE = "automatic:2"
+const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automatic:2"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -3026,6 +3034,30 @@ const inContextGateBlock = (u) => (u.kind === "page" ? "\n<IN-CONTEXT GATE>" : "
   check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
+}
+
+// ENG-95855 — the hand-over has to have a documented channel on EVERY route, not just the Workflow one. A recipe
+// that tells routes 2 and 3 to use a value they were never given, forbids `decisions.md`, and names no fallback is
+// the same silent drift this ticket closes, one route down.
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const recipe08 = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/references/04-per-page-build-recipe.md"), "utf8");
+  const execSkillSrc = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/SKILL.md"), "utf8");
+  const migrationSkillSrc = readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+  check("ENG-95855: recipe step 8 has the null-surface clause — a surface nobody handed over is a `blocked[]` report, never a guessed tier",
+    /If NO `verificationSurface` reached this unit/.test(recipe08)
+      && /do not guess a tier and do not fall back to reading `decisions.md`/.test(recipe08),
+    () => recipe08.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: routes 2 and 3 name `verificationSurface` in their hand-over text, so no route is told to use a value it has no channel for",
+    /Hand `verificationSurface` to every unit prompt/.test(execSkillSrc)
+      && /Reach units get it too/.test(execSkillSrc)
+      && /so `verificationSurface` is already in context/.test(execSkillSrc),
+    () => execSkillSrc.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: tier 4 is stated as never recordable, and a `manual` outcome is pointed at `mode: checkpoints` — the place the render actually gets exercised",
+    /Tier 4 is never a recordable surface/.test(migrationSkillSrc)
+      && /There is no `automatic:4` token, by design/.test(migrationSkillSrc)
+      && /\*\*`mode: checkpoints`\*\* \(item 5\)/.test(migrationSkillSrc),
+    () => migrationSkillSrc.split("\n").filter((l) => /Tier 4|automatic:4/.test(l)).slice(0, 3).join("\n"));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);

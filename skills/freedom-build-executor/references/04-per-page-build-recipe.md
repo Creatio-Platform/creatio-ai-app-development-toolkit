@@ -122,6 +122,11 @@ the verifier files that page's contents as this unit's evidence.
    trailing phase after every unit is built: on a real run the same check, run last over a driver
    context that never compacted, cost 62.7% of the whole run's cache-read for 198K tokens of new
    content.
+   **If NO `verificationSurface` reached this unit** — the hand-over omitted it, whichever route
+   launched the build — do not guess a tier and do not fall back to reading `decisions.md`: report it
+   in `blocked[]` with `what` naming the missing verification surface and `why` that no value was
+   handed to this unit, exactly the way the unachievable-surface case below is reported. That is what
+   tells the caller to hand the resolved surface over rather than let this unit pick one.
    **Tier 2's login is solved ONCE per stand, not per unit.** Capture `storageState` the first time
    a headless Playwright check runs against this stand, in the SAME temporary directory as the
    manifest (step 4.2's convention: outside the repo, never the versioned `outDir` — that folder is
