@@ -3794,8 +3794,12 @@ while (true) {
   // recorded, it holds the run short of `complete`, and it buys the unit the same one repair round.
   for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
     log(`answer NOT on the page: \`${c.unit}\` claims it applied \`${c.id}\`, the verifier reads the page and finds ${c.found}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
+    // DEFENSE-IN-DEPTH, matching `resolutionClaimsLine` (PR #128 review, O3). `c.id` is stand-derived and `c.how` is
+    // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
+    // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
+    // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
     discrepancies = [...discrepancies, { round, unit: c.unit, kind: 'resolution-not-applied',
-      claim: `applied the answer to \`${c.id}\`${c.how ? ` — ${c.how}` : ''}`, found: c.found }]
+      claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${String(c.how).slice(0, 400)}` : ''}`, found: c.found }]
     if (!unconsumed.some((u) => u.unit === c.unit && u.id === c.id)) {
       // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
       // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very

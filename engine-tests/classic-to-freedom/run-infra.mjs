@@ -1730,6 +1730,13 @@ check("PR #128 third-round review (RC-8): the seed touches `resolutionsReopened`
 check("PR #128 third-round review (RC-9): a dispatch-sourced miss is deduped against a SURVIVING verifier-sourced row for the same `(unit, id)` — the per-unit clear drops only dispatch rows, so without this filter one answer surfaced twice in the operator report and held the run open twice",
   /const gone = unconsumedResolutions\(routed, res, unit\.key\)\s*\n?\s*\.filter\(\(g\) => !unconsumed\.some\(\(u\) => u\.unit === g\.unit && u\.id === g\.id\)\)/.test(wfSrc));
 
+// O3 — the `resolution-not-applied` audit `claim` wraps its untrusted halves like the sibling `resolutionClaimsLine`
+// does. Only ever re-enters a prompt JSON-encoded (via `carryBlock`), so this is defense-in-depth/consistency, not a
+// live break-out — but `c.id` is stand-derived and `c.how` is build-agent-authored, so the same wrap + cap applies.
+check("PR #128 third-round review (O3): the `resolution-not-applied` audit `claim` wraps `c.id` in `JSON.stringify` and caps `c.how` at 400 — the same treatment `resolutionClaimsLine` gives the same stand-derived / build-agent-authored text",
+  /applied the answer to \$\{JSON\.stringify\(c\.id\)\}/.test(wfSrc)
+    && /\$\{String\(c\.how\)\.slice\(0, 400\)\}/.test(wfSrc));
+
 // RC-15 — the MECHANISM-2 INPUT SEAM, pinned. `resolutionClaims: resolutionClaimRows(routed, res)` and its caller
 // `r.claims.push(claimFor(unit, res, routed))` are the ONLY things that populate `claims[].resolutionClaims` on a real
 // run, and both sit OUTSIDE the pure-helper block, so the harness cannot import them. Every executed test above builds
