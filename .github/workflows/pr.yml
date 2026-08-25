@@ -89,6 +89,29 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-infra.mjs
+      # The shipped Claude `.workflow.js` files are GENERATED from skills/_workflow-core/ (a workflow script cannot
+      # `import`, so the host-neutral core is inlined into them). This is the drift gate: an edit to the generated
+      # file alone, or a core edit that was never re-generated, fails here instead of shipping two divergent
+      # orchestrations — the Claude one and the one Codex runs through the CLI.
+      - name: Workflow core ↔ generated workflow in sync
+        if: always()
+        run: node scripts/build-workflows.mjs --check
+      # The host-neutral core itself: the work-item protocol's three outcomes, capability negotiation (an explicit
+      # stop, never a silent degradation), journal replay/resume, CROSS-HOST PARITY (the Claude adapter and the CLI
+      # must return the identical result), and an evaluation of the generated file the way the host evaluates it.
+      - name: Run workflow-core goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-workflow-core.mjs
+      # DIFFERENTIAL: the generated workflow scripts against the hand-written baselines they replaced, driven the
+      # way the Claude host drives them. Identical phase sequence, identical agent dispatch order, identical
+      # PROMPTS byte for byte, identical return value — the acceptance criterion "existing Claude Code behavior
+      # remains unchanged", asserted rather than asserted-about. The baselines under `baseline/` are frozen; a
+      # deliberate behaviour change replaces them in its own reviewed commit.
+      - name: Run workflow parity goldens (shipped vs baseline)
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-workflow-parity.mjs
       # ENG-95470 (defect 1) — offline regression guard for freedom-build-executor's round-churn predicate.
       - name: Run freedom-build-executor round-guard golden
         if: always()
