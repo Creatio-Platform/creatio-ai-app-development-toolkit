@@ -120,6 +120,16 @@ element the template provides is touched with `operation: "merge"` and carries n
 could never confirm Feed, FileList, ApprovalList or the DCM bar. A payload that is not keyed by page is rejected
 with exit 1, and an id or page key the engine did not publish is silently "not checked" — never invent one.
 
+**The LIST page's OWN template is its own machine-checked row (ENG-95470), the same mechanism the form page's
+`Form template` row uses.** `pages["list"]` carries `parentSchemaName` exactly like every other page key, and when
+the plan resolved at least one other list-page deliverable (columns, a quick filter, a command-bar action) a
+`List template → <planned template>` row is added alongside them, resolved against `pages["list"].parentSchemaName`.
+Before this, a plan/built template mismatch on the list page (e.g. the plan recommends `ListPageV2FreedomTemplate`
+but the section was built on `ListPageV3Template`) surfaced only as free text inside a judge's evidence rejection —
+nothing machine-checked it, so a run could close green while quietly ignoring it. The row is deliberately added ONLY
+when the list page is already gated by another row: a plan with nothing else resolved for the list page must stay
+UNGATED (a `planMeta.listTemplate` value alone must never publish an otherwise-unclosable `list` build unit).
+
 **`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). `--units` publishes no GUID of any kind, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists) — it stops a payload assembled from `--units` output alone, not a determined author.
 
 **The mini page is a page, so it is checked like one.** Its `Mini page` row resolves from

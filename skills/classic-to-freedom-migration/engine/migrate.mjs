@@ -42,8 +42,9 @@
 // physical pages would otherwise share a key — read them, never construct one) with its role, source schema,
 // `expectedTemplate`, target package
 // and `expect` counts (including `expect.fieldNames`, the element names the fields check matches on), plus the five
-// reachability keys with `appliesWhen` already decided, the evidence-record ids, the ⚠ Confirm preflight items and a
-// leaf-first `buildOrder`. Run it BEFORE building: it is the only source of the keys `--built` must use — an
+// reachability keys with `appliesWhen` already decided, the evidence-record ids, the ⚠ Confirm preflight items, the
+// root-level `templateNames` (every page template this plan asserts, deduped — the executor resolves them against the
+// stand BEFORE the first write, ENG-95468) and a leaf-first `buildOrder`. Run it BEFORE building: it is the only source of the keys `--built` must use — an
 // invented key is silently "not checked", never an error.
 // `--page <key>` narrows `--spec`, `--checklist` and `--units` to ONE published page key. An unknown key is exit 1,
 // never a silent fall-back to the whole artifact.

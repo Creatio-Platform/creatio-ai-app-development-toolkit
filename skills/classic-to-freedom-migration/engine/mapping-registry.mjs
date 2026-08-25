@@ -8,9 +8,9 @@
 // WHAT IT CHECKS AND WHAT IT CANNOT. The registry has no `required` flag on a component's own inputs, no
 // deprecation flag at COMPONENT level, and no package field: so "fill the required props", "flag a deprecated
 // target" and "replace the hardcoded package knowledge" cannot be driven from it as the proposal assumed.
-// What IS there, and is checked here: existence per version, input and output names, per-INPUT deprecation
-// (`deprecated` + `deprecationReason`, 13 inputs at `latest`), `compositeOnly`, and the selection taxonomy — on
-// 8 of 205 components, which is why a taxonomy-based ranking is an aid, never a claim of coverage.
+// What IS there, and is checked here: existence per version, input and output names, per-INPUT and per-OUTPUT
+// deprecation (`deprecated` + `deprecationReason`), `compositeOnly`, and the selection taxonomy — on 8 of 205
+// components, which is why a taxonomy-based ranking is an aid, never a claim of coverage.
 //
 // SCOPE. Only keys the TABLE declares are validated. The engine also emits framework-level props no component
 // declares (`type`, `layoutConfig`, `visible`) — validating emitted `values` instead of declared keys would report
@@ -98,6 +98,9 @@ function checkOutputs(events, ctx) {
     if (!meta) { add("unknown-output", { componentType: ctype, event: ev }); continue; }
     if (bit !== null && (meta.v & bit) === 0)
       add("output-absent-in-version", { componentType: ctype, event: ev, version, presentIn: versionsOf(meta.v, index) });
+    // Per-OUTPUT deprecation, same advisory treatment as per-input deprecation above: a deprecated output still
+    // fires, and the row's author decides with the reason in front of them.
+    if (meta.deprecated) add("deprecated-output", { componentType: ctype, event: ev, reason: meta.deprecationReason || null });
   }
 }
 
@@ -123,7 +126,7 @@ export function validateRow(row, { index = vendoredIndex(), version = null } = {
 }
 
 // Severity, kept in ONE place so the CI check, a run-time gate and a reader cannot disagree about what blocks.
-const ADVISORY = new Set(["deprecated-input", "composite-only"]);
+const ADVISORY = new Set(["deprecated-input", "deprecated-output", "composite-only"]);
 export const isAdvisory = (f) => ADVISORY.has(f.kind);
 
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
@@ -147,6 +150,9 @@ export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), ve
 // for 4% of the catalog and stay silent for the rest. Components WITHOUT taxonomy are therefore ranked by their
 // componentType text, and every candidate says which evidence put it there — a name match is a weaker reason than
 // a published `whenToUse`, and a reader must be able to tell them apart rather than see one undifferentiated list.
+// A candidate also carries `appliesToCustomEntities` / `entityCouplingNote` when the component publishes them —
+// evidence for the reader, never a filter: `appliesToCustomEntities` is `true` on every real component that has
+// it, so gating on `false` would be unreachable on real data and is not done here.
 export function rankCandidates(terms, { index = vendoredIndex(), version = null, limit = 5 } = {}) {
   const bit = version ? versionBit(version, index) : null;
   const needles = (Array.isArray(terms) ? terms : [terms]).filter(Boolean).map((t) => String(t).toLowerCase());
@@ -161,7 +167,16 @@ export function rankCandidates(terms, { index = vendoredIndex(), version = null,
       if (taxText.includes(n)) { score += 3; why.push(`taxonomy mentions "${n}"`); }
       else if (nameText.includes(n)) { score += 1; why.push(`type name contains "${n}"`); }
     }
-    if (score > 0) out.push({ componentType: ctype, score, evidence: why, hasTaxonomy: Object.keys(tax).length > 0 });
+    if (score > 0) {
+      const candidate = { componentType: ctype, score, evidence: why, hasTaxonomy: Object.keys(tax).length > 0 };
+      // Entity coupling is evidence for the reader deciding among candidates, never a gate: `appliesToCustomEntities`
+      // is `true` on every one of the 8/205 components that publish it (zero `false` in real data), so a branch
+      // keyed on `=== false` would be unreachable here and is deliberately not written. The two fields do not
+      // always co-occur (only 1 of the 8 also publishes `entityCouplingNote`), so each is read independently.
+      if (tax.appliesToCustomEntities !== undefined) candidate.appliesToCustomEntities = tax.appliesToCustomEntities;
+      if (tax.entityCouplingNote !== undefined) candidate.entityCouplingNote = tax.entityCouplingNote;
+      out.push(candidate);
+    }
   }
   // Sorted in its own statement (not chained onto the return): highest score first, ties by type name so the
   // ranking is stable rather than dependent on the index's key order.
@@ -185,7 +200,11 @@ export function indexFromRegistryExport(json, { version = null } = {}) {
     components[c.componentType] = {
       v: 1, compositeOnly: !!c.compositeOnly,
       inputs: Object.fromEntries(Object.entries(c.inputs || {}).map(([k, m]) => [k, { v: 1, ...pickMeta(m) }])),
-      outputs: Object.fromEntries(Object.keys(c.outputs || {}).map((k) => [k, { v: 1 }])),
+      // `pickMeta` also picks `type`/`values`/`default`, which build-registry-index.mjs deliberately withholds
+      // from OUTPUT_META (an output is an event, not a typed prop). Left unified here rather than duplicating a
+      // second narrow picker: a stand export that happened to put one of those keys on an output would carry it
+      // through unused, which is harmless — no reader treats an output's `type`/`values`/`default` as meaningful.
+      outputs: Object.fromEntries(Object.entries(c.outputs || {}).map(([k, m]) => [k, { v: 1, ...pickMeta(m) }])),
       taxonomy: {},
     };
   }
