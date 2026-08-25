@@ -1965,8 +1965,10 @@ export function registrySettleGuidance(finding) {
 
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
-// that function's nesting weight.
-function reportRegistryFindings(changeSet, manifest, baseDir) {
+// that function's nesting weight. Exported (like `buildCoverage` / `registrySettleGuidance`) so a test can drive
+// it against a hand-built changeSet — the only way to exercise the `enginePositioned` tableElements branch in
+// isolation, since a real run always emits a table element into `viewConfigDiff.values.type` as well.
+export function reportRegistryFindings(changeSet, manifest, baseDir) {
   // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
   // against the registry it could resolve — the stand's own export when the manifest carries one, else the
   // vendored index. Same severity rule as the CI check, so a finding cannot mean two things.

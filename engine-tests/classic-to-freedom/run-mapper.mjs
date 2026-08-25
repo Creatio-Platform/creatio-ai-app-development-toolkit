@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -9068,6 +9068,25 @@ try {
     () => ({ view: engPosRun.changeSet.viewConfigDiff.map((o) => ({ name: o.name, type: o.values?.type })),
       registry: engPosRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")) }));
 
+  // ENG-95683 (item 2/R1, negative control — the `tableElements` SOURCE of enginePositioned, in ISOLATION): the skip
+  // set is built from TWO sources — `viewConfigDiff[].values.type` (the radio-group test above) AND
+  // `tableElements[].componentType`. A real run ALWAYS emits a table element into `viewConfigDiff.values.type` too
+  // (mapper resolveProps sets `values.type = componentType`), so the tableElements branch cannot be isolated through
+  // runMigration — the viewConfigDiff branch would cover it regardless. Driving the exported `reportRegistryFindings`
+  // with a hand-built changeSet is the only way: `crt.Positioned` sits ONLY in `tableElements` (absent from
+  // viewConfigDiff), a standalone `crt.Standalone` sits in `profileCards`, both compositeOnly. The tableElements one
+  // must be skipped, the standalone one must surface — so deleting the `tableElements` line in reportRegistryFindings
+  // makes `crt.Positioned` surface and fails HERE, a regression the viewConfigDiff-sourced test above cannot catch.
+  const tblGateCs = { needsDecision: [], viewConfigDiff: [], tableElements: [{ componentType: "crt.Positioned" }], profileCards: [{ type: "crt.Standalone", entity: "E" }] };
+  const tblGateManifest = { componentRegistry: { resolvedTargetVersion: "8.3.9", components: [
+    { componentType: "crt.Positioned", compositeOnly: true, inputs: {}, outputs: {} },
+    { componentType: "crt.Standalone", compositeOnly: true, inputs: {}, outputs: {} }] } };
+  reportRegistryFindings(tblGateCs, tblGateManifest, FIX);
+  const tblGateHas = (item) => tblGateCs.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === item);
+  check("ENG-95683 (item 2/R1, negative control): a compositeOnly type engine-positioned via `tableElements` ONLY (absent from viewConfigDiff) is skipped by enginePositioned, while a standalone (profileCards) one still surfaces — isolates the tableElements branch, which the viewConfigDiff-sourced test cannot",
+    !tblGateHas("crt.Positioned") && tblGateHas("crt.Standalone"),
+    () => tblGateCs.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
   // ---- ENG-95683 (item 1, R2): the durable resolved-gate set + its plan.md provenance mirror ---------------
   // A run whose emitted type is a gated composite the stand LACKS carries the resolved gate on `result.resolvedGates`
   // ([{componentType,kind,id,feature?,source}]) — the exact set the `--resolved-gates` artifact writes — and mirrors
@@ -9094,6 +9113,24 @@ try {
     Array.isArray(ungatedRun.resolvedGates) && ungatedRun.resolvedGates.length === 0
     && !/Resolved component gates:/.test(ungatedRun.plan),
     () => ungatedRun.resolvedGates);
+  // ENG-95683 (item 1/R2): the plan.md gate MIRROR with MULTIPLE resolved gates — the `; ` join, the order, and the
+  // per-gate OPTIONAL `feature` segment (present on one, absent on the other). The single-gate run above never
+  // exercises `resolvedGates.map(...).join("; ")`. renderPlan is deterministic and the mirror reads only
+  // `result.resolvedGates`, so a minimal hand-built result drives it directly (the golden runners build several).
+  const twoGatePlan = renderPlan({
+    entity: "X", changeSet: { viewConfigDiff: [], needsDecision: [] },
+    resolvedGates: [
+      { componentType: "crt.CommunicationOptions", kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior", source: "stand-export" },
+      { componentType: "crt.SecondGate", kind: GATE_KIND.COMPOSITE, id: "CrtSecondApp", source: "vendored-pinned" },
+    ],
+  }, {});
+  const gateLine = twoGatePlan.split("\n").find((l) => /\*\*Resolved component gates:\*\*/.test(l)) || "";
+  check("ENG-95683 (item 1/R2): the plan gate mirror renders TWO resolved gates joined by `; `, in order, with the optional `feature` segment present for the first and ABSENT for the second",
+    /`CrtCustomer360App` \+ feature `CommonCommunicationsBehavior` \(stand-export\)/.test(gateLine)
+    && /`CrtSecondApp` \(vendored-pinned\)/.test(gateLine)
+    && /CrtCustomer360App`.*; `crt\.SecondGate`/.test(gateLine)   // `; ` join, first before second
+    && !/CrtSecondApp` \+ feature/.test(gateLine),                 // the second gate carries no feature segment
+    () => gateLine);
 
   // ---- ENG-95683 (item 1, R2): the `--resolved-gates <file>` CLI output, end-to-end -----------------------
   // The write happens on the `--plan`/`--units` path (a PLAN/RUN-time fact, not a `--verify` verdict), is registered
@@ -9149,6 +9186,17 @@ try {
   check("ENG-95683 (item 1/R2): `--resolved-gates` outside --plan/--units fails loudly (exit 1) — the flag is registered and mode-guarded, not silently ignored",
     rgBadMode.status === 1 && /--resolved-gates/.test(rgBadMode.stderr || "") && /applies to .--plan. and .--units./.test(rgBadMode.stderr || ""),
     () => (rgBadMode.stderr || "").slice(0, 200));
+  // The WRITE-FAILURE path: `--resolved-gates` pointed at a file inside a NON-EXISTENT directory → writeFileSync
+  // ENOENT → the wrapped `fail("cannot write --resolved-gates ...")`, exit 1. Only the happy write and the mode-guard
+  // were covered; a realistic typo'd / absent target directory had none, and a silent swallow here would drop the
+  // artifact a verification step is about to read.
+  const rgNoDir = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--resolved-gates", path.join(os.tmpdir(), `c2f_rg_nodir_${process.pid}`, "x.json")],
+    { input: JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] },
+      schemas: [{ pkg: "P", body: gmBody(compOnlyDetails, [nameOp, compOnlyDetail].join(",")) }] }), encoding: "utf8" });
+  check("ENG-95683 (item 1/R2): `--resolved-gates` pointed at an unwritable path (a file in a non-existent directory) fails LOUDLY (exit 1, `cannot write --resolved-gates`) — the write error is surfaced, never swallowed",
+    rgNoDir.status === 1 && /cannot write --resolved-gates/.test(rgNoDir.stderr || ""),
+    () => ({ status: rgNoDir.status, stderr: (rgNoDir.stderr || "").slice(0, 200) }));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
