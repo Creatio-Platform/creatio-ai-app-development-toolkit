@@ -9761,6 +9761,25 @@ const N2_NO_SUCH_KEY = "child:NotAPage";
       return Object.keys(thin.pages).length === 0 && !Object.hasOwn(thin.pages, "main")
         && Object.keys(builtSlice(lpUnits, {}, "main").evidence).length === 0; },
     () => JSON.stringify(builtSlice(lpUnits, { pages: {}, reachability: {}, evidence: {}, judge: {} }, "main")));
+  // A slice must carry every `built.*` key the verify rows for that unit read. `reachability` is one of them, and a
+  // slicer that dropped it would have stayed green: the fixture above carries `sectionRegistered` and nothing
+  // asserted it. An empty reachability row reads as an unverified deliverable on a page that is actually complete.
+  const N2_REACH_MAIN = "sectionRegistered", N2_REACH_OTHER = "typedRouting";
+  const reachOfMain = lpUnits.reachability.filter((r) => r.appliesWhen && (r.pages || []).includes("main")).map((r) => r.key);
+  check("ENG-95472: the BUILT slice carries the reachability rows that read on THIS unit, values verbatim",
+    () => bMain.reachability[N2_REACH_MAIN]?.workplaces === 1
+      && (bMain.reachability[N2_REACH_MAIN].names || []).join(",") === "Recruiting"
+      && reachOfMain.includes(N2_REACH_MAIN)
+      && Object.keys(bList.reachability).length === 0,
+    () => JSON.stringify({ main: bMain.reachability, list: bList.reachability, appliesToMain: reachOfMain }));
+  // `typedRouting` is published for this plan but names no page, so a payload carrying it must not reach any
+  // builder — the same narrowing the evidence ids get, on the key family a verify row reads off the stand.
+  const bothReach = builtSlice(lpUnits, { ...builtAll,
+    reachability: { [N2_REACH_MAIN]: { workplaces: 1 }, [N2_REACH_OTHER]: { ok: true } } }, "main");
+  check("ENG-95472: a reachability key is sliced to the page(s) `--units` says it reads on, and to no other",
+    () => Object.hasOwn(bothReach.reachability, N2_REACH_MAIN) && !Object.hasOwn(bothReach.reachability, N2_REACH_OTHER)
+      && reachOfMain.length > 0 && !reachOfMain.includes(N2_REACH_OTHER),
+    () => JSON.stringify({ appliesToMain: reachOfMain, sliced: Object.keys(bothReach.reachability) }));
 }
 
 // The CLI half. Two fixtures, deliberately: a gate-CLEAN single-page manifest pins the exit codes and the flag
@@ -10003,6 +10022,31 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
         catch (e) { return "(" + e.code + ")"; } }));
     fs.rmSync(d, { recursive: true, force: true });
   }
+}
+
+// --- WHAT THE SLICING ACTUALLY SAVES, in bytes, on real files. -------------------------------
+// Slicing PARTITIONS the queue: the slices sum to about the whole file, so no single agent's read shrinks by an
+// order of magnitude. The saving is the RUN total — N agents that each read the whole file now read one row each,
+// so it scales with the page count and is invisible on a one-page plan. Asserted because the numbers are the whole
+// point of the mechanism and nothing else here measures them: a slicer rewritten to hand out the whole payload
+// would pass every structural check above.
+{
+  const d = n2TmpDir("bytes");
+  const r = n2RunCli(n2TreeManifest("Education school", "Experience school"), N2_UNITS, N2_SLICES, d);
+  const keys = r.stdout?.trim().startsWith("{") ? JSON.parse(r.stdout).pages.map((p) => p.key) : [];
+  const wholeBytes = Buffer.byteLength(r.stdout || "", "utf8");
+  const sliceBytes = keys.map((k, i) => fs.statSync(n2SliceFile(d, N2_Q, i + 1)).size);
+  const sumSlices = sliceBytes.reduce((t, b) => t + b, 0);
+  // What the run cost BEFORE: every agent opened the whole queue. AFTER: each opens its own row.
+  const runBefore = wholeBytes * keys.length, runAfter = sumSlices;
+  check("ENG-95472: the slices PARTITION the queue — together they are about the whole file, not a fraction of it",
+    () => keys.length === 3 && sumSlices > wholeBytes * 0.5 && sumSlices < wholeBytes * 2,
+    () => ({ wholeBytes, sliceBytes, sumSlices, ratio: +(sumSlices / wholeBytes).toFixed(2) }));
+  check("ENG-95472: so the saving is the RUN TOTAL and it scales with the page count — not an order of magnitude off any single agent's read",
+    () => runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / 10),
+    () => ({ pages: keys.length, runBefore, runAfter, runSaving: +(runBefore / runAfter).toFixed(2),
+      perAgent: sliceBytes.map((b) => +(wholeBytes / b).toFixed(2)) }));
+  fs.rmSync(d, { recursive: true, force: true });
 }
 
 // ===== ENG-95470 — N1: make --verify trustworthy (business rules gated, component role/analog) ================
