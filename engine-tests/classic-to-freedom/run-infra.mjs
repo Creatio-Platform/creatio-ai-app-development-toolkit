@@ -955,6 +955,15 @@ check("ENG-95468: the identity check is SCOPED and fails closed — it applies o
 check("ENG-95468: a `new-app` plan that publishes NO application code is not a mismatch — the engine publishes `null` there by design, and inventing a contradiction from an absent field would stop every such plan",
   () => wf.appIdentityMismatch("UsrApplicant", "new-app", "", null) === null
     && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "") === null);
+// THE RESUME. This check guards `create-app`; once THIS run's own app unit has closed on its full deliverable that
+// write is behind us, and stopping would spend a round reporting a contradiction nothing can act on. It goes quiet
+// exactly where `packagePreconditionStop` already lets a resume through — and not one step earlier.
+check("ENG-95468: the identity check goes quiet on a RESUME whose own app unit already completed — the write it guards is behind us, so the same contradiction that stops a fresh run must not stop a run that already created the app",
+  () => wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", true) === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", false)?.kind === "app-code-contradicts-target-package"
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", undefined)?.kind === "app-code-contradicts-target-package",
+  () => ({ resume: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", true),
+    fresh: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", false) }));
 // The app unit's own instruction, which is where the divergence entered: "choose the code so the package comes out
 // right" is what the builder followed. With the prefix known the code is a FACT the prompt states; without it the
 // old wording must survive unchanged, because the builder then has to read the prefix itself.
@@ -996,7 +1005,7 @@ check("ENG-95468: the Reconcile prompt asks for BOTH new gate inputs — the rea
     && /The empty string is a REAL answer and is not the same as \\`null\\`/.test(wfSrc));
 check("ENG-95468: the pre-build gate and its mid-run twin are wired to all THREE axes — a stop computed from one of them and returned from another is the failure mode a source pin catches and an execution test cannot name",
   /const templateMismatchesNow = templateMismatches\(state\.templateResolution, state\.templateNames\)/.test(wfSrc)
-    && /const appIdentity = appIdentityMismatch\(state\.targetPackage, state\.sectionHost, state\.schemaNamePrefix, state\.applicationCode\)/.test(wfSrc)
+    && /const appIdentity = appIdentityMismatch\(state\.targetPackage, state\.sectionHost, state\.schemaNamePrefix, state\.applicationCode, appUnitDone\(\)\)/.test(wfSrc)
     && /if \(componentMismatches\.length \|\| templateMismatchesNow\.length \|\| appIdentity\)/.test(wfSrc)
     && /if \(midRunMismatches\.length \|\| midRunTemplates\.length \|\| midRunIdentity\)/.test(wfSrc));
 // --- ENG-94859 the per-run REFS cache, the page slice and the split worklog. Measured on a real run: 40% of all
@@ -1759,6 +1768,26 @@ check("workflow EXECUTES the half-finished app unit: OUR package with `appUnitCo
     && ownedShort.packageCreatedByRun?.package === "UsrApplicantFreedom" && ownedShort.packageCreatedByRun?.appUnitComplete === false
     && /INCOMPLETE/.test(ownedShort.next || "") && /without a second approval/.test(ownedShort.next || ""),
   () => (ownedShort.threw ? `threw: ${ownedShort.threw}` : `stopped=${ownedShort.stopped} rec=${JSON.stringify(ownedShort.packageCreatedByRun)}`));
+// ENG-95468 — the identity gate must let the SAME resume through, for the same reason: `create-app` is behind us.
+// Without this the new gate re-broke exactly what ENG-95850 fixed — a `new-app` run could not survive its own
+// success — only one stop later and under a different key, which is the worst version of that bug to debug.
+const ownedResumeIdentity = await runToBaseline({
+  ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 × ENG-95850: a RESUME whose own app unit completed is not stopped by the identity gate either — the contradiction is real but `create-app` already ran, so the run continues to a downstream stop instead of paying a round to report it",
+  !ownedResumeIdentity.threw && ownedResumeIdentity.stopped === "unknown-checkpoint-key"
+    && ownedResumeIdentity.appIdentityMismatch === null,
+  () => (ownedResumeIdentity.threw ? `threw: ${ownedResumeIdentity.threw}` : `stopped=${ownedResumeIdentity.stopped} identity=${JSON.stringify(ownedResumeIdentity.appIdentityMismatch)}`));
+// And the control: the same contradiction on a package with NO provenance record still surfaces — so the quiet above
+// is the resume record's doing, not a gate that stopped working.
+const strangerIdentity = await runToBaseline({
+  ...newAppBaseline(null), applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 × ENG-95850: the same contradiction against a package this migration did NOT create still reaches the operator — carried on the package stop, so the one re-plan that run needs fixes both",
+  !strangerIdentity.threw && strangerIdentity.stopped === "new-app-over-existing-package"
+    && strangerIdentity.appIdentityMismatch?.kind === "app-code-contradicts-target-package",
+  () => (strangerIdentity.threw ? `threw: ${strangerIdentity.threw}` : `stopped=${strangerIdentity.stopped} identity=${JSON.stringify(strangerIdentity.appIdentityMismatch)}`));
 
 // --- ENG-95850 (A3): RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Two consecutive launches of the real run were
 // rejected at this exact call in 9 ms with 0 writes, a later identical launch passed, and in between the flake read
