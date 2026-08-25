@@ -150,7 +150,9 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
   "selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
-  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock",
+  // The verifier's per-round read-back scope, and the judge-queue re-file guard.
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -1522,6 +1524,185 @@ check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fa
     && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
     && /Verify did not confirm the queue carry write/.test(wfSrc)
     && /await persistPending\(`recording what round \$\{round\}'s builders reported after verify`\)/.test(wfSrc));
+
+// --- THE VERIFIER'S PER-ROUND READ-BACK SCOPE. A repair round used to re-read every published page and re-file
+// its evidence, which sent records that were already settled back to the judge with nothing underlying them
+// changed. The scope is a pure decision, so it is exercised here rather than asserted from the prompt text. ---
+const scopeKeys = ["main", "list", "sectionRegistered"];
+const scopeSchemas = { main: "UsrApplicant_FormPage", list: "UsrApplicant_ListPage", sectionRegistered: "UsrApplicantSection" };
+const scopeAllRecorded = ["main", "list", "sectionRegistered"];
+const fetched = (built, recorded) => wf.verifyFetchKeys({ touchedThisRound: built, unitKeys: scopeKeys, schemas: scopeSchemas, pagesRecorded: recorded }).join(",");
+check("verifyFetchKeys: a recorded key the round did not build is NOT re-fetched (the whole point: an unchanged page was being re-read every round)",
+  () => fetched(["main"], scopeAllRecorded) === "main");
+check("verifyFetchKeys: a recorded key the round DID build IS fetched, because it just changed",
+  () => fetched(["main", "list"], scopeAllRecorded) === "main,list");
+check("verifyFetchKeys: a NEVER-recorded key is fetched even when the round did not build it (absent = nobody looked, and skipping it would leave it absent forever)",
+  () => fetched([], ["main"]) === "list,sectionRegistered");
+check("verifyFetchKeys: `pagesRecorded` undefined or empty fetches EVERY key: the old whole-section sweep, never a silent skip",
+  () => fetched([], undefined) === "main,list,sectionRegistered" && fetched([], []) === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key with no recorded Freedom schema is never fetched, even when the round built it",
+  () => wf.verifyFetchKeys({ touchedThisRound: ["orphan"], unitKeys: [...scopeKeys, "orphan"], schemas: scopeSchemas, pagesRecorded: [] }).join(",") === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key that is only a SUBSTRING of a `builtThisRound` entry does not count as built (exact match, as the judge-queue predicate also requires)",
+  () => fetched(["child:main"], scopeAllRecorded) === "");
+check("verifyFetchKeys: an empty Reconcile report yields no keys rather than throwing",
+  () => wf.verifyFetchKeys({ touchedThisRound: [], unitKeys: undefined, schemas: scopeSchemas, pagesRecorded: [] }).length === 0);
+
+// The table renders three groups, and TWO different empty states share the FETCH list: nothing recorded
+// anywhere, and everything recorded with nothing to fetch this round. A round whose builders all returned
+// nothing produces the second, and one label for both contradicts the ALREADY ON FILE list printed under it.
+check("fetchTableGroups: with nothing to fetch and every key on file, the FETCH list does not claim nothing is recorded",
+  () => {
+    const g = wf.fetchTableGroups([], scopeKeys, scopeSchemas);
+    return g.known.length === 0 && g.keep.length === 3 && wf.fetchListEmptyLabel(g.keep.length).includes("already on file");
+  });
+check("fetchTableGroups: with nothing recorded anywhere the FETCH list still says none recorded yet",
+  () => wf.fetchTableGroups([], scopeKeys, {}).keep.length === 0 && wf.fetchListEmptyLabel(0) === "- (none recorded yet)");
+check("fetchTableGroups: the three rendered groups PARTITION the published keys, with no key in two of them and none dropped",
+  () => {
+    const g = wf.fetchTableGroups(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    const all = [...g.known, ...g.keep, ...g.unknown];
+    return g.known.join() === "main" && g.keep.join() === "list,sectionRegistered" && g.unknown.join() === "orphan"
+      && all.length === new Set(all).size && all.length === 4;
+  });
+
+// A builder that answered nothing may still have WRITTEN to the stand before it died, so its page is read back
+// even though it never reached `builtThisRound` — which stays as it is, because the judge-queue predicate
+// discriminates on real build activity.
+check("touchedKeys: a unit whose builder answered nothing counts as touched",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }]).join() === "main,list");
+check("touchedKeys: a unit that reported normally is not duplicated, and absent claims yield just the built list",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }]).join() === "main" && wf.touchedKeys(["main"], undefined).join() === "main");
+
+// The rejected-record loop: `isSettledAndUnitUntouched` covers only an id EARNED before the round, and a
+// rejected record is not earned, so it came back to Judge every round no matter what happened to its unit.
+check("isRefiledForUntouchedUnit: a REJECTED record whose unit was not touched is not re-queued",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main"]) === true);
+check("isRefiledForUntouchedUnit: the same record IS re-queued once its unit is touched again",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main", "list"]) === false);
+check("isRefiledForUntouchedUnit: a FIRST-EVER record is never suppressed, so nothing unjudged is hidden",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(), ["main"]) === false);
+check("isRefiledForUntouchedUnit: an id with no `#` uses the whole id as its owner",
+  () => wf.isRefiledForUntouchedUnit("sectionRegistered", new Set(["sectionRegistered"]), ["main"]) === true);
+
+// The two guards are checked IN ORDER and are not interchangeable: the first asks EARNED + BUILT, the second
+// only RECORDED + TOUCHED. Each is covered above in isolation; these drive the composition over a mixed list.
+const earned = new Set(["main#quality-gates"]);
+const filed = new Set(["main#quality-gates", "list#quality-gates", "list#listpage:columns"]);
+const skipWhy = (id, built, touchedUnits) => wf.requeueSkipReason(id, earned, filed, built, touchedUnits);
+check("requeueSkipReason: an EARNED id whose unit was not built is skipped as settled, not as refiled",
+  () => skipWhy("main#quality-gates", ["list"], ["list"]) === "settled");
+check("requeueSkipReason: a REJECTED id (filed, never earned) whose unit was not touched is skipped as refiled",
+  () => skipWhy("list#quality-gates", ["main"], ["main"]) === "refiled");
+check("requeueSkipReason: an id whose unit WAS built goes through both guards to the judge",
+  () => skipWhy("list#quality-gates", ["list"], ["list"]) === null);
+check("requeueSkipReason: a no-answer unit is TOUCHED but not BUILT — its earned id stays settled while its rejected id goes through",
+  () => skipWhy("main#quality-gates", [], ["main"]) === "settled" && skipWhy("list#quality-gates", [], ["list"]) === null);
+check("requeueSkipReason: a FIRST-EVER id is never skipped, whichever guard is asked",
+  () => skipWhy("sectionRegistered#reach", [], []) === null);
+check("requeueSkipReason: an id with no `#` owner resolves against the whole id",
+  () => wf.requeueSkipReason("sectionRegistered", new Set(["sectionRegistered"]), new Set(["sectionRegistered"]), [], []) === "settled");
+check("requeueSkipReason: over a mixed list, every id resolves to exactly one outcome and the order holds",
+  () => ["main#quality-gates", "list#quality-gates", "list#listpage:columns", "child:X#childpage"]
+    .map((id) => skipWhy(id, ["child:X"], ["child:X", "list"])).join(",") === "settled,,,");
+
+// The round loop derives `touchedThisRound` and `filedBeforeRound` from `claims` and `state.evidenceFiled`, then
+// feeds them per id. Testing the predicates alone left that wiring uncovered: passing `builtThisRound` where
+// `touchedThisRound` belongs, or swapping the two lists, would have passed every case above.
+const wroteThisRound = ["main#quality-gates", "list#quality-gates", "child:X#childpage", "sectionRegistered#reach"];
+const roundClaims = [{ unit: "main" }, { unit: "list", noAnswer: true }];
+const filedOnFile = ["main#quality-gates", "list#quality-gates", "child:X#childpage"];
+const decide = (built, claimsIn) => wf.requeueDecisions({ evidenceWritten: wroteThisRound, earnedBeforeRound: new Set(["main#quality-gates", "child:X#childpage"]), evidenceFiled: filedOnFile, builtThisRound: built, claims: claimsIn })
+  .map((d) => d.id + "=" + (d.why || "queue")).join(" ");
+check("requeueDecisions: derives both lists from the round inputs and returns one verdict per filed id",
+  () => decide(["main"], roundClaims) === "main#quality-gates=queue list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide(["main"], roundClaims));
+check("requeueDecisions: a no-answer unit is TOUCHED but not BUILT — its rejected id is released while an earned id elsewhere stays settled",
+  () => decide([], roundClaims) === "main#quality-gates=settled list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], roundClaims));
+check("requeueDecisions: with no claims at all, a unit that did not build keeps its filed record out of the queue",
+  () => decide([], undefined) === "main#quality-gates=settled list#quality-gates=refiled child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], undefined));
+check("requeueDecisions: an empty or absent `evidenceWritten` decides nothing rather than throwing",
+  () => wf.requeueDecisions({ evidenceWritten: undefined, earnedBeforeRound: new Set(), evidenceFiled: [], builtThisRound: [], claims: [] }).length === 0 && wf.requeueDecisions({ evidenceWritten: [], earnedBeforeRound: new Set(), evidenceFiled: [], builtThisRound: [], claims: [] }).length === 0);
+
+// The table is the artifact the Verify agent reads, so its rendered text is asserted, not only the partition
+// logic behind it: a group under the wrong header, or the wrong empty-state branch, misinforms that agent.
+const renderTable = (fetchKeys, keys, schemas) => wf.verifierSchemaTable(fetchKeys, keys, schemas);
+check("verifierSchemaTable: the fetched keys render under FETCH THIS ROUND and the untouched ones under ALREADY ON FILE, each in its own group",
+  () => {
+    const t = renderTable(["main"], scopeKeys, scopeSchemas);
+    const fetchPart = t.slice(0, t.indexOf("ALREADY ON FILE"));
+    return fetchPart.includes("`main` → get-page `UsrApplicant_FormPage`")
+      && !fetchPart.includes("`list`")
+      && t.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+      && t.slice(t.indexOf("ALREADY ON FILE")).includes("`list`, `sectionRegistered`");
+  },
+  () => renderTable(["main"], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing to fetch with every key on file renders the already-on-file label, never `(none recorded yet)`",
+  () => {
+    const t = renderTable([], scopeKeys, scopeSchemas);
+    return t.includes("nothing to fetch this round") && !t.includes("(none recorded yet)") && t.includes("ALREADY ON FILE");
+  },
+  () => renderTable([], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing recorded anywhere renders `(none recorded yet)` with no ALREADY ON FILE group",
+  () => {
+    const t = renderTable([], scopeKeys, {});
+    return t.includes("(none recorded yet)") && !t.includes("ALREADY ON FILE") && t.includes("NO FREEDOM SCHEMA IS RECORDED FOR");
+  },
+  () => renderTable([], scopeKeys, {}));
+check("verifierSchemaTable: a key with no schema renders only under the unknown-schema line, never as a fetch target",
+  () => {
+    const t = renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    return t.slice(t.indexOf("NO FREEDOM SCHEMA IS RECORDED FOR")).includes("`orphan`")
+      && !t.slice(0, t.indexOf("ALREADY ON FILE")).includes("`orphan`");
+  },
+  () => renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas));
+
+// The read-back call site derived `touched`, `fetchKeys`, the log list and the table itself, so the helpers above
+// were covered while that threading was not. The plan does the derivation from round-shaped state instead.
+const planFor = (builtThisRound, claims, pagesRecorded) => wf.verifyFetchPlan({
+  unitKeys: scopeKeys, schemas: scopeSchemas, pagesRecorded, builtThisRound, claims,
+});
+check("verifyFetchPlan: derives touched, fetchKeys and the not-read-back list from round-shaped state in one pass",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }], scopeAllRecorded);
+    return p.touched.join() === "main" && p.fetchKeys.join() === "main" && p.notReRead.join() === "list,sectionRegistered";
+  },
+  () => JSON.stringify(planFor(["main"], [{ unit: "main" }], scopeAllRecorded)));
+check("verifyFetchPlan: a no-answer claim widens the read-back without widening the built list",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }], scopeAllRecorded);
+    return p.touched.join() === "main,list" && p.fetchKeys.join() === "main,list" && p.notReRead.join() === "sectionRegistered";
+  },
+  () => JSON.stringify(planFor(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }], scopeAllRecorded)));
+check("verifyFetchPlan: an absent `pagesRecorded` reads back every key and leaves nothing on the not-read-back list",
+  () => {
+    const p = planFor([], [], undefined);
+    return p.fetchKeys.join() === "main,list,sectionRegistered" && p.notReRead.length === 0;
+  });
+check("verifyFetchPlan: the table it returns is the one the round's own fetch set produces, groups and all",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }], scopeAllRecorded);
+    return p.table === wf.verifierSchemaTable(p.fetchKeys, scopeKeys, scopeSchemas)
+      && p.table.includes("FETCH THIS ROUND") && p.table.includes("ALREADY ON FILE");
+  });
+
+// The read-back scope is a cost decision made from a report this script cannot verify, so it is logged.
+check("workflow: the read-back scope names the pages it did NOT re-read, and says so when it narrowed nothing",
+  wfSrc.includes("already on file and untouched — not read back")
+    && wfSrc.includes("no pages reported on file — reading back every key with a schema"));
+
+// The predicates decide the set; these clauses are what make the verifier ACT on it. Any one of them reverting
+// puts the whole-section re-read back while every case above still passes.
+check("workflow: the verifier `pages` instruction is scoped to the FETCH THIS ROUND list, and the table names the keys it is NOT fetching",
+  wfSrc.includes("for every key the table above lists under FETCH THIS ROUND")
+    && wfSrc.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+    && wfSrc.includes("do NOT re-file their evidence"));
+check("workflow: the verifier `evidence` instruction files only the ids this round owns, because naming an untouched id is what sends it back to Judge",
+  wfSrc.includes("**FILE ONLY THE IDS THIS ROUND OWNS:**"));
+check("workflow: Reconcile is asked for `pagesRecorded`, without which the read-back scope degrades to the old sweep",
+  wfSrc.includes("Also return \\`pagesRecorded\\`")
+    && wfSrc.includes("pagesRecorded: { type: 'array', items: { type: 'string' } }"));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
