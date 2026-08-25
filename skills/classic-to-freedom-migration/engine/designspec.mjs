@@ -3471,7 +3471,7 @@ export function verifyReport(result, v) {
 export function verifyDigest(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
-    pages[k] = p && p.complete === true ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified } : p;
+    pages[k] = p?.complete === true ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified } : p;
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
 }

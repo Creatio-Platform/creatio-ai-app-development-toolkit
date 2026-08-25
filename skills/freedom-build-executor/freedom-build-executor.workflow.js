@@ -1171,17 +1171,20 @@ const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachState, pack
 // defense-in-depth: `state.verify` reaches this function through the Reconcile agent's structured output
 // (VERIFY_RESULT, which DOES declare `buildComplete` — see the schema comment), so `buildComplete` should always be
 // present on a fresh verdict; the fallback covers a verdict written before this field existed, or a payload from a
-// caller that has not adopted it, so this comparison never reads a page as "not build-complete" purely because a
-// field is missing, never because it is false.
-const verifierBuildComplete = (verify, key) => derivedBuildComplete(pageStateOf(verify, key)) === true
+// caller that has not adopted it. TRI-STATE (PR review, ENG-95901 follow-up): stays `undefined` — not coerced to
+// `false` — when the verifier has NO entry for this page at all (`pageStateOf` returns null, e.g. the page has not
+// reached its first post-hoc verify pass yet). Coercing that to `false` made `selfCheckMismatches` read "the
+// verifier has not looked at this page" as "the verifier looked and disagrees", flagging an honest
+// `buildComplete: true` self-report as a MISMATCH for every page the verifier simply has not run against yet.
+const verifierBuildComplete = (verify, key) => derivedBuildComplete(pageStateOf(verify, key))
 const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageState) =>
   (selfChecks || [])
     .filter((c) => c && c.key && isUnitOpen(unitFor(c.key), verify, reachState, packageState))
     .map((c) => {
       const sc = c.sc
       const scBuildComplete = selfCheckBuildComplete(sc)
-      if (sc && sc.ran === true && scBuildComplete === true && !verifierBuildComplete(verify, c.key)) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
-      if (sc && sc.ran === true && scBuildComplete !== true && scBuildComplete !== false) return { key: c.key, kind: 'ran-without-verdict' }
+      if (sc?.ran === true && scBuildComplete === true && verifierBuildComplete(verify, c.key) === false) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
+      if (sc?.ran === true && scBuildComplete !== true && scBuildComplete !== false) return { key: c.key, kind: 'ran-without-verdict' }
       if (!sc || sc.ran === false) return { key: c.key, kind: 'gate-not-run' }
       return null
     })

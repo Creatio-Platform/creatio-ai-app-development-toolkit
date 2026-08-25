@@ -457,6 +457,16 @@ check("ENG-95901: derivedBuildComplete is the ONE shared derivation behind selfC
     () => wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined));
   check("ENG-95469/ENG-95901 T5 (RC-12): the honest short case `{ran:true, buildComplete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
     () => wf.selfCheckMismatches(honestShort, unitFor, openVerify, {}, undefined).length === 0);
+  // PR review (ENG-95901 follow-up): `verifierBuildComplete` used to coerce "no page entry in `verify.pages` at
+  // all" (the page has not reached its first post-hoc verify pass yet) to `false`, indistinguishable from "the
+  // verifier ran and says NOT build-complete". That misread an honest `buildComplete:true` self-report as a
+  // MISMATCH on every page the verifier simply has not looked at yet. `isOpenPage` treats a missing entry as OPEN
+  // (so this unit is NOT filtered out before reaching the comparison), which is exactly what makes this case reach
+  // `selfCheckMismatches` at all.
+  const noVerifierEntryYet = { pages: {} };
+  check("ENG-95901 T5 (PR review): an HONEST `buildComplete:true` self-report on a page with NO entry in `verify.pages` (verifier has not run against it yet) raises NO mismatch — 'no data yet' must not read as 'verifier disagrees'",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, noVerifierEntryYet, {}, undefined).length === 0,
+    () => wf.selfCheckMismatches(honestComplete, unitFor, noVerifierEntryYet, {}, undefined));
 }
 // The T5 cross-check WIRING, pinned at the source level (the round loop drives live agents): buildRound returns the
 // per-unit self-reports, and the round loop cross-checks them against the FRESH post-hoc `state.verify` and records a
@@ -635,11 +645,30 @@ const reqOf = (re) => { const m = re.exec(wfSrc); return m ? m[1].split(",").map
 const missingReq = (obj, req) => (req || []).filter((k) => !(k in obj));
 const PAGE_REQ = reqOf(/const BUILD_SCHEMA_PAGE = \{[^}]*?required:\s*\[([^\]]*)\]/);
 const SC_REQ = reqOf(/selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\[([^\]]*)\]/);
-// ENG-95901 — the SAME schema-drift gate as VERIFY_RESULT's, for the `selfCheck` property block: a bounded window
-// after `selfCheck: { type: 'object', ... }`'s opening proves `buildComplete: { type: 'boolean' }` is declared
-// inside THIS block specifically, not merely present somewhere else in the file.
-check("ENG-95901: the `selfCheck` structured-output schema DECLARES `buildComplete: { type: 'boolean' }` — a builder's structured answer will not reproduce an undeclared field, so its absence here silently drops `buildComplete` from every self-report before `selfCheckStillShort`/`selfCheckMismatches` ever see it",
-  /selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\['ran'\],\s*properties:\s*\{[\s\S]{0,80}buildComplete:\s*\{\s*type:\s*'boolean'\s*\}/.test(wfSrc));
+// ENG-95901 (PR review) — a bounded-window REGEX against `wfSrc` (below) only proves the text pattern still reads
+// a certain way; it does not prove the SHIPPED schema object actually declares the field, the way the VERIFY_RESULT
+// drift gate above does by loading the real module and reading the live object. Load `BUILD_PROPERTIES` the SAME
+// way (a standalone module slice + `import()`) and assert on the live object, so a reformatting that keeps the
+// regex passing while actually dropping the property (or nesting it one level off) cannot go unnoticed.
+let selfCheckMod;
+try {
+  const slice = wfSrc.slice(wfSrc.indexOf("const BUILD_PROPERTIES"), wfSrc.indexOf("const BUILD_SCHEMA_APP"));
+  const modPath = path.join(mkdtempSync(path.join(os.tmpdir(), "wf-selfcheck-schema-")), "selfcheck-schema.mjs");
+  writeFileSync(modPath, `${slice}\nexport { BUILD_PROPERTIES };\n`);
+  selfCheckMod = await import(pathToFileURL(modPath).href);
+} catch (e) {
+  check("ENG-95901: the `BUILD_PROPERTIES` schema slice loads as a standalone module", false, e.message);
+}
+check("ENG-95901: `BUILD_PROPERTIES.selfCheck`'s structured-output schema DECLARES `buildComplete: { type: 'boolean' }` on the LIVE shipped object — a builder's structured answer will not reproduce an undeclared field, so its absence here silently drops `buildComplete` from every self-report before `selfCheckStillShort`/`selfCheckMismatches` ever see it",
+  selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.properties?.buildComplete?.type === 'boolean',
+  () => selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.properties);
+// Declaring it is not enough on its own here either — but unlike VERIFY_RESULT's page-state, `selfCheck` MUST NOT
+// require `buildComplete`: `ran: false` (the builder genuinely could not get-page) is a documented, valid outcome
+// with no build-axis verdict at all, and `ran-without-verdict` exists specifically to surface a schema-valid
+// `{ran:true}` with `buildComplete` absent as its own discrepancy kind rather than a schema violation.
+check("ENG-95901: `BUILD_PROPERTIES.selfCheck` requires ONLY `ran` — `buildComplete` stays optional so `ran:false`/`ran-without-verdict` remain schema-valid self-reports, not violations",
+  JSON.stringify(selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.required) === JSON.stringify(['ran']),
+  () => selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.required);
 // The pre-PR 4-field page-unit shape (no `selfCheck`), and the current 5-field shape whose `selfCheck` uses the
 // documented `ran:false` + `notRunWhy` escape hatch the breaking-change argument leans on.
 const prePrPageResult = { unit: "main", claimedBuilt: ["crt.Input"], schemaName: "UsrMainPage",

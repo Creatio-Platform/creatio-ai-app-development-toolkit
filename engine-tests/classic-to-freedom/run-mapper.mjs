@@ -2608,7 +2608,7 @@ try {
       const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
       check("ENG-95901: the SCOPED stderr diagnostic on a page with BOTH a genuine MISSING deliverable and unfiled evidence names ONLY `missing` — no 'unconfirmed' count, no 'file the on-stand evidence' advice, exit 2",
         vScopedShort.status === 2
-        && /\d+ MISSING deliverable\(s\)/.test(vScopedShort.stderr || "")
+        && /\d MISSING deliverable\(s\)/.test(vScopedShort.stderr || "")
         && !/unconfirmed/.test(vScopedShort.stderr || "")
         && !/file the on-stand evidence/.test(vScopedShort.stderr || ""),
         () => ({ status: vScopedShort.status, stderr: vScopedShort.stderr }));
@@ -8066,8 +8066,7 @@ check("digest: the COMPLETE-page compaction literal carries `buildComplete` (not
     return done.length >= 1 && done.every(([, p]) => p.buildComplete === true); },
   () => JSON.stringify(dgDigest.pages));
 check("digest: an OPEN page with `buildComplete: true` (missing:0, unverified>0 — the axis-split case) forwards `buildComplete` unchanged through the un-compacted branch",
-  () => { const v = renderVerify(dgRun, dgOpts, m12Built(m12Page(M12_NAMED)));
-    // Force this page's ONLY shortfall to be unverified (drop the QG evidence the base fixture supplies) so
+  () => { // Force this page's ONLY shortfall to be unverified (drop the QG evidence the base fixture supplies) so
     // complete:false while missing stays 0.
     const built = m12Built(m12Page(M12_NAMED)); delete built.evidence; delete built.judge;
     const vSplit = renderVerify(dgRun, dgOpts, built);
