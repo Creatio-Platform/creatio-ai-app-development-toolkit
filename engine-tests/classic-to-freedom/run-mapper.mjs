@@ -7264,6 +7264,16 @@ check("ENG-94975 F4/D3: a one-key JSON object closes the unresolved child's STRU
   () => ({ junk: pgJunkNoEvidence.pages["child:U1"], withEv: pgJunkWithEvidence.pages["child:U1"],
     ids: pgUnits.evidenceRows.filter((e) => e.pageKey === "child:U1") }));
 
+// ENG-95471 SCOPE: the `components: [] + noChangesReason` concession is `#quality-gates`-ONLY. A `#childpage`
+// record proves a page was BUILT, which an empty answer never can — "nothing to fix" is not a meaningful outcome
+// for it — so the same no-diff shape here must stay ⚠ unverified, never a false close.
+const pgChildNoDiff = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": { viewConfig: { items: [{ name: "Box", items: [{ name: "F", type: "crt.Input" }] }] } } },
+  evidence: { "child:U1#childpage": { referencePage: "the existing Classic child page", components: [], noChangesReason: "diffed and found identical" } },
+  judge: { "child:U1#childpage": { convincing: true, why: "looks fine" } } });
+check("ENG-95471 SCOPE: the no-diff concession does NOT leak onto `#childpage` — `components: []` there stays incomplete even with a `noChangesReason` and a convincing judge",
+  pgChildNoDiff.pages["child:U1"].complete === false && pgChildNoDiff.pages["child:U1"].unverified === 1,
+  () => pgChildNoDiff.pages["child:U1"]);
+
 /* ---- D6/v2 change 1: `--built` carries `get-page`'s MERGED `bundle.viewConfig`, a JSON TREE the engine walks
    itself. A component the TEMPLATE provides is touched in the page's own body with `operation: "merge"` and
    carries NO type, so the previously documented source (`ownBodySummary.viewConfigDiffOps`) structurally could
@@ -9449,8 +9459,27 @@ try {
   const closed = qgRun({ [qgId]: { referencePage: "AccountPage", components: ["crt.Input"] } },
     { [qgId]: { convincing: true, why: "prop-level diff against AccountPage" } });
   check("ENG-95471: a complete record PLUS a judge verdict is the only thing that closes the quality-gates row — no false positive on the honest path",
-    () => /✅/.test(qgRow(closed)) && !/❌|⚠/.test(qgRow(closed)),
+    () => /✅/.test(qgRow(closed)) && !/[❌⚠]/.test(qgRow(closed)),
     () => qgRow(closed));
+
+  // ENG-95471 reopen — a page diffed and found ALREADY compliant (0 edits) could not file ANY record: `components`
+  // demanded a non-empty list, so an honest "nothing to fix" was unfileable and the row stayed ❌ MISSING forever.
+  // `components: []` + a non-blank `noChangesReason` is now the accepted shape for this outcome, and ONLY for it.
+  const noDiffClosed = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [], noChangesReason: "diffed QuickFilter, ButtonToggleGroup and the four command buttons against ContactsListPage — identical props, no drift" } },
+    { [qgId]: { convincing: true, why: "reason names the specific components compared and they genuinely match the reference" } });
+  check("ENG-95471 reopen: `components: []` WITH a non-blank `noChangesReason` closes the row — a page reviewed and found already compliant is a legitimate pass, not a permanent MISSING",
+    () => /✅/.test(qgRow(noDiffClosed)) && !/[❌⚠]/.test(qgRow(noDiffClosed)),
+    () => qgRow(noDiffClosed));
+
+  const noDiffNoReason = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [] } }, { [qgId]: { convincing: true, why: "looks fine" } });
+  check("ENG-95471 reopen: `components: []` with NO `noChangesReason` is still an INCOMPLETE record — the empty list alone proves nothing, it needs the reason to earn the pass",
+    () => /⚠/.test(qgRow(noDiffNoReason)) && !/✅/.test(qgRow(noDiffNoReason)),
+    () => qgRow(noDiffNoReason));
+
+  const noDiffBlankReason = qgRun({ [qgId]: { referencePage: "ContactsListPage", components: [], noChangesReason: "   " } }, { [qgId]: { convincing: true, why: "looks fine" } });
+  check("ENG-95471 reopen: a whitespace-only `noChangesReason` does not satisfy the shape either — the reason must be a REAL non-blank string, not a filled-in-looking blank",
+    () => /⚠/.test(qgRow(noDiffBlankReason)) && !/✅/.test(qgRow(noDiffBlankReason)),
+    () => qgRow(noDiffBlankReason));
 }
 
 // ---------------------------------------------------------------------------

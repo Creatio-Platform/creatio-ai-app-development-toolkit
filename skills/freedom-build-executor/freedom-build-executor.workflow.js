@@ -722,6 +722,11 @@ const BUILD_PROPERTIES = {
       ran: { type: 'boolean' },
       referencePage: { type: 'string' },
       componentsDiffed: { type: 'array', items: { type: 'string' } },
+      // ENG-95471 — the diff came back EMPTY because the page already matched the guideline, a legitimate
+      // outcome the diff-list alone cannot express. `noChangesNeeded` names that outcome explicitly so it is
+      // never mistaken for an unanswered field, and `noChangesReason` carries what was compared to reach it.
+      noChangesNeeded: { type: 'boolean' },
+      noChangesReason: { type: 'string' },
       notRunWhy: { type: 'string' },
     },
   },
@@ -1642,7 +1647,7 @@ function answeredNoteFor(batch, note) {
 // the source: a regex can show a block is interpolated somewhere in the function, never that it reaches the string
 // the agent is handed. Every block arrives already rendered; this only orders them.
 const GUIDELINES_RETURN = `
-  THEN RETURN \`guidelines\` — REQUIRED, and this unit does not close without it. \`evidenceId\`: your page's \`#quality-gates\` id, COPIED from \`--units.evidenceRows\`, never composed from your page key. \`ran: true\` takes \`referencePage\` (the shipped page you diffed) AND \`componentsDiffed\` (the ones you prop-diffed — NOT everything you built). Did not run it? \`ran: false\` plus \`notRunWhy\`; that is a valid ANSWER, not a pass — the record is filed as \`false\`, which is a hard \`❌ MISSING\`, and your unit stays open. Report it anyway: an omitted or half-filled answer is not valid at all, and a reference page you did not open is the one thing this field exists to stop.`
+  THEN RETURN \`guidelines\` — REQUIRED, and this unit does not close without it. \`evidenceId\`: your page's \`#quality-gates\` id, COPIED from \`--units.evidenceRows\`, never composed from your page key. \`ran: true\` takes \`referencePage\` (the shipped page you diffed) AND \`componentsDiffed\` (the ones you prop-diffed — NOT everything you built). Found NO drift worth fixing? That is a real outcome, not a shortcut: leave \`componentsDiffed\` empty and instead set \`noChangesNeeded: true\` with \`noChangesReason\` naming what you diffed and confirmed already matched — an empty \`componentsDiffed\` with neither flag is NOT filed as a pass. Did not run it? \`ran: false\` plus \`notRunWhy\`; that is a valid ANSWER, not a pass — the record is filed as \`false\`, which is a hard \`❌ MISSING\`, and your unit stays open. Report it anyway: an omitted or half-filled answer is not valid at all, and a reference page you did not open is the one thing this field exists to stop.`
 
 // `guidelinesReturn` is EMPTY for the app and reachability kinds: they own no page, carry no `#quality-gates` id,
 // and their schemas do not require the field. Only a page unit is held by it.
@@ -1741,6 +1746,15 @@ function notRunMiss(g, earnedIds) {
 // MISSING and the unit stays open.
 // `earnedIds` are ids already carrying an unrejected record: `ran: false` against one of those would overwrite
 // work that is done, so it is a miss rather than an answer.
+// THE `componentsDiffed` HALF, split out so `guidelinesCloseMiss` gains no nested branch (Sonar CC). A run
+// diffed AND found nothing to fix is answered by `noChangesNeeded: true` + a reason, never by an empty
+// `componentsDiffed` on its own — that shape is indistinguishable from a half-filled answer, which is exactly
+// the silence ENG-95471 exists to close off.
+function componentsMiss(g) {
+  if (Array.isArray(g.componentsDiffed) && g.componentsDiffed.filter(nonBlank).length) return null
+  if (g.noChangesNeeded === true) return nonBlank(g.noChangesReason) ? null : 'reported no changes needed, gave no `noChangesReason`'
+  return 'reported run, named no `componentsDiffed` and did not report `noChangesNeeded`'
+}
 function guidelinesCloseMiss(unit, res, evidenceIds, earnedIds) {
   if (!owesGuidelines(unit, evidenceIds)) return null
   const g = res?.guidelines
@@ -1749,8 +1763,7 @@ function guidelinesCloseMiss(unit, res, evidenceIds, earnedIds) {
   if (g.evidenceId !== qualityGateId(unit.key)) return `${JSON.stringify(g.evidenceId)} is not this unit's published quality-gates id`
   if (g.ran !== true) return notRunMiss(g, earnedIds)
   if (!nonBlank(g.referencePage)) return 'reported run, named no `referencePage`'
-  if (!Array.isArray(g.componentsDiffed) || !g.componentsDiffed.filter(nonBlank).length) return 'reported run, named no `componentsDiffed`'
-  return null
+  return componentsMiss(g)
 }
 // The UI-GUIDELINES answer as the verifier's instruction for that one id: file the record, file `false`, or file
 // NOTHING. It RENDERS the close-row decision and re-derives none of it, so the two surfaces cannot disagree and an
@@ -1766,7 +1779,11 @@ function guidelinesLine(g, miss, owes, fence) {
   if (miss) return `UI-guidelines: **NOT FILEABLE as returned** (${miss}) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
   const wrap = typeof fence === 'function' ? fence : String
   if (g.ran !== true) return `UI-guidelines: **reported NOT run** — file \`evidence[${JSON.stringify(g.evidenceId)}] = false\`. Reason given: ${wrap(String(g.notRunWhy ?? '').slice(0, 240))}`
-  const comps = g.componentsDiffed.filter(nonBlank)
+  const comps = (Array.isArray(g.componentsDiffed) ? g.componentsDiffed : []).filter(nonBlank)
+  if (!comps.length) {
+    if (!nonBlank(g.noChangesReason)) return `UI-guidelines: **NOT FILEABLE as returned** (noChangesReason is blank) — file NOTHING for this page's quality-gates id and say so in \`notes\`. You never compose \`referencePage\` or \`components\`.`
+    return `UI-guidelines: RUN, NO CHANGES NEEDED — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": [], "noChangesReason": ${JSON.stringify(String(g.noChangesReason).slice(0, 400))} }\`.`
+  }
   return `UI-guidelines: RUN — file \`evidence[${JSON.stringify(g.evidenceId)}] = { "referencePage": ${JSON.stringify(g.referencePage)}, "components": ${JSON.stringify(comps)} }\`.`
 }
 // ENG-95470 / defect 4 — the `sectionRegistered` unit's OWN counted workplace bindings, rendered for Verify so it
@@ -3163,7 +3180,7 @@ WRITE THREE THINGS into ${BUILT_FILE}, and nothing else — the \`judge\` object
 2. \`reachability\` — for each applicable key, \`true\` ONLY after you confirmed the wiring on-stand, \`false\` when you confirmed it is absent, and OMIT the key when you did not check. Return what you wrote in \`reachabilityWritten\` as the strings 'true' / 'false' / 'unset'.
    - **\`sectionRegistered\` IS A COUNT, NOT A FLAG (ENG-95850 / B2).** Registering a section into a workplace does NOT unbind the one it was in, so \`true\` is the same answer for one binding and for two — and on a real run it hid a section left in BOTH "Recruiting" and "My applications". COUNT the workplace bindings this section actually has (its \`SysModuleInWorkplace\` rows) and write \`reachability.sectionRegistered = { "workplaces": <n>, "names": ["<workplace>", …], "source": "verified" }\`, \`n\` a real integer you counted, not a guess. The gate closes the row at exactly 1, reports 0 as unreachable, and reports 2+ by naming them. Write \`false\` only when you confirmed no registration exists, and OMIT the key if you could not count — an omitted key is ⚠ not-checked, which is honest; a \`true\` here is neither, and the row will ask you for the number anyway. **You COUNT and REPORT; you never unbind — removing a workplace binding is a stand deletion and not this run's to make.**
    - **CARRY THE BUILD UNIT'S OWN COUNT FORWARD (ENG-95470 / defect 4) — AND SAY SO IN \`source\`, NOT ONLY IN PROSE.** If the \`sectionRegistered\` unit ran this round, the claims block above (WHAT THE BUILD AGENTS CLAIMED) carries its OWN counted \`workplaceBindings\` line — write THAT count into \`reachability.sectionRegistered\` even when you could not (or did not get to) independently re-derive the count yourself this round: a run where ONLY your own on-stand check counted left the row at \`reachability: {}\` forever whenever that check was skipped or missed, despite the section being genuinely registered. When you do this, set \`"source": "carried-forward"\` on that same object — the gate reads this field and treats a carried-forward count as lower-trust than one you counted yourself, exactly because nobody independently confirmed it this round. If you DID independently count, set \`"source": "verified"\` regardless of what the claim said; if the two disagree, YOUR count wins and say so in \`notes\` (the claim is the build unit's report, not a second ground truth).
-3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
+3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. **Exception, \`#quality-gates\` ONLY (ENG-95471):** a page genuinely reviewed and found already compliant files \`components: []\` together with a non-blank \`noChangesReason\` — an empty list with neither \`false\` nor a reason is not a record, it is silence. For \`#quality-gates\`, the claims block above states PER UNIT what to file — the record, \`false\`, or nothing. Follow it: both fields come from that unit's builder, and you compose NEITHER. **A published \`#quality-gates\` id with NO line in that block means no builder answered for it this round — file NOTHING for it and say so in \`notes\`. You never invent a \`referencePage\`: being able to fetch the page is not evidence that a style diff was done against a reference page.** Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
 
 ${orphanBlock()}Then report \`discrepancies\`: where a builder CLAIMED a component and get-page does not show it, or the reverse. Record them — do not smooth them over.
 
@@ -3201,7 +3218,7 @@ EVIDENCE IDS TO RULE ON — every record filed in this run so far plus every rec
 For each id, READ the record under \`evidence["<id>"]\` and decide whether it actually proves the deliverable, then write \`judge["<id>"] = { "convincing": true|false, "why": "<one sentence>" }\`.
 
 WHAT "CONVINCING" MEANS — a real bar, not a formality:
-- a \`#quality-gates\` record must name a SHIPPED reference page AND the components that were prop-diffed against it. A claim about how a field BINDS — its control, its data-source path — is checkable against that page's viewModelConfig entry in the built file: read it before you accept or reject such a claim, and say which fields you checked. A live run rejected a record here because it claimed every field bound $PDS_<Column> while only 2 of 16 did; that rejection was only possible because the binding data was in the file. "Native components used", "style parity is inherent", "looks fine", "the template handles it", and a record covering only some of the pages are NOT acceptance — mark those \`false\`.
+- a \`#quality-gates\` record must name a SHIPPED reference page AND the components that were prop-diffed against it. A claim about how a field BINDS — its control, its data-source path — is checkable against that page's viewModelConfig entry in the built file: read it before you accept or reject such a claim, and say which fields you checked. A live run rejected a record here because it claimed every field bound $PDS_<Column> while only 2 of 16 did; that rejection was only possible because the binding data was in the file. "Native components used", "style parity is inherent", "looks fine", "the template handles it", and a record covering only some of the pages are NOT acceptance — mark those \`false\`. **An EMPTY \`components\` with a \`noChangesReason\` (ENG-95471) is a different, legitimate shape — a page diffed and found already compliant** — and is judged on whether the reason actually names what was compared against the reference page (specific props/containers, not a restated "looks fine"); a vague or generic reason is NOT convincing, mark it \`false\` the same as an unsupported diff claim.
 - a \`#confirm:<kind>:<item>\` record must ANSWER that specific decision with what was queried or built, not restate the question.
 - a \`#childpage\` record must name the reference page the unfolded child was built from and the components it carries.
 - a record naming a component the built page does not carry is \`false\` — UNLESS a DIFFERENT component on the page genuinely performs the SAME action (ENG-95470 / defect 2, see below).

@@ -550,6 +550,22 @@ check("guidelinesCloseMiss: the row never holds a reachability or app unit",
   () => (gMiss({}, gIds, [], { key: "sectionRegistered", kind: "reach" }) === null
     && gMiss({}, gIds, [], { key: "app", kind: "app" }) === null));
 
+// --- ENG-95471 REOPEN — a page diffed and found ALREADY compliant (0 edits, identical to the reference) could not
+// file ANY record: `componentsDiffed` demanded a non-empty list, so the honest outcome was unfileable and the row
+// stayed a permanent ❌ MISSING across repair rounds. `noChangesNeeded: true` + `noChangesReason` is the answer for
+// exactly that outcome — never a substitute for a real diff when one is due.
+const gNoDiff = { evidenceId: "main#quality-gates", ran: true, referencePage: "ContactsListPage", componentsDiffed: [], noChangesNeeded: true, noChangesReason: "diffed QuickFilter and the command buttons against ContactsListPage — identical" };
+check("ENG-95471 reopen: `noChangesNeeded: true` WITH a reason answers the row — empty `componentsDiffed` is not silence when it is explicitly a no-drift finding",
+  () => (gMiss({ guidelines: gNoDiff }) === null));
+check("ENG-95471 reopen: `noChangesNeeded: true` with NO reason does not answer — the flag alone is not evidence",
+  () => (typeof gMiss({ guidelines: { ...gNoDiff, noChangesReason: undefined } }) === "string"
+    && typeof gMiss({ guidelines: { ...gNoDiff, noChangesReason: "   " } }) === "string"));
+check("ENG-95471 reopen: an empty `componentsDiffed` with NEITHER `noChangesNeeded` NOR a non-empty diff is still a miss — the concession never becomes a silent free pass",
+  () => (typeof gMiss({ guidelines: { ...gOk, componentsDiffed: [] } }) === "string"));
+check("ENG-95471 reopen: `noChangesNeeded` is ignored when a real diff IS present — a builder cannot set the flag to dodge naming what it actually diffed AND still have the diff count",
+  () => (gMiss({ guidelines: { ...gOk, noChangesNeeded: false } }) === null
+    && gMiss({ guidelines: { ...gOk, noChangesNeeded: true, noChangesReason: "" } }) === null));
+
 // --- guidelinesLine: the text that actually reaches the verifier, so every branch is asserted on the RENDERED
 // string. It renders the close-row decision; re-deriving it is how the two surfaces came to disagree.
 check("guidelinesLine: a unit that owes no record renders NOTHING — no instruction about an id that does not exist",
@@ -571,6 +587,10 @@ check("ENG-95471 review fix: a whitespace-only `referencePage` cannot reach a fi
 check("ENG-95471 review fix: a quote inside a builder value cannot reshape the filing instruction — values are JSON-quoted, not interpolated raw",
   () => { const t = wf.guidelinesLine({ ...gOk, referencePage: 'A" , "components": ["x' }, null, true, FENCE);
     return t.includes('"components": ["crt.Input"]') && (t.match(/"components":/g) || []).length === 1; });
+check("ENG-95471 reopen: a no-changes-needed record renders `components: []` plus the JSON-quoted `noChangesReason` — never confused with the run-and-diffed filing",
+  () => { const t = wf.guidelinesLine(gNoDiff, null, true, FENCE);
+    return t.includes('"components": []') && t.includes(JSON.stringify(gNoDiff.noChangesReason))
+      && t.includes("NO CHANGES NEEDED") && !t.includes("file NOTHING"); });
 
 check("ENG-95471 / ENG-95469: `guidelines` AND `selfCheck` are REQUIRED on the page build schema — optional `guidelines` let a builder close on silence, and A3's in-context gate (`selfCheck`) must run before a page reports complete",
   /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'\]/.test(wfSrc));
