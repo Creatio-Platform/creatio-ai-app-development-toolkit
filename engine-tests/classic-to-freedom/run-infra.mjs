@@ -152,7 +152,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock",
   // The verifier's per-round read-back scope, and the judge-queue re-file guard.
-  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason"];
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable"];
 // Non-function members of the same block. Exported so a prompt fragment is asserted against the SHIPPED text
 // rather than a copy of it in this file.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN"];
@@ -1429,6 +1429,59 @@ check("requeueSkipReason: an id with no `#` owner resolves against the whole id"
 check("requeueSkipReason: over a mixed list, every id resolves to exactly one outcome and the order holds",
   () => ["main#quality-gates", "list#quality-gates", "list#listpage:columns", "child:X#childpage"]
     .map((id) => skipWhy(id, ["child:X"], ["child:X", "list"])).join(",") === "settled,,,");
+
+// The round loop derives `touchedThisRound` and `filedBeforeRound` from `claims` and `state.evidenceFiled`, then
+// feeds them per id. Testing the predicates alone left that wiring uncovered: passing `builtThisRound` where
+// `touchedThisRound` belongs, or swapping the two lists, would have passed every case above.
+const wroteThisRound = ["main#quality-gates", "list#quality-gates", "child:X#childpage", "sectionRegistered#reach"];
+const roundClaims = [{ unit: "main" }, { unit: "list", noAnswer: true }];
+const filedOnFile = ["main#quality-gates", "list#quality-gates", "child:X#childpage"];
+const decide = (built, claimsIn) => wf.requeueDecisions(wroteThisRound, new Set(["main#quality-gates", "child:X#childpage"]), filedOnFile, built, claimsIn)
+  .map((d) => d.id + "=" + (d.why || "queue")).join(" ");
+check("requeueDecisions: derives both lists from the round inputs and returns one verdict per filed id",
+  () => decide(["main"], roundClaims) === "main#quality-gates=queue list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide(["main"], roundClaims));
+check("requeueDecisions: a no-answer unit is TOUCHED but not BUILT — its rejected id is released while an earned id elsewhere stays settled",
+  () => decide([], roundClaims) === "main#quality-gates=settled list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], roundClaims));
+check("requeueDecisions: with no claims at all, a unit that did not build keeps its filed record out of the queue",
+  () => decide([], undefined) === "main#quality-gates=settled list#quality-gates=refiled child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], undefined));
+check("requeueDecisions: an empty or absent `evidenceWritten` decides nothing rather than throwing",
+  () => wf.requeueDecisions(undefined, new Set(), [], [], []).length === 0 && wf.requeueDecisions([], new Set(), [], [], []).length === 0);
+
+// The table is the artifact the Verify agent reads, so its rendered text is asserted, not only the partition
+// logic behind it: a group under the wrong header, or the wrong empty-state branch, misinforms that agent.
+const renderTable = (fetchKeys, keys, schemas) => wf.verifierSchemaTable(fetchKeys, keys, schemas);
+check("verifierSchemaTable: the fetched keys render under FETCH THIS ROUND and the untouched ones under ALREADY ON FILE, each in its own group",
+  () => {
+    const t = renderTable(["main"], scopeKeys, scopeSchemas);
+    const fetchPart = t.slice(0, t.indexOf("ALREADY ON FILE"));
+    return fetchPart.includes("`main` → get-page `UsrApplicant_FormPage`")
+      && !fetchPart.includes("`list`")
+      && t.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+      && t.slice(t.indexOf("ALREADY ON FILE")).includes("`list`, `sectionRegistered`");
+  },
+  () => renderTable(["main"], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing to fetch with every key on file renders the already-on-file label, never `(none recorded yet)`",
+  () => {
+    const t = renderTable([], scopeKeys, scopeSchemas);
+    return t.includes("nothing to fetch this round") && !t.includes("(none recorded yet)") && t.includes("ALREADY ON FILE");
+  },
+  () => renderTable([], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing recorded anywhere renders `(none recorded yet)` with no ALREADY ON FILE group",
+  () => {
+    const t = renderTable([], scopeKeys, {});
+    return t.includes("(none recorded yet)") && !t.includes("ALREADY ON FILE") && t.includes("NO FREEDOM SCHEMA IS RECORDED FOR");
+  },
+  () => renderTable([], scopeKeys, {}));
+check("verifierSchemaTable: a key with no schema renders only under the unknown-schema line, never as a fetch target",
+  () => {
+    const t = renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    return t.slice(t.indexOf("NO FREEDOM SCHEMA IS RECORDED FOR")).includes("`orphan`")
+      && !t.slice(0, t.indexOf("ALREADY ON FILE")).includes("`orphan`");
+  },
+  () => renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas));
 
 // The read-back scope is a cost decision made from a report this script cannot verify, so it is logged.
 check("workflow: the read-back scope names the pages it did NOT re-read, and says so when it narrowed nothing",
