@@ -1618,8 +1618,15 @@ export function renderPlan(result, opts = {}) {
   // sees WHICH gated composites this run resolved (and against which registry) without opening the JSON. Rendered
   // only when the run gates a type — a run with no gated types has nothing to mirror (its artifact is `[]`).
   const resolvedGates = Array.isArray(result.resolvedGates) ? result.resolvedGates : [];
+  // One gate's rendered fragment, built with intermediate variables instead of a nested template literal (Sonar
+  // S4624): the optional `+ feature` segment is computed on its own line, so adding a future gate field stays a
+  // one-line change here rather than a deeper nesting at the call site.
+  const gateFragment = (g) => {
+    const feature = g.feature ? ` + feature \`${esc(g.feature)}\`` : "";
+    return `\`${esc(g.componentType)}\` → \`${esc(g.id)}\`${feature} (${esc(g.source)})`;
+  };
   const gateMirror = resolvedGates.length
-    ? [`**Resolved component gates:** ${resolvedGates.map((g) => `\`${esc(g.componentType)}\` → \`${esc(g.id)}\`${g.feature ? ` + feature \`${esc(g.feature)}\`` : ""} (${esc(g.source)})`).join("; ")} — machine-readable copy in the \`--resolved-gates\` artifact.`, ""]
+    ? [`**Resolved component gates:** ${resolvedGates.map(gateFragment).join("; ")} — machine-readable copy in the \`--resolved-gates\` artifact.`, ""]
     : [];
   P.push(
     "### Overview",
