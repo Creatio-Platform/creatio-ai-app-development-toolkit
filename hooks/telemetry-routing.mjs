@@ -145,6 +145,13 @@ function reportSessionUsage(payload, sessionId) {
 	if (payload?.stop_hook_active || !consentGranted()) {
 		return;
 	}
+	// A session with exactly one clio call never makes a SUBSEQUENT clio call, so routeClioCall's own
+	// retry loop — which only ever runs from there — never gets a chance to notice an async 'rejected'
+	// answer and retry it. Stop is the session's last opportunity: calling the same claim/retry
+	// primitive here can only ever WIN a claim no other process already holds (a no-op once the floor
+	// is recorded, pending, or already exhausted its FLOOR_ATTEMPT_LIMIT), never emit past the bound
+	// routeClioCall itself already respects.
+	attemptFloorEmission(sessionId, payload);
 	// Stop fires per response, so this runs many times per session. When the transcript has not grown
 	// since the last reading there is provably nothing new, so the file is not read or parsed at all —
 	// a stat instead of opening it at all. Everything past this point goes through the offset-based
@@ -201,6 +208,44 @@ function reportSessionUsage(payload, sessionId) {
 	}
 }
 
+// Claims the floor for this session if it is not already claimed (or already exhausted its
+// retries), dispatching the event on a freshly-won claim. Callable from more than one hook event —
+// a clio call and Stop both call it — because neither alone is guaranteed to be the LAST chance a
+// session gets: a session can end after exactly one clio call, with no later call to retry from.
+//
+// Each attempt is its own exclusively-created claim (`claimed`, `claimed-1`, `claimed-2`), so two
+// callers racing each other (two parallel clio calls, or a clio call racing this session's own Stop)
+// never both win the same attempt: releasing and re-claiming was two operations, and two hook
+// processes running in parallel — which Claude Code produces routinely by batching tool calls —
+// could interleave them so that both ended up holding a claim and both dispatched a floor event. An
+// over-counted floor is worse than an under-counted funnel, because every reliability ratio is
+// computed against it.
+function attemptFloorEmission(sessionId, payload) {
+	let attempt = 0;
+	let claimed = claimOnce(sessionId, floorClaimSuffix(attempt));
+	while (!claimed && attempt + 1 < FLOOR_ATTEMPT_LIMIT) {
+		if (!floorRetryable(sessionId, attempt)) {
+			return false;
+		}
+		// Deliberately NOT cleaned up here, unlike the usage path: floorRetryable() re-derives
+		// "was this attempt rejected" from THIS OUTCOME FILE on every call — there is no durable
+		// record of it anywhere else, since the floor has no equivalent of the usage marker's
+		// promoted-total write. Deleting it early would force later calls onto the weaker,
+		// GRACE-PERIOD-gated 'none' path instead, which is slower and (measured while writing this)
+		// stalls the retry loop entirely once a later attempt's claim file already exists. Left for
+		// the weekly sweep — at most FLOOR_ATTEMPT_LIMIT pairs per session, not per dispatch.
+		attempt += 1;
+		claimed = claimOnce(sessionId, floorClaimSuffix(attempt));
+	}
+	if (claimed) {
+		// Dispatched whether or not the routing reaches the agent: if clio refuses the call (an older
+		// clio, a broken install), the agent's own stages are then the only telemetry there is. The
+		// outcome is read on a later call rather than awaited here — see dispatch().
+		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started', floorNonce(attempt));
+	}
+	return claimed;
+}
+
 // A clio MCP call: the floor event, and the routing the agent needs to build a funnel on top of it.
 function routeClioCall(payload, sessionId) {
 	const toolName = String(payload?.tool_name ?? '');
@@ -238,37 +283,13 @@ function routeClioCall(payload, sessionId) {
 		// would interrupt the developer's task with a question they did not ask for.
 		return;
 	}
-	// Each attempt is its own exclusively-created claim (`claimed`, `claimed-1`, `claimed-2`), so a
-	// retry never deletes a claim another process may have just taken. Releasing and re-claiming was
-	// two operations: two hook processes running in parallel — which Claude Code produces routinely by
-	// batching tool calls — could interleave them so that both ended up holding a claim and both
-	// dispatched a floor event. An over-counted floor is worse than an under-counted funnel, because
-	// every reliability ratio is computed against it.
-	let attempt = 0;
-	let floorClaimed = claimOnce(sessionId, floorClaimSuffix(attempt));
-	while (!floorClaimed && attempt + 1 < FLOOR_ATTEMPT_LIMIT) {
-		if (!floorRetryable(sessionId, attempt)) {
-			break;
-		}
-		// Deliberately NOT cleaned up here, unlike the usage path: floorRetryable() re-derives
-		// "was this attempt rejected" from THIS OUTCOME FILE on every call — there is no durable
-		// record of it anywhere else, since the floor has no equivalent of the usage marker's
-		// promoted-total write. Deleting it early would force later calls onto the weaker,
-		// GRACE-PERIOD-gated 'none' path instead, which is slower and (measured while writing this)
-		// stalls the retry loop entirely once a later attempt's claim file already exists. Left for
-		// the weekly sweep — at most FLOOR_ATTEMPT_LIMIT pairs per session, not per dispatch.
-		attempt += 1;
-		floorClaimed = claimOnce(sessionId, floorClaimSuffix(attempt));
-	}
+	const floorClaimed = attemptFloorEmission(sessionId, payload);
+	// The floor claim above is independent of the routing reminder below: over-counting the floor
+	// is worse than under-counting the funnel, because every reliability ratio is computed against
+	// it, so the two are claimed separately rather than as one combined decision.
 	const remind = claimOnce(sessionId, 'turn') || (isWriteCall(payload) && claimOnce(sessionId, 'write'));
 	if (!floorClaimed && !remind) {
 		return;
-	}
-	if (floorClaimed) {
-		// Dispatched whether or not the routing reaches the agent: if clio refuses the call (an older
-		// clio, a broken install), the agent's own stages are then the only telemetry there is. The
-		// outcome is read on a later call rather than awaited here — see dispatch().
-		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started', floorNonce(attempt));
 	}
 	const routing = remind ? routingOutput(sessionId) : null;
 	if (routing) {

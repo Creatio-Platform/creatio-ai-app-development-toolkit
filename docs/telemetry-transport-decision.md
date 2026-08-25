@@ -53,6 +53,17 @@ resolution on both sides. That narrower half is covered by
 three places: here, and once in each implementation.** The token-splitting half is Python-only and has
 no hook-side equivalent to keep in sync.
 
+**The trust boundary this existence check does NOT close, on either side:** `CLIO_IS_SAFE` (and
+`mcp_client.py`'s `is_file()`) confirm the configured path resolves to a file, not that the file at
+that path is actually clio. Both the hook (wired into `PostToolUse`/`UserPromptSubmit`/`Stop`, so it
+spawns on nearly every turn) and the runtime script trust whatever binary already sits at a
+developer- or installer-configured path the moment it exists there — a hijacked or stale file at that
+location is executed exactly as the real clio would be. This is accepted, not overlooked: the
+configured path is install-time, developer-controlled input, the same trust level every tool the
+developer's PATH resolves to already carries, and verifying identity (a signature, a pinned hash)
+would need clio to ship one to check against, which it does not today. Raised in review of PR #96;
+tracked as a follow-up rather than a blocker for that reason.
+
 ## The floor's exactly-once contract
 
 `workflow_started` is the denominator every reliability ratio in this system is computed against, so

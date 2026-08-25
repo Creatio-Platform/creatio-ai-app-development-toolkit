@@ -1906,6 +1906,113 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "")
 
 
+class TelemetryStateDirSecurityTests(unittest.TestCase):
+    """Two security-relevant checks inside hooks/telemetry/state-dir.mjs that the full-hook
+    black-box tests above never exercise directly: sanitizeSessionId()'s path-traversal
+    allow-list, and assertStateDirIsOurs()'s ownership/symlink guard.
+
+    The module split that created hooks/telemetry/state-dir.mjs is what makes this possible at
+    all: these are now real importable functions rather than closures inside one 1400-line
+    script, so a small Node probe script can call them directly instead of going through the
+    full hook's stdin/stdout. Each probe runs in its OWN private temp root — never the suite's
+    shared `_TMP` — so a deliberately hostile state directory here can never affect any other
+    test's marker files.
+    """
+
+    def _run_probe(self, import_line: str, expression: str, tmp_root: str) -> dict:
+        module = (ROOT / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
+        script = Path(tmp_root) / "probe.mjs"
+        script.write_text(
+            f"import {{ {import_line} }} from {json.dumps(module)};\n"
+            f"process.stdout.write(JSON.stringify({expression}));\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [NODE, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**_base_env(), "TMPDIR": tmp_root, "TMP": tmp_root, "TEMP": tmp_root},
+        )
+        self.assertEqual(result.stderr, "", result.stderr)
+        return json.loads(result.stdout)
+
+    def test_sanitize_session_id_strips_path_traversal_and_stays_inside_the_state_dir(self):
+        # markerPath() and transcriptPath() both interpolate sanitizeSessionId()'s output
+        # straight into a filesystem path with no further check, so the allow-list IS the
+        # entire defense against an attacker-controlled session_id escaping the state
+        # directory. Pure functions, no filesystem writes, so this needs no isolated tmp root.
+        if not NODE:
+            self.skipTest("node not available")
+        attempts = [
+            "normal-session-id",
+            "../../etc/passwd",
+            "..\\..\\windows\\system32",
+            "C:\\Users\\someone\\session",
+            "\\\\server\\share\\session",
+            "a/b/../../../c",
+        ]
+        script = Path(tempfile.mkdtemp(prefix="caadt-sanitize-test-", dir=_TMP)) / "probe.mjs"
+        module = (ROOT / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
+        attempts_literal = json.dumps(attempts)
+        script.write_text(
+            f"import {{ markerPath }} from {json.dumps(module)};\n"
+            "import path from 'node:path';\n"
+            f"const ids = {attempts_literal};\n"
+            "process.stdout.write(JSON.stringify(ids.map(id => {\n"
+            "  const full = markerPath(id, 'scan');\n"
+            "  return { dir: path.dirname(full), base: path.basename(full) };\n"
+            "})));\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [NODE, str(script)], capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.stderr, "", result.stderr)
+        entries = json.loads(result.stdout)
+        # Every id, however hostile, resolves inside the SAME single directory — none of them
+        # produced a `..` or a path separator that escaped markerPath()'s own path.join.
+        dirs = {entry["dir"] for entry in entries}
+        self.assertEqual(len(dirs), 1, entries)
+        for entry in entries:
+            self.assertNotIn("..", entry["base"], entry)
+            self.assertNotIn("/", entry["base"], entry)
+            self.assertNotIn("\\", entry["base"], entry)
+
+    def test_a_symlinked_state_directory_is_rejected(self):
+        # The exact TOCTOU gap the comment above stateDir()'s mkdirSync call describes: a
+        # symlink pre-planted at the predictable state-dir path must not be silently followed
+        # and used. Checked on every OS, including Windows, which is why this does not skip
+        # where process.getuid is unavailable — see the POSIX-only mode test below for the half
+        # that does.
+        if not NODE:
+            self.skipTest("node not available")
+        tmp_root = tempfile.mkdtemp(prefix="caadt-symlink-test-")
+        elsewhere = tempfile.mkdtemp(prefix="caadt-symlink-target-")
+        state_dir = Path(tmp_root) / "caadt-telemetry-routing"
+        try:
+            state_dir.symlink_to(elsewhere, target_is_directory=True)
+        except OSError:
+            self.skipTest("cannot create a directory symlink in this environment")
+        result = self._run_probe("ensureStateDir", "{ ok: ensureStateDir() }", tmp_root)
+        self.assertEqual(result, {"ok": False})
+
+    def test_a_wrongly_permissioned_state_directory_is_rejected_on_posix(self):
+        # The POSIX-only half: process.getuid is unavailable on Windows, so this half of
+        # assertStateDirIsOurs() cannot run there by design — the symlink check above is what
+        # covers Windows instead.
+        if os.name != "posix":
+            self.skipTest("POSIX-only: process.getuid is unavailable on Windows")
+        if not NODE:
+            self.skipTest("node not available")
+        tmp_root = tempfile.mkdtemp(prefix="caadt-mode-test-")
+        state_dir = Path(tmp_root) / "caadt-telemetry-routing"
+        state_dir.mkdir()
+        os.chmod(state_dir, 0o755)  # too permissive; stateDir() itself requests 0o700
+        result = self._run_probe("ensureStateDir", "{ ok: ensureStateDir() }", tmp_root)
+        self.assertEqual(result, {"ok": False})
+
+
 class CursorTelemetryHookWiringTests(unittest.TestCase):
     """Cursor is the one host whose hook config the installer can write itself."""
 
