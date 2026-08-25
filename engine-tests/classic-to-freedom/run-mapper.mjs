@@ -9113,6 +9113,23 @@ try {
     Array.isArray(ungatedRun.resolvedGates) && ungatedRun.resolvedGates.length === 0
     && !/Resolved component gates:/.test(ungatedRun.plan),
     () => ungatedRun.resolvedGates);
+  // ENG-95683 (item 1/R2, the REALISTIC vendored path): the R2 tests above force a stand-export so the gated type
+  // MISSES the registry; a real run carries NO `manifest.componentRegistry` and resolves against the VENDORED index,
+  // where the canonical gated composites are PRESENT (no miss). resolvedGates must STILL carry the gate — it is a
+  // property of the type, not of the registry the run resolved against — else the artifact and the plan mirror ship
+  // empty by default (the false negative two reviewers caught). `source` is `vendored-union` here, not `stand-export`.
+  // Gathering only from the findings loop (the pre-fix behavior) makes this EMPTY and fails here.
+  const vendoredGatedRun = gmRun(compOnlyDetail, compOnlyDetails); // NO componentRegistry → vendored index
+  check("ENG-95683 (item 1/R2): on the DEFAULT vendored path (no manifest.componentRegistry), resolvedGates STILL carries the run's gated composite — {componentType,kind,id,feature,source:'vendored-union'} — and the plan mirror renders",
+    Array.isArray(vendoredGatedRun.resolvedGates) && vendoredGatedRun.resolvedGates.length === 1
+    && vendoredGatedRun.resolvedGates[0].componentType === "crt.CommunicationOptions"
+    && vendoredGatedRun.resolvedGates[0].id === "CrtCustomer360App"
+    && vendoredGatedRun.resolvedGates[0].feature === "CommonCommunicationsBehavior"
+    && vendoredGatedRun.resolvedGates[0].source === "vendored-union"
+    && /\*\*Resolved component gates:\*\*/.test(vendoredGatedRun.plan)
+    && /crt\.CommunicationOptions/.test(vendoredGatedRun.plan) && /CrtCustomer360App/.test(vendoredGatedRun.plan),
+    () => ({ resolvedGates: vendoredGatedRun.resolvedGates, mirror: /Resolved component gates/.test(vendoredGatedRun.plan) }));
+
   // ENG-95683 (item 1/R2): the plan.md gate MIRROR with MULTIPLE resolved gates — the `; ` join, the order, and the
   // per-gate OPTIONAL `feature` segment (present on one, absent on the other). The single-gate run above never
   // exercises `resolvedGates.map(...).join("; ")`. renderPlan is deterministic and the mirror reads only

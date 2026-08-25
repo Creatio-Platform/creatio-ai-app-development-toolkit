@@ -73,8 +73,8 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
-import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
-import { GATE_KIND } from "./mapping-table.mjs";
+import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
+import { GATE_KIND, gateForComponentType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
@@ -1963,6 +1963,49 @@ export function registrySettleGuidance(finding) {
   return "this is not a package-install away — fix the mapping or the plan and re-run `--plan --out` before building.";
 }
 
+// ENG-95683 (item 1) — the RESOLVED gate set this run emits: EVERY gated type the run puts on the page, resolved
+// through the mapping table (`gateForComponentType`), NOT only the subset that also MISSED the resolved registry.
+// A gate is a property of the TYPE (its required package/feature), independent of whether the registry the run
+// happened to resolve against lists the type — so on the DEFAULT vendored path (where the canonical gated composites
+// are present, hence produce no registry-target MISS) the `--resolved-gates` artifact and the plan.md mirror still
+// carry them. Gathering only from the findings loop made both empty on that default path — the false negative
+// ENG-95683 reviewers caught. `source` is the registry provenance (a REG_SOURCE_NOTE key), `kind`/`id`/`feature`
+// the typed gate; `runTypes` already dedupes, so each gated type appears once. Extracted from reportRegistryFindings
+// (Sonar S3776) so the gate collection and the parent's registry-finding loop are each independently readable.
+function collectResolvedGates(changeSet, source) {
+  const gates = [];
+  for (const [ctype] of runTypes(changeSet)) {
+    const gate = gateForComponentType(ctype);
+    if (gate)
+      gates.push({ componentType: ctype, kind: gate.kind, id: gate.id,
+        ...(gate.feature ? { feature: gate.feature } : {}), source });
+  }
+  return gates;
+}
+// ENG-95683 (item 2) — the compositeOnly ADVISORY, computed by `validateRun` and (until this feature) discarded. A
+// compositeOnly type deliberately carries NO gate: the platform assembles it as part of a composite and it has no
+// Designer toolbar entry, so it cannot be inserted directly. Surface each as a `registry-composite-only`
+// needsDecision item with GENERIC guidance — reach it through its composite host/recipe — NOT install/enable text:
+// on the failing run the package WAS installed and the feature enabled, so an install/enable instruction would
+// have been wrong. (Absent a gate, `registrySettleGuidance` is not called here.)
+//
+// SCOPE — only a compositeOnly type the BUILD AGENT must place STANDALONE (a standard-feature / profile-card
+// deliverable). A compositeOnly type the ENGINE already positioned in the view (`viewConfigDiff` / `tableElements`
+// — every container and field, e.g. `crt.TabContainer` / `crt.HeaderContainer`, most of which are compositeOnly)
+// needs no "reach it via its host" advice: the engine placed it, the agent never drags it from a toolbar. Surfacing
+// those would flood the worklist (the majority of registry types are compositeOnly) and blame the operator for a
+// type the engine chose — the same rule the registry-target check already honours. Extracted from
+// reportRegistryFindings (Sonar S3776) alongside `collectResolvedGates`.
+function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
+  const enginePositioned = new Set();
+  for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
+  for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
+  for (const a of regRun.advisories || []) {
+    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType)) continue;
+    changeSet.needsDecision.push({ kind: "registry-composite-only", item: a.componentType,
+      reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${sourceNote}.` });
+  }
+}
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
 // that function's nesting weight. Exported (like `buildCoverage` / `registrySettleGuidance`) so a test can drive
@@ -2003,10 +2046,6 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   };
   if (reg.source === "unreadable-export")
     changeSet.needsDecision.push({ kind: "registry-source", item: "componentRegistry", reason: REG_SOURCE_NOTE["unreadable-export"] });
-  // ENG-95683 (item 1) — the RESOLVED gate set this run gathered, echoed into a durable machine-readable artifact by
-  // the CLI (`--resolved-gates <file>`) and mirrored as one provenance line in plan.md. Collected here, at the one
-  // place `f.gate` is known, so the artifact carries exactly the gates the findings below report on — no re-derivation.
-  const resolvedGates = [];
   for (const f of regRun.findings) {
     const where = f.presentIn ? ` (the registry carries it in ${f.presentIn.join(", ")})` : "";
     // The verdict clause is its own statement: the two arms differ (one names no version at all), and nesting the
@@ -2018,35 +2057,9 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
     // let the SETTLE clause say the actionable fix for THIS cause instead of one blanket sentence for every miss.
     changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
       reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
-    // ENG-95683 (item 1) — gather the resolved gate for a gated finding. `source` is the REGISTRY the presence check
-    // resolved against (REG_SOURCE_NOTE key), the run-time provenance of the answer; `kind`/`id`/`feature` are the
-    // typed gate the mapping table resolved for the type. `feature` is carried only when the gate names one.
-    if (f.gate)
-      resolvedGates.push({ componentType: f.componentType, kind: f.gate.kind, id: f.gate.id,
-        ...(f.gate.feature ? { feature: f.gate.feature } : {}), source: reg.source });
   }
-  // ENG-95683 (item 2) — the compositeOnly ADVISORY, until now computed by `validateRun` and discarded here. A
-  // compositeOnly type deliberately carries NO gate: the platform assembles it as part of a composite and it has no
-  // Designer toolbar entry, so it cannot be inserted directly. Surface each as a `registry-composite-only`
-  // needsDecision item with GENERIC guidance — reach it through its composite host/recipe — NOT install/enable text:
-  // on the failing run the package WAS installed and the feature enabled, so an install/enable instruction would
-  // have been wrong. (Absent a gate, `registrySettleGuidance` is not called here.)
-  //
-  // SCOPE — only a compositeOnly type the BUILD AGENT must place STANDALONE (a standard-feature / profile-card
-  // deliverable). A compositeOnly type the ENGINE already positioned in the view (`viewConfigDiff` / `tableElements`
-  // — every container and field, e.g. `crt.TabContainer` / `crt.HeaderContainer`, most of which are compositeOnly)
-  // needs no "reach it via its host" advice: the engine placed it, the agent never drags it from a toolbar. Surfacing
-  // those would flood the worklist (the majority of registry types are compositeOnly) and blame the operator for a
-  // type the engine chose — the same rule the registry-target check already honours.
-  const enginePositioned = new Set();
-  for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
-  for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
-  for (const a of regRun.advisories || []) {
-    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType)) continue;
-    changeSet.needsDecision.push({ kind: "registry-composite-only", item: a.componentType,
-      reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${REG_SOURCE_NOTE[reg.source]}.` });
-  }
-  return resolvedGates;
+  buildCompositeOnlyDecisions(changeSet, regRun, REG_SOURCE_NOTE[reg.source]);
+  return collectResolvedGates(changeSet, reg.source);
 }
 
 export function runMigration(manifest, opts = {}) {
