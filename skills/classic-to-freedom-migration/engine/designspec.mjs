@@ -3084,14 +3084,17 @@ function resolveOnstandCountVk(vk, v) {
       ? `registered, but the BINDING COUNT was not reported — a move only ADDS, so \`true\` cannot tell one binding from two; supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\` with the rows you actually counted`
       : `not confirmed — supply \`built.reachability.${vk.evidence} = { "workplaces": <n>, "names": [...] }\`, the number of workplace bindings this section actually has`, "unverified"];
   }
-  if (n === want) {
-    if (onstandSource(v) === "carried-forward") {
-      return ["⚠ verify", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)} — but this count is CARRIED FORWARD from the build unit's own claim, not independently confirmed by Verify this round; re-run the on-stand check to close this row for real`, "unverified"];
-    }
-    return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
-  }
+  if (n === want) return resolveOnstandExactMatch(want, v);
   if (n === 0) return ["❌ MISSING", `bound to NO workplace${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["❌ MISSING", `bound to ${n} workplaces${onstandNames(v)}, expected exactly ${want} — a registration only ADDS, so the previous binding is still there; unbind all but the intended one (this row REPORTS it, the build does not undo it on its own)`, "missing"];
+}
+// ENG-95470 (defect 4 review) — split out of `resolveOnstandCountVk` so that function stays under Sonar CC 15.
+// The count matches what the row wants; whether that closes the row depends on WHERE the count came from.
+function resolveOnstandExactMatch(want, v) {
+  if (onstandSource(v) === "carried-forward") {
+    return ["⚠ verify", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)} — but this count is CARRIED FORWARD from the build unit's own claim, not independently confirmed by Verify this round; re-run the on-stand check to close this row for real`, "unverified"];
+  }
+  return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
 }
 function resolveOnstandVk(vk, ctx) {
   const v = reachabilityValue(ctx.root, vk.evidence);
