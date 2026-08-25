@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import attempts as attempts_mod
 import export as export_mod
 import metrics
 import parsing
@@ -164,31 +165,101 @@ class ReconcileRow:
     tool_calls_meta: Optional[int]
     tool_calls_seen: int
     run_id: Optional[str] = None   # opaque workflow run-id, kept for traceability
+    # None only for a row built without classification (e.g. a hand-made row in
+    # a test); an unreadable run file still yields an Attribution, unclassified.
+    attribution: Optional[attempts_mod.Attribution] = None
 
     @property
     def agents_ok(self) -> bool:
-        return self.agents_meta is None or self.agents_meta == self.agents_seen
+        # A resumed or killed run legitimately holds more transcripts than its
+        # record accounts for -- the run file is rewritten per attempt, so the
+        # leftovers of earlier attempts are never in it. That is an explained
+        # surplus, not a discrepancy, so long as attribution accounts for every
+        # extra file. An unexplained gap still fails.
+        if self.agents_meta is None:
+            return True
+        if self.agents_meta == self.agents_seen:
+            return True
+        return self.explained
+
+    @property
+    def explained(self) -> bool:
+        """True when an interrupted run accounts for its surplus transcripts.
+
+        Note this deliberately does NOT check that the three classes add up to
+        ``agents_seen``: they are derived from the same file list, so that sum is
+        an identity and would verify nothing. What can genuinely fail is the run
+        file's internal consistency -- ``agentCount`` against the number of
+        ``workflowProgress`` entries. A record that disagrees with itself leaves
+        the surplus unexplained no matter how the transcripts classify.
+        """
+        attribution = self.attribution
+        if attribution is None or not attribution.classified:
+            return False
+        if not attribution.interrupted:
+            return False
+        return attribution.record_consistent
+
+    @property
+    def note(self) -> Optional[str]:
+        """One-line explanation of a count gap, or None when the counts agree."""
+        if self.agents_meta is None or self.agents_meta == self.agents_seen:
+            return None
+        if self.agents_meta > self.agents_seen:
+            # Fewer transcripts than the record claims ran: a truncated or
+            # partially-copied export, not a resume. Naming it a surplus would
+            # tell the reader the opposite of what happened.
+            missing = self.agents_meta - self.agents_seen
+            return f"{missing} transcript(s) missing from the export"
+        if not self.explained:
+            return "unexplained surplus"
+        counts = self.attribution.counts
+        return (f"{self.attribution.how}: {counts[attempts_mod.LEFTOVER]} "
+                "leftover transcript(s); meta counts cover the surviving attempt only")
 
     @property
     def tool_calls_ok(self) -> bool:
-        return self.tool_calls_meta is None or self.tool_calls_meta == self.tool_calls_seen
+        # On an interrupted run ``totalToolCalls`` and the seen count are not
+        # comparable, so an explained surplus must not be reported as a failed
+        # cross-check. See ``tool_calls_comparable``: the suppression is
+        # deliberate and the figure is rendered n/a rather than ok, because
+        # nothing here verifies it.
+        if self.tool_calls_meta is None:
+            return True
+        if self.tool_calls_meta == self.tool_calls_seen:
+            return True
+        return self.explained
+
+    @property
+    def tool_calls_comparable(self) -> bool:
+        """False when the two tool-call counts are on different bases.
+
+        Do NOT "improve" this by comparing ``totalToolCalls`` against the
+        live-only subtotal. That matches on trivial workflows and fails on real
+        ones: on the ENG-95941 reference export the run file reports 144 while
+        the live transcripts hold 103, live+replayed 409 and all 41 transcripts
+        1089 -- it matches no subset. Like ``totalTokens``, ``totalToolCalls`` is
+        on its own accounting basis once a run has been interrupted. An
+        uninterrupted workflow in the same export reconciles exactly (83/83).
+        """
+        if self.tool_calls_meta is None or self.tool_calls_meta == self.tool_calls_seen:
+            return True
+        return not self.explained
 
 
-def _read_meta(path: str) -> tuple[Optional[int], Optional[int]]:
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            data = json.load(handle)
-    except Exception:
-        return (None, None)
-    # A meta file that is valid JSON but not an object (e.g. ``null`` or a bare
-    # array) must degrade to (None, None), not raise on ``.get`` -- callers treat
-    # a missing/unreadable meta as "no counts recorded".
-    if not isinstance(data, dict):
-        return (None, None)
-    return (data.get("agentCount"), data.get("totalToolCalls"))
+def _run_records(session: export_mod.SessionExport) -> dict:
+    """run-id -> RunRecord, read once per workflow and shared by every consumer.
+
+    Stage labels, execution order, reconcile counts and attempt attribution all
+    come out of the same ``workflows/<wf>.json``. Reading it in one place means
+    the degrade-on-malformed-JSON path (absent / unparseable / valid-but-not-an-
+    object) cannot drift between them: every consumer sees ``readable=False``
+    and falls back the same way.
+    """
+    return {wf.name: attempts_mod.read_run_record(wf.meta_json) for wf in session.workflows}
 
 
-def _workflow_labels(session: export_mod.SessionExport) -> dict:
+def _workflow_labels(session: export_mod.SessionExport, records: dict) -> dict:
     """Human-friendly stage label per workflow, read from the workflow meta.
 
     ``workflows/<wf>.json`` carries ``workflowName`` (e.g.
@@ -198,7 +269,9 @@ def _workflow_labels(session: export_mod.SessionExport) -> dict:
     build rounds), the repeats are numbered ``round 1/2/3`` in start-time order.
     Anything without a readable name falls back to its raw run id.
     """
-    info = {wf.name: _workflow_name_start(wf) for wf in session.workflows}
+    info = {wf.name: (records[wf.name].workflow_name,
+                      records[wf.name].start_time or records[wf.name].timestamp)
+            for wf in session.workflows}
     round_no = _round_numbers(info)
 
     labels: dict = {}
@@ -211,24 +284,6 @@ def _workflow_labels(session: export_mod.SessionExport) -> dict:
             friendly = f"{friendly} · round {round_no[run_id]}"
         labels[run_id] = friendly
     return labels
-
-
-def _workflow_name_start(workflow) -> tuple:
-    """(workflowName, startTime) from a workflow's meta json, (None, None) if absent."""
-    if not workflow.meta_json:
-        return (None, None)
-    try:
-        with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
-            data = json.load(handle)
-    except Exception:
-        return (None, None)
-    # Valid-but-non-object JSON (``null`` / array) degrades to (None, None) so the
-    # run still renders against the raw run id, matching _workflow_sort_key and
-    # _read_meta. Without this guard ``.get`` raises and every section fails,
-    # because _workflow_labels runs in Report.__init__.
-    if not isinstance(data, dict):
-        return (None, None)
-    return (data.get("workflowName"), data.get("startTime") or data.get("timestamp"))
 
 
 def _round_numbers(info: dict) -> dict:
@@ -250,19 +305,13 @@ def _round_numbers(info: dict) -> dict:
     return round_no
 
 
-def _workflow_sort_key(workflow) -> tuple:
+def _workflow_sort_key(workflow, records: dict) -> tuple:
     """Execution order: sort workflows by their `startTime` (epoch ms) from the
     meta, so stages read in the order they actually ran (behaviour-analysis,
     build round 1, 2, 3 …) rather than by the opaque run-id directory name.
     Workflows without a numeric start time sort last, then by name for stability.
     """
-    start = None
-    if workflow.meta_json:
-        try:
-            with open(workflow.meta_json, encoding="utf-8", errors="replace") as handle:
-                start = json.load(handle).get("startTime")
-        except Exception:
-            pass
+    start = records[workflow.name].start_time
     if isinstance(start, (int, float)):
         return (0, start, workflow.name)
     return (1, 0, workflow.name)
@@ -317,10 +366,27 @@ class Report:
                     agent_file, workflow.tool_results_dir
                 )
 
+        # Every consumer of workflows/<wf>.json reads it through this one dict.
+        self._records = _run_records(session)
+
+        # Which transcripts the surviving run's record accounts for, per workflow.
+        # A resumed or killed run leaves transcripts behind that no record claims;
+        # classifying them here keeps the plain sums intact while letting the
+        # report say what the leftovers are instead of reporting a bare mismatch.
+        self.attribution: dict = {}
+        for workflow in session.workflows:
+            self.attribution[workflow.name] = attempts_mod.attribute(
+                workflow.agent_files,
+                self._records[workflow.name],
+                attempts_mod.produced_result_ids(workflow.journal),
+            )
+
         # human-friendly stage labels (workflowName + round #), not raw run ids
-        self.workflow_labels = _workflow_labels(session)
+        self.workflow_labels = _workflow_labels(session, self._records)
         # execution order (by startTime), so stages read the way the run happened
-        self._ordered_workflows = sorted(session.workflows, key=_workflow_sort_key)
+        self._ordered_workflows = sorted(
+            session.workflows, key=lambda wf: _workflow_sort_key(wf, self._records)
+        )
 
         # per-stage aggregates
         self.stage_aggs: list[tuple[str, TranscriptAgg]] = []
@@ -390,7 +456,7 @@ class Report:
         number of built pages (a run that builds more pages costs more)."""
         pages = self.page_count()
         weighted = self.weighted_total()
-        return {
+        payload = {
             "weighted_total": weighted,
             "weighted_per_page": weighted / pages,
             "page_count": pages,
@@ -410,22 +476,87 @@ class Report:
             "effective_w": self.effective_w,
             "counter_version": COUNTER_VERSION,
         }
+        # Attempt keys appear ONLY for an export that was resumed or killed, so
+        # an ordinary run's payload is unchanged by this feature.
+        if self.interrupted:
+            surviving, leftover = self.leftover_totals()
+            counts = {attempts_mod.LIVE: 0, attempts_mod.REPLAYED: 0, attempts_mod.LEFTOVER: 0}
+            nothing = 0
+            outcomes_known = True
+            for attribution in self.attribution.values():
+                for kind, value in attribution.counts.items():
+                    counts[kind] += value
+                nothing += len(attribution.produced_nothing)
+                outcomes_known = outcomes_known and attribution.outcomes_known
+            payload["attempts"] = {
+                "interrupted": True,
+                "live_agents": counts[attempts_mod.LIVE],
+                "replayed_agents": counts[attempts_mod.REPLAYED],
+                "leftover_agents": counts[attempts_mod.LEFTOVER],
+                # Weighted cost of the transcripts no record claims. Still part
+                # of the run total above -- this names it, it does not remove it.
+                "leftover_weighted": self._weighted(leftover),
+                "surviving_weighted": self._weighted(surviving),
+                # Transcripts whose agent never wrote a journal `result`: spend
+                # that produced nothing. None when no journal was readable.
+                "produced_nothing_agents": nothing if outcomes_known else None,
+                # The harness's own figure for the surviving attempt's live
+                # agents. Read, never recomputed: it is on a different accounting
+                # basis from transcript sums and the two do not reconcile.
+                "run_file_total_tokens": {
+                    run_id: a.total_tokens
+                    for run_id, a in self.attribution.items() if a.interrupted
+                },
+            }
+        return payload
 
     def reconcile(self) -> list[ReconcileRow]:
         rows = []
         for workflow in self._ordered_workflows:
-            agents_meta = tool_calls_meta = None
-            if workflow.meta_json:
-                agents_meta, tool_calls_meta = _read_meta(workflow.meta_json)
+            record = self._records[workflow.name]
             tool_calls_seen = 0
             for agent_file in workflow.agent_files:
                 tool_calls_seen += sum(self._agent_aggs[agent_file].tool_calls.values())
             rows.append(ReconcileRow(
                 self.workflow_labels.get(workflow.name, workflow.name),
-                agents_meta, len(workflow.agent_files),
-                tool_calls_meta, tool_calls_seen, run_id=workflow.name,
+                record.agent_count, len(workflow.agent_files),
+                record.tool_calls, tool_calls_seen, run_id=workflow.name,
+                attribution=self.attribution.get(workflow.name),
             ))
         return rows
+
+    @property
+    def interrupted(self) -> bool:
+        """True when any workflow was resumed or killed, so leftovers exist."""
+        return any(a.interrupted for a in self.attribution.values())
+
+    def attempt_rows(self) -> list:
+        """(stage label, Attribution) for workflows that were resumed or killed.
+
+        Empty for an ordinary run, which is what keeps the report byte-identical
+        for exports that were never interrupted.
+        """
+        return [
+            (self.workflow_labels.get(wf.name, wf.name), self.attribution[wf.name])
+            for wf in self._ordered_workflows
+            if self.attribution[wf.name].interrupted
+        ]
+
+    def leftover_totals(self) -> tuple:
+        """(surviving TranscriptAgg, leftover TranscriptAgg) across every workflow.
+
+        Both are plain sums of the transcripts in each class; together they equal
+        the run total, so no spend is hidden by the split.
+        """
+        surviving, leftover = TranscriptAgg(), TranscriptAgg()
+        for workflow in self._ordered_workflows:
+            attribution = self.attribution[workflow.name]
+            for agent_file in workflow.agent_files:
+                target = (leftover
+                          if attribution.classes.get(agent_file) == attempts_mod.LEFTOVER
+                          else surviving)
+                target.add(self._agent_aggs[agent_file])
+        return (surviving, leftover)
 
     # ---- tables ----------------------------------------------------------
 
