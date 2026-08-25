@@ -2674,7 +2674,9 @@ check("PR #128 review (round 7, G6): the one-round terminus is pinned on the SHI
   /if \(!ungranted\.length\) return\s*\n\s*for \(const g of ungranted\) resolutionsReopened\.add\(pairKey\(unit\.key, g\.id\)\)/.test(wfSrc)
     && /if \(!resolutionsReopened\.has\(pairKey\(c\.unit, c\.id\)\)\) \{ resolutionsReopened\.add\(pairKey\(c\.unit, c\.id\)\); resolutionsPending\.add\(idKey\(c\.unit\)\) \}/.test(wfSrc)
     // the release set is the ONLY thing that clears a verifier row, so the terminus depends on it staying yes-or-unknown
-    && /c\.shows === SHOWS_YES \|\| c\.shows === SHOWS_UNKNOWN/.test(wfSrc));
+    // The release set is `yes` OR a REASONED `unknown` (approving round, Minor 3) — a bare shrug releases nothing.
+    && /const reasonedUnknown = c\.shows === SHOWS_UNKNOWN && nonBlank\(c\.found\)/.test(wfSrc)
+    && /if \(c\.shows === SHOWS_YES \|\| reasonedUnknown\) \{/.test(wfSrc));
 // Round-8 (H1) — the unconsumed carry REPORTS its size instead of being trimmed. The review asked for a ceiling;
 // a silent one is unavailable here because this text is the persist instruction, so a rendered subset becomes a
 // persisted subset. Making the growth visible is the part that can be done without losing rows.
@@ -2739,6 +2741,30 @@ check("PR #128 review (round 9, J2): the record site writes the LITERAL, not a r
     && !/source: 'dispatch'/.test(wfSrc));
 
 // Round-9 (J1) — the grant shape is stated ONE way, on every surface that describes it.
+/* ===================================================================================================
+   PR #128 APPROVING ROUND — the four Minors the approval left open. Each fix is pinned here, because
+   the first pass shipped three of them with no failing check at all: the mutation harness caught that,
+   which is the same defect these rounds have been about, arriving in the fixes for it.
+   =================================================================================================== */
+
+// Minor 1 — `unconsumedWritten` is DEMANDED, so it is READ.
+check("PR #128 (approving round, Minor 1): the persister's `unconsumedWritten` is compared against the rows handed over — `written: true` says the agent wrote the FILE, not that it wrote THIS key, so a multi-part merge that dropped `unconsumedResolutions` used to advance the carry over rows that never landed",
+  /const owedWrite = unconsumed\.map\(\(u\) => idKey\(u\.id\)\)/.test(wfSrc)
+    && /const confirmedWrite = new Set\(\(persisted\.unconsumedWritten \|\| \[\]\)\.map\(idKey\)\)/.test(wfSrc)
+    && /did NOT report writing \$\{unconfirmedWrite\.length\} unconsumed-answer row\(s\)/.test(wfSrc)
+    // and the carry is still marked: the write DID happen, re-sending is idempotent, so this reports rather than blocks
+    && /unconfirmedWrite\.length\) \{[\s\S]{0,400}?\}\s*\n\s*markCarryPersisted\(\)/.test(wfSrc));
+
+// Minor 2 — a dispatch that never ran files no contract-breach row against a builder that never answered.
+check("PR #128 (approving round, Minor 2): the `blockedItems` write is gated on `dispatched` — on the `!res` path `resolutionAccountingMiss(routed, null)` always yields a miss, so this filed a contract breach against a builder that never ran, and `blockedItems` is what the operator reads",
+  /  if \(miss && dispatched\) \{/.test(wfSrc)
+    && !/\n  if \(miss\) \{/.test(wfSrc));
+
+// Minor 4 — the stated remedy has to be one that works.
+check("PR #128 (approving round, Minor 4): the unpublished-id comment names the REAL remedy (a queue-file edit), not withdrawal — withdrawal clears a row by leaving the id published with `resolution: null` so the owed-set drop runs, and for an UNPUBLISHED id the fail-closed short-circuit returns before `owed` is ever consulted, so an operator following the old sentence would edit `resolutions.json` and watch nothing change",
+  /AND THE REMEDY IS NOT WITHDRAWAL/.test(wfSrc)
+    && /delete that row from `unconsumedResolutions` in the queue file by/.test(wfSrc)
+    && !/the operator clears it by withdrawing the answer/.test(wfSrc));
 check("PR #128 review (round 9, J1): BOTH prompt copies describe `resolutionsReopened` as `{unit, id}` PAIRS — the round-8 shape change updated the carry instruction and left the queue-read instruction saying \"every unit key\", so the agent that WRITES this array back was being told the wrong shape by one of the two texts handed to it",
   () => { const PAIR_PHRASE = "PAIRS — every ANSWER that has already spent its ONE repair round";
     const copies = wfSrc.split(PAIR_PHRASE).length - 1;
@@ -3481,7 +3507,7 @@ check("ENG-95474 review round 2: the evidence clear is ID-SCOPED — an unreport
 // while unfiled records are still in it records them as durable. Evidence must be dropped FIRST.
 check("ENG-95474 review round 2: on the `queueWritten` path the evidence is settled BEFORE the carry — otherwise the fingerprint records unfiled records as durable",
   /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,400}?markEvidenceFiled\(lastVerifier\.evidenceWritten\)[\s\S]{0,40}?markCarryPersisted\(\)/.test(wfSrc)
-    && /markEvidenceFiled\(persisted\.evidenceWritten\)[\s\S]{0,200}?markCarryPersisted\(\)/.test(wfSrc),
+    && /markEvidenceFiled\(persisted\.evidenceWritten\)[\s\S]{0,1400}?markCarryPersisted\(\)/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("if (lastVerifier.queueWritten)"), wfSrc.indexOf("if (lastVerifier.queueWritten)") + 460));
 // Schema membership is read off the SLICE for each schema, not off an adjacency regex: `\s*\n\s*` backtracks (S8786),
 // and a slice also proves the field landed in the right schema rather than merely somewhere in the file.

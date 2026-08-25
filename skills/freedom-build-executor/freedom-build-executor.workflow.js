@@ -1940,7 +1940,19 @@ function owedResolutionPairs(items, unitKeys) {
 function releasedResolutionPairs(checks) {
   const out = new Set()
   for (const c of checks || []) {
-    if (c && typeof c.unit === 'string' && typeof c.id === 'string' && (c.shows === SHOWS_YES || c.shows === SHOWS_UNKNOWN)) {
+    if (!c || typeof c.unit !== 'string' || typeof c.id !== 'string') continue
+    // A REASONED `unknown` ONLY (PR #128 review, approving round, Minor 3). Releasing on any `unknown` was too
+    // wide: the rationale for including it covers ONE class -- an answer whose effect the page body structurally
+    // cannot show, where requiring a `yes` blocks `complete` for ever -- but the predicate discriminated on
+    // nothing, so a layout-shaped answer correctly refuted with `no` in round N was released in round N+1 by a
+    // verifier that merely shrugged. The row then stopped gating on the strength of the builder's own untrusted
+    // `applied: true`, which is the trust inversion this whole mechanism exists to prevent.
+    // `found` is the discriminator because it is the one the verifier prompt already demands for this state
+    // ("`unknown` -- you could not determine the effect, with `found` saying WHY"): a verifier that names the
+    // surface limitation has looked and reported; one that returns a bare `unknown` has not, and an unreasoned
+    // shrug now releases nothing. `yes` needs no such test -- it is a positive confirmation.
+    const reasonedUnknown = c.shows === SHOWS_UNKNOWN && nonBlank(c.found)
+    if (c.shows === SHOWS_YES || reasonedUnknown) {
       out.add(pairKey(c.unit, c.id))
     }
   }
@@ -1968,7 +1980,15 @@ function publishedResolutionIds(items) {
 // `publishedIds` keeps EVERY entry, which subsumes the old whole-list `itemsPresent` guard. An entry whose id IS still
 // published but no longer owed (`resolution: null`, or a `list-*` item re-routed to another unit by a newly published
 // `list` key) is a genuine drop. A re-keyed id that has genuinely left the plan is kept, not dropped — the safe
-// direction when its presence cannot be confirmed; the operator clears it by withdrawing the answer.
+// direction when its presence cannot be confirmed.
+// AND THE REMEDY IS NOT WITHDRAWAL (PR #128 review, approving round, Minor 4). This comment used to say the
+// operator clears such a row by withdrawing the answer, and that is FALSE for exactly this case: withdrawal
+// works by leaving the id PUBLISHED with `resolution: null` so the owed-set drop below runs, and for an
+// UNPUBLISHED id the short-circuit above returns before `owed` is ever consulted. An operator following the old
+// sentence would edit `resolutions.json` and watch nothing change. The real remedy for an id a regenerated
+// manifest re-keyed out of the plan is to delete that row from `unconsumedResolutions` in the queue file by
+// hand. Kept as the safe direction anyway -- losing an answer is unrecoverable, holding one open is not -- but
+// a stated remedy that does nothing is worse than none, so it is stated correctly.
 // CAPPED ON THE WAY IN AS WELL AS THE WAY OUT (PR #128 review, round 7). This is the SEED path: `unconsumed` is
 // rehydrated here from `state.unconsumedResolutions`, which is an AGENT-WRITTEN file, so the record-time caps at
 // `unconsumedResolutions` / `resolutionContradictions` bind nothing that arrives this way -- a folder written by an
@@ -4142,6 +4162,19 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       // Evidence FIRST, then the carry: both recompute the fingerprint, so settling the carry while unfiled records are
       // still in it would record them as durable. Only the ids this agent reported are dropped.
       markEvidenceFiled(persisted.evidenceWritten)
+      // ENG-95503 (PR #128 review, approving round, Minor 1) -- `unconsumedWritten` is DEMANDED, so it is READ.
+      // `written: true` says the agent wrote the file, not that it wrote THIS key: a multi-part merge that
+      // dropped `unconsumedResolutions` still returned `written: true`, and `markCarryPersisted()` then recorded
+      // the carry as durable over rows that never landed -- the same silent loss for the record whose entire
+      // purpose is surviving a resume. Reported ids are compared against what was handed over; a shortfall does
+      // not withhold the carry (the write DID happen, and re-sending it next round is harmless and idempotent),
+      // but it is named, because an operator reading a green close is otherwise told nothing.
+      const owedWrite = unconsumed.map((u) => idKey(u.id))
+      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map(idKey))
+      const unconfirmedWrite = owedWrite.filter((id) => !confirmedWrite.has(id))
+      if (unconfirmedWrite.length) {
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((id) => `\`${id}\``).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+      }
       markCarryPersisted()
     }
     else log(`WARNING: the queue-file write did not confirm — ${unpersistedParks.length} park(s) and this round's proposals / blockers / discrepancies are in this return only; a resumed run will re-derive the parks from the round counters but the lists are lost`)
@@ -4558,7 +4591,11 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   unconsumed = unconsumed.filter((u) => !(idKey(u.unit) === idKey(unit.key) && u.source === UNCONSUMED_FROM_DISPATCH))
   if (!(routed || []).length) return
   const miss = resolutionAccountingMiss(routed, res)
-  if (miss) {
+  // NO BLOCKED ROW FOR A DISPATCH THAT NEVER RAN (PR #128 review, approving round, Minor 2). On the `!res` path
+  // `resolutionAccountingMiss(routed, null)` always yields a miss, so this filed a contract-breach row against a
+  // builder that never answered — and `blockedItems` is what the operator reads. Self-correcting on the next
+  // dispatch, but not when the round budget or a usage limit ends the run on that very round.
+  if (miss && dispatched) {
     // DEDUPED ON `(unit, what)` (PR #128 review), exactly as `reportGuidelinesMiss` does it and for the reason that
     // one states: "a row repeated each round is re-billed". `RESOLUTIONS_BLOCKED_WHAT` was introduced here so the
     // report and any dedup would match on one literal, and then no dedup followed -- while `blockedItems` is

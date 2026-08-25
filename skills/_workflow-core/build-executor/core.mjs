@@ -1044,6 +1044,19 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       // Evidence FIRST, then the carry: both recompute the fingerprint, so settling the carry while unfiled records are
       // still in it would record them as durable. Only the ids this agent reported are dropped.
       markEvidenceFiled(persisted.evidenceWritten)
+      // ENG-95503 (PR #128 review, approving round, Minor 1) -- `unconsumedWritten` is DEMANDED, so it is READ.
+      // `written: true` says the agent wrote the file, not that it wrote THIS key: a multi-part merge that
+      // dropped `unconsumedResolutions` still returned `written: true`, and `markCarryPersisted()` then recorded
+      // the carry as durable over rows that never landed -- the same silent loss for the record whose entire
+      // purpose is surviving a resume. Reported ids are compared against what was handed over; a shortfall does
+      // not withhold the carry (the write DID happen, and re-sending it next round is harmless and idempotent),
+      // but it is named, because an operator reading a green close is otherwise told nothing.
+      const owedWrite = unconsumed.map((u) => idKey(u.id))
+      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map(idKey))
+      const unconfirmedWrite = owedWrite.filter((id) => !confirmedWrite.has(id))
+      if (unconfirmedWrite.length) {
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((id) => `\`${id}\``).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+      }
       markCarryPersisted()
     }
     else log(`WARNING: the queue-file write did not confirm — ${unpersistedParks.length} park(s) and this round's proposals / blockers / discrepancies are in this return only; a resumed run will re-derive the parks from the round counters but the lists are lost`)
@@ -1460,7 +1473,11 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   unconsumed = unconsumed.filter((u) => !(idKey(u.unit) === idKey(unit.key) && u.source === UNCONSUMED_FROM_DISPATCH))
   if (!(routed || []).length) return
   const miss = resolutionAccountingMiss(routed, res)
-  if (miss) {
+  // NO BLOCKED ROW FOR A DISPATCH THAT NEVER RAN (PR #128 review, approving round, Minor 2). On the `!res` path
+  // `resolutionAccountingMiss(routed, null)` always yields a miss, so this filed a contract-breach row against a
+  // builder that never answered — and `blockedItems` is what the operator reads. Self-correcting on the next
+  // dispatch, but not when the round budget or a usage limit ends the run on that very round.
+  if (miss && dispatched) {
     // DEDUPED ON `(unit, what)` (PR #128 review), exactly as `reportGuidelinesMiss` does it and for the reason that
     // one states: "a row repeated each round is re-billed". `RESOLUTIONS_BLOCKED_WHAT` was introduced here so the
     // report and any dedup would match on one literal, and then no dedup followed -- while `blockedItems` is

@@ -22,7 +22,7 @@
 //
 // Zero dependencies (node built-ins only), same `check` idiom as the sibling
 // runners, exits 1 on any failed check.
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
@@ -998,6 +998,55 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       () => JSON.stringify(stopState.stop));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+
+/* PR #128 (approving round) — THE GENERATOR'S LF NORMALISATION, EXERCISED END TO END. `build-workflows.mjs` strips
+   CR because `.gitattributes` pins `*.workflow.js text eol=lf` and the on-disk check below asserts it — but on a
+   Linux/macOS runner the core modules are checked out LF-only, so removing that `.replace(...)` changes nothing CI
+   can see: the artifact is LF because its INPUT was, not because the generator normalised. Only a Windows
+   contributor with `core.autocrlf=true` would rediscover the bug, which is a pin with no failure mode on the
+   machine that runs it. This feeds CRLF INPUT through the real generator, on any OS, and asserts none survives. */
+{
+  const tmpGen = mkdtempSync(path.join(os.tmpdir(), "wf-crlf-"));
+  try {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const copyTree = (from, to) => {
+      mkdirSync(to, { recursive: true });
+      for (const e of readdirSync(from, { withFileTypes: true })) {
+        const s = path.join(from, e.name), d = path.join(to, e.name);
+        if (e.isDirectory()) copyTree(s, d); else copyFileSync(s, d);
+      }
+    };
+    mkdirSync(path.join(tmpGen, "scripts"), { recursive: true });
+    copyFileSync(path.join(repoRoot, "scripts/build-workflows.mjs"), path.join(tmpGen, "scripts/build-workflows.mjs"));
+    copyTree(path.join(repoRoot, "skills/_workflow-core"), path.join(tmpGen, "skills/_workflow-core"));
+    // The generator writes its two targets into these, so they have to exist.
+    mkdirSync(path.join(tmpGen, "skills/freedom-build-executor"), { recursive: true });
+    mkdirSync(path.join(tmpGen, "skills/classic-to-freedom-migration"), { recursive: true });
+    // CRLF-ify EVERY core module and template — exactly what a Windows checkout hands the generator.
+    const crlfify = (dir) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { crlfify(p); continue; }
+        if (!/\.(mjs|js)$/.test(e.name)) continue;
+        writeFileSync(p, readFileSync(p, "utf8").replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"), "utf8");
+      }
+    };
+    crlfify(path.join(tmpGen, "skills/_workflow-core"));
+    const gen = spawnSync(process.execPath, [path.join(tmpGen, "scripts/build-workflows.mjs")], { encoding: "utf8" });
+    const outFile = path.join(tmpGen, "skills/freedom-build-executor/freedom-build-executor.workflow.js");
+    const produced = existsSync(outFile) ? readFileSync(outFile, "utf8") : "";
+    check("PR #128 (approving round): the generator NORMALISES CRLF core sources to LF — fed a fully CRLF checkout it still emits an artifact with no CR, so a Linux CI run can catch the loss of that normalisation instead of leaving it for a Windows contributor to rediscover",
+      gen.status === 0 && produced.length > 0 && !produced.includes("\r"),
+      () => ({ status: gen.status, stderr: String(gen.stderr).slice(0, 300),
+        bytes: produced.length, crCount: (produced.match(/\r/g) || []).length }));
+    // ... and the input really WAS CRLF, or the assertion above passes vacuously on an unchanged tree.
+    check("PR #128 (approving round): the fixture genuinely fed CRLF in — without this the normalisation check would pass on any LF checkout and prove nothing, which is the exact shape of the gap it was added to close",
+      readFileSync(path.join(tmpGen, "skills/_workflow-core/build-executor/core.mjs"), "utf8").includes("\r\n"));
+  } finally {
+    rmSync(tmpGen, { recursive: true, force: true });
   }
 }
 

@@ -1329,7 +1329,19 @@ export function owedResolutionPairs(items, unitKeys) {
 export function releasedResolutionPairs(checks) {
   const out = new Set()
   for (const c of checks || []) {
-    if (c && typeof c.unit === 'string' && typeof c.id === 'string' && (c.shows === SHOWS_YES || c.shows === SHOWS_UNKNOWN)) {
+    if (!c || typeof c.unit !== 'string' || typeof c.id !== 'string') continue
+    // A REASONED `unknown` ONLY (PR #128 review, approving round, Minor 3). Releasing on any `unknown` was too
+    // wide: the rationale for including it covers ONE class -- an answer whose effect the page body structurally
+    // cannot show, where requiring a `yes` blocks `complete` for ever -- but the predicate discriminated on
+    // nothing, so a layout-shaped answer correctly refuted with `no` in round N was released in round N+1 by a
+    // verifier that merely shrugged. The row then stopped gating on the strength of the builder's own untrusted
+    // `applied: true`, which is the trust inversion this whole mechanism exists to prevent.
+    // `found` is the discriminator because it is the one the verifier prompt already demands for this state
+    // ("`unknown` -- you could not determine the effect, with `found` saying WHY"): a verifier that names the
+    // surface limitation has looked and reported; one that returns a bare `unknown` has not, and an unreasoned
+    // shrug now releases nothing. `yes` needs no such test -- it is a positive confirmation.
+    const reasonedUnknown = c.shows === SHOWS_UNKNOWN && nonBlank(c.found)
+    if (c.shows === SHOWS_YES || reasonedUnknown) {
       out.add(pairKey(c.unit, c.id))
     }
   }
@@ -1357,7 +1369,15 @@ export function publishedResolutionIds(items) {
 // `publishedIds` keeps EVERY entry, which subsumes the old whole-list `itemsPresent` guard. An entry whose id IS still
 // published but no longer owed (`resolution: null`, or a `list-*` item re-routed to another unit by a newly published
 // `list` key) is a genuine drop. A re-keyed id that has genuinely left the plan is kept, not dropped — the safe
-// direction when its presence cannot be confirmed; the operator clears it by withdrawing the answer.
+// direction when its presence cannot be confirmed.
+// AND THE REMEDY IS NOT WITHDRAWAL (PR #128 review, approving round, Minor 4). This comment used to say the
+// operator clears such a row by withdrawing the answer, and that is FALSE for exactly this case: withdrawal
+// works by leaving the id PUBLISHED with `resolution: null` so the owed-set drop below runs, and for an
+// UNPUBLISHED id the short-circuit above returns before `owed` is ever consulted. An operator following the old
+// sentence would edit `resolutions.json` and watch nothing change. The real remedy for an id a regenerated
+// manifest re-keyed out of the plan is to delete that row from `unconsumedResolutions` in the queue file by
+// hand. Kept as the safe direction anyway -- losing an answer is unrecoverable, holding one open is not -- but
+// a stated remedy that does nothing is worse than none, so it is stated correctly.
 // CAPPED ON THE WAY IN AS WELL AS THE WAY OUT (PR #128 review, round 7). This is the SEED path: `unconsumed` is
 // rehydrated here from `state.unconsumedResolutions`, which is an AGENT-WRITTEN file, so the record-time caps at
 // `unconsumedResolutions` / `resolutionContradictions` bind nothing that arrives this way -- a folder written by an
