@@ -9012,6 +9012,96 @@ try {
     && gateConflicts([ck({ kind: "composite", id: "A" }), ck({ kind: "composite", id: "B" })]).length === 1,
     () => gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]));
 
+  // ---- ENG-95683 (item 2, R1): the compositeOnly ADVISORY reaches needsDecision with GENERIC guidance ------
+  // `validateRun` already computed a `composite-only` advisory for a type the platform assembles as part of a
+  // composite; `reportRegistryFindings` used to discard it. It now pushes a `registry-composite-only` needsDecision
+  // item. The type must be PRESENT in the resolved index AND flagged `compositeOnly` for the advisory to fire — so
+  // the stand export carries `crt.CommunicationOptions` with `compositeOnly:true` (and `crt.Input` for the Name
+  // field, which resolves normally). This drives validateRun → reportRegistryFindings end-to-end (non-vacuous):
+  // dropping the advisory loop in `reportRegistryFindings` fails HERE.
+  const compOnlyDetail = `{operation:"insert",name:"Comm",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.DETAIL}}`;
+  const compOnlyDetails = `details:{Comm:{schemaName:"Schema9Detail",entitySchemaName:"ContactCommunication",detailColumn:"Contact",masterColumn:"Id"}},`;
+  const compOnlyRun = gmRun(compOnlyDetail, compOnlyDetails,
+    { componentRegistry: { resolvedTargetVersion: "8.3.9",
+      components: [{ componentType: "crt.Input", inputs: {}, outputs: {} },
+        { componentType: "crt.CommunicationOptions", compositeOnly: true, inputs: {}, outputs: {} }] } });
+  const coWarn = compOnlyRun.changeSet.needsDecision.find((d) => d.kind === "registry-composite-only" && d.item === "crt.CommunicationOptions");
+  check("ENG-95683 (item 2/R1): a compositeOnly type the run emits reaches changeSet.needsDecision as `registry-composite-only` with GENERIC guidance (reach it via its composite host/recipe) and NO install/enable instruction",
+    !!coWarn && /COMPOSITE-ONLY/.test(coWarn.reason) && /composite host\/recipe/.test(coWarn.reason)
+    && /cannot be inserted directly/.test(coWarn.reason)
+    && !/\binstall\b/i.test(coWarn.reason) && !/\benable\b/i.test(coWarn.reason) && !/re-run the BUILD/.test(coWarn.reason),
+    () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+  check("ENG-95683 (item 2/R1, negative control): a compositeOnly item carries NO structured gate, and a NON-compositeOnly present type (crt.Input) yields NO `registry-composite-only` item",
+    coWarn && coWarn.gate === undefined
+    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === "crt.Input")
+    // ...and a compositeOnly type that resolves is NOT ALSO reported as a missing `registry-target` (it is present).
+    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions"),
+    () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // ---- ENG-95683 (item 1, R2): the durable resolved-gate set + its plan.md provenance mirror ---------------
+  // A run whose emitted type is a gated composite the stand LACKS carries the resolved gate on `result.resolvedGates`
+  // ([{componentType,kind,id,feature?,source}]) — the exact set the `--resolved-gates` artifact writes — and mirrors
+  // one provenance line into the plan. The stand export lists only `crt.Input`, so `crt.CommunicationOptions` gates.
+  const gatedRun = gmRun(compOnlyDetail, compOnlyDetails,
+    { componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] } });
+  check("ENG-95683 (item 1/R2): result.resolvedGates carries EXACTLY the resolved gate for the run's gated type — {componentType,kind,id,feature,source}, sourced from the stand export",
+    Array.isArray(gatedRun.resolvedGates) && gatedRun.resolvedGates.length === 1
+    && gatedRun.resolvedGates[0].componentType === "crt.CommunicationOptions"
+    && gatedRun.resolvedGates[0].kind === GATE_KIND.COMPOSITE
+    && gatedRun.resolvedGates[0].id === "CrtCustomer360App"
+    && gatedRun.resolvedGates[0].feature === "CommonCommunicationsBehavior"
+    && gatedRun.resolvedGates[0].source === "stand-export",
+    () => gatedRun.resolvedGates);
+  check("ENG-95683 (item 1/R2): plan.md carries the provenance MIRROR line naming the resolved gate (component type, package, feature) and pointing at the --resolved-gates artifact",
+    /\*\*Resolved component gates:\*\*/.test(gatedRun.plan)
+    && /crt\.CommunicationOptions/.test(gatedRun.plan) && /CrtCustomer360App/.test(gatedRun.plan)
+    && /CommonCommunicationsBehavior/.test(gatedRun.plan) && /--resolved-gates/.test(gatedRun.plan),
+    () => gatedRun.plan.split("\n").filter((l) => /Resolved component gates/.test(l)));
+  // Negative control: a run that gates NO type has an EMPTY resolvedGates set and NO mirror line — the empty-artifact
+  // case the `--resolved-gates` output must still write verbatim as `[]`.
+  const ungatedRun = gmRun("");
+  check("ENG-95683 (item 1/R2, negative control): a run with no gated type has resolvedGates === [] and NO provenance mirror line in the plan",
+    Array.isArray(ungatedRun.resolvedGates) && ungatedRun.resolvedGates.length === 0
+    && !/Resolved component gates:/.test(ungatedRun.plan),
+    () => ungatedRun.resolvedGates);
+
+  // ---- ENG-95683 (item 1, R2): the `--resolved-gates <file>` CLI output, end-to-end -----------------------
+  // The write happens on the `--plan`/`--units` path (a PLAN/RUN-time fact, not a `--verify` verdict), is registered
+  // in VALUE_FLAGS (so its path is not read as the manifest), and writes `[]` verbatim when nothing gates. Driven
+  // through the real CLI so a regression in the flag wiring — not just the pure result field above — is caught.
+  const rgPath = path.join(os.tmpdir(), `c2f_resolved_gates_${process.pid}.json`);
+  const rgEmptyPath = path.join(os.tmpdir(), `c2f_resolved_gates_empty_${process.pid}.json`);
+  try {
+    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true });
+    const gatedManifest = JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] },
+      schemas: [{ pkg: "P", body: gmBody(compOnlyDetails, [nameOp, compOnlyDetail].join(",")) }] });
+    const rgRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--resolved-gates", rgPath], { input: gatedManifest, encoding: "utf8" });
+    const rgWritten = fs.existsSync(rgPath) ? JSON.parse(fs.readFileSync(rgPath, "utf8")) : null;
+    check("ENG-95683 (item 1/R2): `migrate.mjs --plan --resolved-gates <file>` WRITES the resolved gate set as JSON — exactly the run's gates, and a stderr confirmation",
+      Array.isArray(rgWritten) && rgWritten.length === 1 && rgWritten[0].componentType === "crt.CommunicationOptions"
+      && rgWritten[0].id === "CrtCustomer360App" && rgWritten[0].source === "stand-export"
+      && /wrote 1 resolved component gate/.test(rgRun.stderr || ""),
+      () => ({ status: rgRun.status, written: rgWritten, stderr: (rgRun.stderr || "").slice(0, 200) }));
+    // Empty-artifact control: a manifest that gates nothing still writes the file, as `[]`.
+    const plainManifest = JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+      schemas: [{ pkg: "P", body: gmBody("", nameOp) }] });
+    spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--units", "--resolved-gates", rgEmptyPath], { input: plainManifest, encoding: "utf8" });
+    const rgEmpty = fs.existsSync(rgEmptyPath) ? JSON.parse(fs.readFileSync(rgEmptyPath, "utf8")) : null;
+    check("ENG-95683 (item 1/R2): the empty-artifact case — a run that gates no type writes `[]` verbatim (present, not absent), on the --units path too",
+      Array.isArray(rgEmpty) && rgEmpty.length === 0,
+      () => rgEmpty);
+  } finally {
+    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true });
+  }
+  // `--resolved-gates` is registered in VALUE_FLAGS (its path is not read as the manifest) and is rejected outside
+  // the --plan/--units path — the mode guard, exit 1 with an actionable message.
+  const rgBadMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec", "--resolved-gates", path.join(os.tmpdir(), `c2f_rg_never_${process.pid}.json`)],
+    { input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: gmBody("", nameOp) }] }), encoding: "utf8" });
+  check("ENG-95683 (item 1/R2): `--resolved-gates` outside --plan/--units fails loudly (exit 1) — the flag is registered and mode-guarded, not silently ignored",
+    rgBadMode.status === 1 && /--resolved-gates/.test(rgBadMode.stderr || "") && /applies to .--plan. and .--units./.test(rgBadMode.stderr || ""),
+    () => (rgBadMode.stderr || "").slice(0, 200));
+
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket
   // names. Both halves are asserted together on purpose — emitting the binding without the options is exactly the

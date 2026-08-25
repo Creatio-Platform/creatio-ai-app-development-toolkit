@@ -2001,6 +2001,10 @@ function reportRegistryFindings(changeSet, manifest, baseDir) {
   };
   if (reg.source === "unreadable-export")
     changeSet.needsDecision.push({ kind: "registry-source", item: "componentRegistry", reason: REG_SOURCE_NOTE["unreadable-export"] });
+  // ENG-95683 (item 1) — the RESOLVED gate set this run gathered, echoed into a durable machine-readable artifact by
+  // the CLI (`--resolved-gates <file>`) and mirrored as one provenance line in plan.md. Collected here, at the one
+  // place `f.gate` is known, so the artifact carries exactly the gates the findings below report on — no re-derivation.
+  const resolvedGates = [];
   for (const f of regRun.findings) {
     const where = f.presentIn ? ` (the registry carries it in ${f.presentIn.join(", ")})` : "";
     // The verdict clause is its own statement: the two arms differ (one names no version at all), and nesting the
@@ -2012,7 +2016,35 @@ function reportRegistryFindings(changeSet, manifest, baseDir) {
     // let the SETTLE clause say the actionable fix for THIS cause instead of one blanket sentence for every miss.
     changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
       reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
+    // ENG-95683 (item 1) — gather the resolved gate for a gated finding. `source` is the REGISTRY the presence check
+    // resolved against (REG_SOURCE_NOTE key), the run-time provenance of the answer; `kind`/`id`/`feature` are the
+    // typed gate the mapping table resolved for the type. `feature` is carried only when the gate names one.
+    if (f.gate)
+      resolvedGates.push({ componentType: f.componentType, kind: f.gate.kind, id: f.gate.id,
+        ...(f.gate.feature ? { feature: f.gate.feature } : {}), source: reg.source });
   }
+  // ENG-95683 (item 2) — the compositeOnly ADVISORY, until now computed by `validateRun` and discarded here. A
+  // compositeOnly type deliberately carries NO gate: the platform assembles it as part of a composite and it has no
+  // Designer toolbar entry, so it cannot be inserted directly. Surface each as a `registry-composite-only`
+  // needsDecision item with GENERIC guidance — reach it through its composite host/recipe — NOT install/enable text:
+  // on the failing run the package WAS installed and the feature enabled, so an install/enable instruction would
+  // have been wrong. (Absent a gate, `registrySettleGuidance` is not called here.)
+  //
+  // SCOPE — only a compositeOnly type the BUILD AGENT must place STANDALONE (a standard-feature / profile-card
+  // deliverable). A compositeOnly type the ENGINE already positioned in the view (`viewConfigDiff` / `tableElements`
+  // — every container and field, e.g. `crt.TabContainer` / `crt.HeaderContainer`, most of which are compositeOnly)
+  // needs no "reach it via its host" advice: the engine placed it, the agent never drags it from a toolbar. Surfacing
+  // those would flood the worklist (the majority of registry types are compositeOnly) and blame the operator for a
+  // type the engine chose — the same rule the registry-target check already honours.
+  const enginePositioned = new Set();
+  for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
+  for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
+  for (const a of regRun.advisories || []) {
+    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType)) continue;
+    changeSet.needsDecision.push({ kind: "registry-composite-only", item: a.componentType,
+      reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${REG_SOURCE_NOTE[reg.source]}.` });
+  }
+  return resolvedGates;
 }
 
 export function runMigration(manifest, opts = {}) {
@@ -2126,7 +2158,7 @@ export function runMigration(manifest, opts = {}) {
   if (driftAdvisory.newMembers.length)
     changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
       reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
-  reportRegistryFindings(changeSet, manifest, baseDir);
+  const resolvedGates = reportRegistryFindings(changeSet, manifest, baseDir);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
@@ -2293,6 +2325,10 @@ export function runMigration(manifest, opts = {}) {
       referencedModules: eff.referencedModules, // UI-rendering deps outside the page-schema migration unit
     },
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
+    // ENG-95683 (item 1) — the resolved component gate set [{componentType,kind,id,feature?,source}] for THIS run,
+    // the durable fact the `--resolved-gates <file>` output writes and `renderPlan` mirrors as a provenance line.
+    // Empty (`[]`) when the run gates no type — the negative-control case the artifact must still write verbatim.
+    resolvedGates,
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
     listChangeSet,   // the LIST page's own ChangeSet: positioned grid columns / quick filters / command-bar actions
@@ -2398,7 +2434,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions", "--slices"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions", "--slices", "--resolved-gates"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2599,6 +2635,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("`--slices <dir>` applies to `--units` and `--verify` — it writes one per-page slice file per published key. Add one of them, or drop `--slices`.");
   if (verifyJsonFile && !verifyMode)
     fail("`--verify-json <file>` only applies to `--verify` — it writes THAT run's machine-readable verdict. Add `--verify --built <file>`, or drop `--verify-json`.");
+  // `--resolved-gates <file>` (ENG-95683 item 1) — WRITE the resolved component gate set this run gathered
+  // ([{componentType,kind,id,feature?,source}]) as a durable machine-readable artifact, so a verification step can
+  // read the run's gates directly instead of re-deriving them from a temp manifest that was already deleted. It is a
+  // PLAN/RUN-time fact (known in `runMigration`), NOT a `--verify` verdict, so it rides the `--plan`/`--units` path
+  // and is rejected elsewhere; the empty set writes verbatim as `[]` (the negative-control run that gates nothing).
+  const resolvedGatesFile = valueFlagArg(argv, "--resolved-gates", "--resolved-gates resolved-gates.json", fail);
+  if (resolvedGatesFile && !(planMode || unitsMode))
+    fail("`--resolved-gates <file>` applies to `--plan` and `--units` — it writes THAT run's resolved component gate set. Add one of them, or drop `--resolved-gates`.");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
@@ -2618,6 +2662,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
+  // `--resolved-gates <file>` (ENG-95683 item 1) — the durable machine-readable copy of THIS run's resolved gate set,
+  // written before the mode output below (its own artifact, not part of stdout). Always the full set the run gathered,
+  // `[]` included, so a reader can tell "no gated types" from "the flag was never passed".
+  if (resolvedGatesFile) {
+    try { fs.writeFileSync(resolvedGatesFile, JSON.stringify(result.resolvedGates || [], null, 2) + "\n"); }
+    catch (e) { fail(`cannot write --resolved-gates '${resolvedGatesFile}': ${e.message}`); }
+    process.stderr.write(`migrate.mjs: wrote ${(result.resolvedGates || []).length} resolved component gate(s) to ${resolvedGatesFile} — the run's machine-readable gate set [{componentType,kind,id,feature?,source}]; verify against THIS file, not a temp manifest.\n`);
+  }
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null;
   if (planMode) output = result.plan + "\n";
