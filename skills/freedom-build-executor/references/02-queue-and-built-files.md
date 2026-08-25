@@ -95,6 +95,8 @@ there is no "resume" command: there is one command, and it does the next undone 
       "item": "(1 lookup)", "answer": "restrict to Status IN {InProgress}",
       "why": "no lookupListConfig anywhere in viewConfig", "source": "verifier" }
   ],
+  "resolutionsReopened": ["main"],
+  "resolutionsPending": [],
   "history": [
     { "round": 1, "units": ["child:VisaRequest", "child:Education", "mini:ApplicantMiniPage"], "at": "2026-08-07T11:04Z" }
   ]
@@ -168,7 +170,27 @@ Rules that make it trustworthy:
   it decides what may clear the row: a builder's own account of its own work is replaced whenever that unit builds
   again, while the independent read that DISBELIEVED such an account is cleared only by a verifier that confirms
   the effect. Copy the rows verbatim; the run re-checks each one against the questions the plan still asks, so a
-  withdrawn answer or an id a re-plan moved drops out on its own.
+  withdrawn answer or an id a re-plan moved drops out on its own. A `verifier`-sourced row has exactly **ONE
+  release window**, and it is the repair round the contradiction itself buys: the unit re-opens, it is rebuilt, and
+  THAT round's verifier read releases the row on `"yes"` or `"unknown"`. There is no second window — the grant is
+  spent, the unit goes green, and a green unit is never re-verified — so a row whose repair round came back `"no"`
+  again, or came back with no check row for it at all, is **held until the operator acts**: fix the build, or
+  withdraw the answer so the question stops being owed. That terminus is deliberate and it is why the run's closing
+  `next` names the answer and its `why` rather than only reporting NOT COMPLETE; do not read the `"unknown"` release
+  rule as a promise that a later read will eventually arrive on its own, because for a green unit it will not.
+- **`resolutionsReopened` and `resolutionsPending` are at the ROOT, they are REQUIRED, and both are written on
+  EVERY close — including when they are `[]`.** They are the answer-channel repair grants, and they are process
+  bookkeeping rather than operator content: do NOT judge, filter or tidy them. `resolutionsReopened` is every unit
+  that has already spent its ONE answer-channel repair round; drop an entry and the next resume RE-GRANTS a round
+  that was already spent, which is how a builder gives the same refusal twice at full cost. `resolutionsPending` is
+  the subset still owed that round's dispatch; drop an entry and a unit that was owed its repair is stranded — the
+  grant is recorded as spent while the build it paid for never runs. Both are written even when empty for the same
+  reason `unconsumedResolutions` is: an emptied set is how a resumed run learns a grant was finally consumed, and a
+  stale non-empty one strands a settled unit for ever. They are persisted DIRECTLY rather than derived from
+  `unconsumedResolutions` on resume, because a transient build death files an unconsumed row WITHOUT spending the
+  grant — so the derivation over-marked exactly those units and denied them the repair they were owed. Copy the
+  arrays verbatim; the keys are unit keys and the run trims them on read, so incidental whitespace cannot re-grant
+  a spent round.
 - **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
   else in this file is bookkeeping about units; this is the one section that records a change made outside the
   file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before

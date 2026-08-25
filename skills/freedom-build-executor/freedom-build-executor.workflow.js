@@ -1797,18 +1797,28 @@ function capCarryText(value) {
 // does not answer the questions it was given, `null` when it does. It judges the SET OF IDS and the shape of each
 // row — never whether the answer was built WELL, which is the verifier's job and then the engine's gate.
 // A unit that was handed nothing returns `null` and is not held to anything.
+// PR #128 review (round 6) -- THE MISS STRING IS CARRY-BORNE, so it is capped and its ids are neutralised.
+// It is stored as `blockedItems[].why` (`reportResolutionAccounting`), `blockedItems` rides `carryNow()` and is
+// re-serialised into the round-close prompt every close AND re-seeded on every resume -- the same channel and the
+// same lifetime that motivated `capCarryText`. Two gaps, both closed here: the joined id list was UNBOUNDED (one
+// unit can owe many answers, and an id is `{pageKey}#confirm:{kind}:{item}` with stand-derived `item` on the end),
+// and each id went in RAW inside a backtick span while the sibling `resolutionClaimsLine` neutralises the same
+// text with `JSON.stringify`. The fence-break is defense-in-depth on this path -- `carryBlock` renders `blocked`
+// through `j()`, so it re-enters a prompt JSON-encoded, exactly the argument the O3 note already records for the
+// `resolution-not-applied` claim -- but the CAP is not: nothing bounded this string before.
+const missIdList = (ids) => ids.map((id) => JSON.stringify(id)).join(', ')
 function resolutionAccountingMiss(routed, res) {
   const owed = (routed || []).map((p) => p.id)
   if (!owed.length) return null
   const rows = res?.resolutionsApplied
-  if (!Array.isArray(rows)) return `no \`resolutionsApplied\` returned, and this unit was handed ${owed.length} answered ⚠ Confirm question(s)`
+  if (!Array.isArray(rows)) return capCarryText(`no \`resolutionsApplied\` returned, and this unit was handed ${owed.length} answered ⚠ Confirm question(s)`)
   const byId = rowsById(rows)
   const absent = owed.filter((id) => !byId.has(idKey(id)))
-  if (absent.length) return `no \`resolutionsApplied\` row for ${absent.map((id) => `\`${id}\``).join(', ')} — the answer was handed to this build and nothing says what became of it`
+  if (absent.length) return capCarryText(`no \`resolutionsApplied\` row for ${missIdList(absent)} — the answer was handed to this build and nothing says what became of it`)
   const unexplained = owed.filter((id) => byId.get(idKey(id)).applied === false && !nonBlank(byId.get(idKey(id)).why))
-  if (unexplained.length) return `reported NOT applied with no \`why\` for ${unexplained.map((id) => `\`${id}\``).join(', ')}`
+  if (unexplained.length) return capCarryText(`reported NOT applied with no \`why\` for ${missIdList(unexplained)}`)
   const unsupported = owed.filter((id) => byId.get(idKey(id)).applied === true && !nonBlank(byId.get(idKey(id)).how))
-  if (unsupported.length) return `reported applied with no \`how\` for ${unsupported.map((id) => `\`${id}\``).join(', ')} — a claim of "built" that names nothing built is not a report`
+  if (unsupported.length) return capCarryText(`reported applied with no \`how\` for ${missIdList(unsupported)} — a claim of "built" that names nothing built is not a report`)
   return null
 }
 // ENG-95503 — ONE ROW PER ROUTED ANSWER, pairing the question with what the builder claims it did about it. This is
@@ -2854,8 +2864,13 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
 // the reconciled `unconsumed` instead — but the `!res` path files an unconsumed row WITHOUT spending the grant (RC-4),
 // so the derivation over-marked those units and denied them their one repair round (N2). Seeding the real persisted
 // sets makes the fact exact in both directions: no resume re-grants a spent round, and no transient death loses one.
-for (const k of state.resolutionsReopened || []) resolutionsReopened.add(k)
-for (const k of state.resolutionsPending || []) resolutionsPending.add(k)
+// PR #128 review (round 6) -- NORMALISED ON THE WAY IN, because these two Sets are seeded from the AGENT-WRITTEN
+// queue file. RC-13 called the id asymmetry latent "prevented only by convention"; for a UNIT key round-tripping
+// through a transcription the convention is weaker still, and the failure is worse than a missed dedup: a padded
+// `resolutionsReopened` entry misses `.has(unit.key)` and RE-GRANTS a repair round already spent, while a padded
+// `resolutionsPending` entry never matches its `.delete(unit.key)` and forces its unit open for ever.
+for (const k of state.resolutionsReopened || []) resolutionsReopened.add(idKey(k))
+for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
 
 packageState = state.packageState || null
 let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
@@ -2890,8 +2905,14 @@ const unknownSchemaNow = () => [...new Set([...unknownSchemaSeen, ...(state.unit
 // Two sets, one union — kept separate at the source so `findings` stays exactly what it is (the operator re-opening
 // a unit the gate called complete) rather than becoming the answer channel this ticket exists to replace.
 const reopenKeys = () => new Set([...findingsPending, ...resolutionsPending])
-const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
-  isUnitOpenWithFindings(u, state.verify, state.reachabilityState, reopenKeys(), packageState))
+// PR #128 review (round 6) -- the union is built ONCE PER CALL, not once per schedule element. It is still rebuilt
+// on EVERY `openNow()` because both Sets mutate between calls (a grant is spent, a contradiction files one), so it
+// cannot be hoisted out of the function -- only out of the filter callback.
+const openNow = () => {
+  const keys = reopenKeys()
+  return schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
+    isUnitOpenWithFindings(u, state.verify, state.reachabilityState, keys, packageState))
+}
 
 // One open row, rendered as the engine wrote it — Deliverable, Status, Evidence. The evidence cell IS the repair
 // instruction ("missing: Amount", "built in `X` but the plan targets `Y`", "filed but NOT judged"), so it travels
@@ -3582,7 +3603,9 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   // SCOPED TO DISPATCH-SOURCED ROWS, because a verifier-confirmed row must SURVIVE the next dispatch: this runs
   // right after a builder returns, and a builder that says `applied: true` again must not be able to erase the
   // independent read that disbelieved its last claim. `reconcileUnconsumed` clears those, after the verifier.
-  unconsumed = unconsumed.filter((u) => !(u.unit === unit.key && u.source !== UNCONSUMED_FROM_VERIFIER))
+  // PR #128 review (round 6) -- `idKey` ON BOTH SIDES, like every id comparison in this file. `u.unit` comes off the
+  // persisted, agent-transcribed `unconsumedResolutions`, so a padded key here means the clear silently never fires.
+  unconsumed = unconsumed.filter((u) => !(idKey(u.unit) === idKey(unit.key) && u.source !== UNCONSUMED_FROM_VERIFIER))
   if (!(routed || []).length) return
   const miss = resolutionAccountingMiss(routed, res)
   if (miss) {
@@ -3590,12 +3613,12 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
     // one states: "a row repeated each round is re-billed". `RESOLUTIONS_BLOCKED_WHAT` was introduced here so the
     // report and any dedup would match on one literal, and then no dedup followed -- while `blockedItems` is
     // persisted AND re-seeded, so the duplicates accumulated across every round and every resume.
-    if (blockedItems.some((b) => b.unit === unit.key && b.what === RESOLUTIONS_BLOCKED_WHAT)) {
+    if (blockedItems.some((b) => idKey(b.unit) === idKey(unit.key) && b.what === RESOLUTIONS_BLOCKED_WHAT)) {
       // REFRESH THE PERSISTED REASON (PR #128 review, RC-5). The dedup above keeps ONE row per `(unit, what)`, but the
       // specific unaccounted id can change between rounds — and `blockedItems` is persisted AND re-seeded, so a stale
       // round-1 `why` would outlive the miss it named and mislead the operator across a resume. Rewrite it in place.
       blockedItems = blockedItems.map((b) =>
-        (b.unit === unit.key && b.what === RESOLUTIONS_BLOCKED_WHAT && b.why !== miss) ? { ...b, why: miss } : b)
+        (idKey(b.unit) === idKey(unit.key) && b.what === RESOLUTIONS_BLOCKED_WHAT && b.why !== miss) ? { ...b, why: miss } : b)
       log(`answers NOT accounted for AGAIN on \`${unit.key}\`: ${miss}`)
     } else {
       log(`answers NOT accounted for on \`${unit.key}\`: ${miss}`)
@@ -3627,9 +3650,9 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   // one repair grant: the builder never got its genuine first attempt. The unit stays open on the gate (a page that
   // never built is never green), so it comes back next round, where a real miss then earns the reopen.
   if (!dispatched) return
-  if (resolutionsReopened.has(unit.key)) return
-  resolutionsReopened.add(unit.key)
-  resolutionsPending.add(unit.key)
+  if (resolutionsReopened.has(idKey(unit.key))) return
+  resolutionsReopened.add(idKey(unit.key))
+  resolutionsPending.add(idKey(unit.key))
 }
 // The `what` string for the blocked entry, a constant so the report and any dedup match on one literal.
 const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
@@ -3762,7 +3785,7 @@ async function dispatchUnit(unit, r) {
   // (`401 OAuth access token has expired`) — spent the answer's ONE repair attempt on a dispatch where no builder
   // ever ran. `reportResolutionAccounting` then re-recorded the answers and granted nothing, because
   // `resolutionsReopened` already held the key; with a green gate no later round touched the unit again.
-  if (resolutionsPending.delete(unit.key)) log(`unaccounted answers on \`${unit.key}\` have had their repair round — they no longer force the unit open`)
+  if (resolutionsPending.delete(idKey(unit.key))) log(`unaccounted answers on \`${unit.key}\` have had their repair round — they no longer force the unit open`)
   r.claims.push(claimFor(unit, res, routed))
   reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
   reportResolutionAccounting(unit, routed, res)
@@ -4291,7 +4314,7 @@ while (true) {
     // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
     // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
     discrepancies = [...discrepancies, { round, unit: c.unit, kind: 'resolution-not-applied',
-      claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${String(c.how).slice(0, 400)}` : ''}`, found: c.found }]
+      claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${capCarryText(c.how)}` : ''}`, found: c.found }]
     if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
       // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
       // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
@@ -4300,7 +4323,7 @@ while (true) {
       // without the tag a verifier-confirmed row could never be retracted by a later `shows: "yes"` either.
       unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
     }
-    if (!resolutionsReopened.has(c.unit)) { resolutionsReopened.add(c.unit); resolutionsPending.add(c.unit) }
+    if (!resolutionsReopened.has(idKey(c.unit))) { resolutionsReopened.add(idKey(c.unit)); resolutionsPending.add(idKey(c.unit)) }
   }
   // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier RELEASED
   // (PR #128 review). The only place a verifier-sourced entry is cleared, and the only place an entry whose question

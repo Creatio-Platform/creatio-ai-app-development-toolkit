@@ -200,6 +200,50 @@ class ConsumptionContractDocTests(unittest.TestCase):
         doc = flat(read_text(EXECUTOR_FILES_DOC))
         self.assertIn("`unconsumedResolutions` is at the ROOT", doc)
 
+    def test_the_repair_grant_sets_are_documented_where_an_agent_can_find_them(self):
+        """`resolutionsReopened` / `resolutionsPending` are required root keys, so they must be documented.
+
+        PR #128 review (round 6): both became mandatory members of `RECONCILE_SCHEMA.required`, but the
+        only place a maintainer could learn they exist and must be written even when empty was a runtime
+        prompt string inside `carryBlock` -- not a stable reference, and free to drift from the schema
+        silently. The sibling `unconsumedResolutions` was documented in both files; these were not.
+        """
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            content = flat(read_text(path))
+            self.assertIn("`resolutionsReopened`", content, path)
+            self.assertIn("`resolutionsPending`", content, path)
+        # A bare-name check is nearly free to satisfy -- each file names both keys more than once, so
+        # mutating one mention leaves it green. Pin the SENTENCE that carries each key's consequence,
+        # the same bar the queue-file half below meets; this is the exact "pin with no failure mode"
+        # trap the RC-14 note in this module was written about.
+        skill = flat(read_text(EXECUTOR_SKILL))
+        self.assertIn("a dropped `resolutionsReopened` re-grants a spent round", skill)
+        self.assertIn("a dropped `resolutionsPending` strands a unit that was owed its repair", skill)
+        doc = flat(read_text(EXECUTOR_FILES_DOC))
+        # WHERE, and that the empty write is load-bearing -- an agent that learns the names but not the
+        # placement or the write-when-empty rule still produces a file the reconcile cannot trust.
+        self.assertIn("`resolutionsReopened` and `resolutionsPending` are at the ROOT", doc)
+        self.assertIn("EVERY close", doc)
+        # Each key's OWN failure mode, so a doc that names both but explains neither cannot pass.
+        self.assertIn("RE-GRANTS a round", doc)
+        self.assertIn("stranded", doc)
+        # And the reason they are persisted rather than derived -- the defect that made the first fix wrong.
+        self.assertIn("WITHOUT spending the", doc)
+
+    def test_a_verifier_sourced_entry_has_exactly_one_release_window(self):
+        """The stale-`"no"` terminus is stated, not left to be inferred from the release rule.
+
+        PR #128 review (round 6) asked whether a verifier-sourced entry can ever be released once its
+        unit goes green. It can, exactly once: the contradiction grants the unit its repair round, the
+        rebuild is re-verified, and that read releases the entry on `"yes"` or `"unknown"`. After that
+        the grant is spent and the entry is held until the operator acts -- which is the intended
+        fail-closed terminus, not an oversight, and the docs have to say so or the next reader will
+        read the `"unknown"` rationale as a promise of unlimited re-verification.
+        """
+        doc = flat(read_text(EXECUTOR_FILES_DOC))
+        self.assertIn("ONE release window", doc)
+        self.assertIn("held until the operator", doc)
+
     def test_the_file_must_exist_before_the_run_reads_it(self):
         # The 79-minute gap: written after the only `--units` invocation, so nothing consumed it.
         content = flat(read_text(EXECUTOR_FILES_DOC))
