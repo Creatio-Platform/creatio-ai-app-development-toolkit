@@ -2722,9 +2722,10 @@ function buildPrompt(unit, st, roundNo) {
   const repair = repairBlock(roundNo, shortRows, MAX_ROUNDS, VERIFY_TABLE)
   const known = pageSchemas[unit.key]
   const continuationBudget = continuationBudgetBlock(BUILD_TURN_BUDGET)
-  const kindBlock = unit.kind === 'app' ? appKindBlock(unit)
-    : unit.kind === 'reach' ? reachKindBlock(unit)
-    : pageKindBlock(unit, known)
+  let kindBlock
+  if (unit.kind === 'app') kindBlock = appKindBlock(unit)
+  else if (unit.kind === 'reach') kindBlock = reachKindBlock(unit)
+  else kindBlock = pageKindBlock(unit, known)
 
   // Assembled by a PURE composer so the hand-off is executable: every block is rendered here and ordered there.
   return composeBuildPrompt({
