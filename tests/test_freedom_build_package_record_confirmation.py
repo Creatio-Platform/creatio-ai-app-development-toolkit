@@ -42,12 +42,21 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
         effective_idx = body.index("const effectiveState")
         self.assertLess(own_idx, effective_idx,
             "`own` must be computed before `effectiveState` derives from it")
+        # Review fix (PR #123): the resolution moved into its own pure helper, `resolvePackageState`, so
+        # every SCHEDULING consumer (`appUnitFor`/`isOpenApp`) can be handed the same resolved fact this
+        # gate trusts, instead of re-deriving it (or re-reading the raw, unconfirmed `packageState`)
+        # downstream. The actual 'unknown' → 'exists' resolution behaviour — including that it is scoped to
+        # a matching package NAME and never applied to a confident 'absent' — is proven by REAL EXECUTION in
+        # engine-tests/classic-to-freedom/run-infra.mjs (the `resolvePackageState` and "THE BLOCKER FIX
+        # ITSELF" checks), not re-asserted here as source text.
         self.assertRegex(
-            body[effective_idx:effective_idx + 200],
-            r"const effectiveState\s*=\s*\(own\s*&&\s*packageState === 'unknown'\)\s*\?\s*'exists'\s*:\s*packageState",
-            "an own-package record must resolve an INCONCLUSIVE ('unknown') live check to 'exists' — this is "
-            "the ENG-95884 fix: a resumed round's own record of having minted the package outranks a "
-            "`list-packages`/`find-app` sweep that could not tell")
+            body[effective_idx:effective_idx + 120],
+            r"const effectiveState\s*=\s*resolvePackageState\(targetPackage,\s*packageState,\s*packageCreatedByRun\)",
+            "`packagePreconditionStop` must derive `effectiveState` from the shared `resolvePackageState` helper "
+            "so the stop and downstream scheduling can never observe two different resolved facts")
+        self.assertIn(
+            "const resolvePackageState = (targetPackage, packageState, packageCreatedByRun) => {",
+            self.workflow)
 
         # Every DECISION (an `if` condition) after that point must branch on `effectiveState`, never on the
         # raw `packageState` — a single stale `if` comparing `packageState` again would silently bypass the
@@ -124,6 +133,36 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
                 continue
             self.assertIn("await acceptReconciled(", line,
                 f"acceptReconciled is now async — every call site must await it: {line!r}")
+
+    def test_both_call_sites_write_the_resolved_state_back_before_scheduling(self):
+        # Review fix (PR #123, Blocker): `packagePreconditionStop` clearing a stop on the run's own record was
+        # not enough — `appUnitFor`/`isOpenApp` at scheduling read `state.packageState` directly and saw the
+        # raw, unresolved report, so a resumed run's own success could still get `create-app` re-dispatched
+        # over it. Both places that decide the stop must write the SAME resolved fact back onto `state`
+        # before anything downstream reads `state.packageState` again — pin that write exists at both sites.
+        write_back = "state = { ...state, packageState: resolvePackageState(state.targetPackage, state.packageState, ownPackageNow()) }"
+
+        baseline_start = self.workflow.index("// --- HARD STOP 3: the target package cannot be established")
+        baseline_end = self.workflow.index("// --- HARD STOP 3.5", baseline_start)
+        baseline = self.workflow[baseline_start:baseline_end]
+        confirm_idx = baseline.index("await confirmPackageStop(stopOnPackage,")
+        write_idx = baseline.index(write_back)
+        stop_check_idx = baseline.index("if (stopOnPackage) {")
+        self.assertLess(confirm_idx, write_idx,
+            "the write-back must happen AFTER ownership is confirmed, not before")
+        self.assertLess(write_idx, stop_check_idx,
+            "the write-back must happen BEFORE the stop branch returns, so Hard Stop 4's `appUnitFor` calls "
+            "further down this closure see the resolved state on every path, stopped or not")
+
+        mid_start = self.workflow.index("async function acceptReconciled(next, whereFrom)")
+        mid_end = self.workflow.index("\n}\n", mid_start)
+        mid = self.workflow[mid_start:mid_end]
+        mid_confirm_idx = mid.index("await confirmPackageStop(stopPkg,")
+        mid_write_idx = mid.index(write_back)
+        mid_schedule_idx = mid.index("schedule = scheduleUnits(")
+        self.assertLess(mid_confirm_idx, mid_write_idx)
+        self.assertLess(mid_write_idx, mid_schedule_idx,
+            "the mid-run write-back must land before `scheduleUnits`/`appUnitFor` are called with `packageState`")
 
     def test_stop_text_distinguishes_unread_from_confirmed_absent(self):
         for site_marker in ("// ENG-95884 — distinguish \"confirmed absent\" from \"not read\"",

@@ -1362,6 +1362,15 @@ const ownPackageRecord = (rec, targetPackage) => {
   if (!name || !planned || name !== planned) return null
   return { package: name, appUnitComplete: rec.appUnitComplete === true, planVersion: rec.planVersion ?? null, sectionPage: rec.sectionPage ?? null }
 }
+// ENG-95884 — the RESOLVED package state, exposed as its own pure helper so every consumer that decides what to
+// SCHEDULE (`appUnitFor`/`isOpenApp`, not just this gate) can be handed the same fact `packagePreconditionStop`
+// already trusts, instead of re-reading the raw, unconfirmed report. Without this, a resumed run whose own record
+// proves the package exists clears the stop below while `appUnitFor` downstream still sees `packageState:
+// 'unknown'` and re-schedules `create-app` over a package the run's own record already proves is there.
+const resolvePackageState = (targetPackage, packageState, packageCreatedByRun) => {
+  const own = ownPackageRecord(packageCreatedByRun, targetPackage)
+  return (own && packageState === 'unknown') ? 'exists' : packageState
+}
 function packagePreconditionStop(targetPackage, packageState, sectionHost, packageCreatedByRun) {
   const own = ownPackageRecord(packageCreatedByRun, targetPackage)
   // ENG-95884 — an INCONCLUSIVE live check is not stronger evidence than the run's OWN record of having minted
@@ -1372,7 +1381,7 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
   // when the record agrees, BEFORE any branch below runs, so a resumed run's own success is never re-litigated as
   // "inconclusive". Deliberately NOT applied to a CONFIDENT 'absent': that would mean the package was removed
   // after this run made it, which is a stand-vs-record conflict worth its own stop, never a silent resume.
-  const effectiveState = (own && packageState === 'unknown') ? 'exists' : packageState
+  const effectiveState = resolvePackageState(targetPackage, packageState, packageCreatedByRun)
   // `new-app` over a package that ALREADY exists is unsatisfiable by construction, so it is a stop rather than a
   // unit. `create-app` mints its OWN package, and the app unit's acceptance criterion is an exact equality with
   // the planned package name — no `create-app` can produce a package that is already there. The only route to an
@@ -2124,7 +2133,7 @@ async function confirmPackageRecordAbsent() {
       agentType: 'general-purpose', schema: PACKAGE_RECORD_SCHEMA, phase: 'Reconcile',
       label: attempt === 1 ? 'reconcile:package-record' : `reconcile:package-record:retry-${attempt - 1}`,
     })
-    if (answer && answer.read) return answer
+    if (answer?.read) return answer
     if (attempt < PACKAGE_RECORD_READ_ATTEMPTS) log(`package-record re-read returned nothing usable on attempt ${attempt} of ${PACKAGE_RECORD_READ_ATTEMPTS} — retrying the SAME single-purpose read before trusting the stop`)
   }
   return { read: false, packageCreated: null }
@@ -2146,16 +2155,22 @@ const ownPackageNow = () => standWrites.packageCreated || state?.packageCreatedB
 // the (possibly cleared) stop plus whether the record was actually confirmed absent or merely never read.
 async function confirmPackageStop(candidateStop, targetPackage, pkgState, sectionHost) {
   if (!candidateStop || (candidateStop.stopped !== 'target-package-unknown' && candidateStop.stopped !== 'new-app-over-existing-package')) {
-    return { stop: candidateStop, unread: false }
+    return { stop: candidateStop, unread: false, viaReread: false }
   }
-  if (ownPackageNow()) return { stop: candidateStop, unread: false }
+  if (ownPackageNow()) return { stop: candidateStop, unread: false, viaReread: false }
   log(`no standWrites.packageCreated on the baseline report — confirming with one dedicated read of ${QUEUE_FILE} before trusting ${candidateStop.stopped}`)
   const record = await confirmPackageRecordAbsent()
   if (record.read) {
     state = { ...state, packageCreatedByRun: record.packageCreated || null }
-    return { stop: packagePreconditionStop(targetPackage, pkgState, sectionHost, ownPackageNow()), unread: false }
+    const resolvedStop = packagePreconditionStop(targetPackage, pkgState, sectionHost, ownPackageNow())
+    // ENG-95884 review (thread 2) — flag rather than silently clear: a stop cleared via THIS path rests on
+    // one fresh agent's unverified report of the queue file (`confirmPackageRecordAbsent`), not on the
+    // baseline Reconcile-derived `own` record `ownPackageNow()` already had in hand above. No independent
+    // corroboration is added here — that would widen this fix past what ENG-95884 covers — but an operator
+    // auditing a resume can now see it hinged on this re-read, not on the baseline record.
+    return { stop: resolvedStop, unread: false, viaReread: !resolvedStop }
   }
-  return { stop: candidateStop, unread: true }
+  return { stop: candidateStop, unread: true, viaReread: false }
 }
 // WHETHER `create-app` IS BEHIND US (ENG-95468). The app/package identity check guards that one write, so on a
 // resume whose own app unit already closed on its full deliverable there is nothing left for it to protect — the
@@ -2234,7 +2249,17 @@ if (state.sectionHost === 'new-app' && typeof state.schemaNamePrefix !== 'string
 }
 let stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
 let packageRecordUnread = false
-;({ stop: stopOnPackage, unread: packageRecordUnread } = await confirmPackageStop(stopOnPackage, state.targetPackage, state.packageState, state.sectionHost))
+let packageRecordViaReread = false
+;({ stop: stopOnPackage, unread: packageRecordUnread, viaReread: packageRecordViaReread } = await confirmPackageStop(stopOnPackage, state.targetPackage, state.packageState, state.sectionHost))
+// ENG-95884 (fix) — write the RESOLVED state back onto `state` as soon as ownership is settled (by the direct
+// record above or by `confirmPackageStop`'s re-read), so every later reader of `state.packageState` in this
+// closure — `appUnitFor`/`isOpenApp` at Hard Stop 4's checkpoint checks and at scheduling below — observes the
+// same resolved fact this stop just trusted, not the raw pre-confirmation 'unknown'.
+state = { ...state, packageState: resolvePackageState(state.targetPackage, state.packageState, ownPackageNow()) }
+// ENG-95884 review (thread 2) — an operator-visible audit trail: this resume proceeded on ONE fresh agent's
+// unverified re-read of the queue file, not on the baseline Reconcile-derived record. Minimum flag taken per
+// review; no independent corroboration added (out of this ticket's scope).
+if (packageRecordViaReread) log(`NOTE — the target package stop cleared via the dedicated ${QUEUE_FILE} re-read, not the baseline Reconcile record — this resume's ownership rests on that one unverified agent read`)
 if (stopOnPackage) {
   const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
   const alsoTemplates = templateMismatchesNow.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : ''
@@ -3492,7 +3517,11 @@ async function acceptReconciled(next, whereFrom) {
   // app unit's success — which is exactly what it did before ENG-95850.
   let stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
   let pkgRecordUnread = false
-  ;({ stop: stopPkg, unread: pkgRecordUnread } = await confirmPackageStop(stopPkg, state.targetPackage, state.packageState, state.sectionHost))
+  let pkgRecordViaReread = false
+  ;({ stop: stopPkg, unread: pkgRecordUnread, viaReread: pkgRecordViaReread } = await confirmPackageStop(stopPkg, state.targetPackage, state.packageState, state.sectionHost))
+  // ENG-95884 review (thread 2) — same audit trail as the baseline call site: a mid-run resume that hinged on
+  // the dedicated re-read, not the baseline Reconcile record, is worth an operator-visible note.
+  if (pkgRecordViaReread) log(`NOTE after ${whereFrom} — the target package stop cleared via the dedicated ${QUEUE_FILE} re-read, not the baseline Reconcile record — this resume's ownership rests on that one unverified agent read`)
   if (stopPkg) {
     log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
     return {
@@ -3537,6 +3566,10 @@ async function acceptReconciled(next, whereFrom) {
       next: planInvalidNextAll(midRunMismatches, midRunTemplates, midRunIdentity, 'Anything already built this run is on disk.'),
     }
   }
+  // ENG-95884 (fix) — same write-back as the baseline call site: resolve `state.packageState` against the now-
+  // confirmed ownership record BEFORE it feeds `appUnitFor` below, so a mid-run refresh that reports `'unknown'`
+  // over a package this run's own record already proves does not re-schedule `create-app` over it.
+  state = { ...state, packageState: resolvePackageState(state.targetPackage, state.packageState, ownPackageNow()) }
   packageState = state.packageState || packageState
   schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
   return null
