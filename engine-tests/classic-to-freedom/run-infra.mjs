@@ -1976,9 +1976,10 @@ check("ENG-95468: workflow EXECUTES the mid-run IDENTITY gate — a Reconcile th
 
 // The builder is a Workflow-tool script that cannot import the engine, so its `GATE_COMPOSITE` literal MIRRORS the
 // engine's `GATE_KIND.COMPOSITE`. Pin both sides so the two files cannot drift to different strings.
+// The regex matches both single and double quotes so a quote-style refactor does not silently break the guard.
 check("ENG-95683: the builder's `GATE_COMPOSITE = 'composite'` literal is present and EQUALS the engine's GATE_KIND.COMPOSITE (mirrored across two files that cannot import each other)",
-  /const GATE_COMPOSITE = 'composite'/.test(wfSrc) && GATE_KIND.COMPOSITE === "composite",
-  () => ({ inSource: /const GATE_COMPOSITE = 'composite'/.test(wfSrc), engineValue: GATE_KIND.COMPOSITE }));
+  /const GATE_COMPOSITE = ['"]composite['"]/.test(wfSrc) && GATE_KIND.COMPOSITE === "composite",
+  () => ({ inSource: /const GATE_COMPOSITE = ['"]composite['"]/.test(wfSrc), engineValue: GATE_KIND.COMPOSITE }));
 
 // The carry-through: only a WELL-FORMED gated composite (kind 'composite' + a non-blank string id) is typed onto the
 // mismatch; a missing id, a wrong kind, or a blank id leaves the mismatch untyped (the generic clause then stands).
