@@ -165,7 +165,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   // where its claim disagrees with the verifier's read of the page.
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
   // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
-  "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed",
+  "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed", "runComplete",
   "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
@@ -1478,22 +1478,22 @@ check("ENG-95503 wiring: the ANSWERS ROUTED TO A UNIT are computed at dispatch f
     && /schema: buildSchemaWithResolutions\(BUILD_SCHEMAS\[buildSchemaKind\(unit, state\.evidenceIds\)\], routed\.length\)/.test(wfSrc)
     && /reportResolutionAccounting\(unit, routed, res\)/.test(wfSrc));
 check("ENG-95503 wiring: a builder that returned NOTHING still has its answers accounted for — that path used to record an absent claim and move on, and an unanswered dispatch loses answers exactly like a silent one does",
-  /log\(`build agent returned nothing for \$\{unit\.key\} — it stays open`\)[\s\S]{0,400}?reportResolutionAccounting\(unit, routed, null\)/.test(wfSrc));
-check("ENG-95503 wiring: an unconsumed answer keeps the run from reporting COMPLETE — the gate can be green and the page genuinely built while an answer the operator gave went nowhere, which is the whole failure this ticket is about",
-  /const complete = state\.verify\?\.complete === true && parked\.length === 0 && unconsumed\.length === 0/.test(wfSrc)
-    && /complete: state\.verify\?\.complete === true && !parked\.length && !unconsumed\.length/.test(wfSrc));
+  /log\(`build agent returned nothing for \$\{unit\.key\} — it stays open`\)[\s\S]{0,400}?reportResolutionAccounting\(unit, routed, null, false\)/.test(wfSrc));
+check("ENG-95503 wiring (RC-3): an unconsumed answer keeps the run from reporting COMPLETE, decided through the SHARED `runComplete` at BOTH sites — the gate can be green and the page genuinely built while an answer the operator gave went nowhere, and two inline spellings could silently drift on the ticket's own gate",
+  /const complete = runComplete\(state\.verify\?\.complete, parked, unconsumed\)/.test(wfSrc)
+    && /complete: runComplete\(state\.verify\?\.complete, parked, unconsumed\),/.test(wfSrc));
 check("ENG-95503 wiring: `unconsumedResolutions` is on EVERY return, beside `resolutionsUnmatched` — the two are the same silence from opposite ends (never reached a builder / reached one and died there), and a caller reads one field for each",
   /unconsumedResolutions: unconsumed,/.test(wfSrc)
     && /resolutionsUnmatched: state\?\.resolutionsUnmatched \|\| \[\],/.test(wfSrc));
 check("ENG-95503 wiring: the per-unit report REPLACES that unit's entries rather than appending — it runs every round the unit builds, and an entry that survived its own repair would hold the run incomplete on a question that is now answered",
-  /function reportResolutionAccounting\(unit, routed, res\)[\s\S]{0,1400}?unconsumed = unconsumed\.filter\(/.test(wfSrc));
+  /function reportResolutionAccounting\(unit, routed, res, dispatched = true\)[\s\S]{0,1400}?unconsumed = unconsumed\.filter\(/.test(wfSrc));
 // PR #128 review (RC-2a / RC-2b) — THE ORDER, asserted rather than incidental. The clear must run BEFORE the
 // `routed`-empty guard: the only condition that empties `routed` is the condition under which a stale entry needs
 // clearing (a withdrawn answer, a re-routed `list-*` item, an id a re-plan shifted), so a guard-first ordering makes
 // exactly those entries immortal and `complete` unreachable for the folder. The previous pin used a span regex that
 // matched either ordering, so hoisting or un-hoisting the line was invisible to this suite.
 check("ENG-95503 review fix: the per-unit clear runs ABOVE the `routed`-empty early return — the ONE case that empties `routed` is the case a stale entry has to be cleared in, so a guard-first ordering makes that entry immortal",
-  /function reportResolutionAccounting\(unit, routed, res\)[\s\S]{0,1400}?unconsumed = unconsumed\.filter\([\s\S]{0,120}?if \(!\(routed \|\| \[\]\)\.length\) return/.test(wfSrc));
+  /function reportResolutionAccounting\(unit, routed, res, dispatched = true\)[\s\S]{0,1400}?unconsumed = unconsumed\.filter\([\s\S]{0,120}?if \(!\(routed \|\| \[\]\)\.length\) return/.test(wfSrc));
 // The other half of RC-6b: the clear is SCOPED, so the next dispatch cannot erase a verifier-confirmed row.
 check("ENG-95503 review fix: the per-unit clear is scoped to DISPATCH-sourced rows — a verifier-confirmed contradiction must survive the next build, or an untrusted `applied: true` erases the record that exists to disbelieve it",
   /unconsumed = unconsumed\.filter\(\(u\) => !\(u\.unit === unit\.key && u\.source !== UNCONSUMED_FROM_VERIFIER\)\)/.test(wfSrc));
@@ -1515,8 +1515,8 @@ check("ENG-95503 wiring: the VERIFIER is asked for `resolutionChecks` and the ro
 // existed, and `complete`'s formula still contained `unconsumed.length === 0` — while mechanism 2 quietly degraded
 // to a log line plus a `discrepancies` row that blocks nothing, which is precisely the reopened run's failure this
 // PR exists to close. The repair-budget pin does not reach here either: it matches on `unit.key`, not `c.unit`.
-check("ENG-95503 review fix: a verifier-confirmed contradiction is APPENDED to `unconsumed` and RE-OPENS its unit — being called is not being believed, and without these two lines mechanism 2 is a log line that gates nothing",
-  /unconsumed = \[\.\.\.unconsumed, \{ unit: c\.unit, id: c\.id, kind: c\.kind, item: c\.item, answer: c\.answer, why: c\.found \}\]/.test(wfSrc)
+check("ENG-95503 review fix: a verifier-confirmed contradiction is APPENDED to `unconsumed` — carrying its `source` tag (RC-2) — and RE-OPENS its unit; being called is not being believed, and without these two lines mechanism 2 is a log line that gates nothing",
+  /unconsumed = \[\.\.\.unconsumed, \{ unit: c\.unit, id: c\.id, kind: c\.kind, item: c\.item, answer: c\.answer, how: c\.how, source: c\.source, why: c\.found \}\]/.test(wfSrc)
     && /if \(!resolutionsReopened\.has\(c\.unit\)\) \{ resolutionsReopened\.add\(c\.unit\); resolutionsPending\.add\(c\.unit\) \}/.test(wfSrc));
 // PR #128 review (RC-3) — WHERE the answer channel spends its ONE repair round. `findingsPending.delete` sits below
 // the `!res` early return so a dead build agent does not burn a findings round; this one used to sit ABOVE it, so a
@@ -1594,6 +1594,45 @@ check("PR #128 review: `reconcileUnconsumed` tolerates the empty and absent shap
     && wf.reconcileUnconsumed(undefined, rcOwed(), new Set()).length === 0
     && wf.reconcileUnconsumed(null, new Set(), new Set()).length === 0,
   () => "empty and absent are both []");
+
+/* ===================================================================================================
+   PR #128 SECOND-ROUND REVIEW (Alexandr-Kravchuk) — five confirmed findings, each asserted here. RC-1
+   (`pairKey` NUL) was already addressed at head and is covered by the runtime + no-raw-NUL guards above.
+   =================================================================================================== */
+
+// RC-2 — the verifier-REFUTED claim is tagged at its SOURCE, and the push into `unconsumed` forwards that tag (pinned
+// on source above). Without it the per-unit clear reads the row as dispatch-sourced and the next dispatch erases the
+// independent read; the reconcile tests above already prove a correctly-tagged row survives and retracts by `yes`.
+check("PR #128 review (RC-2): a verifier-REFUTED claim (`shows: no`) becomes ONE contradiction tagged `UNCONSUMED_FROM_VERIFIER` — the tag the push must forward, or the per-unit clear treats the independent read as an erasable dispatch row",
+  () => { const c = wf.resolutionContradictions(accClaims, [
+      { unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: "no such filter on the page" }]);
+    return c.length === 1 && c[0].id === ACC_ID_B && c[0].source === SHOWS.UNCONSUMED_FROM_VERIFIER; },
+  () => wf.resolutionContradictions(accClaims, [{ unit: "main", id: ACC_ID_B, shows: SHOWS.SHOWS_NO, found: "x" }]));
+
+// RC-3 — the run verdict is ONE executed helper, and both sites call it (the wiring pin above matches exactly two).
+check("PR #128 review (RC-3): `runComplete` is green ONLY when the gate is complete AND nothing is parked AND nothing is unconsumed — the ticket's own acceptance gate, executed against its truth table instead of matched as source text",
+  () => wf.runComplete(true, [], []) === true
+    && wf.runComplete(true, [], [{ unit: "main", id: "x" }]) === false
+    && wf.runComplete(true, [{ key: "p" }], []) === false
+    && wf.runComplete(false, [], []) === false
+    && wf.runComplete(undefined, [], []) === false,
+  () => ({ green: wf.runComplete(true, [], []), oneUnconsumed: wf.runComplete(true, [], [{ id: "x" }]) }));
+check("PR #128 review (RC-3): EXACTLY TWO sites decide `complete` through `runComplete` — the close and the nothing-to-build early return — so neither can restate the formula and drift",
+  () => (wfSrc.match(/runComplete\(state\.verify\?\.complete, parked, unconsumed\)/g) || []).length === 2,
+  () => `runComplete call sites: ${(wfSrc.match(/runComplete\(state\.verify\?\.complete, parked, unconsumed\)/g) || []).length}`);
+
+// RC-4 — a build agent that never ran records the rows for the report but does NOT spend the one repair grant.
+check("PR #128 review (RC-4): the `!res` path passes `dispatched: false` and the reopen grant is guarded by `if (!dispatched) return` — a transient death (a documented `401`) records the unconsumed rows but must not burn the answer's one repair round before the builder's genuine first attempt",
+  /reportResolutionAccounting\(unit, routed, null, false\)/.test(wfSrc)
+    && /if \(!dispatched\) return[\s\S]{0,80}?if \(resolutionsReopened\.has\(unit\.key\)\) return/.test(wfSrc));
+
+// RC-5 — a repeated miss REWRITES the persisted reason in place, keeping the (unit, what) dedup its neighbour has.
+check("PR #128 review (RC-5): a repeated accounting miss REWRITES the persisted `why` in place instead of only logging — the unaccounted id can change between rounds and the row is re-seeded across resumes, so a stale round-1 reason would outlive the miss it named",
+  /b\.why !== miss\) \? \{ \.\.\.b, why: miss \}/.test(wfSrc));
+
+// RC-6 — the build-agent `how` is length-bounded before the verifier prompt, the same cap `answer` has.
+check("PR #128 review (RC-6): the build-agent-written `how` is `.slice(0, 400)`-bounded before the read-only verifier's prompt, the same cap `answer` has — fencing stops a break-out, not a context-flooding string from the untrusted party this prompt exists to check",
+  /wrap\(String\(r\.how\)\.slice\(0, 400\)\)/.test(wfSrc));
 
 /* --- The wiring. Pinned on source because each site reads run state the harness cannot supply, but every pin
    names a fact with a failure mode: delete the line and the check goes red. --- */

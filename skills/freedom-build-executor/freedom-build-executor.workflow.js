@@ -1592,7 +1592,10 @@ function resolutionClaimsLine(rows, fence) {
   if (!(rows || []).length) return ''
   const wrap = typeof fence === 'function' ? fence : String
   const line = (r) => {
-    const said = r.applied ? `claims APPLIED${r.how ? ` — ${wrap(r.how)}` : ''}` : 'reports NOT applied'
+    // `r.how` IS BOUNDED (PR #128 review, RC-6). It is build-agent-authored text — the untrusted party this verifier
+    // prompt exists to check — and it reaches the read-only verifier fenced but, until this, uncapped, while the
+    // sibling `answer` a line below is `.slice(0, 400)`. Fencing stops a break-out, not a context-flooding string.
+    const said = r.applied ? `claims APPLIED${r.how ? ` — ${wrap(String(r.how).slice(0, 400))}` : ''}` : 'reports NOT applied'
     // `r.id` IS STAND-DERIVED TEXT (PR #128 review). It is composed as `{pageKey}#confirm:{kind}:{item}` from the
     // RAW `item` — a diff `bindTo`, a `define()` dependency, a source method or process name read off the customer's
     // Classic schema. It used to be interpolated into a backtick span unfenced, while the sibling
@@ -1692,6 +1695,15 @@ function reconcileUnconsumed(entries, owed, confirmed) {
     return !(u.source === UNCONSUMED_FROM_VERIFIER && confirmed.has(pair))
   })
 }
+
+// THE RUN'S `complete` VERDICT, in ONE place and EXECUTED (PR #128 review, RC-3). The engine gate can be green while
+// a park or an unconsumed answer still holds the run short: a park is an unanswered question, and an unconsumed
+// answer is one that reached a builder and produced nothing. This used to be spelled inline at two sites in two
+// spellings (`… === 0` and `!x.length`), each pinned only by a source regex that proves the text exists, not that the
+// truth table evaluates — while every sibling decision helper (`isComplete`, `isOpenPage`) was extracted and run. The
+// ticket's OWN acceptance gate was the one left un-extracted; now the two call sites cannot drift and the table is tested.
+const runComplete = (verifyComplete, parked, unconsumed) =>
+  verifyComplete === true && (parked?.length || 0) === 0 && (unconsumed?.length || 0) === 0
 
 // ENG-95503 / PR #128 review -- WHY THIS UNIT IS BEING BUILT AGAIN, for the round an unconsumed answer bought it.
 // The reopen round used to be dispatched with a BYTE-IDENTICAL prompt: neither the accounting miss nor the verifier's
@@ -2593,8 +2605,8 @@ if (!openNow().length) {
   await persistPending('nothing left to build')
   return runReturn({
     // `unconsumed` is empty on this path by construction (nothing was dispatched), and the term is written out
-    // anyway so the three places that compute `complete` state the same rule rather than three similar ones.
-    complete: state.verify?.complete === true && !parked.length && !unconsumed.length,
+    // anyway via the shared `runComplete` so this site cannot drift from the run's other `complete` decision.
+    complete: runComplete(state.verify?.complete, parked, unconsumed),
     skipped: true,
     reason: why,
     approval,
@@ -3097,7 +3109,7 @@ function reportGuidelinesMiss(unitKey, gateMiss) {
 // the engine gates on deliverables, and "this answer produced nothing" is not a deliverable it has a row for.
 // `unconsumed` is REPLACED per unit, never appended to: this runs every round the unit builds, and an entry that
 // survived its own repair would otherwise be reported twice and hold the run incomplete on a resolved question.
-function reportResolutionAccounting(unit, routed, res) {
+function reportResolutionAccounting(unit, routed, res, dispatched = true) {
   // HOISTED ABOVE THE GUARD (PR #128 review). This clear used to sit BELOW `if (!routed.length) return`, so the one
   // condition that empties `routed` -- a withdrawn answer, a `list-*` item re-routed by a newly published `list` key,
   // an id a regenerated manifest shifted -- was the one condition under which the unit's own entries could never be
@@ -3115,6 +3127,11 @@ function reportResolutionAccounting(unit, routed, res) {
     // report and any dedup would match on one literal, and then no dedup followed -- while `blockedItems` is
     // persisted AND re-seeded, so the duplicates accumulated across every round and every resume.
     if (blockedItems.some((b) => b.unit === unit.key && b.what === RESOLUTIONS_BLOCKED_WHAT)) {
+      // REFRESH THE PERSISTED REASON (PR #128 review, RC-5). The dedup above keeps ONE row per `(unit, what)`, but the
+      // specific unaccounted id can change between rounds — and `blockedItems` is persisted AND re-seeded, so a stale
+      // round-1 `why` would outlive the miss it named and mislead the operator across a resume. Rewrite it in place.
+      blockedItems = blockedItems.map((b) =>
+        (b.unit === unit.key && b.what === RESOLUTIONS_BLOCKED_WHAT && b.why !== miss) ? { ...b, why: miss } : b)
       log(`answers NOT accounted for AGAIN on \`${unit.key}\`: ${miss}`)
     } else {
       log(`answers NOT accounted for on \`${unit.key}\`: ${miss}`)
@@ -3126,6 +3143,11 @@ function reportResolutionAccounting(unit, routed, res) {
   unconsumed = [...unconsumed, ...gone]
   log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${gone.map((g) => `\`${g.id}\``).join(', ')} — the run cannot report complete while that stands`)
   // ONE re-open per unit. A second would be a loop: the same builder, the same prompt, the same refusal.
+  // NOT ON A BUILD THAT NEVER RAN (PR #128 review, RC-4). A `!res` dispatch — a transient death this file documents
+  // (`401 OAuth access token has expired`) — records the rows above for the report, but must NOT spend the answer's
+  // one repair grant: the builder never got its genuine first attempt. The unit stays open on the gate (a page that
+  // never built is never green), so it comes back next round, where a real miss then earns the reopen.
+  if (!dispatched) return
   if (resolutionsReopened.has(unit.key)) return
   resolutionsReopened.add(unit.key)
   resolutionsPending.add(unit.key)
@@ -3242,7 +3264,7 @@ async function dispatchUnit(unit, r) {
     log(`build agent returned nothing for ${unit.key} — it stays open`)
     // A builder that answered nothing consumed nothing either. Recorded now rather than inferred later: the routed
     // answers are in scope here and nowhere else, and an absent report is not a report of "no answers to apply".
-    reportResolutionAccounting(unit, routed, null)
+    reportResolutionAccounting(unit, routed, null, false)
     // An ABSENT claim is recorded as absent. Dropping the unit here would let the verifier read "this unit
     // claimed nothing" off a silence that actually means "the builder never answered" — two different facts.
     r.claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true, owesGuidelines: owesGuidelines(unit, state.evidenceIds) })
@@ -3756,7 +3778,12 @@ while (true) {
     discrepancies = [...discrepancies, { round, unit: c.unit, kind: 'resolution-not-applied',
       claim: `applied the answer to \`${c.id}\`${c.how ? ` — ${c.how}` : ''}`, found: c.found }]
     if (!unconsumed.some((u) => u.unit === c.unit && u.id === c.id)) {
-      unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, why: c.found }]
+      // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
+      // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
+      // next dispatch's untrusted `applied: true` erased the independent read that recorded the contradiction, the
+      // exact erase this round's own `source`-scoping was added to prevent. `reconcileUnconsumed` also keys on it, so
+      // without the tag a verifier-confirmed row could never be retracted by a later `shows: "yes"` either.
+      unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
     }
     if (!resolutionsReopened.has(c.unit)) { resolutionsReopened.add(c.unit); resolutionsPending.add(c.unit) }
   }
@@ -3831,7 +3858,7 @@ await persistPending('closing the run')
 // short: the gate can be green and the page genuinely built, and an answer the operator gave can still have gone
 // nowhere (a real run's `entity-filter` did). The whole point of the answers channel is that such an answer is never
 // dropped in silence, and a run that reported itself finished while holding one would be that silence.
-const complete = state.verify?.complete === true && parked.length === 0 && unconsumed.length === 0
+const complete = runComplete(state.verify?.complete, parked, unconsumed)
 log(complete
   ? `COMPLETE after ${round} round(s): the engine gate is green`
   : `NOT COMPLETE after ${round} round(s): ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s) · ${unconsumed.length} unconsumed answer(s)`)
