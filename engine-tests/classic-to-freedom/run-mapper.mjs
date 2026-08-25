@@ -9118,6 +9118,69 @@ try {
     tplGapTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplAttr"),
     () => tplGapTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
 
+  // PR review follow-up: `templateOwnedNames(eff)` covers five owner kinds (attribute/message/mixin/detail/module),
+  // but the earlier fixtures above only exercised 'attribute'. `details` key by `.key` (not `.name`, unlike the
+  // other four) — a plausible spot for the Set lookup to silently miss. Prove the guard generalizes.
+  const tplGapDetailBase = `define("Base",[],function(){return{details:{TplDetail:{schemaName:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapDetail = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapDetailBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the suppression generalizes past 'attribute' — an unreadable value on a DETAIL no client schema touched also raises no `parse-gap`",
+    !tplGapDetail.changeSet.needsDecision.some((d) => d.item === "TplDetail"),
+    () => tplGapDetail.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  check("ENG-95412 follow-up: that detail's ledger row is `context` — proving the `.key`-keyed lookup (details don't carry `.name`) matches correctly",
+    tplGapDetail.coverage?.rows.find((r) => r.kind === "detail" && r.name === "TplDetail")?.disposition === "context",
+    () => tplGapDetail.coverage?.rows.filter((r) => r.kind === "detail"));
+
+  // PR review follow-up: the PR body claims the fix "does not affect MobilePhone/Email/Skype (client's own Contact
+  // attributes)". Those are attributes a CLIENT schema declares itself (never marked `fromTemplate`), so they must
+  // keep escalating exactly as before — same shape as `tplGapTouched` above, named for the actual scenario.
+  const contactAttrsBase = `define("Base",[],function(){return{diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const contactAttrsClient = `define("P",[],function(){return{entitySchemaName:"Contact",attributes:{MobilePhone:{value:Terrasoft.Features.getIsEnabled("Widget")},Email:{value:Terrasoft.Features.getIsEnabled("Widget")},Skype:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[${nameOp}]};});`;
+  const contactAttrs = runMigration({ entity: "Contact", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: contactAttrsBase }],
+    schemas: [{ pkg: "P", body: contactAttrsClient }] }, { baseDir: FIX });
+  check("PR #125: MobilePhone/Email/Skype declared by the CLIENT's own Contact schema (not template-owned) still escalate — the template-owned suppression does not touch them",
+    ["MobilePhone", "Email", "Skype"].every((n) => contactAttrs.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === n)),
+    () => contactAttrs.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+
+  // PR #125 review — Major: `templateOwned` is built ONCE from `eff` (the MAIN page's merged attribute/message/…
+  // chain) but was applied to EVERY diagnostic in the pool, including ones from detail/profile/section schemas
+  // that never went through `mergeHierarchy` at all. A detail schema declaring its OWN, unrelated attribute under
+  // a name that happens to collide with a main-page template-owned attribute would be silently suppressed too.
+  // Fixed by gating the lookup on `templateOwnedTags` (the tags of the schemas `eff` actually merged).
+  const crossTagDetailBody = `define("SomeDetail",[],function(){return{entitySchemaName:"SomeEntity",attributes:{TplAttr:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[]};});`;
+  const crossTag = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapBase }], // declares its OWN, unrelated "TplAttr" — template-owned in the MAIN chain
+    schemas: [{ pkg: "P", body: tplGapClient }],
+    detailSchemas: { SomeDetail: { body: crossTagDetailBody, entity: "SomeEntity" } } }, { baseDir: FIX });
+  check("PR #125 review fix: a DETAIL schema's own same-named attribute is NOT suppressed by an unrelated main-page template-owned attribute of the same name — exactly one `TplAttr` parse-gap survives (the detail's), the main-page one stays suppressed",
+    crossTag.changeSet.needsDecision.filter((d) => d.kind === "parse-gap" && d.item === "TplAttr").length === 1
+    && crossTag.changeSet.needsDecision.some((d) => d.item === "TplAttr" && /detail:SomeDetail/.test(d.reason)),
+    () => crossTag.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}:${d.reason}`));
+
+  // PR #125 review — investigated, NOT a live bug: `DIAG_OWNER_ROOTS` maps `businessRules`/`rules` to owner kind
+  // "business rule", suggesting a `businessRules.<attr>.…` parse diagnostic could reach the SAME template-owned
+  // escalation path as attribute/message/mixin/detail/module. It cannot: `isStructuralDiag` treats ANY sub-path
+  // under `businessRules`/`rules` as structural unconditionally (`seg[0] !== "diff"` short-circuits to `true`),
+  // so `reportedElsewhere` filters every such diagnostic out BEFORE `diagnosticOwner`/`templateOwned` ever run —
+  // the "business rule" branch of `diagnosticOwner` is unreachable dead code from that direction. The real
+  // consequence is the opposite of "silently escalates to a soft decision": an unresolved business-rule property
+  // — template-owned or not, touched or not — HARD BLOCKS THE WHOLE GATE via `computeGate`'s own `structDiag`
+  // check. That is an existing, deliberate design choice (a rule's condition config genuinely cannot be built
+  // from an unreadable piece), not something this PR's `templateOwnedNames` mechanism was ever positioned to
+  // affect. Proven here rather than assumed.
+  const bizRuleBase = `define("Base",[],function(){return{businessRules:{Contact:{r1:{enabled:Terrasoft.Features.getIsEnabled("Widget"),ruleType:0,property:2}}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const bizRuleClient = `define("P",[],function(){return{entitySchemaName:"X",diff:[${nameOp}]};});`;
+  const bizRule = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: bizRuleBase }],
+    schemas: [{ pkg: "P", body: bizRuleClient }] }, { baseDir: FIX });
+  check("PR #125 review (investigated): an unresolved business-rule property on an UNTOUCHED template-owned attribute never reaches `needsDecision` as a `parse-gap` — it blocks the GATE instead (structural, unconditional), so `templateOwnedNames` has nothing to suppress here",
+    !bizRule.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "Contact")
+    && bizRule.gate.blocked
+    && bizRule.gate.reasons.some((r) => /businessRules\.Contact\.r1\.enabled/.test(r)),
+    () => ({ needsDecision: bizRule.changeSet.needsDecision, gate: bizRule.gate }));
+
   // Drift: unequal severities, by design.
   check("ENG-95412: drift — a value MISMATCH on a pinned member is reported (every element of that kind would be mis-identified)",
     enumDriftIssues({ ViewItemType: { DETAIL: 99 } }).mismatches.join("") === "ViewItemType.DETAIL: engine 2, stand 99",

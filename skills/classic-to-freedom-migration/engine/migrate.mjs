@@ -1200,7 +1200,7 @@ function markOwnerRowWithGap(changeSet, owner, gapPath) {
   }
 }
 
-function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, templateOwned) {
+function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, templateOwned, templateOwnedTags) {
   const seen = new Set();                                        // one row per owner+kind+path+LAYER
   for (const d of parseDiagnostics) {
     const p = String(d.path || "");
@@ -1211,7 +1211,12 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, te
     // it `context` (excluded by design, never a gap). Escalating its parse ambiguity to `needsDecision` would rank
     // it `decision` instead (disposition() ranks decision above context) and hand a human a platform-owned value
     // that isn't theirs to resolve and carries no new information — the exact defect ENG-95412's reopening found.
-    if (ownerKind && templateOwned?.[ownerKind]?.has(item)) continue;
+    // `templateOwned` is built from `eff` (main + seed chain ONLY, see call site) and keyed by NAME alone — a
+    // detail/profile/section schema can declare its own member under a name that collides with an unrelated
+    // template-owned main-page member. `templateOwnedTags` gates the lookup to diagnostics that actually came
+    // from the main/seed chain `eff` was merged from, so a same-named member from a different layer never
+    // borrows another layer's disposition.
+    if (ownerKind && templateOwnedTags?.has(tag) && templateOwned?.[ownerKind]?.has(item)) continue;
     // The layer is part of the key, not just the text: two genuinely different occurrences at the same path in
     // different packages are two gaps, and collapsing them hides the base-layer one behind the client layer.
     const key = `${item}|${d.kind}|${p}|${tag}`;
@@ -2129,13 +2134,14 @@ export function runMigration(manifest, opts = {}) {
   reportDynamicMappingProps(schemas, changeSet);
   // …and every OTHER recorded diagnostic in the POOL, routed to its owning member. Keyed the same way
   // `parseDiagnostics` tags its entries, so a `diff.<n>` path resolves against the body it actually came from.
+  const mainChainTags = new Set([...schemas, ...seedTemplate].map((l) => diagTag(l.pkg)));
   const diagSchemaByTag = new Map([
     ...[...schemas, ...seedTemplate].map((l) => [diagTag(l.pkg), l]),
     ...Object.entries(detailSchemas).map(([name, d]) => [diagTag(`detail:${name}`), d]),
     ...Object.entries(profileSchemas).map(([name, p]) => [diagTag(`profile:${name}`), p]),
     ...sectionSchemas.map((l) => [diagTag(l.pkg, "section"), l]),
   ]);
-  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet, templateOwnedNames(eff));
+  reportRemainingDiagnostics(parseDiagnostics, diagSchemaByTag, changeSet, templateOwnedNames(eff), mainChainTags);
   // ENUM DRIFT, advisory arm. `computeGate` consumes `mismatches` (the arm that BLOCKS); this is the other severity
   // the drift guard is specified to have: a member only the STAND carries. It must NOT block — blocking would stop
   // every migration the day a platform release adds a member — but it must reach the plan, because it is the only
