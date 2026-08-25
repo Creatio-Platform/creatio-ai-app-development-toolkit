@@ -218,26 +218,32 @@ class CliFallbackTest(unittest.TestCase):
         self.assertIn("fell back to 1.25", out)
 
 
+def _build_compare_export(cr, m5, page):
+    """A minimal export usable by `compare()`/`run(..., "summary")`: one
+    agent transcript plus a journal recording the given built page (or none,
+    for `page=None` -- a schema-only / rule-only run)."""
+    root = tempfile.mkdtemp(prefix="cc-cmp-")
+    wf = os.path.join(root, "sess-1", "subagents", "workflows", "wf_a")
+    os.makedirs(wf)
+    with open(os.path.join(wf, "agent-a.jsonl"), "w", encoding="utf-8") as f:
+        f.writelines([
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cr=cr, m5=m5, out=5),
+                               "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
+        ])
+    with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
+        if page is not None:
+            f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
+    return root
+
+
 class CompareAndSummaryTest(unittest.TestCase):
     """The concise single-run summary, and the cost-only baseline->candidate
     compare with its same-section guard and verdict."""
 
     def _export(self, cr, m5, page):
-        root = tempfile.mkdtemp(prefix="cc-cmp-")
+        root = _build_compare_export(cr, m5, page)
         self._tmp.append(root)
-        wf = os.path.join(root, "sess-1", "subagents", "workflows", "wf_a")
-        os.makedirs(wf)
-        with open(os.path.join(wf, "agent-a.jsonl"), "w", encoding="utf-8") as f:
-            f.writelines([
-                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
-                _line({"message": {"role": "assistant", "usage": _usage(cr=cr, m5=m5, out=5),
-                                   "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
-            ])
-        with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
-            # page=None models a schema-only / rule-only run: a journal that
-            # records no built page schemas, so built_pages stays empty.
-            if page is not None:
-                f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
         return root
 
     def setUp(self):
@@ -380,19 +386,8 @@ class VersionNoteTest(unittest.TestCase):
         self.assertIn("not a saved cost-counter summary", buf.getvalue())
 
     def _export(self, cr, m5, page):
-        root = tempfile.mkdtemp(prefix="cc-cmp-")
+        root = _build_compare_export(cr, m5, page)
         self._tmp.append(root)
-        wf = os.path.join(root, "sess-1", "subagents", "workflows", "wf_a")
-        os.makedirs(wf)
-        with open(os.path.join(wf, "agent-a.jsonl"), "w", encoding="utf-8") as f:
-            f.writelines([
-                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
-                _line({"message": {"role": "assistant", "usage": _usage(cr=cr, m5=m5, out=5),
-                                   "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
-            ])
-        with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
-            if page is not None:
-                f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
         return root
 
     def setUp(self):
