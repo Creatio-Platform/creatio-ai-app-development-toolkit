@@ -42,6 +42,9 @@ const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skill
 const TAXONOMY = ["category", "synonyms", "useCases", "whenToUse", "whenNotToUse", "appliesToCustomEntities", "entityCouplingNote"];
 // Per-input metadata a check can act on. `description` is deliberately excluded (prose, ~80% of the bytes).
 const INPUT_META = ["type", "values", "default", "deprecated", "deprecationReason"];
+// Per-output metadata. Outputs are events, not typed props, so there is no `type`/`values`/`default` to carry —
+// only deprecation, mirroring the input side.
+const OUTPUT_META = ["deprecated", "deprecationReason"];
 
 function argValue(flag) {
   const i = process.argv.indexOf(flag);
@@ -103,7 +106,13 @@ for (const [vi, v] of versions.entries()) {
       Object.assign(cur, pick(meta, INPUT_META), { v: cur.v | bit });
       entry.inputs[k] = cur;
     }
-    for (const k of Object.keys(c.outputs || {})) entry.outputs[k] = { v: (entry.outputs[k]?.v || 0) | bit };
+    for (const [k, meta] of Object.entries(c.outputs || {})) {
+      const cur = entry.outputs[k] || { v: 0 };
+      // Same last-version-wins rule as inputs (see above): the newest contract's deprecation state is the one
+      // that matters to a migration targeting the newest platform.
+      Object.assign(cur, pick(meta, OUTPUT_META), { v: cur.v | bit });
+      entry.outputs[k] = cur;
+    }
     for (const t of TAXONOMY) if (c[t] !== undefined) entry.taxonomy[t] = c[t];
     components.set(c.componentType, entry);
   }
