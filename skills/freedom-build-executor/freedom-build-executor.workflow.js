@@ -437,7 +437,14 @@ const RECONCILE_SCHEMA = {
     // omitted it left the row inert — the gate silently off on the run that needs it. `evidenceFiled` and
     // `evidenceRejected` are required because the close row's overwrite guard reads them: absent, it cannot tell
     // an unfiled id from an earned one, and it then fails closed on every honest `ran: false`.
-    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected'],
+    // `preflightItems` is REQUIRED (PR #128 review, N1) with the same rationale: the two reconciles filter `unconsumed`
+    // against `owedResolutionPairs(state.preflightItems, …)`, and the routing helper on an `undefined` list returns `[]`
+    // rather than throwing — so an OMITTED list yields an empty owed set and silently ERASES every unconsumed answer, which
+    // then reports `complete: true` over a lost answer (the round-1 Blocker, reached through the immortality fix). A
+    // required field turns the omission into a schema failure the tool layer retries instead. `resolutionsReopened` and
+    // `resolutionsPending` are REQUIRED (N2) so a dropped repair-grant set cannot silently re-grant a spent round.
+    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
+    'preflightItems', 'resolutionsReopened', 'resolutionsPending'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
@@ -602,6 +609,12 @@ const RECONCILE_SCHEMA = {
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
     reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
     preflightItems: { type: 'array', items: PREFLIGHT_ITEM },
+    // The two answer-channel repair-grant sets, read back off the queue file (PR #128 review, N2). Unit keys only.
+    // `resolutionsReopened` = units that have spent their one repair round; `resolutionsPending` ⊆ it = the subset
+    // still owed that round's dispatch. Persisted directly rather than derived from `unconsumedResolutions`, because
+    // the `!res` path files an unconsumed row without spending the grant, so the derivation mis-marked those units.
+    resolutionsReopened: { type: 'array', items: { type: 'string' } },
+    resolutionsPending: { type: 'array', items: { type: 'string' } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
     // the operator believes is applied.
@@ -1890,14 +1903,27 @@ function confirmedResolutionPairs(checks) {
   }
   return out
 }
+// IS THERE A REAL PREFLIGHT ITEM LIST TO RECONCILE AGAINST? (PR #128 review, N1.) `preflightItems` is agent-transcribed
+// and NOT gated by anything before the reconcile reads it. The routing helper on an `undefined` list returns `[]` rather
+// than throwing, so an ABSENT or EMPTY list yields an empty owed set — and an empty owed set filters EVERY unconsumed entry
+// out, which then reports `complete: true` over a lost answer. This is the discriminator that keeps that erase from
+// happening on absence: a genuine withdrawal empties the ANSWER (`resolution: null`) while the ⚠ item stays in the
+// list, so the list is non-empty on that path and the ordinary owed-set drop still runs.
+function preflightItemsPresent(state) {
+  return Array.isArray(state?.preflightItems) && state.preflightItems.length > 0
+}
 // WHAT STAYS UNCONSUMED after a round, reconciled against the currently-owed set rather than per dispatched unit.
 // Two things clear an entry and NEITHER is a builder's own word about its own work: the question is no longer owed
 // at all, or this round's INDEPENDENT verifier confirmed the effect on the page. A dispatch that comes back
 // `applied: true` clears nothing here -- letting it would hand the untrusted claim the power to erase the record
 // that exists to disbelieve it, which is exactly how a verifier-confirmed contradiction used to vanish on the very
 // next round. Pure, so the gate and the report cannot disagree about what is still outstanding.
-function reconcileUnconsumed(entries, owed, confirmed) {
-  return (entries || []).filter((u) => {
+// FAILS CLOSED when `itemsPresent` is false (PR #128 review, N1): with no reliable owed-set input, erasing nothing is
+// the safe direction — a run held open on a stale answer is recoverable, a `complete: true` over a lost one is not.
+function reconcileUnconsumed(entries, owed, confirmed, itemsPresent = true) {
+  const list = entries || []
+  if (!itemsPresent) return list
+  return list.filter((u) => {
     const pair = pairKey(u.unit, u.id)
     if (!owed.has(pair)) return false
     return !(u.source === UNCONSUMED_FROM_VERIFIER && confirmed.has(pair))
@@ -2305,6 +2331,14 @@ function carryBlock(carry) {
   // built. Folding it into the conditional above would leave the file holding a stale non-empty list for ever,
   // which holds a FINISHED folder open -- the opposite failure and just as silent.
   out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = the \`id\` of every row you wrote. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
+  // PR #128 review (N2) — THE ANSWER-CHANNEL REPAIR GRANTS RIDE THE CARRY TOO. The grant markers used to be derived
+  // from `unconsumedResolutions` on resume, but a transient build death (`!res`) files an unconsumed row WITHOUT
+  // spending the grant, so the derivation over-marked those units and denied them their one repair round. Persisted
+  // directly, the fact is exact: `resolutionsReopened` = units that HAVE spent their one round (never re-grant them),
+  // `resolutionsPending` ⊆ it = the subset still owed that round's dispatch (keep them open until it runs). Written
+  // EVEN WHEN `[]`, for the same reason the list above is — an emptied set is how a resumed run learns a grant was
+  // finally consumed, and a stale non-empty one would strand a settled unit.
+  out.push(`\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is every unit that has already spent its ONE answer-channel repair round; a dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is the subset still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
   if (carry.preflightEvidence && Object.keys(carry.preflightEvidence).length) {
     out.push(`\nPREFLIGHT EVIDENCE — merge these id/value pairs into \`${BUILT_FILE}.evidence\` exactly. A DIFFERENT FILE from the queue merge above, so it needs its own answer: RETURN \`evidenceWritten\` = every id you actually merged there. \`queueWritten\` says nothing about this write, and this run drops exactly the ids you name — one you file but do not report is re-sent to the next writer (harmless, the merge is idempotent); one you report but do not file is lost. A record object goes in as that object; the literal \`false\` goes in as \`false\`, NOT as \`{}\`. Keep existing evidence and judge entries that are already in the file:\n${j(carry.preflightEvidence)}`)
   }
@@ -2346,6 +2380,7 @@ DO SIX THINGS, in order:
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
    - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
+   - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is every unit key that has already spent its ONE repair round for an unconsumed answer, and \`resolutionsPending\` is the subset still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
 
 4. REFRESH THE BUILT FILE AND RUN THE GATE.
@@ -2413,7 +2448,7 @@ function mergeContinuationCounters(continuationOf) {
     if (Number.isInteger(count) && count > 0) continuations[key] = Math.max(continuations[key] ?? 0, count)
   }
 }
-const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched], continuations, preflightEvidence, standWrites, unconsumed })
+const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, resolutionsReopened: [...resolutionsReopened], resolutionsPending: [...resolutionsPending] })
 
 // ENG-95850 (A3) — RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later
 // phase depends on it, so a transient failure there costs the whole run: measured on the Applicant baseline, two
@@ -2754,20 +2789,21 @@ pageSchemas = { ...state.pageSchemas }
 // Which is the failure this whole ticket exists to end, arriving one session boundary later.
 // RECONCILED AS IT IS SEEDED, not merely copied: a persisted entry whose question the operator has since withdrawn,
 // or whose id a re-plan has shifted, must not come back from the dead and hold a finished folder open for ever.
+// FAILS CLOSED ON AN ABSENT ITEM LIST (PR #128 review, N1): `preflightItems` is agent-transcribed, and an omitted or
+// empty list makes `owedResolutionPairs` empty, which would erase EVERY entry and report `complete: true` over a lost
+// answer. So the reconcile only drops when there is a real item list to judge against; a genuine withdrawal keeps the
+// ⚠ item with `resolution: null`, so the list stays non-empty and the ordinary drop still runs.
 unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
-  owedResolutionPairs(state.preflightItems, state.unitKeys), new Set())
-// THE ONCE-PER-UNIT REPAIR GRANT SURVIVES THE PROCESS TOO (PR #128 review, RC-8). `resolutionsReopened` is the ONLY
+  owedResolutionPairs(state.preflightItems, state.unitKeys), new Set(), preflightItemsPresent(state))
+// THE ONCE-PER-UNIT REPAIR GRANT SURVIVES THE PROCESS TOO (PR #128 review, RC-8 + N2). `resolutionsReopened` is the ONLY
 // gate against re-granting a unit its single answer-channel repair round (`reportResolutionAccounting` returns early on
-// `.has(unit.key)`), yet it was process-local while `unconsumed` — the record that PROVES the grant was already spent —
-// is persisted and re-seeded just above. So every resume re-opened the once-only grant for any unit still carrying an
-// unconsumed entry, and SKILL.md states that bound unqualified ("buys its unit ONE repair round"), with no per-process
-// caveat. A persisted entry of EITHER source is only ever written in the same call that adds the unit to
-// `resolutionsReopened` (the dispatch path at `reportResolutionAccounting`, the verifier path at the round tail), so the
-// set of units carrying a reconciled unconsumed entry is exactly the set whose grant is already spent: seed it back.
-// NOT `resolutionsPending` — that channel FORCES a fresh repair dispatch, which is the very over-grant this closes; a
-// unit that genuinely produced no build action is still open on the engine gate and returns through the normal
-// schedule, where the seeded `resolutionsReopened` denies it a second grant.
-for (const u of unconsumed) resolutionsReopened.add(u.unit)
+// `.has(unit.key)`), and `resolutionsPending` ⊆ it is the subset still owed that round's dispatch. Both now RIDE THE
+// CARRY and are seeded straight from the queue, EXACTLY like `unconsumed`. The earlier RC-8 fix derived `reopened` from
+// the reconciled `unconsumed` instead — but the `!res` path files an unconsumed row WITHOUT spending the grant (RC-4),
+// so the derivation over-marked those units and denied them their one repair round (N2). Seeding the real persisted
+// sets makes the fact exact in both directions: no resume re-grants a spent round, and no transient death loses one.
+for (const k of state.resolutionsReopened || []) resolutionsReopened.add(k)
+for (const k of state.resolutionsPending || []) resolutionsPending.add(k)
 
 packageState = state.packageState || null
 let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
@@ -2901,7 +2937,7 @@ function markEvidenceFiled(ids) {
 // inside the round and left to a LATER phase to write, so a kill during Build took the whole round's answer
 // with it. This fingerprint is what makes "is there anything unwritten?" a question with an answer, so the
 // round-close write below can run when there is something to write and be skipped when there is not.
-const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed])
+const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending]])
 let carryPersisted = carryFingerprint()
 async function persistPending(why) {
   const unpersistedParks = parked.filter((p) => !parksPersisted.has(p.key))
@@ -4208,10 +4244,11 @@ while (true) {
   }
   // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier confirmed
   // (PR #128 review). The only place a verifier-sourced entry is cleared, and the only place an entry whose question
-  // has gone away is dropped -- both jobs the per-dispatch clear structurally could not do.
+  // has gone away is dropped -- both jobs the per-dispatch clear structurally could not do. FAILS CLOSED on an absent
+  // item list (N1), same as the seed above: an under-reported `preflightItems` must not silently erase the set here.
   unconsumed = reconcileUnconsumed(unconsumed,
     owedResolutionPairs(state.preflightItems, state.unitKeys),
-    confirmedResolutionPairs(lastVerifier?.resolutionChecks))
+    confirmedResolutionPairs(lastVerifier?.resolutionChecks), preflightItemsPresent(state))
   // IN-CONTEXT PARKS FIRST (ENG-95469): a unit whose builder spent its one bounded fix and stayed short parks after
   // ONE round, with its own gate's open rows as the reason — before the round-budget park runs, so the same unit is
   // never double-parked and its reason names the bounded fix rather than a round count. Confirmed against the fresh

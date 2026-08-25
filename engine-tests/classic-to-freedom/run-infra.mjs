@@ -168,7 +168,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   // where its claim disagrees with the verifier's read of the page.
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
   // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
-  "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed", "runComplete",
+  "pairKey", "owedResolutionPairs", "confirmedResolutionPairs", "reconcileUnconsumed", "preflightItemsPresent", "runComplete",
   "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
@@ -700,7 +700,7 @@ check("ENG-95471 review fix: none of the files that carried the retired `guideli
   staleScalarHits.length === 0,
   () => ({ hits: staleScalarHits.map((f) => f.rel + (existsSync(f.abs) ? " (still names it)" : " (MISSING)")) }));
 check("ENG-95471 review fix: the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two",
-  /required: \['approval'[\s\S]{0,1400}'evidenceIds', 'evidenceFiled', 'evidenceRejected'\]/.test(wfSrc));
+  /required: \['approval'[\s\S]{0,2600}'evidenceIds', 'evidenceFiled', 'evidenceRejected'/.test(wfSrc));
 check("ENG-95471 review fix: an ABSENT `evidenceFiled` yields the UNKNOWN set, not an empty one — the two must not collapse, or the overwrite guard silently stops firing",
   /const earnedFrom = \(filed, rejected\) => \(Array\.isArray\(filed\)[\s\S]{0,140}: null\)/.test(wfSrc));
 // The BUILDER-FACING wording, pinned on the shipped constant. `ran: false` is an honest answer whose row is a hard
@@ -1803,7 +1803,7 @@ check("PR #128 review (RC-6): the build-agent-written `how` is `.slice(0, 400)`-
 /* --- The wiring. Pinned on source because each site reads run state the harness cannot supply, but every pin
    names a fact with a failure mode: delete the line and the check goes red. --- */
 check("PR #128 review: `unconsumed` RIDES IN THE CARRY, so the record survives the process that found it — a well-formed `applied: false` leaves no `blocked` row and no `discrepancies` row, so without this it was the ONE outcome with no persisted trace at all",
-  /const carryNow = \(\) => \(\{[^}]*standWrites, unconsumed \}\)/.test(wfSrc));
+  /const carryNow = \(\) => \(\{[^}]*standWrites, unconsumed,/.test(wfSrc));
 check("PR #128 review: the carry block instructs the writer to persist `unconsumedResolutions` EVEN WHEN EMPTY — an emptied list is how a resumed run learns the answer was finally built, and a conditional write would leave a stale list holding a finished folder open for ever",
   /UNCONSUMED OPERATOR ANSWERS[\s\S]{0,200}?unconsumedResolutions[\s\S]{0,200}?EVEN WHEN IT IS/.test(wfSrc)
     && /out\.push\(`\\nUNCONSUMED OPERATOR ANSWERS/.test(wfSrc));
@@ -1811,9 +1811,9 @@ check("PR #128 review: Reconcile can REPORT the record back — a field the sche
   /unconsumedResolutions: \{[\s\S]{0,400}?required: \['unit', 'id'\]/.test(wfSrc)
     && /source: \{ type: 'string' \}/.test(wfSrc));
 check("PR #128 review: the seed RECONCILES what it rehydrates instead of trusting it — a persisted entry whose question has since been withdrawn or re-keyed must not come back from the dead and hold a finished folder open",
-  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\)\)/.test(wfSrc));
+  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\), preflightItemsPresent\(state\)\)/.test(wfSrc));
 check("PR #128 review: the round tail reconciles the WHOLE set once, AFTER the verifier — the per-dispatch clear could reach neither a stale entry nor a verifier-confirmed one, which is why both defects were invisible to a per-unit pin",
-  /unconsumed = reconcileUnconsumed\(unconsumed,\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*\n?\s*confirmedResolutionPairs\(lastVerifier\?\.resolutionChecks\)\)/.test(wfSrc));
+  /unconsumed = reconcileUnconsumed\(unconsumed,\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*\n?\s*confirmedResolutionPairs\(lastVerifier\?\.resolutionChecks\), preflightItemsPresent\(state\)\)/.test(wfSrc));
 
 /* --- RC-4: "cannot tell" is a state of its own, in the schema AND in the words the verifier reads. --- */
 check("PR #128 review: the verifier's `shows` field is the THREE-value vocabulary and not a boolean — with two values an effect the page cannot show had to be reported as a refutation, so a false contradiction was the EXPECTED outcome for this ticket's own new `lookup-value` id",
@@ -1877,18 +1877,37 @@ check("PR #128 review (RC-10): the answers-blocked row is DEDUPED on `(unit, wha
    ONLY in the resolutions half. Each is asserted in both directions below.
    =================================================================================================== */
 
-// RC-8 — the ONCE-PER-UNIT repair grant survives the process, the same way `unconsumed` does. `resolutionsReopened`
-// is the only gate on re-granting the round; it was process-local while the record that PROVES the grant was spent is
-// persisted and re-seeded. Delete the seed and every resume re-opens the grant for any unit carrying an unconsumed
-// entry — the exact "buys its unit ONE repair round" bound SKILL.md states unqualified, broken one resume along.
-check("PR #128 third-round review (RC-8): the once-per-unit repair grant is SEEDED from the persisted `unconsumed` on hydration — `resolutionsReopened` was process-local while `unconsumed` rides the carry, so without this every resume re-opened the once-only grant for any unit still carrying an unconsumed entry",
-  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions[\s\S]{0,1600}?for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc));
-// The OTHER direction: it must seed the GRANT gate (`resolutionsReopened`) and NOT the DISPATCH gate
-// (`resolutionsPending`) — seeding the latter would force a fresh repair dispatch on resume, which is the over-grant
-// this closes rather than the double-grant it prevents.
-check("PR #128 third-round review (RC-8): the seed touches `resolutionsReopened` (the grant gate) and NOT `resolutionsPending` (the dispatch gate) — seeding the dispatch gate would FORCE a fresh repair round on resume, the over-grant this fix exists to deny",
-  /for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc)
-    && !/for \(const u of unconsumed\) resolutionsPending\.add\(u\.unit\)/.test(wfSrc));
+// RC-8 / N2 — the ONCE-PER-UNIT repair grant survives the process. The FIRST fix derived `resolutionsReopened` from the
+// reconciled `unconsumed` on resume, but the `!res` path files an unconsumed row WITHOUT spending the grant (RC-4), so
+// that derivation over-marked those units and denied them their one repair round. Both grant sets now RIDE THE CARRY
+// and are seeded straight from the queue, exactly like `unconsumed` — the fact is exact instead of inferred.
+check("PR #128 review (N2): both repair-grant sets RIDE THE CARRY — `carryNow` and `carryFingerprint` carry `resolutionsReopened`/`resolutionsPending`, so the grant fact survives a resume by persistence, not by a lossy derivation from `unconsumed`",
+  /const carryNow = \(\) => \(\{[^}]*unconsumed, resolutionsReopened: \[\.\.\.resolutionsReopened\], resolutionsPending: \[\.\.\.resolutionsPending\] \}\)/.test(wfSrc)
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[[\s\S]*?unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\]\]\)/.test(wfSrc));
+check("PR #128 review (N2): the carry block instructs the writer to persist BOTH grant sets EVEN WHEN `[]`, and the queue-read step reads them back — a dropped `resolutionsReopened` re-grants a spent round, a dropped `resolutionsPending` strands one owed",
+  /ANSWER-CHANNEL REPAIR GRANTS[\s\S]{0,260}?resolutionsReopened[\s\S]{0,120}?resolutionsPending[\s\S]{0,200}?EVEN WHEN \\`\[\]\\`/.test(wfSrc)
+    && /- \\`resolutionsReopened\\` and \\`resolutionsPending\\` — the two answer-channel repair-grant arrays the file holds/.test(wfSrc));
+check("PR #128 review (N2): `RECONCILE_SCHEMA` both CARRIES the two grant arrays and REQUIRES them — a field the schema drops cannot round-trip, and one it does not require can be silently omitted straight back into the over-grant",
+  /resolutionsReopened: \{ type: 'array', items: \{ type: 'string' \} \},\s*\n\s*resolutionsPending: \{ type: 'array', items: \{ type: 'string' \} \}/.test(wfSrc)
+    && /'preflightItems', 'resolutionsReopened', 'resolutionsPending'\]/.test(wfSrc));
+check("PR #128 review (N2): the hydration seeds BOTH sets straight from the persisted state, and the lossy derive-from-`unconsumed` loop is GONE — the `!res` path proved that derivation over-marked a never-granted unit",
+  /for \(const k of state\.resolutionsReopened \|\| \[\]\) resolutionsReopened\.add\(k\)\s*\n\s*for \(const k of state\.resolutionsPending \|\| \[\]\) resolutionsPending\.add\(k\)/.test(wfSrc)
+    && !/for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc));
+
+// N1 — an under-reported `preflightItems` must not silently erase `unconsumed` into a false `complete: true`.
+check("PR #128 review (N1): `reconcileUnconsumed` FAILS CLOSED on an absent item list — with `itemsPresent: false` it returns the entries untouched, so an under-reported `preflightItems` cannot erase a real unconsumed answer into a green run",
+  () => { const e = [{ unit: "main", id: "x", source: "dispatch" }];
+    return wf.reconcileUnconsumed(e, new Set(), new Set(), false).length === 1        // no owed set, but items absent ⇒ keep
+      && wf.reconcileUnconsumed(e, new Set(), new Set(), true).length === 0            // items present, not owed ⇒ drop
+      && wf.reconcileUnconsumed(e, new Set(), new Set()).length === 0; },              // default itemsPresent=true ⇒ drop (back-compat)
+  () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "x" }], new Set(), new Set(), false)));
+check("PR #128 review (N1): `preflightItemsPresent` is true ONLY for a non-empty array — absent, non-array and `[]` all read false, which is exactly the discriminator that keeps a genuine withdrawal (item kept, answer nulled) on the normal drop path",
+  () => wf.preflightItemsPresent({ preflightItems: [{ id: "a" }] }) === true
+    && wf.preflightItemsPresent({ preflightItems: [] }) === false
+    && wf.preflightItemsPresent({}) === false
+    && wf.preflightItemsPresent(undefined) === false);
+check("PR #128 review (N1): both reconcile sites pass `preflightItemsPresent(state)` — the seed and the round tail are the two places an under-reported list erases the set, so both fail closed",
+  () => (wfSrc.match(/reconcileUnconsumed\([\s\S]*?preflightItemsPresent\(state\)\)/g) || []).length === 2);
 
 // RC-9 — a dispatch-sourced miss for a pair a verifier-sourced row already covers is NOT re-appended. The per-unit
 // clear drops only dispatch-sourced rows, so a verifier-confirmed contradiction survives it; without this filter the
@@ -3047,7 +3066,7 @@ check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistP
     && !/if \(persisted\?\.written\) \{ markParksPersisted\(\); carryPersisted = carryNowFp \}/.test(wfSrc));
 check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by Verify/Reconcile on the normal path and by fallback persistence only when needed — a kill still cannot come back with the budget reset",
   /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed\]\)/.test(wfSrc)
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\]\]\)/.test(wfSrc)
     && /markCarryPersisted\(\)/.test(wfSrc)
     && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",
@@ -3074,7 +3093,7 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
-  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected']/.test(wfSrc));
+  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',\s*\n\s*'preflightItems', 'resolutionsReopened', 'resolutionsPending'\]/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
   // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
   // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.
