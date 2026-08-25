@@ -410,16 +410,24 @@ Details of the record shapes, the ids and the judge tri-state:
 - A **plan assertion untrue of the STAND**, caught at the BASELINE Reconcile **before the first build unit** and
   **re-applied at every in-run Reconcile** (via the shared acceptance path, `acceptReconciled`): a named component
   type that does not resolve on the target stand (Reconcile's read-only `get-component-info` sweep →
-  `componentResolution`), or the placement preconditions (`new-app-over-existing-package`, an unknown or unnamed
+  `componentResolution`), a **page template** the plan names that the stand does not have (read-only `get-schema`
+  sweep over `--units.templateNames` → `templateResolution`), the **app/package identity** the plan promises being
+  unproducible on this stand or contradicting its own target package under the stand's `SchemaNamePrefix`
+  (→ `appIdentityMismatch`), or the placement preconditions (`new-app-over-existing-package`, an unknown or unnamed
   target package). It **stops the run** (`stopped: 'plan-invalid-against-stand'`, or the package precondition stop
-  — which now also carries any `componentMismatches`), naming EVERY mismatch at once so a re-plan fixes them in one
+  — which now also carries any `componentMismatches`, `templateMismatches` and `appIdentityMismatch`), naming EVERY
+  mismatch at once so a re-plan fixes them in one
   pass instead of a builder rediscovering each mid-build over expensive repair rounds. Because the component gate is
   re-applied mid-run, this stop can also fire on a LATER Reconcile — a resumed run whose baseline predated the field,
   or a package uninstalled during a long run — in which case **anything already built this run is on disk** (the
   stop's `next` says so); the baseline stop, by contrast, wrote nothing. Both share the `plan-invalid-against-stand`
   key and are told apart by that trailing clause (a programmatic consumer keys off `componentMismatches.length`,
-  present on every return). This is not repairable by a build round — it is a plan-vs-stand mismatch, so the fix is a
-  re-plan (ENG-95468).
+  `templateMismatches.length` and `appIdentityMismatch`, all present on every return). This is not repairable by a
+  build round — it is a plan-vs-stand mismatch, so the fix is a re-plan (ENG-95468).
+  One consequence worth stating separately: when the prefix IS reported, the `app` unit is no longer asked to *choose*
+  a code that yields the planned package — the prompt hands it the exact `code` (`SchemaNamePrefix` + code =
+  `targetPackage`, so the code is arithmetic). "Choose the code so the package comes out right" is the instruction a
+  real run followed to a package the plan did not name; the read-back equality on `packageName` stays the backstop.
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.

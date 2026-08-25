@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1474,6 +1474,23 @@ check("ENG-95218: the design spec renders the list page as POSITIONED tables (co
 // must agree with `pages[]` (build order, parent edge, the evidence ids the executor files) agrees by construction.
 const lpUnits = pageUnits(lpRun, lpOpts);
 const lpList = lpUnits.pages.find((p) => p.key === "list");
+/* ENG-95468 — `--units` publishes the TEMPLATE NAMES the plan asserts, so the executor can resolve them against the
+ * target stand before the first write. This is the plan-side half of the gate: without a published set, the build
+ * side has nothing to check, and `ListPageV2FreedomTemplate` is exactly what reached a real build unchecked.
+ */
+check("ENG-95468: `--units` publishes `templateNames` — the deduped, sorted set of page templates this plan asserts, INCLUDING `planMeta.listTemplate` (whose own checklist row is CONDITIONAL, so the name must not depend on that row being emitted)",
+  () => { const t = lpUnits.templateNames;
+    return Array.isArray(t) && t.includes("ListFreedomTemplate") && t.includes("FormPageTemplate")
+      && t.length === new Set(t).size && [...t].sort((a, b) => a.localeCompare(b)).join(",") === t.join(","); },
+  () => ({ templateNames: lpUnits.templateNames,
+    expected: lpUnits.pages.map((p) => [p.key, p.expectedTemplate]), listTemplate: lpOpts.planMeta?.listTemplate }));
+check("ENG-95468: `templateNamesOf` is pure and total — it dedupes a template named by several pages, drops blanks, and returns `[]` for a plan that names none (a plan with no template must publish an empty set, never `undefined`)",
+  () => { const dup = templateNamesOf([{ expectedTemplate: "T" }, { expectedTemplate: "T" }, { expectedTemplate: "  " }, {}], { planMeta: { listTemplate: "T" } });
+    const none = templateNamesOf([], {});
+    return dup.length === 1 && dup[0] === "T" && Array.isArray(none) && none.length === 0
+      && templateNamesOf(undefined, undefined).length === 0; },
+  () => ({ dup: templateNamesOf([{ expectedTemplate: "T" }, { expectedTemplate: "T" }], { planMeta: { listTemplate: "T" } }),
+    none: templateNamesOf([], {}) }));
 check("ENG-95218: `--units` publishes a `list` build unit — role, the classic section it was derived from, and per-kind expectations in the LIST vocabulary (a grid has no fields/tabs/details)",
   () => lpList?.role === "list" && lpList.schema === "Applicant1Section"
     && lpList.expect.listColumns === 3 && lpList.expect.listColumnNames.join(",") === "Name,Stage.Name,Flagged"
@@ -1672,6 +1689,17 @@ check("ENG-95470 (defect 3, guard): a plan with NOTHING else resolved for the li
     return !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list")
       && !rows.some((r) => r.pageKey === "list" && /List template/.test(r.label)); },
   () => checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label));
+// ENG-95468 × ENG-95470 — THE HOLE THE CONDITIONAL ROW LEAVES, and why `templateNames` folds in `planMeta.listTemplate`
+// instead of reading the published units alone. On this very fixture there is no list unit and no template row, so
+// `pages[].expectedTemplate` names the list template NOWHERE — yet the plan still asserts it, and the build still
+// puts a page on it. The pre-build set must ask the stand about it anyway. The two checks are complementary: the row
+// asks the BUILT page afterwards, this set asks the STAND before the first write.
+check("ENG-95468: on the same ungated-list fixture — no `list` unit, no template row — `templateNames` STILL carries `planMeta.listTemplate`, so the name the plan asserts is resolved against the stand even where nothing gates the built page",
+  () => { const t = pageUnits(lpEmptySection, lpOpts).templateNames;
+    return t.includes("ListFreedomTemplate")
+      && !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list"); },
+  () => ({ templateNames: pageUnits(lpEmptySection, lpOpts).templateNames,
+    keys: pageUnits(lpEmptySection, lpOpts).pages.map((p) => p.key) }));
 check("ENG-95218: with NOTHING gated for the list page (empty section, no `list` unit) its ⚠ Confirm items are still GATED — they ride on `main` as `main#confirm:list-*` and reach `--units.preflight`, because withholding a page nobody builds must not withhold the questions",
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
