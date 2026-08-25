@@ -796,6 +796,13 @@ check("ENG-95471 review fix: the close-row log claims no enforcement the code le
     gateBlockSlice.includes('act on every row whose \\`owner\\` is \\`"builder"\\`')
     && gateBlockSlice.includes('NEVER attempt to "fix" a row whose \\`owner\\` is \\`"verifier"\\`')
     && /Read \\`owner\\`, not the \\`missing\\`\/\\`unverified\\` status/.test(gateBlockSlice));
+  // PR review (Minor 3) — the self-check payload shape the builder is told to write. `entitySchemaName` and
+  // `packageName` are BUILDER-owned rows, so a three-key payload leaves the gate short on a page that is
+  // actually complete. Pinned here because the same shape is prescribed twice (this prompt and the recipe's
+  // step 10) and the two silently drifting apart is exactly what the review caught.
+  check("ENG-95901 (review): inContextGateBlock's self-check built-file shape carries entitySchemaName and packageName alongside viewConfig/parentSchemaName/schemaUId",
+    /"viewConfig"[\s\S]{0,200}"entitySchemaName"[\s\S]{0,120}"packageName"[\s\S]{0,120}"parentSchemaName"[\s\S]{0,80}"schemaUId"/.test(gateBlockSlice)
+    && /BUILDER-OWNED rows/.test(gateBlockSlice));
   check("ENG-95901: inContextGateBlock's `selfCheck` reporting instructions include `buildComplete` in the copied-verbatim field list",
     /Report \\`selfCheck\\` copying the verdict VERBATIM:[\s\S]{0,160}buildComplete/.test(gateBlockSlice));
 }
