@@ -9101,8 +9101,9 @@ try {
   // through the real CLI so a regression in the flag wiring — not just the pure result field above — is caught.
   const rgPath = path.join(os.tmpdir(), `c2f_resolved_gates_${process.pid}.json`);
   const rgEmptyPath = path.join(os.tmpdir(), `c2f_resolved_gates_empty_${process.pid}.json`);
+  const rgStdinPath = path.join(os.tmpdir(), `c2f_resolved_gates_stdin_${process.pid}.json`);
   try {
-    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true });
+    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true }); fs.rmSync(rgStdinPath, { force: true });
     const gatedManifest = JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
       componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] },
       schemas: [{ pkg: "P", body: gmBody(compOnlyDetails, [nameOp, compOnlyDetail].join(",")) }] });
@@ -9121,8 +9122,25 @@ try {
     check("ENG-95683 (item 1/R2): the empty-artifact case — a run that gates no type writes `[]` verbatim (present, not absent), on the --units path too",
       Array.isArray(rgEmpty) && rgEmpty.length === 0,
       () => rgEmpty);
+    // VALUE_FLAGS positional-manifest EXCLUSION, exercised: with the manifest on STDIN and NO explicit `-`,
+    // `--plan --resolved-gates <file>` must still read stdin and write the artifact. `--resolved-gates` is in
+    // VALUE_FLAGS precisely so its value is skipped by the positional-manifest search; drop it from VALUE_FLAGS and
+    // the run reads <file> as the manifest instead (it does not exist yet → ENOENT → exit 1, and NO artifact is
+    // written). Every OTHER CLI case above passes an explicit `-`, so the positional search matches `-` first and
+    // this exclusion is never tested — the mode-guard / valueFlagArg wiring is, but not the VALUE_FLAGS membership.
+    // The discriminator is the ARTIFACT (+ its stderr confirmation), not the exit code: this manifest gates a type,
+    // so `--plan` exits 2 (incomplete-plan artifact) exactly like the `rgRun` case above — the write happens anyway,
+    // before the mode output. Under the regression there is no write at all, so the artifact check is what fails.
+    fs.rmSync(rgStdinPath, { force: true });
+    const rgStdin = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "--plan", "--resolved-gates", rgStdinPath], { input: gatedManifest, encoding: "utf8" });
+    const rgStdinWritten = fs.existsSync(rgStdinPath) ? JSON.parse(fs.readFileSync(rgStdinPath, "utf8")) : null;
+    check("ENG-95683 (item 1/R2): with the manifest on STDIN and no explicit `-`, `--resolved-gates <file>` is excluded from the positional-manifest search (VALUE_FLAGS) — the run reads stdin and writes the artifact, not reads <file> as the manifest",
+      Array.isArray(rgStdinWritten) && rgStdinWritten.length === 1
+      && rgStdinWritten[0].componentType === "crt.CommunicationOptions" && rgStdinWritten[0].id === "CrtCustomer360App"
+      && /wrote 1 resolved component gate/.test(rgStdin.stderr || ""),
+      () => ({ status: rgStdin.status, written: rgStdinWritten, stderr: (rgStdin.stderr || "").slice(0, 200) }));
   } finally {
-    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true });
+    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true }); fs.rmSync(rgStdinPath, { force: true });
   }
   // `--resolved-gates` is registered in VALUE_FLAGS (its path is not read as the manifest) and is rejected outside
   // the --plan/--units path — the mode guard, exit 1 with an actionable message.
