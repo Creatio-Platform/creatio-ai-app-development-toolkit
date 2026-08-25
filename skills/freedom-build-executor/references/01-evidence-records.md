@@ -59,6 +59,25 @@ INCOMPLETE record → `⚠ unverified`. A field name in `requires` with no decla
 to the strict generic rule (a non-blank string, or a non-empty list of non-blank strings). There
 is no "unknown field ⇒ accept" escape.
 
+**Exception, `#quality-gates` ONLY (ENG-95471):** a page genuinely diffed and found already
+compliant — zero drift, nothing to fix — cannot honestly name a non-empty `components` list. For
+this one row family, `components: []` is accepted **when paired with a non-blank
+`noChangesReason`** naming what was actually compared:
+
+```json
+"main#quality-gates": {
+  "referencePage": "ContactsListPage",
+  "components": [],
+  "noChangesReason": "diffed QuickFilter, ButtonToggleGroup and the four command buttons against ContactsListPage — identical props, no drift"
+}
+```
+
+`components: []` with no `noChangesReason` is still incomplete, the same as before — the empty
+list alone proves nothing; the reason is what earns the pass, and the judge still rules on whether
+it genuinely supports "nothing needed fixing" rather than accepting it as a formality. No other
+evidence family (`#confirm:*`, `#childpage`, list-page rows) accepts this shape: those rows prove
+something was *built*, and an empty answer can never do that.
+
 `"<id>": false` is the deliberate negative: **checked, and the deliverable was NOT done** → a hard
 `❌ MISSING`. Use it when you know the answer is no. Omitting the key is a different statement —
 nobody looked — and reads `⚠ unverified`. Both block exit 0; they send the executor to a
@@ -103,6 +122,16 @@ The judge writes **only** the `judge` object. It never edits `pages`, `reachabil
 `evidence`, and it never runs a build tool. If the judge could also write the record it is
 blessing, the arithmetic downstream would be arithmetic over one agent's self-assertion — which
 is the failure the split exists to prevent.
+
+**ENG-95859 — `#quality-gates` now renders as TWO rows off this ONE id, not one.** Filing is
+unchanged: you still file exactly one `evidence[id]` record and, separately, one `judge[id]`
+verdict. But `--verify`'s checklist reports "a complete record was filed" and "an independent
+judge found it convincing" as two SEPARATE rows sharing that id — "the design pass ran" and "it
+was reviewed" are different facts, and conflating them let a run that filed a record nobody
+reviewed print identically to one that filed nothing. Both rows must read ✅ (or the outcome
+table above must independently work out to ✅ for each) before the page's design-pass gate is
+closed; `evidenceRows`/`evidenceIds` still publish exactly one `main#quality-gates` entry, so
+nothing about WHERE you file changes.
 
 The judge's job is not to be agreeable. `convincing: false` with a `why` is a normal, useful
 outcome: it names a repair the builder can act on. `convincing: true` on a record that names no

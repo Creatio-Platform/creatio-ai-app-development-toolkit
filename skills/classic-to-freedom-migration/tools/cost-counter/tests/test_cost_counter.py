@@ -218,26 +218,33 @@ class CliFallbackTest(unittest.TestCase):
         self.assertIn("fell back to 1.25", out)
 
 
-class CompareAndSummaryTest(unittest.TestCase):
-    """The concise single-run summary, and the cost-only baseline->candidate
-    compare with its same-section guard and verdict."""
+def _build_compare_export(cr, m5, page):
+    """A minimal export usable by `compare()`/`run(..., "summary")`: one
+    agent transcript plus a journal recording the given built page (or none,
+    for `page=None` -- a schema-only / rule-only run)."""
+    root = tempfile.mkdtemp(prefix="cc-cmp-")
+    wf = os.path.join(root, "sess-1", "subagents", "workflows", "wf_a")
+    os.makedirs(wf)
+    with open(os.path.join(wf, "agent-a.jsonl"), "w", encoding="utf-8") as f:
+        f.writelines([
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cr=cr, m5=m5, out=5),
+                               "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
+        ])
+    with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
+        if page is not None:
+            f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
+    return root
+
+
+class _CompareExportTestCase(unittest.TestCase):
+    """Shared fixture for compare()-oriented tests: builds throwaway exports
+    and captures stdout. No test_ methods of its own -- contributes nothing
+    to the suite by itself."""
 
     def _export(self, cr, m5, page):
-        root = tempfile.mkdtemp(prefix="cc-cmp-")
+        root = _build_compare_export(cr, m5, page)
         self._tmp.append(root)
-        wf = os.path.join(root, "sess-1", "subagents", "workflows", "wf_a")
-        os.makedirs(wf)
-        with open(os.path.join(wf, "agent-a.jsonl"), "w", encoding="utf-8") as f:
-            f.writelines([
-                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
-                _line({"message": {"role": "assistant", "usage": _usage(cr=cr, m5=m5, out=5),
-                                   "content": [{"type": "tool_use", "id": "t", "name": "Read"}]}}),
-            ])
-        with open(os.path.join(wf, "journal.jsonl"), "w", encoding="utf-8") as f:
-            # page=None models a schema-only / rule-only run: a journal that
-            # records no built page schemas, so built_pages stays empty.
-            if page is not None:
-                f.write(_line({"type": "result", "result": {"pageSchemas": {"main": page}}}))
         return root
 
     def setUp(self):
@@ -252,6 +259,11 @@ class CompareAndSummaryTest(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             rc = fn(*args)
         return rc, buf.getvalue()
+
+
+class CompareAndSummaryTest(_CompareExportTestCase):
+    """The concise single-run summary, and the cost-only baseline->candidate
+    compare with its same-section guard and verdict."""
 
     def test_summary_section_is_concise(self):
         rc, out = self._out(counter.run, self._export(1000, 100, "PageA"),
@@ -304,6 +316,122 @@ class CompareAndSummaryTest(unittest.TestCase):
         with contextlib.redirect_stderr(buf):
             rc = counter.compare(base, empty, metrics.CostConfig())
         self.assertEqual(rc, 2)
+
+
+class VersionNoteTest(_CompareExportTestCase):
+    """ENG-95856 Done-criterion #3: --compare states which side was measured
+    with which counter version, and refuses a diff across the fix boundary."""
+
+    def test_matching_versions_state_both_sides(self):
+        base = {"counter_version": "2.0"}
+        cand = {"counter_version": "2.0"}
+        self.assertEqual(counter._version_note(base, cand),
+                         "both sides measured with counter version 2.0")
+
+    def test_mismatched_versions_are_refused(self):
+        base = {"counter_version": "1.0"}
+        cand = {"counter_version": "2.0"}
+        note = counter._version_note(base, cand)
+        self.assertIn("REFUSED", note)
+        self.assertIn("1.0", note)
+        self.assertIn("2.0", note)
+
+    def test_missing_counter_version_does_not_raise_and_is_its_own_value(self):
+        # A summary saved before this field existed has no counter_version
+        # key at all -- must not raise KeyError, and "missing" must not be
+        # silently treated as matching a versioned candidate.
+        base = {}
+        cand = {"counter_version": "2.0"}
+        note = counter._version_note(base, cand)
+        self.assertIn("REFUSED", note)
+        self.assertIn("unversioned", note)
+
+    def test_compare_verdict_short_circuits_on_version_mismatch(self):
+        base = {"counter_version": "1.0", "weighted_per_page": 100}
+        cand = {"counter_version": "2.0", "weighted_per_page": 50}
+        verdict = counter._compare_verdict(base, cand, same_section=True)
+        self.assertIn("REFUSED", verdict)
+
+    def test_compare_end_to_end_refuses_across_a_saved_pre_fix_summary(self):
+        # Drives compare() itself (not just _version_note in isolation): a
+        # summary saved from an older run (different counter_version, or none
+        # at all) compared against a live export must short-circuit to
+        # REFUSED and never reach the ratio computation.
+        old_summary = {
+            "summary": {
+                "weighted_total": 1000, "weighted_per_page": 1000,
+                "page_count": 1, "page_count_defaulted": False,
+                "built_pages": ["PageA"], "input": 1, "cache_write": 1,
+                "cache_read": 1, "output": 1, "tool_calls": 1, "agents": 1,
+                "turns": 1, "effective_w": 1.25,
+                # no counter_version key: pre-dates this field.
+            }
+        }
+        saved = tempfile.mkstemp(prefix="cc-old-summary-", suffix=".json")[1]
+        self.addCleanup(os.remove, saved)
+        with open(saved, "w", encoding="utf-8") as f:
+            json.dump(old_summary, f)
+
+        live = self._export(500, 50, "PageA")
+        rc, out = self._out(counter.compare, saved, live, metrics.CostConfig(), "json")
+        self.assertEqual(rc, 0)
+        doc = json.loads(out)
+        self.assertIn("REFUSED", doc["verdict"])
+        self.assertIn("unversioned", doc["version_note"])
+
+    def test_compare_rejects_a_json_file_missing_the_summary_key(self):
+        not_a_summary = tempfile.mkstemp(prefix="cc-bad-json-", suffix=".json")[1]
+        self.addCleanup(os.remove, not_a_summary)
+        with open(not_a_summary, "w", encoding="utf-8") as f:
+            json.dump({"tables": {}}, f)
+        live = self._export(500, 50, "PageA")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = counter.compare(not_a_summary, live, metrics.CostConfig())
+        self.assertEqual(rc, 2)
+        self.assertIn("not a saved cost-counter summary", buf.getvalue())
+
+
+class CounterVersionEverywhereTest(unittest.TestCase):
+    """ENG-95856 Done-criterion #3: counter_version must surface in every
+    output format, for every --section -- not only 'all' and 'summary'."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="cc-cv-")
+        wf_dir = os.path.join(self.root, "sess-1", "subagents", "workflows", "wf_a")
+        os.makedirs(wf_dir)
+        with open(os.path.join(wf_dir, "agent-aaa.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines([
+                _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+                _line({"message": {"role": "assistant",
+                                   "usage": _usage(inp=10, cw=100, cr=1000, out=5, m5=80, h1=20),
+                                   "content": [{"type": "tool_use", "id": "t1", "name": "Bash"}]}}),
+            ])
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_text_format_prints_counter_version_for_a_non_all_section(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = counter.run(self.root, "role", None, metrics.CostConfig())
+        self.assertEqual(rc, 0)
+        self.assertIn(f"counter version: {counter.COUNTER_VERSION}", buf.getvalue())
+
+    def test_json_format_carries_counter_version_for_a_non_all_section(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = counter.run(self.root, "ttl", None, metrics.CostConfig(), "json")
+        self.assertEqual(rc, 0)
+        doc = json.loads(buf.getvalue())
+        self.assertEqual(doc["counter_version"], counter.COUNTER_VERSION)
+
+    def test_md_format_carries_counter_version_for_a_non_all_section(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = counter.run(self.root, "check", None, metrics.CostConfig(), "md")
+        self.assertEqual(rc, 0)
+        self.assertIn(f"_counter version: {counter.COUNTER_VERSION}_", buf.getvalue())
 
 
 if __name__ == "__main__":
