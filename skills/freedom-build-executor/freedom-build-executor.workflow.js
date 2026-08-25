@@ -1449,7 +1449,7 @@ const GATE_COMPOSITE = 'composite'
 // single-home discipline the GATE_COMPOSITE mirror itself follows. It only CLASSIFIES; `componentTypeMismatches`
 // still owns the normalization (`id.trim()`). Because it tests `c.id.trim()` truthiness it reads a raw resolution
 // entry and an already-normalized mismatch identically (a trimmed non-blank id passes either way).
-const isWellFormedGate = (c) => !!(c && c.kind === GATE_COMPOSITE && typeof c.id === 'string' && c.id.trim())
+const isWellFormedGate = (c) => !!(c?.kind === GATE_COMPOSITE && typeof c.id === 'string' && c.id.trim())
 function componentTypeMismatches(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
