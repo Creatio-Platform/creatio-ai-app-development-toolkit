@@ -237,9 +237,10 @@ def _build_compare_export(cr, m5, page):
     return root
 
 
-class CompareAndSummaryTest(unittest.TestCase):
-    """The concise single-run summary, and the cost-only baseline->candidate
-    compare with its same-section guard and verdict."""
+class _CompareExportTestCase(unittest.TestCase):
+    """Shared fixture for compare()-oriented tests: builds throwaway exports
+    and captures stdout. No test_ methods of its own -- contributes nothing
+    to the suite by itself."""
 
     def _export(self, cr, m5, page):
         root = _build_compare_export(cr, m5, page)
@@ -258,6 +259,11 @@ class CompareAndSummaryTest(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             rc = fn(*args)
         return rc, buf.getvalue()
+
+
+class CompareAndSummaryTest(_CompareExportTestCase):
+    """The concise single-run summary, and the cost-only baseline->candidate
+    compare with its same-section guard and verdict."""
 
     def test_summary_section_is_concise(self):
         rc, out = self._out(counter.run, self._export(1000, 100, "PageA"),
@@ -312,7 +318,7 @@ class CompareAndSummaryTest(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
-class VersionNoteTest(unittest.TestCase):
+class VersionNoteTest(_CompareExportTestCase):
     """ENG-95856 Done-criterion #3: --compare states which side was measured
     with which counter version, and refuses a diff across the fix boundary."""
 
@@ -384,24 +390,6 @@ class VersionNoteTest(unittest.TestCase):
             rc = counter.compare(not_a_summary, live, metrics.CostConfig())
         self.assertEqual(rc, 2)
         self.assertIn("not a saved cost-counter summary", buf.getvalue())
-
-    def _export(self, cr, m5, page):
-        root = _build_compare_export(cr, m5, page)
-        self._tmp.append(root)
-        return root
-
-    def setUp(self):
-        self._tmp = []
-
-    def tearDown(self):
-        for root in self._tmp:
-            shutil.rmtree(root, ignore_errors=True)
-
-    def _out(self, fn, *args):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            rc = fn(*args)
-        return rc, buf.getvalue()
 
 
 class CounterVersionEverywhereTest(unittest.TestCase):
