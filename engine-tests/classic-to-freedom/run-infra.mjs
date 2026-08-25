@@ -140,14 +140,19 @@ const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "preflightToRun", "componentTypeMismatches",
+  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
+  // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
+  // app/package identity it promises is producible on this stand at all.
+  "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
   "readableUnitPart", "nonPageUnitStem", "unitStem",
-  "selfCheckStillShort", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
-  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
+  "selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock",
+  // The verifier's per-round read-back scope, and the judge-queue re-file guard.
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan"];
 // Non-function members of the same block. Exported so a prompt fragment — and the round budget's own DESIGN VALUE —
 // is asserted against the SHIPPED text rather than a copy of it in this file. `DEFAULT_MAX_ROUNDS` is exported for
 // exactly that reason: the park assertions below build their `localRounds` fixtures from it, and hard-coding a 3 here
@@ -299,7 +304,9 @@ check("ENG-95469: the build phase relaxes 'a builder does not run --verify' ONLY
   && wfSrc.includes("IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE"));
 check("ENG-95469: a still-short-after-one-fix selfCheck is collected in buildRound (via `selfCheckStillShort`) and parked via applyInContextParks BEFORE the round-budget applyParks",
   /selfCheckStillShort\(sc\)/.test(wfSrc)
-  && /sc\.ran === true && sc\.complete === false && sc\.fixAttempted === true/.test(wfSrc)
+  // ENG-95901: the in-context PARK decision reads `buildComplete` (missing-only, via the legacy-shape-tolerant
+  // `selfCheckBuildComplete` derivation), not the combined `complete`.
+  && /sc\.ran === true && selfCheckBuildComplete\(sc\) === false && sc\.fixAttempted === true/.test(wfSrc)
   && /const inContextParked = applyInContextParks\(selfCheckShort\)/.test(wfSrc)
   && wfSrc.indexOf("applyInContextParks(selfCheckShort)") < wfSrc.indexOf("const newlyParked = applyParks()"));
 // Supplementary source pin (the double-guard itself is EXECUTED in the `inContextParkableKeys` cases below):
@@ -314,14 +321,63 @@ check("ENG-95469: applyInContextParks decides through the pure `inContextParkabl
 // ATTEMPTED self-check is a park candidate; a shortfall whose one bounded fix is NOT yet attempted is NOT collected
 // — the unit keeps its fix budget instead of being queued/parked prematurely. Proven distinct from the fixAttempted
 // case that IS collected.
-check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
-  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: true }) === true);
-check("ENG-95469 T3: selfCheckStillShort {ran:true, complete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
-  () => wf.selfCheckStillShort({ ran: true, complete: false, fixAttempted: false }) === false);
-check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
-  () => wf.selfCheckStillShort({ ran: true, complete: true, fixAttempted: true }) === false
-    && wf.selfCheckStillShort({ ran: false, complete: false, fixAttempted: true }) === false
+check("ENG-95469/ENG-95901 T3: selfCheckStillShort {ran:true, buildComplete:false, fixAttempted:true} IS collected (short after the one bounded fix ⇒ park candidate)",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: false, fixAttempted: true }) === true);
+check("ENG-95469/ENG-95901 T3: selfCheckStillShort {ran:true, buildComplete:false, fixAttempted:false} is NOT collected — the one bounded fix is not yet attempted, so the unit is not queued/parked yet (distinct from the fixAttempted:true case)",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: false, fixAttempted: false }) === false);
+check("ENG-95469/ENG-95901 T3: a BUILD-COMPLETE self-check is not collected, and a gate that did not run (ran:false) — or an absent self-check — is not collected either",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: true, fixAttempted: true }) === false
+    && wf.selfCheckStillShort({ ran: false, buildComplete: false, fixAttempted: true }) === false
     && wf.selfCheckStillShort(undefined) === false);
+check("ENG-95901 T3: selfCheckStillShort does NOT collect a page whose only open rows are unfiled evidence — `buildComplete:true` with the OLD conflated `complete:false` still present must never park the unit or ask it to repair a row it cannot legitimately file",
+  () => wf.selfCheckStillShort({ ran: true, buildComplete: true, complete: false, fixAttempted: true }) === false);
+// `buildComplete` is OPTIONAL in the selfCheck schema (only `ran` is required) — a builder that reports the OLDER
+// shape (`complete`/`missing`, no `buildComplete`) must not silently lose the fast in-context park it would have
+// gotten before this axis split existed. `derivedBuildComplete` (shared by `selfCheckBuildComplete` and
+// `verifierBuildComplete`) derives the axis from whatever the object actually carries: the new
+// field first; when absent, `missing` — the engine's DIRECT count — BEFORE the old conflated `complete` (which
+// folds in `unverified` too, so preferring it over `missing` would read a build-complete/evidence-unfiled shape,
+// `{complete:false, missing:0}`, as NOT build-complete — the exact ENG-95901 regression); `complete` is the LAST
+// resort, only when `missing` itself is absent. Never a self-graded claim, always arithmetic over the object's OWN
+// fields.
+check("ENG-95901: selfCheckBuildComplete prefers the NEW field when present, even over a conflicting old one",
+  () => wf.selfCheckBuildComplete({ buildComplete: true, complete: false }) === true
+    && wf.selfCheckBuildComplete({ buildComplete: false, complete: true }) === false);
+check("ENG-95901: selfCheckBuildComplete FALLS BACK to `missing === 0` — NOT the old conflated `complete` — when `buildComplete` is absent but `missing` is present (the build-complete/evidence-unfiled shape: {complete:false, missing:0} must read as build-complete, not short)",
+  () => wf.selfCheckBuildComplete({ complete: false, missing: 0 }) === true
+    && wf.selfCheckBuildComplete({ complete: true, missing: 2 }) === false);
+check("ENG-95901: selfCheckBuildComplete FALLS BACK to the old `complete` field only when `missing` itself is ALSO absent",
+  () => wf.selfCheckBuildComplete({ complete: false }) === false && wf.selfCheckBuildComplete({ complete: true }) === true);
+check("ENG-95901: selfCheckBuildComplete is `undefined` (unknown, never a false 'complete') when NONE of the three fields are present, or the self-check itself is absent",
+  () => wf.selfCheckBuildComplete({ ran: true }) === undefined && wf.selfCheckBuildComplete(undefined) === undefined);
+check("ENG-95901: selfCheckStillShort STILL fast-parks a genuinely short LEGACY-shaped self-report ({ran:true, complete:false, missing:3, fixAttempted:true}, no `buildComplete`) — the axis split must not regress a builder that has not adopted the new field name",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, missing: 3, fixAttempted: true }) === true);
+check("ENG-95901: selfCheckStillShort does NOT fast-park the DISCRIMINATING legacy shape ({ran:true, complete:false, missing:0, fixAttempted:true} — build done, only evidence unfiled, no `buildComplete`) — this is the exact case a wrong fallback order (complete before missing) would have regressed",
+  () => wf.selfCheckStillShort({ ran: true, complete: false, missing: 0, fixAttempted: true }) === false);
+check("ENG-95901: derivedBuildComplete is the ONE shared derivation behind selfCheckBuildComplete and verifierBuildComplete's page-state reading — pin it directly so the two callers cannot drift onto different fallback orders again",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0 }) === true
+    && wf.derivedBuildComplete({ buildComplete: false, missing: 0 }) === false
+    && wf.derivedBuildComplete(undefined) === undefined);
+// PR review — the `missing === 0` fallback is LOSSY: a partially-built page resolves `unverified`, so `missing` is 0
+// while the page is short. When the payload carries its ROWS, their `owner` is read first — the same classification
+// the engine made — and only a payload with neither the field nor its rows falls through to the counts.
+check("ENG-95901 (review): derivedBuildComplete reads the ROWS before the lossy `missing` count — a legacy-shaped report with `missing: 0` but a BUILDER-owned open row is NOT build-complete",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Fields — 2 expected", status: "⚠ verify", evidence: "0/2 expected fields present", outcome: "unverified", owner: "builder" }] }) === false);
+check("ENG-95901 (review): the same shape with only VERIFIER-owned open rows still reads build-complete — the boundary the axis exists for is untouched",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Evidence", status: "⚠ verify", evidence: "no complete evidence record", outcome: "unverified", owner: "verifier" }] }) === true);
+check("ENG-95901 (review): an UNTAGGED open row counts as the BUILDER's — the engine tags only the four verifier-filed rows, so defaulting the other way would let an untagged shortfall pass as somebody else's problem",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    openRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified" }] }) === false);
+check("ENG-95901 (review): `stillShortRows` is read the same way as `openRows` — the self-report shape must not drift from the verdict shape",
+  () => wf.derivedBuildComplete({ complete: false, missing: 0,
+    stillShortRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified", owner: "builder" }] }) === false);
+// The operator-facing texts must say the same thing (`migrate.mjs` was deliberately narrowed to strip the figure
+// from the scoped diagnostic; the workflow's own log line kept it until this review round).
+check("ENG-95901 (review): the in-context 'still short' log line carries NO count — a figure next to a repair instruction reads as part of what must be repaired, and `migrate.mjs`'s scoped diagnostic already drops it",
+  /is still short after its one bounded fix — it will park once the verifier confirms it open/.test(wfSrc)
+    && !/is still short after its one bounded fix \(\$\{/.test(wfSrc));
 
 // --- ENG-95469 (PR review T2): the in-context park's DOUBLE-GUARD, EXECUTED (not just source-pinned). The self-check
 // is the engine's own scoped arithmetic reported THROUGH the builder; a self-report of "still short" is parked ONLY
@@ -373,20 +429,50 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
     /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, MAX_ROUNDS, parkedSet\)/.test(wfSrc));
 }
 
+// ENG-95901 item 7 — a DELIBERATE scope cut, pinned so it cannot be silently reversed. An earlier version of this
+// ticket excluded a `buildComplete: true` page (build done, only unfiled evidence open) from the round-budget
+// park; that exclusion was reverted because `parkableKeys` is the ONLY mechanism bounding the outer round loop
+// (there is no separate global round ceiling) — excluding such a page would trade a bounded-but-imperfect park for
+// a run that never terminates if a separate verifier/judge round never confirms the evidence. This golden proves
+// the REVERTED state, not the fix: a `buildComplete: true` / `complete: false` page IS STILL round-budget
+// parkable today, on the SAME terms as any other open unit. A future change that reintroduces the exclusion
+// (silently "fixing" what looks like a bug) must fail THIS check, not slip through untested.
+{
+  const K = "child:A";
+  const unitK = [{ key: K, kind: "page" }];
+  const budgetSpentAgain = { [K]: 3 };
+  const evidenceOnlyOpenAgain = { pages: { [K]: { complete: false, buildComplete: true } } };
+  check("ENG-95901 item 7 (deliberately reverted): a page with `buildComplete: true` (build done, only evidence unfiled) IS round-budget parkable once its budget is spent — parkableKeys applies the SAME rule to every open unit, with no build-axis exclusion",
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, wf.DEFAULT_MAX_ROUNDS, new Set()).join(",") === K,
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, wf.DEFAULT_MAX_ROUNDS, new Set()));
+}
+
 // --- ENG-95469 (PR review T5): the INDEPENDENT-SIGNAL cross-check, EXECUTED. A builder's `selfCheck` is its own word
 // that the scoped gate ran and passed; `selfCheckMismatches` reconciles each page unit's self-report against the
 // independent post-hoc verifier and names the two ways they can disagree, for a unit the verifier finds still OPEN.
 {
   const unitFor = (k) => ({ key: k, kind: "page" });
-  const openVerify = { pages: { "child:A": { complete: false } } };   // the independent verifier finds child:A OPEN
-  const greenVerify = { pages: { "child:A": { complete: true } } };   // …and here it finds it COMPLETE
-  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, complete: true } }];
+  // ENG-95901: the outer "is this unit still open" filter stays on the COMBINED `complete` (unchanged, AC7/AC8 — a
+  // unit open only on unfiled evidence still belongs in this audit sweep); the MISMATCH branch itself now compares
+  // `buildComplete` to `buildComplete`, so each fixture below carries both fields deliberately.
+  const openVerify = { pages: { "child:A": { complete: false, buildComplete: false } } };   // verifier: OPEN, and a genuine MISSING deliverable
+  const openOnEvidenceOnly = { pages: { "child:A": { complete: false, buildComplete: true } } }; // verifier: OPEN, but build is done — only unfiled evidence
+  const greenVerify = { pages: { "child:A": { complete: true, buildComplete: true } } };   // …and here it finds it fully COMPLETE
+  const fabricatedGreen = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
   const notRun = [{ key: "child:A", sc: { ran: false, notRunWhy: "could not get-page" } }];
-  const honestComplete = [{ key: "child:A", sc: { ran: true, complete: true } }];
-  check("ENG-95469 T5: a builder that self-reports the gate PASSED on a page the INDEPENDENT verifier finds OPEN is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on complete:false), so the cross-check is the only independent signal",
+  const honestComplete = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
+  check("ENG-95901 T5: a builder that self-reports the BUILD axis PASSED on a page the INDEPENDENT verifier's OWN build axis is NOT true (a genuine MISSING deliverable) is flagged `reported-complete-but-verifier-open` — the in-context park never catches this (it fires on buildComplete:false), so the cross-check is the only independent signal",
     () => { const m = wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].key === "child:A" && m[0].kind === "reported-complete-but-verifier-open"; },
     () => wf.selfCheckMismatches(fabricatedGreen, unitFor, openVerify, {}, undefined));
+  check("ENG-95901 T5: a builder that HONESTLY self-reports `buildComplete:true` on a page still OPEN per the full sweep ONLY because of unfiled evidence (verifier's own buildComplete IS true) raises NO mismatch — the builder cannot legitimately file that evidence itself, so this must never be flagged (the exact case ENG-95901 exists to fix)",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, openOnEvidenceOnly, {}, undefined).length === 0);
+  // `verifierBuildComplete`'s own `missing === 0` fallback branch, exercised through the PUBLIC selfCheckMismatches
+  // API: a LEGACY verify page-state with no `buildComplete` but `missing: 0` must be read as build-complete on the
+  // verifier side too, so the same honest self-report raises no mismatch against it either.
+  const legacyOpenOnEvidenceOnly = { pages: { "child:A": { complete: false, missing: 0, unverified: 3 } } };
+  check("ENG-95901 T5: the SAME honest self-report raises NO mismatch against a LEGACY verify page-state (no `buildComplete`, `missing: 0`) — the verifier-side fallback must read `missing`, not default an absent field to 'still open'",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, legacyOpenOnEvidenceOnly, {}, undefined).length === 0);
   check("ENG-95469 T5: a `ran:false` self-check on a page the verifier finds OPEN is flagged `gate-not-run` — a builder cannot silently bypass the scoped gate; the skipped-and-still-open unit is surfaced",
     () => { const m = wf.selfCheckMismatches(notRun, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].kind === "gate-not-run"; },
@@ -397,19 +483,30 @@ check("ENG-95469 T3: a COMPLETE self-check is not collected, and a gate that did
   check("ENG-95469 T5: no self-checks at all is an empty mismatch list, not a throw",
     () => wf.selfCheckMismatches([], unitFor, openVerify, {}, undefined).length === 0
       && wf.selfCheckMismatches(undefined, unitFor, openVerify, {}, undefined).length === 0);
-  // PR review RC-12: a schema-valid self-report of `{ran:true}` with `complete` ABSENT (the schema requires only
-  // `ran` inside selfCheck) escapes both `selfCheckStillShort` (needs complete===false) and the two branches above
-  // (complete is neither true nor false), so without a dedicated branch such a unit reaches NEITHER the fast park
-  // NOR the audit trail on a still-open unit. It must be flagged `ran-without-verdict`, and must NOT collide with
-  // the honest short case `{ran:true, complete:false}`, which stays a non-mismatch (builder and verifier agree).
+  // PR review RC-12 (extended by ENG-95901 to the new axis): a schema-valid self-report of `{ran:true}` with
+  // `buildComplete` ABSENT (the schema requires only `ran` inside selfCheck) escapes both `selfCheckStillShort`
+  // (needs buildComplete===false) and the two branches above (buildComplete is neither true nor false), so without a
+  // dedicated branch such a unit reaches NEITHER the fast park NOR the audit trail on a still-open unit. It must be
+  // flagged `ran-without-verdict`, and must NOT collide with the honest short case `{ran:true, buildComplete:false}`,
+  // which stays a non-mismatch (builder and verifier agree).
   const ranNoVerdict = [{ key: "child:A", sc: { ran: true } }];
-  const honestShort = [{ key: "child:A", sc: { ran: true, complete: false } }];
-  check("ENG-95469 T5 (RC-12): `{ran:true, complete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
+  const honestShort = [{ key: "child:A", sc: { ran: true, buildComplete: false } }];
+  check("ENG-95469/ENG-95901 T5 (RC-12): `{ran:true, buildComplete absent}` on a page the verifier finds OPEN is flagged `ran-without-verdict` — it no longer falls silently through every branch",
     () => { const m = wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined);
       return m.length === 1 && m[0].key === "child:A" && m[0].kind === "ran-without-verdict"; },
     () => wf.selfCheckMismatches(ranNoVerdict, unitFor, openVerify, {}, undefined));
-  check("ENG-95469 T5 (RC-12): the honest short case `{ran:true, complete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
+  check("ENG-95469/ENG-95901 T5 (RC-12): the honest short case `{ran:true, buildComplete:false}` is NOT a mismatch — builder and verifier agree the unit is open, so `selfCheckStillShort`/the round loop own it, not the cross-check",
     () => wf.selfCheckMismatches(honestShort, unitFor, openVerify, {}, undefined).length === 0);
+  // PR review (ENG-95901 follow-up): `verifierBuildComplete` used to coerce "no page entry in `verify.pages` at
+  // all" (the page has not reached its first post-hoc verify pass yet) to `false`, indistinguishable from "the
+  // verifier ran and says NOT build-complete". That misread an honest `buildComplete:true` self-report as a
+  // MISMATCH on every page the verifier simply has not looked at yet. `isOpenPage` treats a missing entry as OPEN
+  // (so this unit is NOT filtered out before reaching the comparison), which is exactly what makes this case reach
+  // `selfCheckMismatches` at all.
+  const noVerifierEntryYet = { pages: {} };
+  check("ENG-95901 T5 (PR review): an HONEST `buildComplete:true` self-report on a page with NO entry in `verify.pages` (verifier has not run against it yet) raises NO mismatch — 'no data yet' must not read as 'verifier disagrees'",
+    () => wf.selfCheckMismatches(honestComplete, unitFor, noVerifierEntryYet, {}, undefined).length === 0,
+    () => wf.selfCheckMismatches(honestComplete, unitFor, noVerifierEntryYet, {}, undefined));
 }
 // The T5 cross-check WIRING, pinned at the source level (the round loop drives live agents): buildRound returns the
 // per-unit self-reports, and the round loop cross-checks them against the FRESH post-hoc `state.verify` and records a
@@ -451,6 +548,13 @@ check("ENG-95469 T5: the self-report is COLLECTED per page unit — `recordPageS
       const notRun = wf.selfCheckDiscrepancyText("gate-not-run");
       return /no boolean verdict/i.test(t.claim) && !/did NOT run/i.test(t.claim) && t.claim !== notRun.claim && t.label !== notRun.label; },
     () => ({ ranNoVerdict: wf.selfCheckDiscrepancyText("ran-without-verdict"), gateNotRun: wf.selfCheckDiscrepancyText("gate-not-run") }));
+  // ENG-95901: the branch this text describes tests `sc.buildComplete`, not `sc.complete` — pin the LITERAL field
+  // name in the claim text too, so a future field rename cannot leave this operator-facing string stale again
+  // (exactly the drift a code review caught: the predicate moved to `buildComplete` but the wording still said
+  // "complete absent").
+  check("ENG-95901: `ran-without-verdict`'s claim text names the field it ACTUALLY checks (`buildComplete`), not the retired `complete`",
+    () => /buildComplete absent/.test(wf.selfCheckDiscrepancyText("ran-without-verdict").claim),
+    () => wf.selfCheckDiscrepancyText("ran-without-verdict"));
   check("ENG-95469 RC-17: an UNRECOGNIZED kind throws loudly — a future kind added to `selfCheckMismatches` without a matching text entry cannot silently inherit stale wording",
     () => { try { wf.selfCheckDiscrepancyText("some-new-kind"); return false; } catch (e) { return /unknown selfCheck discrepancy kind/.test(e.message); } });
   // Every kind `selfCheckMismatches` can emit MUST have a text entry — the two lists cannot drift apart.
@@ -474,6 +578,19 @@ check("buildMode: the three modes are accepted, case- and whitespace-insensitive
   () => (wf.buildMode("auto") === "auto" && wf.buildMode(" Checkpoints ") === "checkpoints" && wf.buildMode("GUIDED") === "guided"));
 check("buildMode: an UNKNOWN mode THROWS — it must never fall back to `auto`, which would silently run unattended the one time the operator asked to watch",
   () => { try { wf.buildMode("semi"); return false; } catch (e) { return /unknown mode/i.test(e.message) && /checkpoints/.test(e.message); } });
+
+// ENG-95855 — the migration skill's verification-surface preflight, handed over as an explicit argument.
+// Unlike `buildMode`, absence is never guessed into one of the three tokens: a caller that omits the field
+// gets `null`, not a default tier, because guessing a tier nobody resolved is the exact "preference silently
+// drifted from what was resolved" failure this ticket exists to close.
+check("buildVerificationSurface: an absent value is `null` — never guessed into a tier",
+  () => (wf.buildVerificationSurface(undefined) === null && wf.buildVerificationSurface(null) === null && wf.buildVerificationSurface("") === null));
+check("buildVerificationSurface: the three tokens round-trip verbatim",
+  () => (wf.buildVerificationSurface("automatic:2") === "automatic:2" && wf.buildVerificationSurface("automatic:3") === "automatic:3" && wf.buildVerificationSurface("manual") === "manual"));
+check("buildVerificationSurface: accepted case- and whitespace-insensitively, matching buildMode's own normalization",
+  () => (wf.buildVerificationSurface(" Manual ") === "manual" && wf.buildVerificationSurface("AUTOMATIC:2") === "automatic:2"));
+check("buildVerificationSurface: an UNKNOWN token THROWS — a typo must not silently ship as a resolved tier",
+  () => { try { wf.buildVerificationSurface("automatic"); return false; } catch (e) { return /unknown verificationSurface/i.test(e.message) && /automatic:2/.test(e.message); } });
 
 check("unknownCheckpointKeys: a key `--units` does not publish is REPORTED — it matches no unit, so the run would never stop and the section would be built unwatched",
   () => (wf.unknownCheckpointKeys(["main", "child:Nope"], ["main", "child:Documents"]).join(",") === "child:Nope"));
@@ -552,6 +669,22 @@ check("guidelinesCloseMiss: the row never holds a reachability or app unit",
   () => (gMiss({}, gIds, [], { key: "sectionRegistered", kind: "reach" }) === null
     && gMiss({}, gIds, [], { key: "app", kind: "app" }) === null));
 
+// --- ENG-95471 REOPEN — a page diffed and found ALREADY compliant (0 edits, identical to the reference) could not
+// file ANY record: `componentsDiffed` demanded a non-empty list, so the honest outcome was unfileable and the row
+// stayed a permanent ❌ MISSING across repair rounds. `noChangesNeeded: true` + `noChangesReason` is the answer for
+// exactly that outcome — never a substitute for a real diff when one is due.
+const gNoDiff = { evidenceId: "main#quality-gates", ran: true, referencePage: "ContactsListPage", componentsDiffed: [], noChangesNeeded: true, noChangesReason: "diffed QuickFilter and the command buttons against ContactsListPage — identical" };
+check("ENG-95471 reopen: `noChangesNeeded: true` WITH a reason answers the row — empty `componentsDiffed` is not silence when it is explicitly a no-drift finding",
+  () => (gMiss({ guidelines: gNoDiff }) === null));
+check("ENG-95471 reopen: `noChangesNeeded: true` with NO reason does not answer — the flag alone is not evidence",
+  () => (typeof gMiss({ guidelines: { ...gNoDiff, noChangesReason: undefined } }) === "string"
+    && typeof gMiss({ guidelines: { ...gNoDiff, noChangesReason: "   " } }) === "string"));
+check("ENG-95471 reopen: an empty `componentsDiffed` with NEITHER `noChangesNeeded` NOR a non-empty diff is still a miss — the concession never becomes a silent free pass",
+  () => (typeof gMiss({ guidelines: { ...gOk, componentsDiffed: [] } }) === "string"));
+check("ENG-95471 reopen: `noChangesNeeded` is ignored when a real diff IS present — a builder cannot set the flag to dodge naming what it actually diffed AND still have the diff count",
+  () => (gMiss({ guidelines: { ...gOk, noChangesNeeded: false } }) === null
+    && gMiss({ guidelines: { ...gOk, noChangesNeeded: true, noChangesReason: "" } }) === null));
+
 // --- guidelinesLine: the text that actually reaches the verifier, so every branch is asserted on the RENDERED
 // string. It renders the close-row decision; re-deriving it is how the two surfaces came to disagree.
 check("guidelinesLine: a unit that owes no record renders NOTHING — no instruction about an id that does not exist",
@@ -573,6 +706,10 @@ check("ENG-95471 review fix: a whitespace-only `referencePage` cannot reach a fi
 check("ENG-95471 review fix: a quote inside a builder value cannot reshape the filing instruction — values are JSON-quoted, not interpolated raw",
   () => { const t = wf.guidelinesLine({ ...gOk, referencePage: 'A" , "components": ["x' }, null, true, FENCE);
     return t.includes('"components": ["crt.Input"]') && (t.match(/"components":/g) || []).length === 1; });
+check("ENG-95471 reopen: a no-changes-needed record renders `components: []` plus the JSON-quoted `noChangesReason` — never confused with the run-and-diffed filing",
+  () => { const t = wf.guidelinesLine(gNoDiff, null, true, FENCE);
+    return t.includes('"components": []') && t.includes(JSON.stringify(gNoDiff.noChangesReason))
+      && t.includes("NO CHANGES NEEDED") && !t.includes("file NOTHING"); });
 
 check("ENG-95471 / ENG-95469: `guidelines` AND `selfCheck` are REQUIRED on the page build schema — optional `guidelines` let a builder close on silence, and A3's in-context gate (`selfCheck`) must run before a page reports complete",
   /const BUILD_SCHEMA_PAGE = \{[^}]*required: \['unit', 'claimedBuilt', 'schemaName', 'guidelines', 'selfCheck'\]/.test(wfSrc));
@@ -584,6 +721,30 @@ const reqOf = (re) => { const m = re.exec(wfSrc); return m ? m[1].split(",").map
 const missingReq = (obj, req) => (req || []).filter((k) => !(k in obj));
 const PAGE_REQ = reqOf(/const BUILD_SCHEMA_PAGE = \{[^}]*?required:\s*\[([^\]]*)\]/);
 const SC_REQ = reqOf(/selfCheck:\s*\{\s*type:\s*'object',\s*required:\s*\[([^\]]*)\]/);
+// ENG-95901 (PR review) — a bounded-window REGEX against `wfSrc` (below) only proves the text pattern still reads
+// a certain way; it does not prove the SHIPPED schema object actually declares the field, the way the VERIFY_RESULT
+// drift gate above does by loading the real module and reading the live object. Load `BUILD_PROPERTIES` the SAME
+// way (a standalone module slice + `import()`) and assert on the live object, so a reformatting that keeps the
+// regex passing while actually dropping the property (or nesting it one level off) cannot go unnoticed.
+let selfCheckMod;
+try {
+  const slice = wfSrc.slice(wfSrc.indexOf("const BUILD_PROPERTIES"), wfSrc.indexOf("const BUILD_SCHEMA_APP"));
+  const modPath = path.join(mkdtempSync(path.join(os.tmpdir(), "wf-selfcheck-schema-")), "selfcheck-schema.mjs");
+  writeFileSync(modPath, `${slice}\nexport { BUILD_PROPERTIES };\n`);
+  selfCheckMod = await import(pathToFileURL(modPath).href);
+} catch (e) {
+  check("ENG-95901: the `BUILD_PROPERTIES` schema slice loads as a standalone module", false, e.message);
+}
+check("ENG-95901: `BUILD_PROPERTIES.selfCheck`'s structured-output schema DECLARES `buildComplete: { type: 'boolean' }` on the LIVE shipped object — a builder's structured answer will not reproduce an undeclared field, so its absence here silently drops `buildComplete` from every self-report before `selfCheckStillShort`/`selfCheckMismatches` ever see it",
+  selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.properties?.buildComplete?.type === 'boolean',
+  () => selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.properties);
+// Declaring it is not enough on its own here either — but unlike VERIFY_RESULT's page-state, `selfCheck` MUST NOT
+// require `buildComplete`: `ran: false` (the builder genuinely could not get-page) is a documented, valid outcome
+// with no build-axis verdict at all, and `ran-without-verdict` exists specifically to surface a schema-valid
+// `{ran:true}` with `buildComplete` absent as its own discrepancy kind rather than a schema violation.
+check("ENG-95901: `BUILD_PROPERTIES.selfCheck` requires ONLY `ran` — `buildComplete` stays optional so `ran:false`/`ran-without-verdict` remain schema-valid self-reports, not violations",
+  JSON.stringify(selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.required) === JSON.stringify(['ran']),
+  () => selfCheckMod?.BUILD_PROPERTIES?.selfCheck?.required);
 // The pre-PR 4-field page-unit shape (no `selfCheck`), and the current 5-field shape whose `selfCheck` uses the
 // documented `ran:false` + `notRunWhy` escape hatch the breaking-change argument leans on.
 const prePrPageResult = { unit: "main", claimedBuilt: ["crt.Input"], schemaName: "UsrMainPage",
@@ -639,6 +800,32 @@ check("ENG-95471 review fix: the blocked entry is DEDUPED per unit — the list 
     && /reportGuidelinesMiss\(unit\.key, r\.claims\.at\(-1\)\.guidelinesMiss\)/.test(wfSrc));
 check("ENG-95471 review fix: the close-row log claims no enforcement the code leaves to the verifier prompt",
   !/so the unit stays open`\)/.test(wfSrc) && /the quality-gates row stays unverified/.test(wfSrc));
+// ENG-95901 — the REAL `inContextGateBlock` prompt text, pinned at the source level (the same convention this file
+// already applies to every other builder-facing prompt line, e.g. the T5/RC-16 checks above). This is the literal
+// instruction a LIVE build agent reads to decide what it may and may not touch; a silent regression here (reverting
+// to `complete`, or dropping the missing-only restriction) would ship undetected without this check, since the
+// local stub used elsewhere in this file (for an unrelated buildPrompt-wiring test) is a one-line marker, not the
+// real function's content.
+{
+  const gateBlockSlice = wfSrc.slice(wfSrc.indexOf("function inContextGateBlock(unit)"), wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"));
+  check("ENG-95901: inContextGateBlock names `buildComplete` as the axis the gate's exit code reads, and states that an unconfirmed-evidence-only page exits 0",
+    /buildComplete/.test(gateBlockSlice) && /exits 0/.test(gateBlockSlice));
+  // PR review — the restriction is keyed on the row's OWNER, not on its `missing`/`unverified` label. Pinning the
+  // label wording would re-pin the defect: a `0/N expected fields` row is `unverified` and entirely the builder's.
+  check("ENG-95901 (review): inContextGateBlock restricts the one bounded fix to rows whose `owner` is `\"builder\"`, forbids touching a `\"verifier\"` row, and says in words not to read the missing/unverified label instead",
+    gateBlockSlice.includes('act on every row whose \\`owner\\` is \\`"builder"\\`')
+    && gateBlockSlice.includes('NEVER attempt to "fix" a row whose \\`owner\\` is \\`"verifier"\\`')
+    && /Read \\`owner\\`, not the \\`missing\\`\/\\`unverified\\` status/.test(gateBlockSlice));
+  // PR review (Minor 3) — the self-check payload shape the builder is told to write. `entitySchemaName` and
+  // `packageName` are BUILDER-owned rows, so a three-key payload leaves the gate short on a page that is
+  // actually complete. Pinned here because the same shape is prescribed twice (this prompt and the recipe's
+  // step 10) and the two silently drifting apart is exactly what the review caught.
+  check("ENG-95901 (review): inContextGateBlock's self-check built-file shape carries entitySchemaName and packageName alongside viewConfig/parentSchemaName/schemaUId",
+    /"viewConfig"[\s\S]{0,200}"entitySchemaName"[\s\S]{0,120}"packageName"[\s\S]{0,120}"parentSchemaName"[\s\S]{0,80}"schemaUId"/.test(gateBlockSlice)
+    && /BUILDER-OWNED rows/.test(gateBlockSlice));
+  check("ENG-95901: inContextGateBlock's `selfCheck` reporting instructions include `buildComplete` in the copied-verbatim field list",
+    /Report \\`selfCheck\\` copying the verdict VERBATIM:[\s\S]{0,160}buildComplete/.test(gateBlockSlice));
+}
 check("ENG-95471: the claim carries the `guidelines` OBJECT and no second channel for the same fact",
   /guidelines: res\.guidelines \|\| null/.test(wfSrc)
     && !/guidelinesRun: res\.guidelinesRun/.test(wfSrc) && !/guidelinesRun: \{ type/.test(wfSrc));
@@ -835,10 +1022,34 @@ check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy s
   () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
-check("packagePreconditionStop: provenance changes ONLY the `new-app`-over-existing branch — the unknown and unnamed stops are untouched by a record, and the other host modes still proceed",
-  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()).stopped === "target-package-unknown"
-    && wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
+check("packagePreconditionStop: an own record ALSO resolves a `new-app` stop over 'unknown' — 'unknown' + a matching COMPLETE record is exactly the resumed-run-over-its-own-success case ENG-95884 exists to let through, not a stop to preserve",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()) === null));
+check("packagePreconditionStop: 'unknown' + a matching but INCOMPLETE record resolves to the OWNERSHIP stop, not the generic unknown one — the record already answers 'exists', so the operator is told to finish the app unit, not to go check `list-packages` by hand",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec({ appUnitComplete: false })).stopped === "new-app-over-existing-package"));
+check("packagePreconditionStop: provenance changes ONLY what a matching record can resolve — the unnamed stop is untouched (no record ever supplies a package NAME), and a non-`new-app` host mode with no record proceeds exactly as before",
+  () => (wf.packagePreconditionStop(null, "absent", "new-app", ownRec({ package: null })).stopped === "target-package-unnamed"
     && wf.packagePreconditionStop("UsrPkg", "exists", "existing-app", null) === null));
+
+// --- ENG-95884 (review fix): `resolvePackageState` — the resolved fact SCHEDULING must observe too, not just the
+// stop above. Executed against `appUnitFor`/`isOpenApp` themselves (not source-text), because the bug this fix
+// closes is exactly that those two kept reading the raw, unconfirmed `packageState` after the stop had already
+// cleared on the run's own record — a resumed run's own success re-dispatching `create-app` over itself.
+check("resolvePackageState: an own record with a COMPLETE app unit resolves 'unknown' to 'exists' — this is the value scheduling must see",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec()) === "exists"));
+check("resolvePackageState: 'absent' is NEVER overridden by an own record — a confident absent could mean the package was removed after this run made it, a conflict worth its own stop, never a silent resume",
+  () => (wf.resolvePackageState("UsrPkg", "absent", ownRec()) === "absent"));
+check("resolvePackageState: a record naming a DIFFERENT package resolves nothing — the override is scoped to a NAME match, so a stale record from an earlier package in the same queue cannot flip the wrong target to 'exists'",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" })) === "unknown"));
+check("resolvePackageState: an own record with an INCOMPLETE app unit still resolves to 'exists' — the package itself is confirmed on the stand even though the deliverable is not, matching packagePreconditionStop's own new-app-over-existing-package stop text",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", ownRec({ appUnitComplete: false })) === "exists"));
+check("resolvePackageState: with NO provenance record 'unknown' stays 'unknown' — absence is never read as ownership",
+  () => (wf.resolvePackageState("UsrPkg", "unknown", null) === "unknown"));
+check("THE BLOCKER FIX ITSELF: scheduling handed the RESOLVED state (not the raw 'unknown') reports the app unit CLOSED — this is the exact gap where `create-app` used to get re-dispatched over a package the run's own record already proved exists",
+  () => (wf.appUnitFor("UsrPkg", wf.resolvePackageState("UsrPkg", "unknown", ownRec())) === null
+    && wf.isOpenApp(wf.resolvePackageState("UsrPkg", "unknown", ownRec())) === false));
+check("THE BLOCKER FIX, negative case: a record for a DIFFERENT package must NOT close scheduling — the override stays scoped to a matching package name all the way through to `appUnitFor`/`isOpenApp`",
+  () => (wf.appUnitFor("UsrPkg", wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" }))) !== null
+    && wf.isOpenApp(wf.resolvePackageState("UsrPkg", "unknown", ownRec({ package: "UsrOther" }))) === true));
 check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
   () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
 check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
@@ -921,6 +1132,85 @@ check("ENG-95468 replay: the Applicant plan's BOTH round-1 blockers are caught p
     return comp.length === 1 && comp[0].type === "crt.ContactCommunication"
       && place?.stopped === "new-app-over-existing-package"; });
 
+/* ---- ENG-95468: the TEMPLATE axis and the APP/PACKAGE IDENTITY axis of the same pre-build question ----------
+ * Added after the third Applicant run (2026-08-24), which diverged on BOTH of them and on neither component types
+ * nor placement: the plan named `ListPageV2FreedomTemplate` (the page was built on `ListPageV3Template`) and
+ * promised the app code `UsrApplicantApp` (the stand ended up with `UsrApplicant`, the prefix being empty). Both
+ * were recorded AFTER the write, as proposals. These pin the decision layer; the execution paths are driven below.
+ */
+check("ENG-95468: `templateMismatches` gates on an explicit resolved:false and carries the stand's reason, exactly like the component axis",
+  () => { const m = wf.templateMismatches([{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
+    ["ListPageV2FreedomTemplate"]);
+    return m.length === 1 && m[0].name === "ListPageV2FreedomTemplate" && /ListPageV3Template/.test(m[0].note); },
+  () => JSON.stringify(wf.templateMismatches([{ name: "ListPageV2FreedomTemplate", resolved: false }], ["ListPageV2FreedomTemplate"])));
+check("ENG-95468: `templateMismatches` applies the SAME three absence rules as the component axis — a resolved:true name does not gate, a name the plan never published cannot manufacture a stop, and an unreported name is not a failure",
+  () => wf.templateMismatches([{ name: "ListPageV3Template", resolved: true }], ["ListPageV3Template"]).length === 0
+    && wf.templateMismatches([{ name: "SomeOtherTemplate", resolved: false }], ["ListPageV3Template"]).length === 0
+    && wf.templateMismatches([], ["ListPageV3Template"]).length === 0,
+  () => ({ resolvedTrue: wf.templateMismatches([{ name: "ListPageV3Template", resolved: true }], ["ListPageV3Template"]),
+    unpublished: wf.templateMismatches([{ name: "SomeOtherTemplate", resolved: false }], ["ListPageV3Template"]),
+    unreported: wf.templateMismatches([], ["ListPageV3Template"]) }));
+check("ENG-95468: a plan that published NO `templateNames` (one predating the field) skips the intersection and is trusted as given — the same 'behave exactly as before' rule `componentTypeMismatches` applies",
+  () => wf.templateMismatches([{ name: "AnyTemplate", resolved: false }], []).length === 1
+    && wf.templateMismatches([{ name: "AnyTemplate", resolved: false }], undefined).length === 1);
+check("ENG-95468: `requiredAppCode` is the arithmetic `create-app` performs — package = prefix + code — so the code is derived, never chosen: empty prefix yields the package itself, a real prefix is stripped, and a target the prefix cannot produce yields null",
+  () => wf.requiredAppCode("UsrApplicant", "") === "UsrApplicant"
+    && wf.requiredAppCode("UsrApplicant", "Usr") === "Applicant"
+    && wf.requiredAppCode("CrtThing", "Usr") === null
+    && wf.requiredAppCode("Usr", "Usr") === null,
+  () => ({ empty: wf.requiredAppCode("UsrApplicant", ""), pfx: wf.requiredAppCode("UsrApplicant", "Usr"),
+    foreign: wf.requiredAppCode("CrtThing", "Usr"), exact: wf.requiredAppCode("Usr", "Usr") }));
+check("ENG-95468: `requiredAppCode` treats an UNREPORTED prefix as no answer, not as an empty one — `null`/absent is 'nobody looked' and must not silently behave like a stand with no prefix",
+  () => wf.requiredAppCode("UsrApplicant", null) === null && wf.requiredAppCode("UsrApplicant", undefined) === null);
+// THE THIRD APPLICANT RUN, replayed through the decision layer: plan `UsrApplicantApp`, target package
+// `UsrApplicant`, prefix empty. Both cannot hold, and this is the check that says so BEFORE `create-app` writes.
+check("ENG-95468 replay (third Applicant run): a plan whose application code and target package contradict each other under this stand's prefix is caught PRE-BUILD, naming the code the package actually requires",
+  () => { const m = wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp");
+    return m?.kind === "app-code-contradicts-target-package" && m.requiredCode === "UsrApplicant" && m.applicationCode === "UsrApplicantApp"; },
+  () => JSON.stringify(wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp")));
+check("ENG-95468: a target package this stand's prefix cannot produce AT ALL is its own verdict — no code fixes it, so it is not reported as a code contradiction",
+  () => wf.appIdentityMismatch("CrtThing", "new-app", "Usr", null)?.kind === "target-package-not-producible",
+  () => JSON.stringify(wf.appIdentityMismatch("CrtThing", "new-app", "Usr", null)));
+check("ENG-95468: the identity check is SCOPED and fails closed — it applies only where the run will create the app (`new-app`), it does not exist without a reported prefix, and a consistent plan clears it",
+  () => wf.appIdentityMismatch("UsrApplicant", "existing-app", "", "UsrApplicantApp") === null
+    && wf.appIdentityMismatch("UsrApplicant", "pages-only-no-menu", "", "UsrApplicantApp") === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", null, "UsrApplicantApp") === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicant") === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "Usr", "Applicant") === null,
+  () => ({ existing: wf.appIdentityMismatch("UsrApplicant", "existing-app", "", "UsrApplicantApp"),
+    noPrefix: wf.appIdentityMismatch("UsrApplicant", "new-app", null, "UsrApplicantApp"),
+    agrees: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicant") }));
+check("ENG-95468: a `new-app` plan that publishes NO application code is not a mismatch — the engine publishes `null` there by design, and inventing a contradiction from an absent field would stop every such plan",
+  () => wf.appIdentityMismatch("UsrApplicant", "new-app", "", null) === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "") === null);
+// THE RESUME. This check guards `create-app`; once THIS run's own app unit has closed on its full deliverable that
+// write is behind us, and stopping would spend a round reporting a contradiction nothing can act on. It goes quiet
+// exactly where `packagePreconditionStop` already lets a resume through — and not one step earlier.
+check("ENG-95468: the identity check goes quiet on a RESUME whose own app unit already completed — the write it guards is behind us, so the same contradiction that stops a fresh run must not stop a run that already created the app",
+  () => wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", true) === null
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", false)?.kind === "app-code-contradicts-target-package"
+    && wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", undefined)?.kind === "app-code-contradicts-target-package",
+  () => ({ resume: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", true),
+    fresh: wf.appIdentityMismatch("UsrApplicant", "new-app", "", "UsrApplicantApp", false) }));
+// The app unit's own instruction, which is where the divergence entered: "choose the code so the package comes out
+// right" is what the builder followed. With the prefix known the code is a FACT the prompt states; without it the
+// old wording must survive unchanged, because the builder then has to read the prefix itself.
+check("ENG-95468: with the prefix known the `app` prompt PASSES the exact code instead of asking the builder to choose one — and it names the package that code yields",
+  () => { const t = wf.appCodeInstruction("UsrApplicant", "");
+    return /PASS `code` EXACTLY `UsrApplicant`/.test(t) && /it is EMPTY/.test(t) && !/Choose the `code`/.test(t); },
+  () => wf.appCodeInstruction("UsrApplicant", ""));
+check("ENG-95468: with a NON-empty prefix the instruction names the prefix and the stripped code, so the builder can check the arithmetic rather than trust it",
+  () => { const t = wf.appCodeInstruction("UsrApplicant", "Usr");
+    return /PASS `code` EXACTLY `Applicant`/.test(t) && /`Usr`/.test(t) && /`UsrApplicant`/.test(t); },
+  () => wf.appCodeInstruction("UsrApplicant", "Usr"));
+check("ENG-95468: with NO prefix reported the app prompt keeps the ORIGINAL choose-the-code wording — the check does not exist there, and pretending otherwise would hand the builder a code nobody derived",
+  () => { const t = wf.appCodeInstruction("UsrApplicant", null);
+    return /Choose the `code`/.test(t) && /Read the prefix off the stand/.test(t) && !/PASS `code` EXACTLY/.test(t); },
+  () => wf.appCodeInstruction("UsrApplicant", null));
+check("ENG-95468: the app-code clause carries REAL backticks — it is interpolated into a template literal, so an escaped backtick would reach the builder as a backslash",
+  () => !/\\`/.test(wf.appCodeInstruction("UsrApplicant", "")) && !/\\`/.test(wf.appCodeInstruction("UsrApplicant", null)),
+  () => wf.appCodeInstruction("UsrApplicant", ""));
+
 // Source-level pins for the parts that close over run state.
 check("workflow: the app unit creates the section on the EXISTING object via `create-app-section --entity-schema-name`, and REMOVES the stub section create-app always mints — this is the created-a-new-object failure",
   /create-app-section\b/.test(wfSrc) && /--entity-schema-name \$\{unit\.entity/.test(wfSrc)
@@ -934,6 +1224,18 @@ check("workflow: the component-type gate (ENG-95468) is WIRED at the baseline �
     && /stopped: 'plan-invalid-against-stand'/.test(wfSrc));
 check("workflow: the Reconcile prompt tells the agent to RESOLVE each component type read-only (get-component-info) and return componentResolution — the gate's input",
   /get-component-info component-type=<type>/.test(wfSrc) && /return \\`componentResolution\\`/.test(wfSrc));
+// ENG-95468 — the two new gates have inputs only the Reconcile agent can supply, so a gate wired to a field nobody
+// is asked for is a gate that never fires. Pin the ASK, including the one thing an agent would otherwise normalise
+// away: an empty `SchemaNamePrefix` is an answer, and reporting it as `null` would silently switch the check off.
+check("ENG-95468: the Reconcile prompt asks for BOTH new gate inputs — the read-only template resolution and the stand's `SchemaNamePrefix` — and states that an empty prefix is a real answer, not `null`",
+  /return \\`templateResolution\\`/.test(wfSrc) && /\\`templateNames\\`/.test(wfSrc)
+    && /Return \\`schemaNamePrefix\\`/.test(wfSrc)
+    && /The empty string is a REAL answer and is not the same as \\`null\\`/.test(wfSrc));
+check("ENG-95468: the pre-build gate and its mid-run twin are wired to all THREE axes — a stop computed from one of them and returned from another is the failure mode a source pin catches and an execution test cannot name",
+  /const templateMismatchesNow = templateMismatches\(state\.templateResolution, state\.templateNames\)/.test(wfSrc)
+    && /const appIdentity = appIdentityMismatch\(state\.targetPackage, state\.sectionHost, state\.schemaNamePrefix, state\.applicationCode, appUnitDone\(\)\)/.test(wfSrc)
+    && /if \(componentMismatches\.length \|\| templateMismatchesNow\.length \|\| appIdentity\)/.test(wfSrc)
+    && /if \(midRunMismatches\.length \|\| midRunTemplates\.length \|\| midRunIdentity\)/.test(wfSrc));
 // --- ENG-94859 the per-run REFS cache, the page slice and the split worklog. Measured on a real run: 40% of all
 // tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
@@ -1007,6 +1309,21 @@ check("workflow: the index is written LAST, so a half-built cache cannot read as
 check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
   /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
     && /Do not treat the missing file as a defect/.test(wfSrc));
+// ENG-95855 — the resolved verification surface has to reach the per-page prompt as literal text, or the
+// per-page recipe's "use the verificationSurface VALUE" instruction has nothing concrete to point at: a
+// documented hand-over that no prompt-building code actually threads is the exact defect a prior review round
+// caught in this ticket's own diff.
+check("workflow: VERIFICATION_SURFACE is threaded into the page unit's prompt, not left for the builder to read from decisions.md",
+  /const VERIFICATION_SURFACE = buildVerificationSurface\(input\.verificationSurface\)/.test(wfSrc)
+    && /VERIFICATION SURFACE FOR THIS BUILD:.*\$\{VERIFICATION_SURFACE\}/.test(wfSrc)
+    && /none was handed to this run \(.verificationSurface. was omitted\)/.test(wfSrc));
+// ENG-95855 — a reach unit closes by OPENING the surface its wiring governs, which is a per-unit render check
+// under a different deliverable. Threading the surface into the page prompt only left section registration —
+// the one deliverable a real run silently dropped — telling its agent to open a browser nobody resolved.
+check("workflow: the resolved verification surface is hoisted and reaches the REACH unit's prompt too, with a `blocked` path when the surface is unachievable",
+  /const VERIFICATION_SURFACE_NOTE = VERIFICATION_SURFACE/.test(wfSrc)
+    && /a saved record is not a working binding\.\$\{VERIFICATION_SURFACE_NOTE\}/.test(wfSrc)
+    && /If that surface turns out unachievable for this wiring/.test(wfSrc));
 check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
   /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
 check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",
@@ -1202,9 +1519,35 @@ try {
   tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
   const modPath = path.join(tmpSchema, "schema.mjs");
   const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
-  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA };\n`);
+  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT };\n`);
   const mod = await import(pathToFileURL(modPath).href);
   reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
+  // ENG-95901 — the SCHEMA-DRIFT GATE. Every golden above constructs `{buildComplete: ...}` fixtures BY HAND and
+  // feeds them straight into the pure functions, bypassing the structured-output schema entirely — none of them
+  // would fail if `buildComplete` were silently dropped from VERIFY_RESULT (the exact regression a code review
+  // caught: an LLM constrained to an undeclared-field schema will not reproduce it, so the live agent-mediated path
+  // would lose the field even though every unit test still passes). Load the REAL schema object — not a copy — and
+  // assert the property is actually declared, the same way the byte-budget check above proves this schema's real
+  // shape rather than trusting a comment about it.
+  check("ENG-95901: VERIFY_RESULT's per-page schema DECLARES `buildComplete: { type: 'boolean' }` — an LLM transcribing `--verify-json` into `state.verify` will not reproduce an undeclared field, so its absence here silently drops `buildComplete` on the ONE path that feeds live runtime state",
+    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.buildComplete?.type === 'boolean',
+    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties);
+  // Declaring the property is not enough — only `required` forces an LLM to actually POPULATE it. Without this,
+  // the agent-mediated path could still legally transcribe a page as `{complete:false, unverified:3}` with
+  // `buildComplete` omitted, and `derivedBuildComplete` would silently fall back to the combined `complete`.
+  check("ENG-95901: VERIFY_RESULT's per-page schema also REQUIRES `buildComplete` (not merely typed) — a declared-but-optional field does not stop an LLM from omitting it",
+    (mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required || []).includes('buildComplete'),
+    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required);
+  // PR review — `builderOpen` is emitted by `verifyTally`/`verifyUnit`/`renderVerify`/`verifyDigest` alongside
+  // `buildComplete`, so it needs the same declaration for the same reason: an undeclared field is silently dropped
+  // on the agent-mediated transcription path, and this gate is exactly the blind spot a newly-emitted field falls
+  // into (it checks the fields that ARE declared). Typed, not required — unlike `buildComplete` it is a count a
+  // caller reads, not a flag any decision branches on, so an omission degrades a message rather than a verdict.
+  check("ENG-95901 (review): VERIFY_RESULT declares `builderOpen` at BOTH levels — per-page and on the top-level total — so the count that matches `buildComplete` survives the agent-mediated transcription the same way the flag does",
+    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.builderOpen?.type === 'integer'
+      && mod.VERIFY_RESULT?.properties?.builderOpen?.type === 'integer',
+    () => ({ page: mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties,
+      top: mod.VERIFY_RESULT?.properties?.builderOpen }));
 } catch (e) {
   check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
 } finally {
@@ -1221,6 +1564,185 @@ check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fa
     // …and the fallback really is a FALLBACK: it sits on the else of the confirmation, so a confirmed write costs
     // no extra agent. Pinned because dropping the branch would silently restore the per-round persistence agent.
     && /if \(lastVerifier\.queueWritten\) \{[\s\S]{0,600}?\} else \{[\s\S]{0,300}?yield\* persistPending\(`recording what round/.test(wfSrc));
+
+// --- THE VERIFIER'S PER-ROUND READ-BACK SCOPE. A repair round used to re-read every published page and re-file
+// its evidence, which sent records that were already settled back to the judge with nothing underlying them
+// changed. The scope is a pure decision, so it is exercised here rather than asserted from the prompt text. ---
+const scopeKeys = ["main", "list", "sectionRegistered"];
+const scopeSchemas = { main: "UsrApplicant_FormPage", list: "UsrApplicant_ListPage", sectionRegistered: "UsrApplicantSection" };
+const scopeAllRecorded = ["main", "list", "sectionRegistered"];
+const fetched = (built, recorded) => wf.verifyFetchKeys({ touchedThisRound: built, unitKeys: scopeKeys, schemas: scopeSchemas, pagesRecorded: recorded }).join(",");
+check("verifyFetchKeys: a recorded key the round did not build is NOT re-fetched (the whole point: an unchanged page was being re-read every round)",
+  () => fetched(["main"], scopeAllRecorded) === "main");
+check("verifyFetchKeys: a recorded key the round DID build IS fetched, because it just changed",
+  () => fetched(["main", "list"], scopeAllRecorded) === "main,list");
+check("verifyFetchKeys: a NEVER-recorded key is fetched even when the round did not build it (absent = nobody looked, and skipping it would leave it absent forever)",
+  () => fetched([], ["main"]) === "list,sectionRegistered");
+check("verifyFetchKeys: `pagesRecorded` undefined or empty fetches EVERY key: the old whole-section sweep, never a silent skip",
+  () => fetched([], undefined) === "main,list,sectionRegistered" && fetched([], []) === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key with no recorded Freedom schema is never fetched, even when the round built it",
+  () => wf.verifyFetchKeys({ touchedThisRound: ["orphan"], unitKeys: [...scopeKeys, "orphan"], schemas: scopeSchemas, pagesRecorded: [] }).join(",") === "main,list,sectionRegistered");
+check("verifyFetchKeys: a key that is only a SUBSTRING of a `builtThisRound` entry does not count as built (exact match, as the judge-queue predicate also requires)",
+  () => fetched(["child:main"], scopeAllRecorded) === "");
+check("verifyFetchKeys: an empty Reconcile report yields no keys rather than throwing",
+  () => wf.verifyFetchKeys({ touchedThisRound: [], unitKeys: undefined, schemas: scopeSchemas, pagesRecorded: [] }).length === 0);
+
+// The table renders three groups, and TWO different empty states share the FETCH list: nothing recorded
+// anywhere, and everything recorded with nothing to fetch this round. A round whose builders all returned
+// nothing produces the second, and one label for both contradicts the ALREADY ON FILE list printed under it.
+check("fetchTableGroups: with nothing to fetch and every key on file, the FETCH list does not claim nothing is recorded",
+  () => {
+    const g = wf.fetchTableGroups([], scopeKeys, scopeSchemas);
+    return g.known.length === 0 && g.keep.length === 3 && wf.fetchListEmptyLabel(g.keep.length).includes("already on file");
+  });
+check("fetchTableGroups: with nothing recorded anywhere the FETCH list still says none recorded yet",
+  () => wf.fetchTableGroups([], scopeKeys, {}).keep.length === 0 && wf.fetchListEmptyLabel(0) === "- (none recorded yet)");
+check("fetchTableGroups: the three rendered groups PARTITION the published keys, with no key in two of them and none dropped",
+  () => {
+    const g = wf.fetchTableGroups(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    const all = [...g.known, ...g.keep, ...g.unknown];
+    return g.known.join() === "main" && g.keep.join() === "list,sectionRegistered" && g.unknown.join() === "orphan"
+      && all.length === new Set(all).size && all.length === 4;
+  });
+
+// A builder that answered nothing may still have WRITTEN to the stand before it died, so its page is read back
+// even though it never reached `builtThisRound` — which stays as it is, because the judge-queue predicate
+// discriminates on real build activity.
+check("touchedKeys: a unit whose builder answered nothing counts as touched",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }]).join() === "main,list");
+check("touchedKeys: a unit that reported normally is not duplicated, and absent claims yield just the built list",
+  () => wf.touchedKeys(["main"], [{ unit: "main" }]).join() === "main" && wf.touchedKeys(["main"], undefined).join() === "main");
+
+// The rejected-record loop: `isSettledAndUnitUntouched` covers only an id EARNED before the round, and a
+// rejected record is not earned, so it came back to Judge every round no matter what happened to its unit.
+check("isRefiledForUntouchedUnit: a REJECTED record whose unit was not touched is not re-queued",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main"]) === true);
+check("isRefiledForUntouchedUnit: the same record IS re-queued once its unit is touched again",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(["list#quality-gates"]), ["main", "list"]) === false);
+check("isRefiledForUntouchedUnit: a FIRST-EVER record is never suppressed, so nothing unjudged is hidden",
+  () => wf.isRefiledForUntouchedUnit("list#quality-gates", new Set(), ["main"]) === false);
+check("isRefiledForUntouchedUnit: an id with no `#` uses the whole id as its owner",
+  () => wf.isRefiledForUntouchedUnit("sectionRegistered", new Set(["sectionRegistered"]), ["main"]) === true);
+
+// The two guards are checked IN ORDER and are not interchangeable: the first asks EARNED + BUILT, the second
+// only RECORDED + TOUCHED. Each is covered above in isolation; these drive the composition over a mixed list.
+const earned = new Set(["main#quality-gates"]);
+const filed = new Set(["main#quality-gates", "list#quality-gates", "list#listpage:columns"]);
+const skipWhy = (id, built, touchedUnits) => wf.requeueSkipReason(id, earned, filed, built, touchedUnits);
+check("requeueSkipReason: an EARNED id whose unit was not built is skipped as settled, not as refiled",
+  () => skipWhy("main#quality-gates", ["list"], ["list"]) === "settled");
+check("requeueSkipReason: a REJECTED id (filed, never earned) whose unit was not touched is skipped as refiled",
+  () => skipWhy("list#quality-gates", ["main"], ["main"]) === "refiled");
+check("requeueSkipReason: an id whose unit WAS built goes through both guards to the judge",
+  () => skipWhy("list#quality-gates", ["list"], ["list"]) === null);
+check("requeueSkipReason: a no-answer unit is TOUCHED but not BUILT — its earned id stays settled while its rejected id goes through",
+  () => skipWhy("main#quality-gates", [], ["main"]) === "settled" && skipWhy("list#quality-gates", [], ["list"]) === null);
+check("requeueSkipReason: a FIRST-EVER id is never skipped, whichever guard is asked",
+  () => skipWhy("sectionRegistered#reach", [], []) === null);
+check("requeueSkipReason: an id with no `#` owner resolves against the whole id",
+  () => wf.requeueSkipReason("sectionRegistered", new Set(["sectionRegistered"]), new Set(["sectionRegistered"]), [], []) === "settled");
+check("requeueSkipReason: over a mixed list, every id resolves to exactly one outcome and the order holds",
+  () => ["main#quality-gates", "list#quality-gates", "list#listpage:columns", "child:X#childpage"]
+    .map((id) => skipWhy(id, ["child:X"], ["child:X", "list"])).join(",") === "settled,,,");
+
+// The round loop derives `touchedThisRound` and `filedBeforeRound` from `claims` and `state.evidenceFiled`, then
+// feeds them per id. Testing the predicates alone left that wiring uncovered: passing `builtThisRound` where
+// `touchedThisRound` belongs, or swapping the two lists, would have passed every case above.
+const wroteThisRound = ["main#quality-gates", "list#quality-gates", "child:X#childpage", "sectionRegistered#reach"];
+const roundClaims = [{ unit: "main" }, { unit: "list", noAnswer: true }];
+const filedOnFile = ["main#quality-gates", "list#quality-gates", "child:X#childpage"];
+const decide = (built, claimsIn) => wf.requeueDecisions({ evidenceWritten: wroteThisRound, earnedBeforeRound: new Set(["main#quality-gates", "child:X#childpage"]), evidenceFiled: filedOnFile, builtThisRound: built, claims: claimsIn })
+  .map((d) => d.id + "=" + (d.why || "queue")).join(" ");
+check("requeueDecisions: derives both lists from the round inputs and returns one verdict per filed id",
+  () => decide(["main"], roundClaims) === "main#quality-gates=queue list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide(["main"], roundClaims));
+check("requeueDecisions: a no-answer unit is TOUCHED but not BUILT — its rejected id is released while an earned id elsewhere stays settled",
+  () => decide([], roundClaims) === "main#quality-gates=settled list#quality-gates=queue child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], roundClaims));
+check("requeueDecisions: with no claims at all, a unit that did not build keeps its filed record out of the queue",
+  () => decide([], undefined) === "main#quality-gates=settled list#quality-gates=refiled child:X#childpage=settled sectionRegistered#reach=queue",
+  () => decide([], undefined));
+check("requeueDecisions: an empty or absent `evidenceWritten` decides nothing rather than throwing",
+  () => wf.requeueDecisions({ evidenceWritten: undefined, earnedBeforeRound: new Set(), evidenceFiled: [], builtThisRound: [], claims: [] }).length === 0 && wf.requeueDecisions({ evidenceWritten: [], earnedBeforeRound: new Set(), evidenceFiled: [], builtThisRound: [], claims: [] }).length === 0);
+
+// The table is the artifact the Verify agent reads, so its rendered text is asserted, not only the partition
+// logic behind it: a group under the wrong header, or the wrong empty-state branch, misinforms that agent.
+const renderTable = (fetchKeys, keys, schemas) => wf.verifierSchemaTable(fetchKeys, keys, schemas);
+check("verifierSchemaTable: the fetched keys render under FETCH THIS ROUND and the untouched ones under ALREADY ON FILE, each in its own group",
+  () => {
+    const t = renderTable(["main"], scopeKeys, scopeSchemas);
+    const fetchPart = t.slice(0, t.indexOf("ALREADY ON FILE"));
+    return fetchPart.includes("`main` → get-page `UsrApplicant_FormPage`")
+      && !fetchPart.includes("`list`")
+      && t.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+      && t.slice(t.indexOf("ALREADY ON FILE")).includes("`list`, `sectionRegistered`");
+  },
+  () => renderTable(["main"], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing to fetch with every key on file renders the already-on-file label, never `(none recorded yet)`",
+  () => {
+    const t = renderTable([], scopeKeys, scopeSchemas);
+    return t.includes("nothing to fetch this round") && !t.includes("(none recorded yet)") && t.includes("ALREADY ON FILE");
+  },
+  () => renderTable([], scopeKeys, scopeSchemas));
+check("verifierSchemaTable: nothing recorded anywhere renders `(none recorded yet)` with no ALREADY ON FILE group",
+  () => {
+    const t = renderTable([], scopeKeys, {});
+    return t.includes("(none recorded yet)") && !t.includes("ALREADY ON FILE") && t.includes("NO FREEDOM SCHEMA IS RECORDED FOR");
+  },
+  () => renderTable([], scopeKeys, {}));
+check("verifierSchemaTable: a key with no schema renders only under the unknown-schema line, never as a fetch target",
+  () => {
+    const t = renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas);
+    return t.slice(t.indexOf("NO FREEDOM SCHEMA IS RECORDED FOR")).includes("`orphan`")
+      && !t.slice(0, t.indexOf("ALREADY ON FILE")).includes("`orphan`");
+  },
+  () => renderTable(["main"], [...scopeKeys, "orphan"], scopeSchemas));
+
+// The read-back call site derived `touched`, `fetchKeys`, the log list and the table itself, so the helpers above
+// were covered while that threading was not. The plan does the derivation from round-shaped state instead.
+const planFor = (builtThisRound, claims, pagesRecorded) => wf.verifyFetchPlan({
+  unitKeys: scopeKeys, schemas: scopeSchemas, pagesRecorded, builtThisRound, claims,
+});
+check("verifyFetchPlan: derives touched, fetchKeys and the not-read-back list from round-shaped state in one pass",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }], scopeAllRecorded);
+    return p.touched.join() === "main" && p.fetchKeys.join() === "main" && p.notReRead.join() === "list,sectionRegistered";
+  },
+  () => JSON.stringify(planFor(["main"], [{ unit: "main" }], scopeAllRecorded)));
+check("verifyFetchPlan: a no-answer claim widens the read-back without widening the built list",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }], scopeAllRecorded);
+    return p.touched.join() === "main,list" && p.fetchKeys.join() === "main,list" && p.notReRead.join() === "sectionRegistered";
+  },
+  () => JSON.stringify(planFor(["main"], [{ unit: "main" }, { unit: "list", noAnswer: true }], scopeAllRecorded)));
+check("verifyFetchPlan: an absent `pagesRecorded` reads back every key and leaves nothing on the not-read-back list",
+  () => {
+    const p = planFor([], [], undefined);
+    return p.fetchKeys.join() === "main,list,sectionRegistered" && p.notReRead.length === 0;
+  });
+check("verifyFetchPlan: the table it returns is the one the round's own fetch set produces, groups and all",
+  () => {
+    const p = planFor(["main"], [{ unit: "main" }], scopeAllRecorded);
+    return p.table === wf.verifierSchemaTable(p.fetchKeys, scopeKeys, scopeSchemas)
+      && p.table.includes("FETCH THIS ROUND") && p.table.includes("ALREADY ON FILE");
+  });
+
+// The read-back scope is a cost decision made from a report this script cannot verify, so it is logged.
+check("workflow: the read-back scope names the pages it did NOT re-read, and says so when it narrowed nothing",
+  wfSrc.includes("already on file and untouched — not read back")
+    && wfSrc.includes("no pages reported on file — reading back every key with a schema"));
+
+// The predicates decide the set; these clauses are what make the verifier ACT on it. Any one of them reverting
+// puts the whole-section re-read back while every case above still passes.
+check("workflow: the verifier `pages` instruction is scoped to the FETCH THIS ROUND list, and the table names the keys it is NOT fetching",
+  wfSrc.includes("for every key the table above lists under FETCH THIS ROUND")
+    && wfSrc.includes("ALREADY ON FILE, NOT TOUCHED THIS ROUND")
+    && wfSrc.includes("do NOT re-file their evidence"));
+check("workflow: the verifier `evidence` instruction files only the ids this round owns, because naming an untouched id is what sends it back to Judge",
+  wfSrc.includes("**FILE ONLY THE IDS THIS ROUND OWNS:**"));
+check("workflow: Reconcile is asked for `pagesRecorded`, without which the read-back scope degrades to the old sweep",
+  wfSrc.includes("Also return \\`pagesRecorded\\`")
+    && wfSrc.includes("pagesRecorded: { type: 'array', items: { type: 'string' } }"));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -1391,7 +1913,25 @@ check("ENG-95471 review fix: the return obligation SURVIVES into the composed pr
 // wrapper reads run state and this host's fencer, neither of which the harness can supply.
 // The end marker is ORDINARY source text, so it lives in one constant that both slice sites read.
 const BP_END_MARKER = "// OPERATOR FINDINGS from an earlier checkpoint";
-const buildPromptSrc = wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER, wfSrc.indexOf("function buildPrompt(unit, st, roundNo)")));
+// `buildPrompt` only DISPATCHES by `unit.kind` — the prose per kind (including the app/reach/page prose this
+// file's checks match on below) lives in these named pure functions instead. Sliced in alongside `buildPrompt`
+// itself so `buildPromptSrc` still carries every string these checks were written against.
+// The closing brace is matched at the FUNCTION'S OWN INDENTATION, not column 0: `unitNo` and friends are top-level
+// (module-scope helpers, inlined unindented), but the per-kind block functions live inside `run()`'s generator body
+// and are indented — a bare `"\n}\n"` search runs past their real end into whatever top-level `}` comes next
+// (`run()`'s own closing brace), swallowing every function after them and producing a "already declared" collision
+// when the swallowed text is re-sliced on its own.
+const sliceFn = (name) => {
+  const at = wfSrc.indexOf(`function ${name}(`);
+  if (at < 0) return "";
+  const lineStart = wfSrc.lastIndexOf("\n", at) + 1;
+  const indent = wfSrc.slice(lineStart, at);
+  const closeAt = wfSrc.indexOf(`\n${indent}}\n`, at);
+  return wfSrc.slice(at, closeAt + indent.length + 2);
+};
+const KIND_BLOCK_FN_NAMES = ["appKindBlock", "appSectionHostNoMenuBlock", "appSectionHostMigrationBlock", "reachKindBlock", "pageKindBlock"];
+const buildPromptSrc = KIND_BLOCK_FN_NAMES.map(sliceFn).join("\n")
+  + "\n" + wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER, wfSrc.indexOf("function buildPrompt(unit, st, roundNo)")));
 check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
   buildPromptSrc.length > 200
     && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
@@ -1471,7 +2011,10 @@ check("workflow: Reconcile is asked for BOTH lists the filter needs, off the bui
 // const its body names must be declared BEFORE that call.
 const topLevelConstAt = (name) => wfSrc.search(new RegExp(`^const ${name}\\b`, "m"));
 function topLevelFnBody(name) {
-  const at = wfSrc.indexOf(`function ${name}(`);
+  // `function* ${name}(` first (a generator, e.g. `acceptReconciled` since ENG-95884), then the plain form —
+  // never both matched blindly, since a plain-function name is a substring of no generator declaration here.
+  let at = wfSrc.indexOf(`function* ${name}(`);
+  if (at < 0) at = wfSrc.indexOf(`function ${name}(`);
   if (at < 0) return "";
   const end = wfSrc.indexOf("\n}", at);
   return end < 0 ? wfSrc.slice(at) : wfSrc.slice(at, end + 2);
@@ -1599,6 +2142,90 @@ check("workflow EXECUTES the combined stop: a baseline with new-app-over-existin
     && /crt\.ContactCommunication/.test(combinedStop.next || ""),
   () => (combinedStop.threw ? `threw: ${combinedStop.threw}` : `stopped=${combinedStop.stopped} mismatches=${JSON.stringify(combinedStop.componentMismatches)} next=${(combinedStop.next || "").slice(0, 140)}`));
 
+/* --- ENG-95468: the TEMPLATE and IDENTITY axes AS EXECUTION PATHS -------------------------------------------
+ * The pure checks above prove the decisions; these drive the real run, because a decision nothing calls is a
+ * decision that ships switched off — which is exactly how the third Applicant run reached `create-app` with a plan
+ * whose app code its own target package contradicted. `packageState: "absent"` with a named target and `new-app` is
+ * NOT a package stop (that absent package is what the app unit exists to build), so these isolate the new gates.
+ */
+const templateStop = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app",
+  templateNames: ["ListPageV2FreedomTemplate"],
+  templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES the template gate — a baseline Reconcile whose plan names a template this stand does not have STOPS with `plan-invalid-against-stand` before any unit, carrying `templateMismatches` and naming the template in `next`",
+  !templateStop.threw && templateStop.stopped === "plan-invalid-against-stand"
+    && Array.isArray(templateStop.templateMismatches) && templateStop.templateMismatches.some((t) => t.name === "ListPageV2FreedomTemplate")
+    && /ListPageV2FreedomTemplate/.test(templateStop.next || "")
+    && /Nothing was built\./.test(templateStop.next || ""),
+  () => (templateStop.threw ? `threw: ${templateStop.threw}` : `stopped=${templateStop.stopped} templates=${JSON.stringify(templateStop.templateMismatches)} next=${(templateStop.next || "").slice(0, 200)}`));
+// THE THIRD APPLICANT RUN as a real run: plan `UsrApplicantApp`, target package `UsrApplicant`, empty prefix. The
+// package is ABSENT (so the app unit would build it) and placement is fine — nothing else stops this run, which is
+// precisely why the divergence survived to `create-app` and was only recorded afterwards.
+const identityStop = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 replay (third Applicant run, EXECUTED): a plan promising `UsrApplicantApp` against target package `UsrApplicant` on an empty-prefix stand STOPS before the first write — `create-app` is the first write, and this is the round that used to reach it",
+  !identityStop.threw && identityStop.stopped === "plan-invalid-against-stand"
+    && identityStop.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && identityStop.appIdentityMismatch?.requiredCode === "UsrApplicant"
+    && /UsrApplicantApp/.test(identityStop.next || "") && /UsrApplicant`/.test(identityStop.next || ""),
+  () => (identityStop.threw ? `threw: ${identityStop.threw}` : `stopped=${identityStop.stopped} identity=${JSON.stringify(identityStop.appIdentityMismatch)} next=${(identityStop.next || "").slice(0, 240)}`));
+// ONE WAVE, not three: the whole point of checking before the first write is that a re-plan fixes everything the
+// plan got wrong in a single pass. Three axes failing at once must produce ONE stop naming all three.
+const allThree = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+  componentTypes: ["crt.ContactCommunication"],
+  componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }],
+  templateNames: ["ListPageV2FreedomTemplate"],
+  templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: all THREE axes failing produce ONE stop that names all three — component type, page template and app/package identity in a single `next`, so one re-plan fixes the lot instead of one round per axis",
+  !allThree.threw && allThree.stopped === "plan-invalid-against-stand"
+    && allThree.componentMismatches.some((c) => c.type === "crt.ContactCommunication")
+    && allThree.templateMismatches.some((t) => t.name === "ListPageV2FreedomTemplate")
+    && allThree.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && /crt\.ContactCommunication/.test(allThree.next || "")
+    && /ListPageV2FreedomTemplate/.test(allThree.next || "")
+    && /UsrApplicantApp/.test(allThree.next || ""),
+  () => (allThree.threw ? `threw: ${allThree.threw}` : `stopped=${allThree.stopped} next=${(allThree.next || "").slice(0, 400)}`));
+// Positive control for BOTH new axes at once: a plan whose template resolves and whose identity is consistent must
+// pass the gate and reach a downstream stop — an always-firing gate (or one that read `''` as "no prefix") dies here.
+const newAxesPass = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicant", schemaNamePrefix: "",
+  templateNames: ["ListPageV3Template"],
+  templateResolution: [{ name: "ListPageV3Template", resolved: true }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES PAST both new gates — a resolvable template and an identity that agrees with the stand's (empty) prefix reach a downstream stop, so an inverted gate or one that misreads `''` as absent surfaces here",
+  !newAxesPass.threw && newAxesPass.stopped !== "plan-invalid-against-stand" && newAxesPass.stopped === "unknown-checkpoint-key",
+  () => (newAxesPass.threw ? `threw: ${newAxesPass.threw}` : `stopped=${newAxesPass.stopped}`));
+check("ENG-95468: a stop on another axis entirely still exposes `templateMismatches` as `[]` and `appIdentityMismatch` as `null` — one uniform signal per axis on EVERY return, so a consumer never switches on `stopped` to learn whether the plan disagreed with the stand",
+  Array.isArray(newAxesPass.templateMismatches) && newAxesPass.templateMismatches.length === 0
+    && newAxesPass.appIdentityMismatch === null,
+  () => ({ templates: newAxesPass.templateMismatches, identity: newAxesPass.appIdentityMismatch }));
+// The COMBINED package stop carries the new axes too — the placement stop stays primary (it is what an operator
+// acts on first), but a re-plan must see every defect the baseline found, not just the one that stopped first.
+const combinedAll = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "exists", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+  templateNames: ["ListPageV2FreedomTemplate"],
+  templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema" }],
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468: the package stop carries the template and identity axes as well — `stopped` stays `new-app-over-existing-package`, but the return and its `next` name the unresolved template and the contradicted app code too",
+  !combinedAll.threw && combinedAll.stopped === "new-app-over-existing-package"
+    && combinedAll.templateMismatches.some((t) => t.name === "ListPageV2FreedomTemplate")
+    && combinedAll.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && /ListPageV2FreedomTemplate/.test(combinedAll.next || "") && /UsrApplicantApp/.test(combinedAll.next || ""),
+  () => (combinedAll.threw ? `threw: ${combinedAll.threw}` : `stopped=${combinedAll.stopped} next=${(combinedAll.next || "").slice(0, 300)}`));
+
 // --- ENG-95850 (A2) AS AN EXECUTION PATH. The pure-helper checks above prove the DECISION; these run the real
 // prologue through it, which is the only thing that proves the provenance record is actually THREADED into both
 // package gates. A gate handed `undefined` instead of the record passes every pure test and stops every resumed run.
@@ -1621,6 +2248,26 @@ check("workflow EXECUTES the half-finished app unit: OUR package with `appUnitCo
     && ownedShort.packageCreatedByRun?.package === "UsrApplicantFreedom" && ownedShort.packageCreatedByRun?.appUnitComplete === false
     && /INCOMPLETE/.test(ownedShort.next || "") && /without a second approval/.test(ownedShort.next || ""),
   () => (ownedShort.threw ? `threw: ${ownedShort.threw}` : `stopped=${ownedShort.stopped} rec=${JSON.stringify(ownedShort.packageCreatedByRun)}`));
+// ENG-95468 — the identity gate must let the SAME resume through, for the same reason: `create-app` is behind us.
+// Without this the new gate re-broke exactly what ENG-95850 fixed — a `new-app` run could not survive its own
+// success — only one stop later and under a different key, which is the worst version of that bug to debug.
+const ownedResumeIdentity = await runToBaseline({
+  ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 × ENG-95850: a RESUME whose own app unit completed is not stopped by the identity gate either — the contradiction is real but `create-app` already ran, so the run continues to a downstream stop instead of paying a round to report it",
+  !ownedResumeIdentity.threw && ownedResumeIdentity.stopped === "unknown-checkpoint-key"
+    && ownedResumeIdentity.appIdentityMismatch === null,
+  () => (ownedResumeIdentity.threw ? `threw: ${ownedResumeIdentity.threw}` : `stopped=${ownedResumeIdentity.stopped} identity=${JSON.stringify(ownedResumeIdentity.appIdentityMismatch)}`));
+// And the control: the same contradiction on a package with NO provenance record still surfaces — so the quiet above
+// is the resume record's doing, not a gate that stopped working.
+const strangerIdentity = await runToBaseline({
+  ...newAppBaseline(null), applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 × ENG-95850: the same contradiction against a package this migration did NOT create still reaches the operator — carried on the package stop, so the one re-plan that run needs fixes both",
+  !strangerIdentity.threw && strangerIdentity.stopped === "new-app-over-existing-package"
+    && strangerIdentity.appIdentityMismatch?.kind === "app-code-contradicts-target-package",
+  () => (strangerIdentity.threw ? `threw: ${strangerIdentity.threw}` : `stopped=${strangerIdentity.stopped} identity=${JSON.stringify(strangerIdentity.appIdentityMismatch)}`));
 
 // --- ENG-95850 (A3): RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Two consecutive launches of the real run were
 // rejected at this exact call in 9 ms with 0 writes, a later identical launch passed, and in between the flake read
@@ -1702,6 +2349,31 @@ const midRunPasses = await runToPostPreflight(midRunBaseline, midRunBaseline, { 
 check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches the dry-run boundary (`dryRun:true`), so an always-firing mid-run gate would surface here",
   !midRunPasses.threw && midRunPasses.stopped !== "plan-invalid-against-stand" && midRunPasses.dryRun === true,
   () => (midRunPasses.threw ? `threw: ${midRunPasses.threw}` : `stopped=${midRunPasses.stopped} dryRun=${midRunPasses.dryRun}`));
+// ENG-95468 — the template axis is a mid-run guarantee for the same reasons: a resumed run's baseline may predate
+// `templateResolution`, and a template schema can leave the stand during a long run. The post-preflight Reconcile is
+// the first to report it, and the next unit must not be dispatched on it.
+const midRunTemplate = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, templateNames: ["ListPageV2FreedomTemplate"],
+    templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }] })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES the mid-run TEMPLATE gate — a post-preflight Reconcile that FIRST reports an unresolvable template stops before the next unit, with the MID-RUN tail (units may already be on disk)",
+  !midRunTemplate.threw && midRunTemplate.stopped === "plan-invalid-against-stand"
+    && (midRunTemplate.templateMismatches || []).some((t) => t.name === "ListPageV2FreedomTemplate")
+    && /ListPageV2FreedomTemplate/.test(midRunTemplate.next || "")
+    && /Anything already built this run is on disk\./.test(midRunTemplate.next || "")
+    && !/Nothing was built/.test(midRunTemplate.next || ""),
+  () => (midRunTemplate.threw ? `threw: ${midRunTemplate.threw}` : `stopped=${midRunTemplate.stopped} next=${(midRunTemplate.next || "").slice(0, 240)}`));
+// The identity axis likewise: `sectionHost` / `targetPackage` are re-read on every Reconcile, so a round that first
+// makes the contradiction visible must stop rather than let a later `create-app` run on it.
+const midRunIdentityStop = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+    applicationCode: "UsrApplicantApp", schemaNamePrefix: "" })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95468: workflow EXECUTES the mid-run IDENTITY gate — a Reconcile that first reveals an app code its own target package contradicts stops before the next unit is dispatched",
+  !midRunIdentityStop.threw && midRunIdentityStop.stopped === "plan-invalid-against-stand"
+    && midRunIdentityStop.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && /UsrApplicantApp/.test(midRunIdentityStop.next || ""),
+  () => (midRunIdentityStop.threw ? `threw: ${midRunIdentityStop.threw}` : `stopped=${midRunIdentityStop.stopped} identity=${JSON.stringify(midRunIdentityStop.appIdentityMismatch)}`));
 
 // --- THE BUILD CONTINUATION as an EXECUTION path (ENG-95474 review). Everything about the round-vs-continuation
 // split was asserted only by regexes over the source, which stay green if the accounting is inverted, if the ceiling
@@ -2223,7 +2895,9 @@ check("cba workflow: every helper this suite covers is inside the markers (a mov
 // --- round 6. Four of the five were in code added earlier in this same branch, and three shared one shape: a
 // guarantee established at the head of the run and not re-applied when a LATER Reconcile replaced the state.
 check("workflow: EVERY refreshed state goes through one acceptance path that re-checks the approval, the package state and the entity — three guarantees were first-pass only, so a mid-run re-plan could build a version nobody approved",
-  /function acceptReconciled\(next, whereFrom\)/.test(wfSrc)
+  // `function*` (ENG-95884): the acceptance path may suspend on ONE dedicated package-record re-read
+  // (`confirmPackageStop`) before trusting a stop, so it is a generator rather than a plain function.
+  /function\*? acceptReconciled\(next, whereFrom\)/.test(wfSrc)
     && /approvalStop\(state\.approval \|\| approval, state\.planVersion/.test(wfSrc)
     // Both calls are matched WITHOUT their closing paren: the guarantee under test is that the acceptance path
     // re-runs them on the refreshed state, not how many facts they consult (placement added a third argument to
@@ -2340,7 +3014,9 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
   /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected']/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
-  /if \(packageState !== 'exists' && packageState !== 'absent'\)/.test(wfSrc));
+  // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
+  // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.
+  /if \(effectiveState !== 'exists' && effectiveState !== 'absent'\)/.test(wfSrc));
 check("engine: a MEMBER key carries its scope — two child pages declaring the same member produced one key, so the coverage Set counted two rows as one and ONE card closed both",
   /function memberDigestOf\(changeSet, scopeSchema\)/.test(mgSrc)
     && /key: scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
@@ -2717,6 +3393,12 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     markersOk, () => ({ bpStart, bpEnd, head: BP_HEAD, end: BP_END_MARKER }));
   if (markersOk) {
     const fnSrc = wfSrc.slice(bpStart, bpEnd).trimEnd();
+    // `buildPrompt` dispatches to these per-kind pure functions rather than inlining their template literals —
+    // sliced in FOR REAL alongside `buildPrompt` itself, same as `repairBlock` / `continuationBudgetBlock` below,
+    // so the render actually exercises the shipped prose instead of a stub that cannot throw. `sliceFn` /
+    // `KIND_BLOCK_FN_NAMES` are the same ones `buildPromptSrc` above is built from.
+    const pureFn = sliceFn;
+    const kindBlockFnsSrc = KIND_BLOCK_FN_NAMES.map(pureFn).join("\n");
     // Every free variable `buildPrompt` reads, as DECLARATIONS — they are prepended to the sliced function and the
     // whole thing is imported as a real module. No `new Function`, no eval: the same route the pure-helper block
     // above takes, and for the same reason.
@@ -2731,6 +3413,8 @@ const REF_BLOCK = "<refs>"
 const RULES = "<rules>"
 const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
+const VERIFICATION_SURFACE = "automatic:2"
+const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automatic:2"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -2768,8 +3452,12 @@ const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
     // option, because the prompt prose carries literal braces. The render below covers the rest.
     const params = new Set(["unit", "st", "roundNo"]);
-    const locals = new Set([...fnSrc.matchAll(/(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]));
-    const roots = [...new Set([...fnSrc.matchAll(/\$\{([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]))];
+    // `buildPrompt` itself now only dispatches; the interpolations it used to carry inline live in the per-kind
+    // functions sliced above, so their source is scanned for free variables too, or a typo introduced in one of
+    // them would no longer be caught here.
+    const combinedSrc = `${fnSrc}\n${kindBlockFnsSrc}`;
+    const locals = new Set([...combinedSrc.matchAll(/(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]));
+    const roots = [...new Set([...combinedSrc.matchAll(/\$\{([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((m) => m[1]))];
     const unstubbed = roots.filter((r) => !params.has(r) && !locals.has(r) && !stubbed.has(r));
     check("ENG-95472: every interpolation that OPENS with an identifier resolves to a param, a local or a stub here — a new free variable is added to the list, never auto-stubbed, or this check stops catching typos",
       unstubbed.length === 0, () => ({ unstubbed, roots }));
@@ -2782,11 +3470,24 @@ const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
       const modPath = path.join(tmpBp, "buildPrompt.mjs");
       // The two pure blocks `buildPrompt` composes are sliced in FOR REAL rather than stubbed: they carry the prompt
       // text the assertions below match on, so a stub would make the render pass while shipping nothing.
-      const pureFn = (name) => {
-        const at = wfSrc.indexOf(`function ${name}(`);
-        return at < 0 ? "" : wfSrc.slice(at, wfSrc.indexOf("\n}\n", at) + 3);
-      };
-      writeFileSync(modPath, `${STUBS}\n${pureFn("unitNo")}\n${pureFn("readableUnitPart")}\n${pureFn("nonPageUnitStem")}\n${pureFn("unitStem")}\n${namesSrc}\n${pureFn("repairBlock")}\n${pureFn("continuationBudgetBlock")}\n${fnSrc}\nexport { buildPrompt };\n`);
+      // `requiredAppCode` / `appCodeInstruction` (ENG-95468) are sliced in for the same reason: the app arm's code
+      // clause IS the shipped text, and a stub could not reproduce an escaping mistake in it — the clause is
+      // interpolated into a template literal, so a `\`` where a backtick belongs would reach the builder as a
+      // backslash and nothing else in this suite would see it.
+      writeFileSync(modPath, `${STUBS}
+${pureFn("unitNo")}
+${pureFn("readableUnitPart")}
+${pureFn("nonPageUnitStem")}
+${pureFn("unitStem")}
+${namesSrc}
+${pureFn("repairBlock")}
+${pureFn("continuationBudgetBlock")}
+${pureFn("requiredAppCode")}
+${pureFn("appCodeInstruction")}
+${kindBlockFnsSrc}
+${fnSrc}
+export { buildPrompt };
+`);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
       rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
       rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
@@ -2922,6 +3623,30 @@ const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
   check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
+}
+
+// ENG-95855 — the hand-over has to have a documented channel on EVERY route, not just the Workflow one. A recipe
+// that tells routes 2 and 3 to use a value they were never given, forbids `decisions.md`, and names no fallback is
+// the same silent drift this ticket closes, one route down.
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const recipe08 = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/references/04-per-page-build-recipe.md"), "utf8");
+  const execSkillSrc = readFileSync(path.join(repoRoot, "skills/freedom-build-executor/SKILL.md"), "utf8");
+  const migrationSkillSrc = readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/SKILL.md"), "utf8");
+  check("ENG-95855: recipe step 8 has the null-surface clause — a surface nobody handed over is a `blocked[]` report, never a guessed tier",
+    /If NO `verificationSurface` reached this unit/.test(recipe08)
+      && /do not guess a tier and do not fall back to reading `decisions.md`/.test(recipe08),
+    () => recipe08.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: routes 2 and 3 name `verificationSurface` in their hand-over text, so no route is told to use a value it has no channel for",
+    /Hand `verificationSurface` to every unit prompt/.test(execSkillSrc)
+      && /Reach units get it too/.test(execSkillSrc)
+      && /so `verificationSurface` is already in context/.test(execSkillSrc),
+    () => execSkillSrc.split("\n").filter((l) => /verificationSurface/.test(l)).slice(0, 4).join("\n"));
+  check("ENG-95855: tier 4 is stated as never recordable, and a `manual` outcome is pointed at `mode: checkpoints` — the place the render actually gets exercised",
+    /Tier 4 is never a recordable surface/.test(migrationSkillSrc)
+      && /There is no `automatic:4` token, by design/.test(migrationSkillSrc)
+      && /\*\*`mode: checkpoints`\*\* \(item 5\)/.test(migrationSkillSrc),
+    () => migrationSkillSrc.split("\n").filter((l) => /Tier 4|automatic:4/.test(l)).slice(0, 3).join("\n"));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);

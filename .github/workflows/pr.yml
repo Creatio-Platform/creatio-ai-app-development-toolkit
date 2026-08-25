@@ -112,3 +112,8 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-workflow-parity.mjs
+      # ENG-95470 (defect 1) — offline regression guard for freedom-build-executor's round-churn predicate.
+      - name: Run freedom-build-executor round-guard golden
+        if: always()
+        working-directory: engine-tests/freedom-build-executor
+        run: node round-guard.mjs

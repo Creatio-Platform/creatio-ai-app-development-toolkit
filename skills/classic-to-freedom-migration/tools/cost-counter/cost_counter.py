@@ -26,9 +26,10 @@ import json
 import sys
 from pathlib import Path
 
+import attempts as attempts_mod
 import export as export_mod
 import metrics
-from report import Report
+from report import COUNTER_VERSION, Report
 
 # The shared path-resolution boundary lives with the rest of the repository's
 # Python runtime, not in this tool: `mcp_client.py` and `installer/install.py`
@@ -87,18 +88,71 @@ def _print_ttl(report: Report) -> None:
         print("    (no cache-lifetime breakdown found in this export)")
 
 
+def _mark(ok: bool, comparable: bool = True) -> str:
+    """Cross-check cell: ok / n/a (not comparable) / MISMATCH."""
+    if not ok:
+        return "MISMATCH"
+    return "ok" if comparable else "n/a"
+
+
+def _reconcile_verdict(rows: list) -> str:
+    """Footer line for the cross-check table.
+
+    A suppressed check is never folded into an unqualified pass: a row rendering
+    ``n/a`` verified nothing, so the footer counts it rather than claiming every
+    workflow reconciled. A real MISMATCH outranks both.
+    """
+    if not all(row.agents_ok and row.tool_calls_ok for row in rows):
+        return "DISCREPANCIES ABOVE"
+    skipped = sum(1 for row in rows if not row.tool_calls_comparable)
+    if skipped:
+        return f"all comparable checks reconcile ({skipped} n/a)"
+    return "all workflows reconcile"
+
+
 def _print_check(report: Report) -> None:
     print("cross-checks vs workflow journals (R8):")
     print(f"    {'workflow':34} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
-    all_ok = True
-    for row in report.reconcile():
-        a_mark = "ok" if row.agents_ok else "MISMATCH"
-        t_mark = "ok" if row.tool_calls_ok else "MISMATCH"
-        all_ok = all_ok and row.agents_ok and row.tool_calls_ok
-        agents = f"{row.agents_meta}/{row.agents_seen} {a_mark}"
-        toolcalls = f"{row.tool_calls_meta}/{row.tool_calls_seen} {t_mark}"
+    rows = report.reconcile()
+    for row in rows:
+        # n/a, not ok: on an interrupted run nothing verifies the tool-call
+        # counts against each other, and "ok" would overclaim.
+        agents = f"{row.agents_meta}/{row.agents_seen} {_mark(row.agents_ok)}"
+        toolcalls = (f"{row.tool_calls_meta}/{row.tool_calls_seen} "
+                     f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
         print(f"    {row.workflow:34} {agents:>20} {toolcalls:>24}")
-    print(f"    => {'all workflows reconcile' if all_ok else 'DISCREPANCIES ABOVE'}")
+        if row.note:
+            print(f"    {'':34} {row.note}")
+    print(f"    => {_reconcile_verdict(rows)}")
+
+
+def _print_attempts(report: Report) -> None:
+    """Leftover-transcript block. Printed only for a resumed or killed export."""
+    if not report.interrupted:
+        return
+    summary = report.summary()["attempts"]
+    # ASCII only in the text renderer: this report is read on cp1252 Windows
+    # consoles, and _reconfigure_stdout() is best-effort.
+    print("resumed/killed run -- transcripts by what the run record claims:")
+    for label, attribution in report.attempt_rows():
+        counts = attribution.counts
+        print(f"    {label:34} {attribution.how}"
+              f" / {counts[attempts_mod.LIVE]} live"
+              f" / {counts[attempts_mod.REPLAYED]} replayed"
+              f" / {counts[attempts_mod.LEFTOVER]} leftover")
+        if attribution.total_tokens is not None:
+            print(f"    {'':34} run file totalTokens: {attribution.total_tokens:,}"
+                  " (surviving attempt's live agents, per the harness)")
+    print(f"    leftover weighted cost: {summary['leftover_weighted']:,.0f}"
+          f" of {summary['leftover_weighted'] + summary['surviving_weighted']:,.0f} total")
+    nothing = summary["produced_nothing_agents"]
+    if nothing is None:
+        print("    produced-nothing agents: unknown (no readable journal)")
+    else:
+        print(f"    produced-nothing agents: {nothing}"
+              " (started, no journal result -- spend with no output)")
+    print("    leftovers are counted in every total above; attempts are not"
+          " reconstructed (see README).")
 
 
 def _print_normalization(report: Report) -> None:
@@ -157,6 +211,7 @@ def _config_payload(report: Report) -> dict:
         "cache_write_1h_weight": cfg.cache_write_1h_weight,
         "effective_cache_write_weight": round(report.effective_w, 3),
         "effective_from_fallback": from_fallback,
+        "counter_version": COUNTER_VERSION,
     }
 
 
@@ -183,7 +238,13 @@ def _reconcile_payload(report: Report) -> list:
             "agents_ok": r.agents_ok,
             "tool_calls_meta": r.tool_calls_meta,
             "tool_calls_seen": r.tool_calls_seen,
-            "tool_calls_ok": r.tool_calls_ok,
+            # null, not true, when the comparison was suppressed: reading this
+            # key alone must never show a pass over a check that did not run.
+            # `tool_calls_comparable: false` rides along to say why. Neither
+            # appears unless the run was interrupted.
+            "tool_calls_ok": r.tool_calls_ok if r.tool_calls_comparable else None,
+            **({} if r.tool_calls_comparable else {"tool_calls_comparable": False}),
+            **({"note": r.note} if r.note else {}),
         }
         for r in report.reconcile()
     ]
@@ -195,6 +256,9 @@ def _normalization_payload(report: Report) -> dict:
     return {
         "built_pages": sorted(report.built_pages),
         "page_count": pages,
+        # See summary()["page_count_defaulted"]: True means no built page was
+        # discovered and `pages` fell back to 1 rather than a real count.
+        "page_count_defaulted": report.pages_override is None and not report.built_pages,
         "weighted_total": weighted,
         "weighted_per_page": weighted / pages,
     }
@@ -202,6 +266,13 @@ def _normalization_payload(report: Report) -> dict:
 
 def render_json(report: Report, section: str) -> str:
     doc: dict = {}
+    if section not in ("summary", "all"):
+        # "summary" and "all" already carry counter_version nested in their
+        # own payload (summary()/_config_payload()); every other section
+        # (stage/tool/role/agent/ttl/check) had none until now, so a saved
+        # per-section report carried no indication of which counting rule
+        # produced it.
+        doc["counter_version"] = COUNTER_VERSION
     if section == "summary":
         doc["summary"] = report.summary()
     if section == "all":
@@ -258,14 +329,52 @@ def _reconcile_markdown(report: Report) -> str:
         "| workflow | agents (meta/seen) | toolCalls (meta/seen) |",
         "| :-- | --: | --: |",
     ]
-    all_ok = True
-    for r in report.reconcile():
-        all_ok = all_ok and r.agents_ok and r.tool_calls_ok
-        agents = f"{r.agents_meta}/{r.agents_seen} {'ok' if r.agents_ok else 'MISMATCH'}"
-        calls = f"{r.tool_calls_meta}/{r.tool_calls_seen} {'ok' if r.tool_calls_ok else 'MISMATCH'}"
-        lines.append(f"| {r.workflow} | {agents} | {calls} |")
+    rows = report.reconcile()
+    for r in rows:
+        agents = f"{r.agents_meta}/{r.agents_seen} {_mark(r.agents_ok)}"
+        calls = (f"{r.tool_calls_meta}/{r.tool_calls_seen} "
+                 f"{_mark(r.tool_calls_ok, r.tool_calls_comparable)}")
+        note = f" - {r.note}" if r.note else ""
+        lines.append(f"| {r.workflow} | {agents} | {calls}{note} |")
     lines.append("")
-    lines.append(f"_{'all workflows reconcile' if all_ok else 'DISCREPANCIES ABOVE'}_")
+    lines.append(f"_{_reconcile_verdict(rows)}_")
+    if report.interrupted:
+        lines.append("")
+        lines.append(_attempts_markdown(report))
+    return "\n".join(lines)
+
+
+def _attempts_markdown(report: Report) -> str:
+    """Leftover-transcript table. Empty string unless the run was interrupted."""
+    if not report.interrupted:
+        return ""
+    summary = report.summary()["attempts"]
+    lines = [
+        "### Resumed/killed run -- transcripts by what the run record claims",
+        "",
+        "| workflow | how | live | replayed | leftover | run file totalTokens |",
+        "| :-- | :-- | --: | --: | --: | --: |",
+    ]
+    for label, attribution in report.attempt_rows():
+        counts = attribution.counts
+        total_tokens = ("—" if attribution.total_tokens is None
+                        else f"{attribution.total_tokens:,}")
+        lines.append(
+            f"| {label} | {attribution.how} | {counts[attempts_mod.LIVE]} |"
+            f" {counts[attempts_mod.REPLAYED]} | {counts[attempts_mod.LEFTOVER]} |"
+            f" {total_tokens} |"
+        )
+    nothing = summary["produced_nothing_agents"]
+    nothing_label = ("unknown (no readable journal)" if nothing is None
+                     else f"{nothing} (started, no journal result)")
+    lines.extend([
+        "",
+        f"_leftover weighted cost {summary['leftover_weighted']:,.0f} of "
+        f"{summary['leftover_weighted'] + summary['surviving_weighted']:,.0f} total; "
+        f"produced-nothing agents: {nothing_label}. Leftovers are counted in every "
+        "total above. `totalTokens` is the harness's figure for the surviving "
+        "attempt's live agents and does not reconcile with transcript sums._",
+    ])
     return "\n".join(lines)
 
 
@@ -284,10 +393,15 @@ def _normalization_markdown(report: Report) -> str:
 
 def render_markdown(report: Report, section: str) -> str:
     parts: list = []
+    if section not in ("summary", "all"):
+        # See render_json(): "summary" and "all" already print their own
+        # counter-version line.
+        parts.append(f"_counter version: {COUNTER_VERSION}_")
     if section == "summary":
         parts.append(_summary_markdown(report))
     if section == "all":
         cfg = _config_payload(report)
+        parts.append(f"_counter version: {cfg['counter_version']}_")
         parts.append(
             "**Weighted-cost config** (Anthropic list-price ratios, relative to 1 "
             "input token; model-tier independent):\n\n"
@@ -342,6 +456,8 @@ def _summary_markdown(report: Report) -> str:
     return "\n".join([
         "### Summary",
         "",
+        f"_counter version: {s['counter_version']}_",
+        "",
         "| measure | value |",
         "| :-- | --: |",
         f"| section (built pages) | {pages} |",
@@ -359,6 +475,7 @@ def _print_summary(report: Report) -> None:
     s = report.summary()
     pages = _pages_label(s["page_count"], s["built_pages"])
     print("summary:")
+    print(f"    counter version              : {s['counter_version']}")
     print(f"    section (built pages)        : {pages}")
     print(f"    weighted cost per built page : {s['weighted_per_page'] / 1e6:,.2f}M input-equiv tokens")
     print(f"    weighted cost (total)        : {s['weighted_total'] / 1e6:,.2f}M")
@@ -382,7 +499,29 @@ def _compare_rows(base: dict, cand: dict) -> list:
     return rows
 
 
+def _version_note(base: dict, cand: dict) -> str:
+    """State which side was measured with which counter version.
+
+    A live export is always recomputed by this same running binary, so two
+    live exports can never actually differ here -- the guard earns its keep
+    when one side is a `summary --format json` file saved before a counting
+    fix (see `_load_summary`), which is the exact pre-fix/post-fix comparison
+    ENG-95856 warns about. A saved summary from before this field existed has
+    no ``counter_version`` key at all, so missing is its own distinct value
+    rather than raising or silently matching the other side.
+    """
+    bv = base.get("counter_version", "unversioned")
+    cv = cand.get("counter_version", "unversioned")
+    if bv != cv:
+        return (f"REFUSED -- baseline measured with counter version {bv}, "
+                 f"candidate with version {cv}; regenerate both with the same "
+                 f"counter before comparing.")
+    return f"both sides measured with counter version {bv}"
+
+
 def _compare_verdict(base: dict, cand: dict, same_section: bool) -> str:
+    if base.get("counter_version") != cand.get("counter_version"):
+        return _version_note(base, cand)
     bv, cv = base["weighted_per_page"], cand["weighted_per_page"]
     if not bv:
         core = "baseline cost is zero -- cannot compute a ratio"
@@ -398,18 +537,42 @@ def _compare_verdict(base: dict, cand: dict, same_section: bool) -> str:
     return ("SECTIONS DIFFER -- comparison void. " + core) if not same_section else core
 
 
+def _load_summary(path_or_dir: str, name: str, cfg: metrics.CostConfig) -> dict:
+    """Resolve one side of `--compare`: a live export directory (recomputed
+    with today's COUNTER_VERSION) or a `summary --format json` file saved from
+    an earlier run. A single process only ever runs one COUNTER_VERSION, so
+    loading a previously-saved summary is the only way the two sides of a
+    compare can genuinely carry different counter versions -- which is what
+    lets `_version_note`'s REFUSED path actually fire for the pre-fix/post-fix
+    scenario ENG-95856 calls out, instead of being permanently unreachable.
+    """
+    p = Path(path_or_dir)
+    if p.is_file():
+        with open(p, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        try:
+            return doc["summary"]
+        except KeyError:
+            raise ValueError(
+                f"{path_or_dir} is not a saved cost-counter summary (missing "
+                f"'summary' key) -- produce it with: "
+                f"cost_counter.py <export> summary --format json"
+            ) from None
+    session = export_mod.discover(path_or_dir)
+    if not session.main_transcript and not session.workflows:
+        raise ValueError(
+            f"no transcripts found in the {name} export -- is it a session export?"
+        )
+    return Report(session, cfg).summary()
+
+
 def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "text") -> int:
-    sessions = {
-        "baseline": export_mod.discover(base_dir),
-        "candidate": export_mod.discover(cand_dir),
-    }
-    for name, session in sessions.items():
-        if not session.main_transcript and not session.workflows:
-            print(f"no transcripts found in the {name} export -- is it a session export?",
-                  file=sys.stderr)
-            return 2
-    base = Report(sessions["baseline"], cfg).summary()
-    cand = Report(sessions["candidate"], cfg).summary()
+    try:
+        base = _load_summary(base_dir, "baseline", cfg)
+        cand = _load_summary(cand_dir, "candidate", cfg)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     # Two runs are the same section when their built-page sets are equal --
     # including when both are empty (a schema-only / rule-only run records no
     # page schemas). A bool() short-circuit here would wrongly void the compare
@@ -422,6 +585,7 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
         print(json.dumps({
             "baseline": base, "candidate": cand,
             "same_section": same_section, "deltas": rows, "verdict": verdict,
+            "version_note": _version_note(base, cand),
         }, indent=2, ensure_ascii=False))
     elif fmt == "md":
         print(_compare_markdown(base, cand, same_section, rows, verdict))
@@ -433,6 +597,7 @@ def compare(base_dir: str, cand_dir: str, cfg: metrics.CostConfig, fmt: str = "t
 def _compare_markdown(base: dict, cand: dict, same_section: bool,
                       rows: list, verdict: str) -> str:
     lines = ["### Cost comparison (baseline vs candidate)", ""]
+    lines.append(f"- {_version_note(base, cand)}")
     lines.append(f"- baseline section: {base['built_pages'] or '(none)'}")
     lines.append(f"- candidate section: {cand['built_pages'] or '(none)'}"
                  + ("  · ✓ same section" if same_section
@@ -457,6 +622,7 @@ def _compare_text(base: dict, cand: dict, same_section: bool,
     mark = "same section" if same_section else "SECTIONS DIFFER -- comparison void"
     lines = [
         "cost comparison (baseline -> candidate):",
+        f"    {_version_note(base, cand)}",
         f"    baseline section : {b_sec}",
         f"    candidate section: {c_sec}   [{mark}]",
         "",
@@ -472,21 +638,10 @@ def _compare_text(base: dict, cand: dict, same_section: bool,
     return "\n".join(lines)
 
 
-def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
-        fmt: str = "text") -> int:
-    session = export_mod.discover(export_dir)
-    if not session.main_transcript and not session.workflows:
-        print(f"no transcripts found under {export_dir!r} -- is this a session export?",
-              file=sys.stderr)
-        return 2
-    report = Report(session, cfg, pages_override=pages_override)
-
-    if fmt == "json":
-        print(render_json(report, section))
-        return 0
-    if fmt == "md":
-        print(render_markdown(report, section))
-        return 0
+def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
+    if section != "summary":
+        # "summary" prints its own counter-version line inside _print_summary.
+        print(f"counter version: {COUNTER_VERSION}")
 
     if section in ("all",):
         total = report.totals
@@ -514,12 +669,35 @@ def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
         _print_ttl(report)
     if section == "check":
         _print_check(report)
+        _print_attempts(report)
 
     if section == "all":
         print(_section("cross-checks & normalization"))
         _print_check(report)
+        if report.interrupted:
+            print()
+            _print_attempts(report)
         print()
         _print_normalization(report)
+
+
+def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
+        fmt: str = "text") -> int:
+    session = export_mod.discover(export_dir)
+    if not session.main_transcript and not session.workflows:
+        print(f"no transcripts found under {export_dir!r} -- is this a session export?",
+              file=sys.stderr)
+        return 2
+    report = Report(session, cfg, pages_override=pages_override)
+
+    if fmt == "json":
+        print(render_json(report, section))
+        return 0
+    if fmt == "md":
+        print(render_markdown(report, section))
+        return 0
+
+    _run_text(report, section, cfg)
     return 0
 
 
@@ -550,8 +728,11 @@ def main(argv=None, store=None) -> int:
     )
     parser.add_argument(
         "--compare", metavar="CANDIDATE_EXPORT", default=None,
-        help="compare export_dir (baseline) against this candidate export -- a "
-             "cost-only before/after diff with a same-section guard; honours --format",
+        help="compare export_dir (baseline) against this candidate -- a "
+             "cost-only before/after diff with a same-section guard; honours "
+             "--format. Either side may be a live export dir or a "
+             "'summary --format json' file saved from an earlier run, which "
+             "is how a compare across a counter-version change is done",
     )
     args = parser.parse_args(argv)
     cfg = metrics.CostConfig()

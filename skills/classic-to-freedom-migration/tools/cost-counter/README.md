@@ -65,7 +65,7 @@ python cost_counter.py <baseline-export> --compare <candidate-export>
 python cost_counter.py <baseline-export> --compare <candidate-export> --format md   # for Jira
 ```
 
-Two guards from the ticket's comparison protocol:
+Three guards from the ticket's comparison protocol:
 
 - **Same section only.** If the two runs built different page schemas the diff
   is marked `comparison void` — cross-section comparisons are meaningless
@@ -74,6 +74,14 @@ Two guards from the ticket's comparison protocol:
   (the `--verify` verdict and manual-intervention count). "Cheaper and broken"
   is a regression, not a win — a quality column is a follow-up, and a trustworthy
   comparison also depends on ENG-95470 (N1) landing first.
+- **Same counter version only.** A single invocation always measures both
+  sides with today's `counter_version`, so this only matters across a
+  counting-rule change (like ENG-95856's dedup fix): save the pre-fix side
+  with `... summary --format json > before.json` first, then compare that
+  file against a live post-fix export —
+  `python cost_counter.py before.json --compare <post-fix-export>`. Either
+  `--compare` operand may be a live export directory or such a saved summary
+  file; a genuine version mismatch prints `REFUSED` instead of a number.
 
 Examples:
 
@@ -173,7 +181,66 @@ report. Change a price there — never in a computation.
 - **ttl** — the cache-write TTL split and the effective weight.
 - **check** — reconciles `agentCount` and `totalToolCalls` from each
   `workflows/<wf>.json` against what the transcripts actually contain, and
-  reports built-page normalization.
+  reports built-page normalization. For a run that was resumed or killed it also
+  prints the leftover block described below.
+
+## Resumed and killed runs
+
+A workflow directory accumulates transcripts across every *attempt*. Resuming
+replays some agents and re-runs others; killing a run leaves the interrupted
+agents' transcripts behind. The run file is rewritten on each attempt, so
+`agentCount` describes only the latest one — which is why a real export was seen
+holding 41 `agent-*.jsonl` files for a run whose record says `agentCount: 18`.
+
+The counter does **not** drop those transcripts: every total still sums all of
+them, so the headline figure remains "everything this directory cost", and
+`--compare` stays a like-for-like comparison. What it adds is a classification
+of each transcript against the run's own record:
+
+- **live** — in `workflowProgress`, ran in the surviving attempt;
+- **replayed** — in `workflowProgress` with `cached: true`, its result reused
+  from an earlier attempt rather than recomputed;
+- **leftover** — no record claims it: superseded attempts, killed agents,
+  abandoned retries.
+
+Alongside it the block reports **produced-nothing** agents — a journal `started`
+with no matching `result`, i.e. spend that yielded no output — and the run
+file's own `totalTokens`, which is the harness's figure for the surviving
+attempt's *live* agents only. That number is read, never recomputed: it is on a
+different accounting basis from transcript sums (real agents re-read context
+every turn, so cache-read accumulates in transcripts but not in `totalTokens`)
+and the two are not expected to reconcile.
+
+Because the surplus is explained, the **check** section reports it as a note
+rather than a `MISMATCH`: on an interrupted run the meta counts cover the
+surviving attempt while the seen counts span every transcript, so the two are
+simply not comparable.
+
+Each cross-check cell therefore has three states, not two — `ok` (compared and
+equal), `n/a` (not comparable, so nothing was verified), and `MISMATCH` (a real
+disagreement). The footer says `all comparable checks reconcile (N n/a)` when
+anything was suppressed, so a skipped check is never folded into an unqualified
+pass. In the JSON payload the same distinction is `"tool_calls_ok": null`
+alongside `"tool_calls_comparable": false`; a `true` there always means the
+comparison actually ran. An agent-count gap that the leftover bucket accounts
+for stays `ok` with a note, because that one *is* verified — the leftovers are
+exactly the difference.
+
+A gap in the other direction — fewer transcripts than the record claims ran — is
+a truncated or partially-copied export, and is reported as missing transcripts
+rather than as a surplus.
+
+Attempts are deliberately **not** reconstructed. `promptId` tracks the
+main-session prompt chain rather than the resume (a kill-and-resume was observed
+with both attempts sharing one), and replayed `workflowProgress` entries carry
+the *replay* timestamp rather than their original, so `startedAt` cannot order
+attempts either. Leftovers therefore stay in one bucket instead of being split
+along boundaries the data cannot support.
+
+A resume that replayed *everything* writes no new transcript and is not reported
+as interrupted — the plain sum is already correct for it. An export whose run
+file is missing or unreadable cannot be classified at all, and falls back to
+reporting totals only.
 
 ## Tests
 
@@ -185,6 +252,22 @@ python -m unittest discover -s tests -t .
 ```
 
 ## Acceptance baseline (Applicant migration run)
+
+> **Pre-fix figures — not comparable to a current run.** The table below was
+> produced before ENG-95856 was fixed: `aggregate_transcript` charged the same
+> API message once per JSONL record it was split across (thinking / text /
+> tool_use), instead of once. Measured on a different, smaller export
+> (`classic-behaviour-analysis`, 5 agents, one workflow) the inflation this
+> caused ranged ×1.65–2.15 per measure and ×1.81 on the weighted total; across
+> six exports the weighted factor ranged ×1.74–4.08 and is not uniform, so
+> shares, rankings and `--compare` deltas below are not safe to read as exact.
+> Regenerating this table requires the *original* Applicant baseline export
+> that produced these specific numbers (1,191 tool calls / 50 agents /
+> `Applicant_FormPage`) — that export is not currently available on this
+> machine. `counter_version` is a new field: the code that produced this table
+> predates it and printed no version at all. Any report showing
+> `counter_version: 2` was measured after this fix; do not diff a report that
+> carries no `counter_version` against one that does.
 
 Against the preserved Applicant baseline export the tool reproduces the
 published numbers:

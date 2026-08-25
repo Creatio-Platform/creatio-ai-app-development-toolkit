@@ -7,6 +7,14 @@
 // Mirrors the `--verify-json` FILE, field for field, plus the CLI's exit code and the PLAN-level
 // stderr lines. Nothing else is allowed to reach the verdict — the reconcile agent copies that file,
 // so this schema is a transport check, not a place where an agent's reading of a table gets in.
+// ENG-95901 — `buildComplete` MUST be declared here, field for field with the engine's `verifyTally`/
+// `verifyDigest` output: a structured-output schema constrains what an LLM transcribing the file will
+// reproduce, so an UNDECLARED field is silently dropped on this agent-mediated path even though the engine
+// genuinely writes it. Losing it here would make `state.verify[key].buildComplete` read `undefined` for
+// every page in the live run — defeating `selfCheckMismatches`'s `verifierBuildComplete` (which would then
+// read every page as "not build-complete" and false-flag an honest `buildComplete:true` self-report as
+// `reported-complete-but-verifier-open`) — the exact regression this ticket exists to fix, reappearing
+// specifically on the schema-constrained path that none of the hand-built-fixture tests below exercise.
 export const VERIFY_RESULT = {
   type: 'object',
   required: ['complete', 'missing', 'unverified', 'pages'],
@@ -14,14 +22,23 @@ export const VERIFY_RESULT = {
     complete: { type: 'boolean' },
     missing: { type: 'integer' },
     unverified: { type: 'integer' },
+    // ENG-95901 (PR review) — the count that MATCHES `buildComplete`: how many open rows the builder owns. Declared
+    // for the same reason `buildComplete` is: an undeclared field is silently dropped on the agent-mediated path.
+    builderOpen: { type: 'integer' },
     planGaps: { type: 'array', items: { type: 'string' } }, // D12: non-empty ⇒ the PLAN is short, not the build
     pages: {
       type: 'object',
       additionalProperties: {
         type: 'object',
-        required: ['complete'],
+        // `buildComplete` is REQUIRED, not merely typed: a DECLARED-but-optional property does not force an LLM to
+        // populate it — only `required` does. Without this, the agent-mediated Reconcile path could still legally
+        // transcribe a page as `{complete:false, unverified:3}` with `buildComplete` omitted, and `derivedBuildComplete`
+        // would fall back to the combined `complete`, silently reintroducing the exact conflation this ticket fixes.
+        required: ['complete', 'buildComplete'],
         properties: {
           complete: { type: 'boolean' },
+          buildComplete: { type: 'boolean' },
+          builderOpen: { type: 'integer' },
           missing: { type: 'integer' },
           unverified: { type: 'integer' },
           // Every row that is not ✅, as the engine emitted it: the same Deliverable / Status /
@@ -37,6 +54,10 @@ export const VERIFY_RESULT = {
                 status: { type: 'string' },
                 evidence: { type: 'string' },
                 outcome: { type: 'string' },
+                // ENG-95901 (PR review) — WHOSE work closes the row: "builder" or "verifier". This, not the
+                // `missing`/`unverified` label, is what `buildComplete` is keyed on and what the one bounded
+                // in-context fix is allowed to act on.
+                owner: { type: 'string' },
                 id: { type: 'string' },
               },
             },
@@ -188,6 +209,33 @@ export const RECONCILE_SCHEMA = {
         },
       },
     },
+    // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
+    // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
+    // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
+    templateNames: { type: 'array', items: { type: 'string' } },
+    // ENG-95468 — the Reconcile agent's read-only resolution of each `templateNames` entry against the TARGET stand:
+    // `{ name, resolved, note }`. Same shape, same rules and the same absence rule as `componentResolution`: only an
+    // explicit `resolved: false` gates, an unreported name is not a failure, and a plan predating the field behaves
+    // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
+    // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
+    templateResolution: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['name', 'resolved'],
+        properties: {
+          name: { type: 'string' },
+          resolved: { type: 'boolean' },
+          note: { type: 'string' },
+        },
+      },
+    },
+    // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
+    // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
+    // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
+    // writes. THE EMPTY STRING IS A REAL VALUE and is NOT the same as absence — a stand with no prefix is exactly
+    // the case the third Applicant run hit (package == app code) — so `''` gates and `null`/absent does not.
+    schemaNamePrefix: { type: ['string', 'null'] },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -240,6 +288,11 @@ export const RECONCILE_SCHEMA = {
     // answer. Both are read off the built file, and both may be empty on a first run.
     evidenceFiled: { type: 'array', items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
     evidenceRejected: { type: 'array', items: { type: 'string' } },  // ids the judge ruled `convincing: false`
+    // Keys whose `pages` entry already exists in `built.json` — a recorded object, or `false` for "checked,
+    // genuinely not built". Absent or empty fetches every key. This is a REPORT, not a verified fact, and the only
+    // thing that makes an over-report survivable is Reconcile's own all-keys sweep running every round regardless of
+    // what Verify skipped: a wrongly-skipped page is re-read there, and its unit stays open until it is.
+    pagesRecorded: { type: 'array', items: { type: 'string' } },
     // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
     // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
     // round for a unit its predecessor already gave up on and asked the user about.
@@ -361,6 +414,11 @@ export const BUILD_PROPERTIES = {
       ran: { type: 'boolean' },
       referencePage: { type: 'string' },
       componentsDiffed: { type: 'array', items: { type: 'string' } },
+      // ENG-95471 — the diff came back EMPTY because the page already matched the guideline, a legitimate
+      // outcome the diff-list alone cannot express. `noChangesNeeded` names that outcome explicitly so it is
+      // never mistaken for an unanswered field, and `noChangesReason` carries what was compared to reach it.
+      noChangesNeeded: { type: 'boolean' },
+      noChangesReason: { type: 'string' },
       notRunWhy: { type: 'string' },
     },
   },
@@ -373,23 +431,31 @@ export const BUILD_PROPERTIES = {
   // its OWN page before reporting the unit complete, gets one bounded fix if short, re-checks, and files the outcome
   // here. `ran: false` with `notRunWhy` is a valid outcome (a page the builder genuinely could not get-page);
   // `stillShortRows` is the scoped verdict's `openRows` AFTER the one fix — what the run composes the park reason
-  // from when a unit is still short. `complete`/`missing`/`unverified` are copied VERBATIM from the engine's
-  // single-unit verdict file, never a self-graded claim: the number is the engine's arithmetic, transcribed.
+  // from when a unit is still short. `buildComplete`/`complete`/`missing`/`unverified` are copied VERBATIM from the
+  // engine's single-unit verdict file, never a self-graded claim: the number is the engine's arithmetic, transcribed.
+  // ENG-95901 — `buildComplete` (the `missing`-only axis) is what the in-context gate's own exit code and this
+  // schema's PARK decision read; `complete` (kept for logging/back-compat) still folds in `unverified`, which the
+  // builder can never legitimately clear itself.
   selfCheck: {
     type: 'object',
     required: ['ran'],
     properties: {
       ran: { type: 'boolean' },
+      buildComplete: { type: 'boolean' },
       complete: { type: 'boolean' },
       missing: { type: 'integer' },
       unverified: { type: 'integer' },
+      builderOpen: { type: 'integer' },
       fixAttempted: { type: 'boolean' },
       stillShortRows: {
         type: 'array',
         items: {
           type: 'object',
           required: ['deliverable', 'status', 'evidence'],
-          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' } },
+          // `outcome`/`owner` ride along so the tail cross-check can tell a builder-owned shortfall from a row the
+          // builder was never allowed to close, without re-deriving what the engine already decided.
+          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' },
+            outcome: { type: 'string' }, owner: { type: 'string' } },
         },
       },
       notRunWhy: { type: 'string' },
@@ -531,5 +597,28 @@ export const PERSIST_SCHEMA = {
     parkedKeys: { type: 'array', items: { type: 'string' } },
     evidenceWritten: { type: 'array', items: { type: 'string' } },   // preflight evidence ids merged into the built file
     notes: { type: 'string' },
+  },
+}
+
+// ENG-95884 — `packageCreatedByRun` is deliberately NOT required on RECONCILE_SCHEMA (ENG-95850: "an agent that
+// cannot read the file must be able to say nothing rather than guess"), so a Reconcile call that silently dropped
+// the field and a queue file that genuinely holds no `standWrites.packageCreated` record were indistinguishable —
+// both paid the SAME stop. Before either package-ownership stop is trusted with no record in hand, this ONE
+// single-purpose read confirms it — cheap, and bounded the same way Reconcile's own retry is.
+export const PACKAGE_RECORD_SCHEMA = {
+  type: 'object',
+  required: ['read', 'packageCreated'],
+  properties: {
+    read: { type: 'boolean' },   // true iff the file was actually opened and inspected — false only on a real I/O/parse failure
+    packageCreated: {
+      type: ['object', 'null'],
+      required: ['package', 'appUnitComplete'],
+      properties: {
+        package: { type: 'string' },
+        appUnitComplete: { type: 'boolean' },
+        planVersion: { type: ['string', 'null'] },
+        sectionPage: { type: ['string', 'null'] },
+      },
+    },
   },
 }

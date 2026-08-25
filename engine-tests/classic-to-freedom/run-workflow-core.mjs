@@ -885,15 +885,22 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
     parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 3, new Set(["main"])).length === 0
       && parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 3, new Set()).join(",") === "main");
   check("build-executor helpers: each of the THREE self-report/verifier disagreements gets its OWN kind — folding `ran-without-verdict` into `gate-not-run` would name the wrong repair",
+    // ENG-95901 follow-up (TRI-STATE) — `verifierBuildComplete` reads `undefined`, never a coerced `false`, when
+    // the verifier has NO entry for a page at all: an absent entry means "not looked at yet", not "looked and
+    // disagrees". So every key here carries an explicit verifier entry (`buildComplete: false`) — the fixture a
+    // page whose verifier has genuinely run and still finds it short, which is what a real mismatch is.
     selfCheckMismatches([
       { key: "a", sc: { ran: true, complete: true } },
       { key: "b", sc: { ran: true } },
       { key: "c", sc: { ran: false } },
       { key: "d", sc: { ran: true, complete: false } },
-    ], (k) => ({ key: k, kind: "page" }), { pages: {} }, {}, null)
+    ], (k) => ({ key: k, kind: "page" }),
+      { pages: { a: { complete: false, buildComplete: false }, b: { complete: false, buildComplete: false },
+        c: { complete: false, buildComplete: false }, d: { complete: false, buildComplete: false } } }, {}, null)
       .map((m) => `${m.key}:${m.kind}`).join(" | ")
       === "a:reported-complete-but-verifier-open | b:ran-without-verdict | c:gate-not-run",
-    () => JSON.stringify(selfCheckMismatches([{ key: "b", sc: { ran: true } }], (k) => ({ key: k, kind: "page" }), { pages: {} }, {}, null)));
+    () => JSON.stringify(selfCheckMismatches([{ key: "b", sc: { ran: true } }],
+      (k) => ({ key: k, kind: "page" }), { pages: { b: { complete: false, buildComplete: false } } }, {}, null)));
   // ENG-95474 — the continuation cap is the continuation path's ONLY termination guarantee, so it is EXECUTED here
   // rather than matched against the constant in the source.
   check("build-executor helpers: the continuation ceiling terminates — spent < cap is honoured, spent === cap is refused, and cap 0 refuses every ask (never read as `no limit`)",

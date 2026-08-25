@@ -33,6 +33,9 @@ export const meta = {
 //     customizations?: string,  // step 5.1's customizations.md — the behaviour cards an imperative row is ported from
 //     behaviourIndex?: string,  // step 5.1's behaviour-index.json, as merged into the manifest
 //     sectionSchema?: string,   // surface label for the prompts
+//     verificationSurface?: string, // 'automatic:2' | 'automatic:3' | 'manual' — the migration skill's
+//                            // verification-surface preflight answer for this section (ENG-95855); absent -> null,
+//                            // never guessed. Threaded into each page unit's render-check instruction.
 //     dryRun?:     boolean,  // PREVIEW: stop before the first stand WRITE and report what would be built
 //     mode?:       string,   // 'auto' (default) | 'checkpoints' | 'guided' — how often the run stops for a human
 //     checkpointAfter?: string[], // mode 'checkpoints': the PUBLISHED unit keys to stop after (unknown key ⇒ refuse)

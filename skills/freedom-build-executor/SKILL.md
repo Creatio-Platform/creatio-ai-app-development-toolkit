@@ -292,6 +292,22 @@ primary package and could not host a section at all. What each mode changes here
   here may infer a section nobody confirmed, and the absence of a record is never read as ownership.
   It is written by the app unit itself, on the branch where the unit closes (and as `false` on the
   branch where it is short), so it is never a claim about work that was not done.
+
+  **This table also settles an INCONCLUSIVE `packageState` (ENG-95884).** `target-package-unknown` used to fire
+  whenever the live `list-packages`/`find-app` sweep came back `'unknown'`, even when this very table's own record
+  named the package — an inconclusive stand check is not stronger evidence than the run's own memory of having
+  minted the thing. `packagePreconditionStop` now resolves `packageState: 'unknown'` to `'exists'` whenever
+  `packageCreatedByRun` names the SAME package, before any row above is evaluated — so a resumed round with a
+  matching record runs this table instead of stopping on `target-package-unknown`. A CONFIDENT `'absent'` is never
+  overridden this way (that would mean the package was removed after this run made it — a conflict worth its own
+  stop).
+
+  **"Nothing" is confirmed, not assumed.** Reconcile is one busy agent, and a resumed round can report "nothing"
+  simply because it dropped the field — not because the file is empty. Before either ownership stop
+  (`target-package-unknown`, `new-app-over-existing-package`) fires on "nothing", the script runs one dedicated
+  single-purpose re-read of the state file to confirm the record is genuinely absent. That re-read failing outright
+  (the file could not be opened) is reported as `packageRecordUnread: true` and worded as "not read", never as a
+  confirmed absence — re-running costs nothing, since no round was spent on it.
 - **`pages-only-no-menu`** — no section is registered anywhere. If a package still has to be created,
   the `app` unit creates the application (the only route to a package) but is told NOT to call
   `create-app-section`, and it closes on the package alone; `main` then builds its own page. The
@@ -410,16 +426,24 @@ Details of the record shapes, the ids and the judge tri-state:
 - A **plan assertion untrue of the STAND**, caught at the BASELINE Reconcile **before the first build unit** and
   **re-applied at every in-run Reconcile** (via the shared acceptance path, `acceptReconciled`): a named component
   type that does not resolve on the target stand (Reconcile's read-only `get-component-info` sweep →
-  `componentResolution`), or the placement preconditions (`new-app-over-existing-package`, an unknown or unnamed
+  `componentResolution`), a **page template** the plan names that the stand does not have (read-only `get-schema`
+  sweep over `--units.templateNames` → `templateResolution`), the **app/package identity** the plan promises being
+  unproducible on this stand or contradicting its own target package under the stand's `SchemaNamePrefix`
+  (→ `appIdentityMismatch`), or the placement preconditions (`new-app-over-existing-package`, an unknown or unnamed
   target package). It **stops the run** (`stopped: 'plan-invalid-against-stand'`, or the package precondition stop
-  — which now also carries any `componentMismatches`), naming EVERY mismatch at once so a re-plan fixes them in one
+  — which now also carries any `componentMismatches`, `templateMismatches` and `appIdentityMismatch`), naming EVERY
+  mismatch at once so a re-plan fixes them in one
   pass instead of a builder rediscovering each mid-build over expensive repair rounds. Because the component gate is
   re-applied mid-run, this stop can also fire on a LATER Reconcile — a resumed run whose baseline predated the field,
   or a package uninstalled during a long run — in which case **anything already built this run is on disk** (the
   stop's `next` says so); the baseline stop, by contrast, wrote nothing. Both share the `plan-invalid-against-stand`
   key and are told apart by that trailing clause (a programmatic consumer keys off `componentMismatches.length`,
-  present on every return). This is not repairable by a build round — it is a plan-vs-stand mismatch, so the fix is a
-  re-plan (ENG-95468).
+  `templateMismatches.length` and `appIdentityMismatch`, all present on every return). This is not repairable by a
+  build round — it is a plan-vs-stand mismatch, so the fix is a re-plan (ENG-95468).
+  One consequence worth stating separately: when the prefix IS reported, the `app` unit is no longer asked to *choose*
+  a code that yields the planned package — the prompt hands it the exact `code` (`SchemaNamePrefix` + code =
+  `targetPackage`, so the code is arithmetic). "Choose the code so the package comes out right" is the instruction a
+  real run followed to a package the plan did not name; the read-back equality on `packageName` stays the backstop.
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.
@@ -473,7 +497,11 @@ which applies here in full and is stricter for a build than for an analysis.
    path** — the script ships beside this file:
    `Workflow({ scriptPath: "./freedom-build-executor.workflow.js", args: {
    manifest, environment, outDir, planFile, engine, customizations, behaviourIndex,
-   sectionSchema } })`, resolved to its absolute path in the plugin dir.
+   sectionSchema, verificationSurface } })`, resolved to its absolute path in the plugin dir.
+   `verificationSurface` (`automatic:2` | `automatic:3` | `manual`) is the migration skill's
+   verification-surface preflight answer for this section (ENG-95855) — omit it only on a run that
+   predates the field, never to skip resolving it; a page unit built without it is told plainly that
+   no surface was handed over rather than left to assume one.
    `name: "creatio-freedom-build-executor"` resolves only where the installer has mirrored it, which
    on Claude Code is usually nowhere, so do not spend a call probing it first (see "Named-workflow
    availability" below). Resolve
@@ -505,6 +533,12 @@ which applies here in full and is stricter for a build than for an analysis.
    - **Write the state file, or the route is not interchangeable.** Everything contract rule 7 names
      goes into `build-queue.json`, `standWrites.packageCreated` included, as each unit closes. A route
      that builds without writing it hands the next run a stand it cannot account for.
+   - **Hand `verificationSurface` to every unit prompt** (`automatic:2` | `automatic:3` | `manual`) —
+     the same value route 1 passes in its args, quoted in the prompt text, because a sub-agent starts
+     with a fresh context and `decisions.md` never reaches it. Reach units get it too: their closing
+     "open the surface it governs" IS a render check. If the preflight answer is not available to
+     hand over, say so in the prompt instead of omitting it silently — the per-page recipe's step 8
+     then reports it in `blocked[]` rather than guessing a tier.
 
    **Do NOT switch routes mid-folder to get past a failure.** A rejection at the first agent looks
    deterministic and usually is not: two consecutive Workflow launches of the Applicant run were
@@ -517,7 +551,12 @@ which applies here in full and is stricter for a build than for an analysis.
    only **through the gate above** — never as a silent third choice. It costs the session's context
    and it loses the role separation for the verifier and the judge, which is a real weakening; on a
    multi-unit build it has not once reached a first closed unit before the context ended — say so in
-   worklog.md, and prefer 1 or 2 whenever either can run.
+   worklog.md, and prefer 1 or 2 whenever either can run. This route reads the recipe in the SAME
+   session that resolved the preference, so `verificationSurface` is already in context — state it
+   explicitly in worklog.md as the surface this build verifies on, and use THAT value for every
+   unit's step-8 render check. It is still the resolved value, never `decisions.md` re-read as prose
+   and never a tier picked per unit; if the preflight never produced one, step 8's `blocked[]` report
+   applies here as well.
 
 **Named-workflow availability — `scriptPath` is the primary call.** A name resolves ONLY from
 `~/.claude/workflows/` (user scope) or a project's `.claude/workflows/`; the plugin cache is never

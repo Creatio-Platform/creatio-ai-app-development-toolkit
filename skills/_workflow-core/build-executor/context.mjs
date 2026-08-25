@@ -12,7 +12,7 @@
 // to the contract every phase is handed. `run-workflow-parity.mjs` compares the prompt text of the shipped script
 // against the hand-written original byte for byte, which is how that was caught the first time.
 
-import { buildMode, findingKeySet, unitNo, unitStem } from './helpers.mjs'
+import { buildMode, buildVerificationSurface, findingKeySet, unitNo, unitStem } from './helpers.mjs'
 
 export const REQUIRED_INPUTS = ['manifest', 'environment', 'outDir', 'planFile']
 
@@ -182,6 +182,18 @@ export function makeContext(input, selfPath) {
   // a proposal rather than an action. Building the page that carries the row and stopping before the NEXT unit
   // costs the operator the rest of that page's logic and buys a model that cannot lie about what is done.
   const MODE = buildMode(input.mode)
+  // The migration skill's verification-surface preflight answer for THIS section (ENG-95855), handed over as an
+  // explicit argument rather than left for each page unit to read from `decisions.md` — that file's prose does
+  // not reach a fresh-context build agent. `null` when the caller omitted it (an older invocation, or a run this
+  // field predates); the per-page recipe's render check treats that as "not told" and reports so, never a guess.
+  const VERIFICATION_SURFACE = buildVerificationSurface(input.verificationSurface)
+  // Built ONCE and appended to EVERY unit prompt that carries a render check — page units and reach units alike.
+  // A reach unit ends by opening the surface its wiring governs, which is the same per-unit render check under a
+  // different deliverable, so leaving it out of `reachKindBlock` was the one place a surface stayed ASSUMED rather
+  // than resolved (ENG-95855): section registration is precisely the deliverable a prior run silently dropped.
+  const VERIFICATION_SURFACE_NOTE = VERIFICATION_SURFACE
+    ? ` VERIFICATION SURFACE FOR THIS BUILD: \`${VERIFICATION_SURFACE}\` — use it for this unit's render check exactly as the per-page recipe's step 8 describes.`
+    : ' VERIFICATION SURFACE FOR THIS BUILD: none was handed to this run (`verificationSurface` was omitted). Do not guess a tier — say so in `blocked` if the per-page recipe\'s step 8 needs one to proceed.'
   const CHECKPOINT_AFTER = Array.isArray(input.checkpointAfter)
     ? input.checkpointAfter.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim())
     : []
@@ -274,6 +286,7 @@ Read the card for each imperative row this page owns before you write the handle
 return {
   input, ENGINE, SKILLS_ROOT, REF_RECIPE, REF_MAPPING, REF_POLICY, REF_BLOCK,
   SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
+  VERIFICATION_SURFACE, VERIFICATION_SURFACE_NOTE,
   FINDINGS, FINDING_KEYS,
   QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
   REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
