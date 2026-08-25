@@ -242,6 +242,11 @@ An omitted or half-filled `guidelines` is neither. Nothing downstream can file t
 a reference page you did not open is the one failure this field exists to prevent.
 
 **A page key that publishes no `#quality-gates` id owes no record** — an unfolded or reuse child page.
+
+**One record, TWO rows in `--verify` (ENG-95859).** Filing `guidelines` above is unchanged — one record
+under this page's one id. `--verify`'s checklist now reports "a complete record was filed" and "an
+independent judge found it convincing" as two separate rows sharing that id, so a record filed but never
+reviewed leaves the second row open even when the first reads ✅. See `./01-evidence-records.md`.
 The field is not required of it, and the obligation above is not in its prompt.
 
 The verifier reads the stand and files what it actually finds. Where the two disagree, the

@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
-import { featureVerifyType, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -1789,6 +1789,12 @@ function buildCoverageRows(cs, pm, result) {
     const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
     cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
+    // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
+    // gated row PER HALF, same as the DCM case-progress-bar/next-steps split a few lines below. Before this, the
+    // second half lived only in `notes` prose, and a build that added just the list read identically to one that
+    // added both — twice, on the same feature, in real runs (see FEATURE_SECOND_HALF in mapping-table.mjs).
+    for (const extra of featureVerifyExtraTypes(f))
+      cover.push({ label: `${esc(f)} — second required component (\`${extra}\`)`, vk: { type: "feature", ftype: extra } });
   }
   if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
     cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } }, { label: "DCM Next steps", vk: { type: "dcm-next" } });
@@ -1987,8 +1993,11 @@ function pageGroup(pageKey, title, rows) {
 // a caption carrying a backtick or a pipe would yield an id the caller could not reproduce to file its evidence
 // under. `requires` is the UI gate for "this record is complete" and rides on the row so `--units` can publish it.
 export const EVIDENCE_REQUIRES = ["referencePage", "components"];
-function evidenceRow(id, label, extra = {}) {
-  return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES } };
+// `vkExtra` rides straight onto `vk` (never onto the outer row) — ENG-95859 needs a `part` discriminator there so
+// two DIFFERENT rows can share the SAME evidence id (see `qualityGateRows`) without the resolver losing which half
+// it is answering for.
+function evidenceRow(id, label, extra = {}, vkExtra = {}) {
+  return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES, ...vkExtra } };
 }
 // The ⚠ Confirm worklist — the same items as the Confirm section (kinds without a section of their own). Removals are not
 // decisions. Own fn so `checklistGroups` gains no branch of its own (Sonar CC 15).
@@ -2005,8 +2014,21 @@ function confirmWorklistRows(pageKey, cs) {
 // row: visible, tallied in nothing, closable by asserting it in prose — which is exactly how "native components →
 // style parity is inherent" waved it through. It is now an EVIDENCE row: it closes only on a filed record naming
 // the reference page + the components checked AND a judge that found that record convincing.
+//
+// ENG-95859 — TWO rows, ONE id. "A record was filed naming the reference page + components" and "an independent
+// judge found that record convincing" are different facts (a run that did the design work and a run that skipped
+// it must not read identically), so each gets its OWN row/status via the `part` discriminator on `vk` — but they
+// still file under the SAME `${pageKey}#quality-gates` id: the executor's filing contract
+// (`references/01-evidence-records.md` in freedom-build-executor, the migration skill's steps 7/8) names ONE id
+// per page, and splitting the id itself would be a build-agent-facing contract change this ticket does not need.
+// `evidenceRows`/`evidenceIds` below dedupe by id so `--units` still publishes exactly one id per page.
 function qualityGateRows(pageKey) {
-  return [evidenceRow(`${pageKey}#quality-gates`, "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above.")];
+  const id = `${pageKey}#quality-gates`;
+  const base = "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema.";
+  return [
+    evidenceRow(id, `${base} **This row: the design pass RAN** — a record naming the reference page and the components checked was filed under \`${esc(id)}\`.`, {}, { part: "filed" }),
+    evidenceRow(id, `${base} **This row: the design pass was INDEPENDENTLY JUDGED** — a separate reviewer found the filed record convincing. A record nobody reviewed does not close this row, even when the row above is ✅.`, {}, { part: "judged" }),
+  ];
 }
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
@@ -2657,7 +2679,10 @@ export function pageUnits(result, opts = {}) {
     resolutionsConflicts: resolutionConflicts(resIndex, preflight),
     // Answers matching no question this plan asks — published so the CLI reports them rather than dropping them.
     resolutionsUnmatched: unmatchedResolutions(resIndex, preflight),
-    evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
+    // ENG-95859 — dedupe by id: `qualityGateRows` now publishes TWO rows (`part: "filed"` / `"judged"`) sharing
+    // ONE evidence id, so a naive `.map` here would publish that id twice. The build-agent filing contract
+    // (`references/01-evidence-records.md` in freedom-build-executor) names ONE id per page — keep that true.
+    evidenceRows: [...new Map(evidence.map((r) => [r.vk.id, { id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] }])).values()],
     // LEAF-FIRST, and the list page is a leaf: it depends on no other page, and building it first is what the real
     // runs do (`create-app-section` mints it before the form page exists). Included ONLY when it published a unit —
     // an order naming a key with no entry would send the executor to build a page it was never given.
@@ -3098,6 +3123,13 @@ function resolveChildPageVk(vk, ctx) {
 // self-asserted "done" can no longer close it; `convincing: false` (or a `false` record) is a hard MISSING.
 function resolveEvidenceVk(vk, ctx) {
   if (vk.type !== "evidence") return unknownVk();
+  // ENG-95859 — `part` routes to the split verdict (see `qualityGateRows`). Every OTHER evidence row (a ⚠ Confirm
+  // item, an unfolded child page) carries no `part` and keeps the original combined behavior unchanged below.
+  if (vk.part === "filed") return resolveEvidenceFiledPart(vk, ctx);
+  if (vk.part === "judged") return resolveEvidenceJudgedPart(vk, ctx);
+  return resolveEvidenceCombinedVk(vk, ctx);
+}
+function resolveEvidenceCombinedVk(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const judged = ctx.root?.judge?.[vk.id]?.convincing;
   const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}) + an independent judge verdict`;
@@ -3121,6 +3153,38 @@ function resolveEvidenceVk(vk, ctx) {
   if (evidenceComplete(rec, vk.requires) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
   return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
+}
+// ENG-95859 — the FILED half in isolation: did the verifier file a complete record? Deliberately silent about the
+// judge (that is the other row's question) — reusing `resolveEvidenceCombinedVk`'s wording would have this row's
+// status swing on a fact it does not claim to check.
+function resolveEvidenceFiledPart(vk, ctx) {
+  const rec = ctx.root?.evidence?.[vk.id];
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")})`;
+  if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
+  if (evidenceComplete(rec, vk.requires)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
+  return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
+}
+// ENG-95859 — the JUDGED half in isolation: did an independent reviewer find the filed record convincing? A run
+// that filed a complete record but was never reviewed reads ⚠ HERE (not ✅, the way the old combined row could
+// look identical to a run that skipped the design pass) — distinct from "not judged because there is nothing yet
+// to judge", which points the reader at the row above instead of at the judge.
+function resolveEvidenceJudgedPart(vk, ctx) {
+  const rec = ctx.root?.evidence?.[vk.id];
+  const judged = ctx.root?.judge?.[vk.id]?.convincing;
+  const why = ctx.root?.judge?.[vk.id]?.why;
+  const need = `\`${esc(vk.id)}\``;
+  if (rec === false) {
+    let contradiction = "";
+    if (judged === true) {
+      const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
+      contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page.`;
+    }
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
+  }
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
+  if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
+  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified"];
+  return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
 }
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
 // The earlier predicate ended in `v != null`, so `components: false`, `components: {}` and `referencePage: 0` all

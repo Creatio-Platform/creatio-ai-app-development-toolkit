@@ -104,6 +104,16 @@ The judge writes **only** the `judge` object. It never edits `pages`, `reachabil
 blessing, the arithmetic downstream would be arithmetic over one agent's self-assertion — which
 is the failure the split exists to prevent.
 
+**ENG-95859 — `#quality-gates` now renders as TWO rows off this ONE id, not one.** Filing is
+unchanged: you still file exactly one `evidence[id]` record and, separately, one `judge[id]`
+verdict. But `--verify`'s checklist reports "a complete record was filed" and "an independent
+judge found it convincing" as two SEPARATE rows sharing that id — "the design pass ran" and "it
+was reviewed" are different facts, and conflating them let a run that filed a record nobody
+reviewed print identically to one that filed nothing. Both rows must read ✅ (or the outcome
+table above must independently work out to ✅ for each) before the page's design-pass gate is
+closed; `evidenceRows`/`evidenceIds` still publish exactly one `main#quality-gates` entry, so
+nothing about WHERE you file changes.
+
 The judge's job is not to be agreeable. `convincing: false` with a `why` is a normal, useful
 outcome: it names a repair the builder can act on. `convincing: true` on a record that names no
 reference page, or lists a component the page does not carry, is the judge failing.

@@ -478,6 +478,22 @@ export function featureVerifyType(featureName) {
   return r?.verify.componentType || null;
 }
 
+// ENG-95859 — a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
+// approval MODULE/widget placed ABOVE the profile island (`crt.Approval`) PLUS the approval LIST
+// (`crt.ApprovalList`, already gated by `featureVerifyType` above) — the FEATURE_ROWS note for Approvals has said
+// so in prose since ENG-95254, and `freedom-build-executor.workflow.js` repeats it in its build prompt, but
+// `featureVerifyType` only ever answered ONE componentType, so the module half had NO row to gate `--verify` on.
+// Two real builds (the base measurement run and its ENG-95859 recurrence) added only `crt.ApprovalList` and had
+// the missing module recorded as a "proposal" instead of a hard MISSING — a rule read twice and applied to one of
+// two halves is exactly the defect this table exists to close by machine. One entry per feature whose second half
+// has a KNOWN static componentType (confirmed via `get-component-info search="approval"`: `crt.Approval` is a
+// real, non-`compositeOnly` standalone type — not part of the "Approval list" composite recipe, so it needs its
+// own row rather than a composite-recipe check). A feature not listed here has no second half to gate.
+const FEATURE_SECOND_HALF = { Approvals: ["crt.Approval"] };
+export function featureVerifyExtraTypes(featureName) {
+  return FEATURE_SECOND_HALF[featureName] || [];
+}
+
 // The row for a bare itemType VALUE, with NO fallback of any kind — `undefined` means the table has no entry for
 // that member. This is what lets a golden witness the 29-member coverage instead of leaving it to a reader's
 // tally: every convenience accessor above returns something truthy for a member nobody listed.
