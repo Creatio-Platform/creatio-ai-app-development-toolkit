@@ -1877,8 +1877,8 @@ check("workflow EXECUTES the Reconcile retry: a baseline Reconcile that returns 
   () => (afterRetry.threw ? `threw: ${afterRetry.threw}` : `stopped=${afterRetry.stopped} calls=${retryCalls}`));
 let deadCalls = 0;
 const stillDead = await runWith({}, async () => { deadCalls += 1; return null; }).catch((e) => ({ threw: e.message }));
-check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly twice and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
-  !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 2
+check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly three times and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
+  !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 3
     && /SAME route/.test(stillDead.next || "") && /switching routes/.test(stillDead.next || ""),
   () => (stillDead.threw ? `threw: ${stillDead.threw}` : `stopped=${stillDead.stopped} calls=${deadCalls} next=${(stillDead.next || "").slice(0, 160)}`));
 

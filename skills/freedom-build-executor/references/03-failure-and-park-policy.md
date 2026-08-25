@@ -224,3 +224,16 @@ are intact, and a re-run re-reads the stand. The same rule applies to a reconcil
 **Distinguish this from the environment faults above.** Those are Creatio failing to answer a read, and they
 must not spend a repair round. This one is the RUN's own machinery failing, and it must not produce a number
 at all.
+
+## A host-rejected agent: the reason is not in the run's return
+
+When the host rejects an agent before the model runs (e.g. `blocked by safety classifier: …`), the
+script sees only `agent()` returning `null` — no reason attached, so the run can neither log nor
+branch on the cause. The reason is recorded by the host: in the run's failure lines and in the run's
+transcript directory (`journal.jsonl`, plus the per-agent `agent-<id>.jsonl`). Read those before
+acting on the failure.
+
+Treat the host's label as a symptom, not a measurement. A rejection at the run's first agent is
+transient more often than not: re-run the SAME route. Only the SAME rejection repeating across
+launches is worth stopping for — and then verify the reported cause (measure it) before building a
+fix on it.

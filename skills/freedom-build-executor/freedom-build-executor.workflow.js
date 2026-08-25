@@ -2089,10 +2089,11 @@ const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancie
 // phase depends on it, so a transient failure there costs the whole run: measured on the Applicant baseline, two
 // consecutive Workflow launches were rejected at this exact call in 9 ms with 0 writes ("output schema too large to
 // classify safely"), a LATER identical launch passed — and in between, the flake read as a hard block and pushed the
-// run onto the Agent route, which is where the divergent state of A2 came from. One retry is what turns that from a
-// route switch into a hiccup. Bounded and never silent: each attempt is logged, and exhausting them is still the
-// honest `reconcile-failed` stop, not a run that proceeds on a state nobody produced.
-const RECONCILE_ATTEMPTS = 2
+// run onto the Agent route, which is where the divergent state of A2 came from. Attempts fire back-to-back within
+// the same second (a workflow script cannot sleep), so the budget is three: a brief host-side burst can consume two.
+// Bounded and never silent: each attempt is logged, and exhausting them is still the honest `reconcile-failed` stop,
+// not a run that proceeds on a state nobody produced.
+const RECONCILE_ATTEMPTS = 3
 async function reconcileAgent(roundNo, label) {
   for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
     // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
@@ -2109,7 +2110,7 @@ async function reconcileAgent(roundNo, label) {
 // The one wording for both Reconcile failures, and it names the recovery the Applicant run got wrong: re-run THIS
 // route. A rejection at the first agent is not evidence the route is unavailable, and a route switch mid-folder is
 // how two routes ended up with two views of one stand.
-const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. Nothing was built`
+const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it. Nothing was built`
 
 // ENG-95884 — `packageCreatedByRun` is deliberately NOT required on RECONCILE_SCHEMA (ENG-95850: "an agent that
 // cannot read the file must be able to say nothing rather than guess"), so a Reconcile call that silently dropped
@@ -3704,7 +3705,7 @@ while (true) {
       planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
       discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it`,
+      next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it`,
     })
   }
   const stopAfterRound = await acceptReconciled(next, `round ${round}'s Reconcile`)
