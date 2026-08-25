@@ -153,9 +153,12 @@ export const isUnitOpen = (unit, verify, reachState, packageState) => {
 // exactly ONCE — here the dedup is a PURE input (same shape and role as `inContextParkableKeys`'s `alreadyParked`),
 // so the "parked once, one reason" interaction of the two paths is unit-testable rather than resting on the impure
 // `parkedSet.has` guard in `applyParks` alone.
-export const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState, maxRounds = DEFAULT_MAX_ROUNDS, alreadyParked = null) =>
+// The trailing two knobs (`maxRounds`, `alreadyParked`) are bundled into one options object (Sonar S107 — 7
+// params max): both are OPTIONAL tuning of the SAME "which keys are parkable" question, never data the caller
+// must always supply, so folding them costs no call site clarity.
+export const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState, { maxRounds = DEFAULT_MAX_ROUNDS, alreadyParked = null } = {}) =>
   parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key), maxRounds)
-    .filter((k) => !(alreadyParked && alreadyParked.has(k)))
+    .filter((k) => !alreadyParked?.has(k))
 
 // ENG-95901 — ONE shared derivation for the `missing`-only build axis off any `{buildComplete, complete, missing}`
 // shaped object — a `selfCheck` self-report OR a `verify` page-state entry, the two places this axis is read from.
@@ -220,7 +223,7 @@ export function selfCheckStillShort(sc) {
 // lookup is injected), and `alreadyParked` is handed in, so the whole decision is unit-testable without run state.
 export const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachState, packageState, alreadyParked) =>
   (selfCheckShort || [])
-    .filter((s) => s && s.key && !(alreadyParked && alreadyParked.has(s.key)))
+    .filter((s) => s?.key && !alreadyParked?.has(s.key))
     .filter((s) => isUnitOpen(unitFor(s.key), verify, reachState, packageState))
     .map((s) => s.key)
 
@@ -264,7 +267,7 @@ export const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachStat
 const verifierBuildComplete = (verify, key) => derivedBuildComplete(pageStateOf(verify, key))
 export const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageState) =>
   (selfChecks || [])
-    .filter((c) => c && c.key && isUnitOpen(unitFor(c.key), verify, reachState, packageState))
+    .filter((c) => c?.key && isUnitOpen(unitFor(c.key), verify, reachState, packageState))
     .map((c) => {
       const sc = c.sc
       const scBuildComplete = selfCheckBuildComplete(sc)
@@ -301,7 +304,7 @@ export function selfCheckDiscrepancyText(kind) {
 // ONE bounded attempt named in place of a round count. Never blank: a park with no reason is a question nobody can
 // answer.
 export function inContextParkWhy(shortRows) {
-  const rows = (shortRows || []).filter((r) => r && r.deliverable).map((r) => `${r.deliverable} — ${r.status} — ${r.evidence}`)
+  const rows = (shortRows || []).filter((r) => r?.deliverable).map((r) => `${r.deliverable} — ${r.status} — ${r.evidence}`)
   const head = 'still short after ONE in-context fix attempt (the unit\'s own completeness gate, run before it could report complete)'
   if (rows.length) return `${head} — the gate's open rows: ${rows.join(' · ')}`
   return `${head} — the gate reported the unit incomplete but named no open row; re-verify this unit`
@@ -511,7 +514,7 @@ export function packagePreconditionStop(targetPackage, packageState, sectionHost
   // continues. Without this branch a `new-app` plan could not survive its own success — the app unit sets
   // `packageState: 'exists'`, and the very next Reconcile re-applied this stop and killed the run mid-flight.
   if (sectionHost === 'new-app' && effectiveState === 'exists') {
-    if (own && own.appUnitComplete) return null
+    if (own?.appUnitComplete) return null
     if (own) {
       return { stopped: 'new-app-over-existing-package', next: `the plan's section host is \`new-app\` and the target package \`${targetPackage || '(unnamed)'}\` is on the stand because THIS migration created it — but the state file records its app unit as INCOMPLETE (the package exists; the section on the migrated object and/or the removal of the stub \`create-app\` mints did not finish). \`create-app\` cannot be re-run over a package that is already there, and this run will not infer a section nobody confirmed. Two ways out, both yours to pick: (a) finish the app unit BY HAND — \`create-app-section --entity-schema-name <the migrated object>\` in that application, then \`delete-app-section\` for the stub — and re-run this build, which then resumes without a re-plan and without a second approval; or (b) re-plan with \`sectionHost: existing-app\` against the package that now exists. Nothing further has been built` }
     }
@@ -615,7 +618,7 @@ const templateInvalidClause = (mismatches) =>
 export function requiredAppCode(targetPackage, schemaNamePrefix) {
   if (typeof schemaNamePrefix !== 'string') return null
   const pkg = typeof targetPackage === 'string' ? targetPackage.trim() : ''
-  if (!pkg || !pkg.startsWith(schemaNamePrefix)) return null
+  if (!pkg?.startsWith(schemaNamePrefix)) return null
   const code = pkg.slice(schemaNamePrefix.length)
   return code || null
 }
@@ -628,16 +631,18 @@ export function requiredAppCode(targetPackage, schemaNamePrefix) {
 // instead of a stub that cannot reproduce an escaping mistake.
 export function appCodeInstruction(targetPackage, schemaNamePrefix) {
   const code = requiredAppCode(targetPackage, schemaNamePrefix)
-  // Plain backticks, NOT escaped ones: this string is INTERPOLATED into the prompt's template literal, so it must
-  // already carry the real character — a `\`` here would reach the agent as a backslash.
-  return code
-    ? 'PASS `code` EXACTLY `' + code + '` — that is not a suggestion and not yours to adjust: this stand\'s '
-      + '`SchemaNamePrefix` was read off the stand before the build (' + (schemaNamePrefix === '' ? 'it is EMPTY' : '`' + schemaNamePrefix + '`')
-      + '), and clio derives the package as prefix + code, so this code is the ONLY one that yields `' + targetPackage
-      + '`. If `create-app` rejects it, that is a `blocked` — never a cue to pick a different code.'
-    : 'Choose the `code` so that the package clio produces is EXACTLY `' + targetPackage + '` — clio applies the '
+  if (!code) {
+    return 'Choose the `code` so that the package clio produces is EXACTLY `' + targetPackage + '` — clio applies the '
       + 'environment\'s `SchemaNamePrefix` to `code`, so the code you pass and the package you get are usually NOT '
       + 'the same string. Read the prefix off the stand rather than assuming it.'
+  }
+  // Plain backticks, NOT escaped ones: this string is INTERPOLATED into the prompt's template literal, so it must
+  // already carry the real character — a `\`` here would reach the agent as a backslash.
+  const prefixNote = schemaNamePrefix === '' ? 'it is EMPTY' : '`' + schemaNamePrefix + '`'
+  return 'PASS `code` EXACTLY `' + code + '` — that is not a suggestion and not yours to adjust: this stand\'s '
+    + '`SchemaNamePrefix` was read off the stand before the build (' + prefixNote
+    + '), and clio derives the package as prefix + code, so this code is the ONLY one that yields `' + targetPackage
+    + '`. If `create-app` rejects it, that is a `blocked` — never a cue to pick a different code.'
 }
 
 // THE APP/PACKAGE IDENTITY CHECK, before the first write. Applies ONLY where the run will actually create the app

@@ -415,7 +415,7 @@ check("ENG-95901 (review): the in-context 'still short' log line carries NO coun
   const BUDGET = wf.DEFAULT_MAX_ROUNDS;                // the design value the run passes as `MAX_ROUNDS`
   const budgetSpent = { [K]: BUDGET };                 // localRounds ⇒ roundsRun === MAX_ROUNDS ⇒ budget spent
   const scShortK = [{ key: K, shortRows: [] }];
-  const budgetParks = (already) => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, BUDGET, already);
+  const budgetParks = (already) => wf.parkableKeys({}, budgetSpent, unitK, openVerify, {}, undefined, { maxRounds: BUDGET, alreadyParked: already });
   const inContext = wf.inContextParkableKeys(scShortK, (k) => ({ key: k, kind: "page" }), openVerify, {}, undefined, new Set());
   check("ENG-95469 T2b: a unit eligible for BOTH park paths is selected by each in isolation — in-context (short AND independently open) and round-budget (budget spent AND still open)",
     () => inContext.join(",") === K && budgetParks(new Set()).join(",") === K,
@@ -426,7 +426,7 @@ check("ENG-95901 (review): the in-context 'still short' log line carries NO coun
     () => budgetParks(new Set(inContext)).length === 0 && budgetParks(new Set()).length === 1,
     () => ({ excluded: budgetParks(new Set(inContext)), notExcluded: budgetParks(new Set()) }));
   check("ENG-95469 T2b: `applyParks` HANDS `parkedSet` to `parkableKeys` as the alreadyParked filter, WITH the configured round budget in front of it — the pure dedup is actually wired, so a refactor cannot drop it and leave only the local guard, and it cannot land the set in the `maxRounds` slot where it would silently disable the budget",
-    /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, MAX_ROUNDS, parkedSet\)/.test(wfSrc));
+    /parkableKeys\(state\.roundOf, localRounds, schedule, state\.verify, state\.reachabilityState, packageState, \{ maxRounds: MAX_ROUNDS, alreadyParked: parkedSet \}\)/.test(wfSrc));
 }
 
 // ENG-95901 item 7 — a DELIBERATE scope cut, pinned so it cannot be silently reversed. An earlier version of this
@@ -443,8 +443,8 @@ check("ENG-95901 (review): the in-context 'still short' log line carries NO coun
   const budgetSpentAgain = { [K]: 3 };
   const evidenceOnlyOpenAgain = { pages: { [K]: { complete: false, buildComplete: true } } };
   check("ENG-95901 item 7 (deliberately reverted): a page with `buildComplete: true` (build done, only evidence unfiled) IS round-budget parkable once its budget is spent — parkableKeys applies the SAME rule to every open unit, with no build-axis exclusion",
-    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, wf.DEFAULT_MAX_ROUNDS, new Set()).join(",") === K,
-    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, wf.DEFAULT_MAX_ROUNDS, new Set()));
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, { maxRounds: wf.DEFAULT_MAX_ROUNDS, alreadyParked: new Set() }).join(",") === K,
+    () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, { maxRounds: wf.DEFAULT_MAX_ROUNDS, alreadyParked: new Set() }));
 }
 
 // --- ENG-95469 (PR review T5): the INDEPENDENT-SIGNAL cross-check, EXECUTED. A builder's `selfCheck` is its own word
@@ -3446,7 +3446,10 @@ const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
     const namesSrc = nFrom >= 0 && nTo > nFrom ? wfSrc.slice(nFrom + NAMES_BEGIN.length, nTo) : "";
     // ONE source of truth for what is stubbed: the names are read back out of the declarations above, so the
     // guard below cannot drift from them.
-    const stubbed = new Set([...`${STUBS}\n${namesSrc}`.matchAll(/^\s*const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
+    // `[ \t]*`, not `\s*` (Sonar S8786): `\s` also matches `\n`, so with the `m` flag a run of blank lines let the
+    // engine re-try the same span from every `^` inside it — polynomial, not the single pass a same-line indent scan
+    // needs. Indentation is spaces/tabs only, never a literal newline, so the semantics are unchanged.
+    const stubbed = new Set([...`${STUBS}\n${namesSrc}`.matchAll(/^[ \t]*const ([A-Za-z_$][A-Za-z0-9_$]*)/gm)].map((m) => m[1]));
     // A free variable with no stub FAILS here; auto-stubbing would swallow the typo this check exists to catch.
     // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an

@@ -843,8 +843,8 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       && parkedKeys({}, { a: 3 }, ["a"]).join(",") === "a",
     () => JSON.stringify({ five: parkedKeys({}, { a: 4 }, ["a"], 5), spent: parkedKeys({}, { a: 5 }, ["a"], 5), dflt: parkedKeys({}, { a: 3 }, ["a"]) }));
   check("build-executor helpers: `parkableKeys` threads the same budget through — budget spent AND still open, at the configured number",
-    parkableKeys({}, { main: 4 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 5).length === 0
-      && parkableKeys({}, { main: 5 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 5).join(",") === "main");
+    parkableKeys({}, { main: 4 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, { maxRounds: 5 }).length === 0
+      && parkableKeys({}, { main: 5 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, { maxRounds: 5 }).join(",") === "main");
   const paths = makePaths(ctx, () => ["main", "list"]);
   check("build-executor paths: every per-unit file carries the UNIT NUMBER — a name built from the page key alone is many-to-one",
     paths.specFile("list") === "/mig/refs/spec-list-2.md" && paths.queueSliceFile("main") === "/mig/slices/queue-1.json");
@@ -882,8 +882,8 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       && inContextParkableKeys([{ key: "main", shortRows: [] }], () => ({ key: "main", kind: "page" }),
         { pages: { main: { complete: false } } }, {}, null, new Set(["main"])).length === 0);
   check("build-executor helpers: a unit the in-context park already claimed is EXCLUDED from the round-budget park — one unit, one park, one reason",
-    parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 3, new Set(["main"])).length === 0
-      && parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, 3, new Set()).join(",") === "main");
+    parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, { maxRounds: 3, alreadyParked: new Set(["main"]) }).length === 0
+      && parkableKeys({}, { main: 3 }, [{ key: "main", kind: "page" }], { pages: {} }, {}, undefined, { maxRounds: 3, alreadyParked: new Set() }).join(",") === "main");
   check("build-executor helpers: each of the THREE self-report/verifier disagreements gets its OWN kind — folding `ran-without-verdict` into `gate-not-run` would name the wrong repair",
     // ENG-95901 follow-up (TRI-STATE) — `verifierBuildComplete` reads `undefined`, never a coerced `false`, when
     // the verifier has NO entry for a page at all: an absent entry means "not looked at yet", not "looked and
