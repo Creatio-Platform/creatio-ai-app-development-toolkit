@@ -341,6 +341,14 @@ const cliSelfCheck = (key) => cli(`--verify --built ${q(selfBuiltFile(key))} --p
 // Mirrors the `--verify-json` FILE, field for field, plus the CLI's exit code and the PLAN-level
 // stderr lines. Nothing else is allowed to reach the verdict — the reconcile agent copies that file,
 // so this schema is a transport check, not a place where an agent's reading of a table gets in.
+// ENG-95901 — `buildComplete` MUST be declared here, field for field with the engine's `verifyTally`/
+// `verifyDigest` output: a structured-output schema constrains what an LLM transcribing the file will
+// reproduce, so an UNDECLARED field is silently dropped on this agent-mediated path even though the engine
+// genuinely writes it. Losing it here would make `state.verify[key].buildComplete` read `undefined` for
+// every page in the live run — defeating `selfCheckMismatches`'s `verifierBuildComplete` (which would then
+// read every page as "not build-complete" and false-flag an honest `buildComplete:true` self-report as
+// `reported-complete-but-verifier-open`) — the exact regression this ticket exists to fix, reappearing
+// specifically on the schema-constrained path that none of the hand-built-fixture tests below exercise.
 const VERIFY_RESULT = {
   type: 'object',
   required: ['complete', 'missing', 'unverified', 'pages'],
@@ -348,14 +356,23 @@ const VERIFY_RESULT = {
     complete: { type: 'boolean' },
     missing: { type: 'integer' },
     unverified: { type: 'integer' },
+    // ENG-95901 (PR review) — the count that MATCHES `buildComplete`: how many open rows the builder owns. Declared
+    // for the same reason `buildComplete` is: an undeclared field is silently dropped on the agent-mediated path.
+    builderOpen: { type: 'integer' },
     planGaps: { type: 'array', items: { type: 'string' } }, // D12: non-empty ⇒ the PLAN is short, not the build
     pages: {
       type: 'object',
       additionalProperties: {
         type: 'object',
-        required: ['complete'],
+        // `buildComplete` is REQUIRED, not merely typed: a DECLARED-but-optional property does not force an LLM to
+        // populate it — only `required` does. Without this, the agent-mediated Reconcile path could still legally
+        // transcribe a page as `{complete:false, unverified:3}` with `buildComplete` omitted, and `derivedBuildComplete`
+        // would fall back to the combined `complete`, silently reintroducing the exact conflation this ticket fixes.
+        required: ['complete', 'buildComplete'],
         properties: {
           complete: { type: 'boolean' },
+          buildComplete: { type: 'boolean' },
+          builderOpen: { type: 'integer' },
           missing: { type: 'integer' },
           unverified: { type: 'integer' },
           // Every row that is not ✅, as the engine emitted it: the same Deliverable / Status /
@@ -371,6 +388,10 @@ const VERIFY_RESULT = {
                 status: { type: 'string' },
                 evidence: { type: 'string' },
                 outcome: { type: 'string' },
+                // ENG-95901 (PR review) — WHOSE work closes the row: "builder" or "verifier". This, not the
+                // `missing`/`unverified` label, is what `buildComplete` is keyed on and what the one bounded
+                // in-context fix is allowed to act on.
+                owner: { type: 'string' },
                 id: { type: 'string' },
               },
             },
@@ -739,23 +760,31 @@ const BUILD_PROPERTIES = {
   // its OWN page before reporting the unit complete, gets one bounded fix if short, re-checks, and files the outcome
   // here. `ran: false` with `notRunWhy` is a valid outcome (a page the builder genuinely could not get-page);
   // `stillShortRows` is the scoped verdict's `openRows` AFTER the one fix — what the run composes the park reason
-  // from when a unit is still short. `complete`/`missing`/`unverified` are copied VERBATIM from the engine's
-  // single-unit verdict file, never a self-graded claim: the number is the engine's arithmetic, transcribed.
+  // from when a unit is still short. `buildComplete`/`complete`/`missing`/`unverified` are copied VERBATIM from the
+  // engine's single-unit verdict file, never a self-graded claim: the number is the engine's arithmetic, transcribed.
+  // ENG-95901 — `buildComplete` (the `missing`-only axis) is what the in-context gate's own exit code and this
+  // schema's PARK decision read; `complete` (kept for logging/back-compat) still folds in `unverified`, which the
+  // builder can never legitimately clear itself.
   selfCheck: {
     type: 'object',
     required: ['ran'],
     properties: {
       ran: { type: 'boolean' },
+      buildComplete: { type: 'boolean' },
       complete: { type: 'boolean' },
       missing: { type: 'integer' },
       unverified: { type: 'integer' },
+      builderOpen: { type: 'integer' },
       fixAttempted: { type: 'boolean' },
       stillShortRows: {
         type: 'array',
         items: {
           type: 'object',
           required: ['deliverable', 'status', 'evidence'],
-          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' } },
+          // `outcome`/`owner` ride along so the tail cross-check can tell a builder-owned shortfall from a row the
+          // builder was never allowed to close, without re-deriving what the engine already decided.
+          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' },
+            outcome: { type: 'string' }, owner: { type: 'string' } },
         },
       },
       notRunWhy: { type: 'string' },
@@ -1101,19 +1130,70 @@ const isUnitOpen = (unit, verify, reachState, packageState) => {
 // exactly ONCE — here the dedup is a PURE input (same shape and role as `inContextParkableKeys`'s `alreadyParked`),
 // so the "parked once, one reason" interaction of the two paths is unit-testable rather than resting on the impure
 // `parkedSet.has` guard in `applyParks` alone.
+// ENG-95901 (reverted — see below) — an earlier version of this diff excluded a PAGE unit whose BUILD axis was
+// already done (`buildComplete: true`) from the round-budget park, reasoning that parking it over merely-unfiled
+// evidence would trigger the harmful chain the comment above names. That exclusion was itself reverted: the
+// round-budget park is the ONLY mechanism bounding the outer `while (true)` round loop (there is no global round
+// ceiling) — a page excluded from parking here would be re-dispatched forever if a separate verifier/judge round
+// never manages to confirm its evidence, trading a bounded-but-imperfect outcome for an unbounded one. Giving such
+// a page its OWN distinct, bounded park path (a separate counter, a distinct "awaiting verifier/judge evidence"
+// reason) is a real fix but a materially bigger change than this ticket's scope — tracked as a follow-up, not
+// attempted here. `parkableKeys` is therefore unchanged from before this ticket: budget-spent AND still open,
+// full stop, for every unit kind.
+// ENG-95901 — ONE shared derivation for the `missing`-only build axis off any `{buildComplete, complete, missing}`
+// shaped object — a `selfCheck` self-report OR a `verify` page-state entry, the two places this axis is read from.
+// `buildComplete` is declared but OPTIONAL almost everywhere it appears (the `selfCheck` schema requires only
+// `ran`; a pre-fix or legacy `verify` payload may not carry it at all), so every reader must tolerate its absence
+// the SAME way — `selfCheckStillShort` and `selfCheckMismatches`'s verifier-side comparison used a DIFFERENT ad-hoc
+// fallback before this was pulled out, and one of them (the self-report side) had the fallback ORDER backwards.
+// Preference order: the new field first; when absent, `missing` — the engine's direct count — takes priority over
+// the OLD conflated `complete` (which folds in `unverified` too, so trusting it INSTEAD of `missing` would read a
+// build-complete/evidence-unfiled report — `{complete:false, missing:0}`, exactly the ENG-95901 shape — as NOT
+// build-complete, reintroducing the bug this ticket fixes); `complete` is the LAST resort, only when `missing`
+// itself is absent too. Returns `undefined` (never a false "not complete") when NONE of the three fields are
+// present, or the input itself is absent — arithmetic over the input's OWN fields, never an invented verdict.
+// PR review — the `missing === 0` fallback is LOSSY and is no longer the first one tried: `unverified` is also what
+// a partial or unread build resolves to, so a `0/N expected fields` page has `missing: 0` while being as short as a
+// page can be. When the payload carries its rows, they are read instead: each row's `owner` is the engine's own
+// classification, so the fallback answers the same question the primary field does. `missing`/`complete` stay as
+// last resorts for a legacy payload that carries neither the field nor its rows.
+// One open row this builder owns — the predicate `buildComplete` means. A row with no `owner` is treated as the
+// builder's: the engine tags only the four verifier/judge-filed rows, and defaulting the other way would let an
+// untagged shortfall pass as somebody else's problem.
+const isBuilderOwnedRow = (r) =>
+  (r?.outcome === 'missing' || r?.outcome === 'unverified') && r?.owner !== 'verifier' 
+function derivedBuildComplete(x) {
+  if (!x) return undefined
+  if (typeof x.buildComplete === 'boolean') return x.buildComplete
+  const rows = Array.isArray(x.openRows) ? x.openRows : x.stillShortRows
+  if (Array.isArray(rows)) return !rows.some(isBuilderOwnedRow)
+  if (typeof x.missing === 'number') return x.missing === 0
+  if (typeof x.complete === 'boolean') return x.complete
+  return undefined
+}
 const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState, alreadyParked = null) =>
   parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key))
     .filter((k) => !(alreadyParked && alreadyParked.has(k)))
 
 // ENG-95469 — the ONE self-check outcome that PARKS a page IN-CONTEXT, as a predicate `buildRound` can test (PR
-// review T3): the builder ran its scoped gate (`ran: true`), the engine's single-unit verdict is still NOT complete
-// (`complete: false`), AND the builder has already spent its ONE bounded fix (`fixAttempted: true`). A shortfall
-// whose bounded fix is NOT YET attempted (`fixAttempted: false`) is deliberately NOT collected — the unit still has
-// its one attempt owed to it, so parking it now would skip the very fix the gate promises; it stays open for that
-// attempt instead. A gate that could not run (`ran: false`) and a complete gate collect nothing. Pinned as its own
-// function so a case that must NOT park (`fixAttempted: false`) is proven distinct from the one that does.
+// review T3): the builder ran its scoped gate (`ran: true`), the engine's single-unit verdict is still NOT build-
+// complete (`buildComplete: false` — ENG-95901: the `missing`-only axis, not the combined `complete` that also
+// folds in unfiled evidence), AND the builder has already spent its ONE bounded fix (`fixAttempted: true`). A
+// shortfall whose bounded fix is NOT YET attempted (`fixAttempted: false`) is deliberately NOT collected — the unit
+// still has its one attempt owed to it, so parking it now would skip the very fix the gate promises; it stays open
+// for that attempt instead. A gate that could not run (`ran: false`) and a build-complete gate collect nothing.
+// Gating on `buildComplete` rather than `complete` is the fix for ENG-95901: a page whose only open rows are
+// unfiled evidence (which the builder is contractually forbidden to file itself) must never be told "still short,
+// fix it" or parked for a row it cannot touch. Pinned as its own function so a case that must NOT park
+// (`fixAttempted: false`) is proven distinct from the one that does.
+// `buildComplete` is OPTIONAL in the selfCheck schema (only `ran` is required, matching the RC-12 precedent that a
+// schema-valid self-report can still be an incomplete one) — a builder that reported the OLDER shape (`complete` /
+// `missing`, no `buildComplete`) must not silently lose the fast in-context park it would have gotten before this
+// split existed. `derivedBuildComplete` (shared with `verifierBuildComplete`, the verifier-side comparison below)
+// does the actual fallback arithmetic; this is a thin, named alias so a golden can pin the self-report reading.
+const selfCheckBuildComplete = (sc) => derivedBuildComplete(sc)
 function selfCheckStillShort(sc) {
-  return !!sc && sc.ran === true && sc.complete === false && sc.fixAttempted === true
+  return !!sc && sc.ran === true && selfCheckBuildComplete(sc) === false && sc.fixAttempted === true
 }
 
 // ENG-95469 — WHICH self-check-short units this round actually parks IN-CONTEXT (PR review T2): the builder reported
@@ -1135,30 +1215,47 @@ const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachState, pack
 // actually ran or that its verdict is honest — enforcement was prompt-compliance only. This reconciles each page
 // unit's self-report against the INDEPENDENT post-hoc verifier (`verify`, produced by the read-only agent that did
 // NOT build the page — the run's authoritative oracle) and names the two ways a self-report and the independent
-// detector can disagree, for a unit the verifier finds still OPEN:
-//   · `reported-complete-but-verifier-open` — the builder reported the gate PASSED (`ran` + `complete`) but the
-//     independent verifier finds the unit still open. The in-context park never catches this (it fires only on
-//     `complete: false`), so a fabricated / mis-run green would otherwise pass silently; surfaced here it is not
-//     trusted and the post-hoc verifier governs.
+// detector can disagree, for a unit the verifier finds still OPEN (per the COMBINED `complete`, unchanged — a unit
+// open only on unfiled evidence still needs the verifier/judge round, so it still belongs in this audit sweep):
+//   · `reported-complete-but-verifier-open` — ENG-95901: the builder reported its BUILD axis passed (`ran` +
+//     `buildComplete: true`) but the independent verifier's OWN `buildComplete` for the same page is NOT true — i.e.
+//     the verifier's `missing` count is nonzero. Comparing `buildComplete` to `buildComplete` (not `complete` to
+//     "still open") is deliberate: a page honestly `buildComplete: true` with only unfiled evidence rows IS still
+//     open per `verify` (evidence is unconfirmed), but that is not a self-report/verifier disagreement — the
+//     builder is contractually forbidden to file that evidence itself, so it must never be flagged as a mismatch.
+//     The in-context park never catches a real mismatch either (it fires only on `buildComplete: false`), so a
+//     fabricated / mis-run green would otherwise pass silently; surfaced here it is not trusted and the post-hoc
+//     verifier governs.
 //   · `gate-not-run` — the builder returned `ran: false` (the documented escape hatch) on a unit the verifier finds
 //     open: legitimate, but surfaced (never silently accepted) so an operator can see which open units bypassed the
 //     scoped gate. A unit the verifier confirms complete needs no such note.
-//   · `ran-without-verdict` — the builder reported `ran: true` but NO boolean `complete` (PR review RC-12): the
-//     schema requires only `ran` inside `selfCheck`, so a self-report with `complete` absent is a valid page shape,
-//     yet `complete`/`missing`/`unverified` are meant to be COPIED VERBATIM from the engine's single-unit verdict —
-//     an absent `complete` on a gate that claims to have run is an inconclusive/malformed self-report. It also
-//     escapes `selfCheckStillShort` (which needs `complete === false`) and the two branches above, so without this
-//     branch such a unit reaches neither the fast park nor the audit trail on a still-open unit. Named here so it
-//     is surfaced, not silently dropped.
+//   · `ran-without-verdict` — the builder reported `ran: true` but NO boolean `buildComplete` (PR review RC-12,
+//     extended by ENG-95901 to the new axis): the schema requires only `ran` inside `selfCheck`, so a self-report
+//     with `buildComplete` absent is a valid page shape, yet `buildComplete`/`missing`/`unverified` are meant to be
+//     COPIED VERBATIM from the engine's single-unit verdict — an absent `buildComplete` on a gate that claims to
+//     have run is an inconclusive/malformed self-report. It also escapes `selfCheckStillShort` (which needs
+//     `buildComplete === false`) and the two branches above, so without this branch such a unit reaches neither the
+//     fast park nor the audit trail on a still-open unit. Named here so it is surfaced, not silently dropped.
 // Pure: the verdict and the self-reports are handed in; `unitFor` injects the schedule lookup. It changes NO verdict
 // — it only names a discrepancy for the run's audit trail; the post-hoc verifier remains the authoritative evidence.
+// `verifierBuildComplete` reads the SAME shared `derivedBuildComplete` on the VERIFIER's side of the comparison,
+// defense-in-depth: `state.verify` reaches this function through the Reconcile agent's structured output
+// (VERIFY_RESULT, which DOES declare `buildComplete` — see the schema comment), so `buildComplete` should always be
+// present on a fresh verdict; the fallback covers a verdict written before this field existed, or a payload from a
+// caller that has not adopted it. TRI-STATE (PR review, ENG-95901 follow-up): stays `undefined` — not coerced to
+// `false` — when the verifier has NO entry for this page at all (`pageStateOf` returns null, e.g. the page has not
+// reached its first post-hoc verify pass yet). Coercing that to `false` made `selfCheckMismatches` read "the
+// verifier has not looked at this page" as "the verifier looked and disagrees", flagging an honest
+// `buildComplete: true` self-report as a MISMATCH for every page the verifier simply has not run against yet.
+const verifierBuildComplete = (verify, key) => derivedBuildComplete(pageStateOf(verify, key))
 const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageState) =>
   (selfChecks || [])
     .filter((c) => c && c.key && isUnitOpen(unitFor(c.key), verify, reachState, packageState))
     .map((c) => {
       const sc = c.sc
-      if (sc && sc.ran === true && sc.complete === true) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
-      if (sc && sc.ran === true && sc.complete !== true && sc.complete !== false) return { key: c.key, kind: 'ran-without-verdict' }
+      const scBuildComplete = selfCheckBuildComplete(sc)
+      if (sc?.ran === true && scBuildComplete === true && verifierBuildComplete(verify, c.key) === false) return { key: c.key, kind: 'reported-complete-but-verifier-open' }
+      if (sc?.ran === true && scBuildComplete !== true && scBuildComplete !== false) return { key: c.key, kind: 'ran-without-verdict' }
       if (!sc || sc.ran === false) return { key: c.key, kind: 'gate-not-run' }
       return null
     })
@@ -1170,8 +1267,8 @@ const selfCheckMismatches = (selfChecks, unitFor, verify, reachState, packageSta
 // builder actually ran it and returned an inconclusive verdict, two different repairs. `label` heads the log line;
 // `claim` is copied into the `discrepancies` audit row verbatim. Pure and exported-in-spirit so a golden can pin it.
 const SELF_CHECK_DISCREPANCY_TEXT = {
-  'reported-complete-but-verifier-open': { label: 'MISMATCH', claim: 'selfCheck reported the in-context completeness gate PASSED (ran + complete)' },
-  'ran-without-verdict': { label: 'INCONCLUSIVE', claim: 'selfCheck reported the gate RAN but returned NO boolean verdict (ran:true, complete absent)' },
+  'reported-complete-but-verifier-open': { label: 'MISMATCH', claim: 'selfCheck reported the in-context completeness gate PASSED (ran + buildComplete) but the independent verifier still counts a MISSING deliverable on this page' },
+  'ran-without-verdict': { label: 'INCONCLUSIVE', claim: 'selfCheck reported the gate RAN but returned NO boolean verdict (ran:true, buildComplete absent)' },
   'gate-not-run': { label: 'NOT RUN', claim: 'selfCheck reported the in-context completeness gate did NOT run (ran:false)' },
 }
 // Resolve one kind to its { label, claim }. FAIL LOUD on an unrecognized kind — a new kind added to
@@ -2752,11 +2849,11 @@ function inContextGateBlock(unit) {
   if (unit.kind !== 'page') return ''
   return `
 IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (ENG-95469). This is the ONE place you run \`--verify\`, and only for YOUR OWN page:
-1. After you have built and render-checked the page, get-page YOUR page's Freedom schema and write its \`bundle.viewConfig\` VERBATIM into \`${selfBuiltFile(unit.key)}\` as \`{ "pages": { "${unit.key}": { "viewConfig": <bundle.viewConfig>, "parentSchemaName": <template>, "schemaUId": <page.schemaUId> } } }\`. If this page owns business rules, run \`read-page-business-rules\` and add its \`{ count, rules }\` result under \`"businessRules"\` on that entry — a rule deliverable cannot be checked without it, and an ABSENT slot reads ⚠ not-checkable, not a false ❌.
+1. After you have built and render-checked the page, get-page YOUR page's Freedom schema and write its \`bundle.viewConfig\` VERBATIM into \`${selfBuiltFile(unit.key)}\` as \`{ "pages": { "${unit.key}": { "viewConfig": <bundle.viewConfig>, "entitySchemaName": <primary data source's object>, "packageName": <package the schema lives in>, "parentSchemaName": <template>, "schemaUId": <page.schemaUId> } } }\` — \`entitySchemaName\` is read off \`modelConfig\`, the data source named by \`primaryDataSourceName\`; it and \`packageName\` are BUILDER-OWNED rows, so a payload that omits them leaves your own gate short on a page that is actually complete. If this page owns business rules, run \`read-page-business-rules\` and add its \`{ count, rules }\` result under \`"businessRules"\` on that entry — a rule deliverable cannot be checked without it, and an ABSENT slot reads ⚠ not-checkable, not a false ❌.
 1b. CHECK YOUR OWN READ IS NOT STALE (ENG-95850 / B3). If the bundle's \`fetchedAt\` is OLDER than the page's \`modifiedOn\`, you were handed a cached response describing an earlier state — re-fetch ONCE before you write the file. A stale read makes a page you just built look short, and it would spend your one bounded fix attempt re-doing work that is already there. If it still disagrees, say so in \`notes\` and report \`selfCheck.ran: false\` with that as \`notRunWhy\` rather than gating on a read you cannot trust.
-2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, missing, unverified, openRows }\`. A non-zero exit (2) means your build is short.
-3. If the verdict is NOT \`complete\`, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` — each row's Evidence cell IS the repair (a field absent by name, a grid with no bound datasource, a component not on the page, a rule the slot does not carry) — fix ONLY those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check.
-4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If it is STILL short after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
+2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, buildComplete, missing, unverified, openRows }\`. \`buildComplete\` is YOUR axis — it is exit-code-gated and true only when NO open row is yours to close, while rows a separate read-only verifier/judge files (evidence, judge verdict, reachability) may still sit unfiled. A non-zero exit (2) means your build is short — an unfiled-evidence-only page exits 0.
+3. If \`buildComplete\` is NOT true, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` and act on every row whose \`owner\` is \`"builder"\` — each such row's Evidence cell IS the repair (a field absent by name, only some of the expected fields present, a grid with no bound datasource, a partial component count, a component not on the page, a rule the slot does not carry). Fix those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check. NEVER attempt to "fix" a row whose \`owner\` is \`"verifier"\` — the evidence record, the judge verdict and the reachability rows are filed by a separate agent; they are not yours to close, and \`buildComplete\` does not require them. Read \`owner\`, not the \`missing\`/\`unverified\` status: a partially-built page reads \`unverified\` and is still entirely your work.
+4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
 }
 
 // THE PREREQUISITE UNIT. It owns `create-app` precisely because that call also mints the starter pages that
@@ -3189,15 +3286,19 @@ function recordPageSchema(unit, res, r) {
   if (res.schemaName) pageSchemas[unit.key] = res.schemaName
   else if (!pageSchemas[unit.key]) r.noSchema.push(unit.key)
   // THE IN-CONTEXT GATE'S PARK SIGNAL (ENG-95469). The builder ran its scoped self-check, made its one bounded fix
-  // (`fixAttempted`), and the engine's single-unit verdict is still NOT `complete` — so this unit has spent its one
-  // in-context attempt and parks, once the post-hoc verifier confirms it open. A `ran: false`, or a gate that came
-  // back complete, records nothing here. Every raw self-report is kept for the independent cross-check at the tail of
-  // the round, where `state.verify` is fresh.
+  // (`fixAttempted`), and the engine's single-unit verdict is still NOT `buildComplete` (ENG-95901: the `missing`-
+  // only axis) — so this unit has spent its one in-context attempt and parks, once the post-hoc verifier confirms
+  // it open. A `ran: false`, or a gate that came back build-complete (including one whose only open rows are
+  // unfiled evidence), records nothing here. Every raw self-report is kept for the independent cross-check at the
+  // tail of the round, where `state.verify` is fresh.
   const sc = res.selfCheck
   r.selfChecks.push({ key: unit.key, sc })
   if (selfCheckStillShort(sc)) {
     r.selfCheckShort.push({ key: unit.key, shortRows: sc.stillShortRows || [] })
-    log(`in-context gate: \`${unit.key}\` is still short after its one bounded fix (${sc.missing ?? '?'} MISSING + ${sc.unverified ?? '?'} unconfirmed) — it will park once the verifier confirms it open`)
+    // The count is deliberately absent, matching `migrate.mjs`'s scoped diagnostic: a figure next to a repair
+    // instruction reads as part of what must be repaired, and the rows themselves are already carried in
+    // `selfCheckShort`. The two operator-facing texts say the same thing.
+    log(`in-context gate: \`${unit.key}\` is still short after its one bounded fix — it will park once the verifier confirms it open`)
   }
 }
 
