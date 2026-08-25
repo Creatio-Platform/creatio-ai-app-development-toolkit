@@ -224,6 +224,39 @@ class NormalizationTest(unittest.TestCase):
         # sorted() over the set must not raise.
         self.assertEqual(report.summary()["built_pages"], ["Applicant_FormPage"])
 
+    def test_page_count_defaulted_is_false_when_a_page_was_built(self):
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        self.assertEqual(report.summary()["page_count_defaulted"], False)
+
+    def test_page_count_defaulted_is_false_with_an_explicit_override(self):
+        # An override means the caller supplied the count on purpose --
+        # never "silently fell back to 1", even with no built page recorded.
+        empty_fx = ExportFixture()
+        self.addCleanup(empty_fx.cleanup)
+        empty_fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cr=100, out=1),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Read"}]}}),
+        ])
+        report = Report(export_mod.discover(empty_fx.root), metrics.CostConfig(),
+                         pages_override=4)
+        self.assertEqual(report.summary()["page_count_defaulted"], False)
+
+    def test_page_count_defaulted_is_true_with_no_built_page_and_no_override(self):
+        # No journal recording a built page, and no --pages override: the
+        # fallback to page_count()==1 must be reported explicitly rather than
+        # read as a real single-page run (Done-criterion #4, ENG-95856).
+        empty_fx = ExportFixture()
+        self.addCleanup(empty_fx.cleanup)
+        empty_fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _line({"message": {"role": "assistant", "usage": _usage(cr=100, out=1),
+                               "content": [{"type": "tool_use", "id": "t1", "name": "Read"}]}}),
+        ])
+        report = Report(export_mod.discover(empty_fx.root), metrics.CostConfig())
+        self.assertEqual(report.page_count(), 1)
+        self.assertEqual(report.summary()["page_count_defaulted"], True)
+
 
 class MultiSessionTest(unittest.TestCase):
     """Two session UUID subdirectories under one export root.

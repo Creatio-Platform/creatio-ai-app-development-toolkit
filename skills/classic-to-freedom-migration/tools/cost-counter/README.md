@@ -65,7 +65,7 @@ python cost_counter.py <baseline-export> --compare <candidate-export>
 python cost_counter.py <baseline-export> --compare <candidate-export> --format md   # for Jira
 ```
 
-Two guards from the ticket's comparison protocol:
+Three guards from the ticket's comparison protocol:
 
 - **Same section only.** If the two runs built different page schemas the diff
   is marked `comparison void` — cross-section comparisons are meaningless
@@ -74,6 +74,14 @@ Two guards from the ticket's comparison protocol:
   (the `--verify` verdict and manual-intervention count). "Cheaper and broken"
   is a regression, not a win — a quality column is a follow-up, and a trustworthy
   comparison also depends on ENG-95470 (N1) landing first.
+- **Same counter version only.** A single invocation always measures both
+  sides with today's `counter_version`, so this only matters across a
+  counting-rule change (like ENG-95856's dedup fix): save the pre-fix side
+  with `... summary --format json > before.json` first, then compare that
+  file against a live post-fix export —
+  `python cost_counter.py before.json --compare <post-fix-export>`. Either
+  `--compare` operand may be a live export directory or such a saved summary
+  file; a genuine version mismatch prints `REFUSED` instead of a number.
 
 Examples:
 
