@@ -1160,8 +1160,8 @@ const isBuilderOwnedRow = (r) =>
 function derivedBuildComplete(x) {
   if (!x) return undefined
   if (typeof x.buildComplete === 'boolean') return x.buildComplete
-  const rows = Array.isArray(x.openRows) ? x.openRows : Array.isArray(x.stillShortRows) ? x.stillShortRows : null
-  if (rows) return !rows.some(isBuilderOwnedRow)
+  const rows = Array.isArray(x.openRows) ? x.openRows : x.stillShortRows
+  if (Array.isArray(rows)) return !rows.some(isBuilderOwnedRow)
   if (typeof x.missing === 'number') return x.missing === 0
   if (typeof x.complete === 'boolean') return x.complete
   return undefined

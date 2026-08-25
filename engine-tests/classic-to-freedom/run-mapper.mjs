@@ -2669,7 +2669,8 @@ try {
       const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
       check("ENG-95901: the SCOPED stderr diagnostic on a page with BOTH a genuine shortfall and unfiled evidence counts ONLY the rows the BUILDER owns — a non-zero `builderOpen`, no 'unconfirmed' count, no 'file the on-stand evidence' advice, exit 2",
         vScopedShort.status === 2
-        && /[1-9]\d* open deliverable\(s\) YOU OWN/.test(vScopedShort.stderr || "")
+        && (vScopedShort.stderr || "").includes(" open deliverable(s) YOU OWN")
+        && !(vScopedShort.stderr || "").includes("0 open deliverable(s) YOU OWN")
         && !/unconfirmed/.test(vScopedShort.stderr || "")
         && !/file the on-stand evidence/.test(vScopedShort.stderr || ""),
         () => ({ status: vScopedShort.status, stderr: vScopedShort.stderr }));
