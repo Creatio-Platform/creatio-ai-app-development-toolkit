@@ -102,11 +102,11 @@ Use the branding flow when the request is about visual branding rather than busi
 
 - creating or restyling a theme, or matching a brandbook or company site
 - changing the app's brand colors or fonts
-- adding or changing the app's logos, or generating a palette-matched app background
+- adding or changing the app's logos and browser-tab favicon, or generating a palette-matched app background
 
 Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
 
-Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, background) with no business-logic component; when in doubt, treat it as app work, not branding.
+Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, favicon, background) with no business-logic component; when in doubt, treat it as app work, not branding.
 
 ## Support Mode (Troubleshooting)
 
@@ -400,19 +400,15 @@ Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_d
 
 Notes for each release live in `RELEASE-NOTES.md` (canonical file at the repo root). Add a `## X.Y.Z (YYYY-MM-DD)` section at the top of the file in a separate PR before triggering the release workflow. Subsections (`###`) are free-form per release (Features, Bug Fixes, Migration Notes, etc.).
 
-<!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
+<!-- BEGIN MANAGED SECTION: company-agent-policy v1.1.0 -->
 <!-- DO NOT EDIT THIS SECTION MANUALLY. -->
 
 ## Required Workflow
-Before any substantial repository analysis, planning, implementation, refactoring, bug fixing, or file edits, use the `$ensure-ai-commit-attribution` skill.
-
-This is a mandatory attribution rule for all coding sessions in this repository.
+Attribution of AI-authored changes is handled automatically by the installed Claude Code tooling hooks (Pre/PostToolUse events) — no manual skill or marker command is required for normal work.
 
 The agent must:
-1. Mark every file the agent creates or modifies with the skill marker helper.
-2. Allow the repository hooks to manage the `AI agents: ...` trailer automatically.
-3. Avoid all other attribution commands during normal work.
-
-For normal work, the only allowed attribution command is the file-marking command after a real file write. That single command must also handle any needed hook installation quietly.
+1. Let the installed hooks record every file the agent creates or modifies.
+2. Allow the hooks to manage the `AI agents: ...` commit trailer automatically.
+3. Avoid running manual attribution commands during normal work.
 
 <!-- END MANAGED SECTION -->
