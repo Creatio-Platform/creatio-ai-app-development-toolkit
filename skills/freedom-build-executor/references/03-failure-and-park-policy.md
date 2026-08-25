@@ -72,9 +72,11 @@ not carry) is caught **as the unit builds**, not a whole round later.
 Its park budget is different, and deliberately so. The gate allows **exactly one bounded fix** in
 the builder's own context: if `buildComplete` (ENG-95901 — the OWNER axis; `complete` is
 kept only for the post-hoc CLI verdict and folds in unfiled evidence too) is not `true`, the builder
-repairs the rows the verdict's `openRows` name **whose `outcome` is `"missing"` only** — never a row
-whose `outcome` is `"unverified"`, since that is an evidence/reachability record a separate read-only
-verifier/judge files, not the builder's to close — re-runs the gate **once**, and stops. Still short
+repairs the rows the verdict's `openRows` name **whose `owner` is `"builder"`** — never a row
+whose `owner` is `"verifier"`, since that is an evidence/judge/reachability record a separate
+read-only verifier/judge files, not the builder's to close. `owner` is the axis to read, not the
+`missing`/`unverified` status: a partially-built page reads `unverified` and is still entirely the
+builder's work. It re-runs the gate **once**, and stops. Still short
 after that one attempt is a valid outcome — the unit **parks immediately**, with `inContextParkWhy`
 composed from the gate's still-short rows. It does **not** spend the 3-round post-hoc budget below:
 one bounded fix, then park, so a unit that cannot be completed in its own context does not burn three

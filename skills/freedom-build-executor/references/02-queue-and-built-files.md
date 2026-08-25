@@ -246,7 +246,7 @@ report, `verify.json` is the verdict.
     "child:Education": { "missing": 1, "unverified": 2, "complete": false, "buildComplete": false,
       "openRows": [ { "n": 31, "deliverable": "Fields — 7 expected", "status": "⚠ verify",
                       "evidence": "5/7 expected fields present — missing: Amount, Owner",
-                      "outcome": "unverified" } ] }
+                      "outcome": "unverified", "owner": "builder" } ] }
   }
 }
 ```
