@@ -102,6 +102,31 @@ effort, since the child is never awaited — at least one for any session that t
    slower grace-period path instead of failing outright. See the comment at the floor retry loop in
    `hooks/telemetry-routing.mjs`.
 
+## Cursor's funnel is floor-only from this file
+
+Raised in review of PR #96: `routeClioCall`'s routing reminder (`hooks/telemetry/reminder.mjs`) is
+handed back to the agent through `hookSpecificOutput.additionalContext` (Claude Code) or
+`systemMessage` (Codex) — `routingOutput()` returns `null` for every other host, Cursor included, so
+Cursor never receives that per-call text. This is not an oversight this ADR forgot to close; it is a
+consequence of Cursor's own hook shape. Cursor's `afterMCPExecution` hook is documented as
+informational only — its return value reaches neither the user nor the agent — so there is no channel
+`routingOutput()` could return text through for Cursor even if it built one. What Cursor gets instead:
+
+- **The floor still fires.** `attemptFloorEmission` is called from `routeClioCall` regardless of
+  `HOST`, so a Cursor session gets the same one `workflow_started` guarantee every other host does.
+- **The funnel comes from a static rule, not a per-call reminder.** The installer writes an
+  always-applied Cursor rule (`render_cursor_telemetry_rule` in `installer/install.py`) carrying the
+  same stage vocabulary and routing prose `reminder()` sends elsewhere — session-scoped identity
+  fields (`session_id` to reuse, the floor's own `workflow_started`) aside, since a rule written once
+  at install time cannot carry per-session state the way a per-call hook response can.
+
+So the parity claim is: every host gets the floor, deterministically, from this file; the funnel
+(the agent's own later stages) reaches Claude Code and Codex through this file's per-call reminder,
+and reaches Cursor through its own separate, static, always-applied rule instead. Both are complete
+funnel channels, but they are not the same mechanism, and a Cursor session's funnel reliability is
+therefore whatever an always-applied rule alone achieves — not measured against the same baseline the
+reminder's own history in this file (the once-per-session vs. once-per-turn revisions) was tuned against.
+
 ## When to revisit
 
 If a third caller appears, or if the hook ever needs to read a response inline, the argument above

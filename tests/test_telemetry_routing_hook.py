@@ -2013,6 +2013,56 @@ class TelemetryStateDirSecurityTests(unittest.TestCase):
         self.assertEqual(result, {"ok": False})
 
 
+class ConsentTelemetryHomeFallbackTests(unittest.TestCase):
+    """telemetryHome()'s no-override fallback, per platform — regression coverage for a bug
+    raised in review of PR #96: with neither CLIO_TELEMETRY_HOME nor CLIO_HOME set, the fallback
+    used to join clio's storage suffix onto a Windows-shaped `.../AppData/Local` path even on
+    macOS/Linux, where clio's own ClioRuntimePaths.Home resolves to `~/creatio/clio` instead —
+    silently and permanently making consentGranted() return false there. `process.platform` is
+    overridden inside the probe script (Node allows redefining it) so both branches are exercised
+    regardless of which OS actually runs this test.
+    """
+
+    def _resolved_home(self, platform: str, env_overrides: dict) -> str:
+        if not NODE:
+            self.skipTest("node not available")
+        tmp_root = tempfile.mkdtemp(prefix="caadt-consent-home-test-")
+        module = (ROOT / "hooks" / "telemetry" / "consent.mjs").as_uri()
+        script = Path(tmp_root) / "probe.mjs"
+        script.write_text(
+            f"Object.defineProperty(process, 'platform', {{ value: {json.dumps(platform)} }});\n"
+            f"const {{ telemetryHome }} = await import({json.dumps(module)});\n"
+            "process.stdout.write(telemetryHome());\n",
+            encoding="utf-8",
+        )
+        env = {**_base_env(), "TMPDIR": tmp_root, "TMP": tmp_root, "TEMP": tmp_root, **env_overrides}
+        for key in ("CLIO_TELEMETRY_HOME", "CLIO_HOME", "LOCALAPPDATA"):
+            env.pop(key, None)
+        result = subprocess.run([NODE, str(script)], capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(result.stderr, "", result.stderr)
+        return result.stdout
+
+    def test_posix_fallback_matches_clios_own_home_not_a_windows_shaped_path(self):
+        # Compared with slashes normalized: this test suite runs on Windows too, where Node's
+        # `path.join` (bound to the REAL host OS, not the spoofed `process.platform`) renders
+        # every separator as `\`, including the leading one in the POSIX-shaped `HOME` this test
+        # feeds in. What matters here is which BASE directory `telemetryHome()` chose — `HOME`
+        # alone, not `HOME/AppData/Local` — not which separator character rendered it.
+        home = self._resolved_home("linux", {"HOME": "/home/dev", "USERPROFILE": "/home/dev"})
+        self.assertEqual(home.replace("\\", "/"), "/home/dev/creatio/clio/telemetry")
+
+    def test_macos_fallback_matches_clios_own_home_too(self):
+        home = self._resolved_home("darwin", {"HOME": "/Users/dev", "USERPROFILE": "/Users/dev"})
+        self.assertEqual(home.replace("\\", "/"), "/Users/dev/creatio/clio/telemetry")
+
+    def test_windows_fallback_still_uses_local_app_data(self):
+        home = self._resolved_home(
+            "win32", {"LOCALAPPDATA": "C:\\Users\\dev\\AppData\\Local",
+                      "HOME": "C:\\Users\\dev", "USERPROFILE": "C:\\Users\\dev"})
+        self.assertEqual(
+            home.replace("\\", "/"), "C:/Users/dev/AppData/Local/creatio/clio/telemetry")
+
+
 class CursorTelemetryHookWiringTests(unittest.TestCase):
     """Cursor is the one host whose hook config the installer can write itself."""
 

@@ -46,7 +46,7 @@
 import fs from 'node:fs';
 import { HOST } from './telemetry/identity.mjs';
 import { TELEMETRY_TOOLS, isWriteCall, writeVerbSubject } from './telemetry/write-classification.mjs';
-import { claimOnce, markTouchedClio, releaseClaim, touchedClio } from './telemetry/state-dir.mjs';
+import { claimOnce, markTouchedClio, releaseClaim, sanitizeSessionId, touchedClio } from './telemetry/state-dir.mjs';
 import { consentGranted } from './telemetry/consent.mjs';
 import { modelFromPayload, readSessionUsage, transcriptSize } from './telemetry/transcript.mjs';
 import { emitEvent } from './telemetry/dispatch.mjs';
@@ -97,10 +97,20 @@ function normalizePayload(payload) {
 
 function main() {
 	const payload = normalizePayload(readStdin());
-	const sessionId = payload?.session_id;
-	if (!sessionId) {
+	const rawSessionId = payload?.session_id;
+	if (!rawSessionId) {
 		return;
 	}
+	// Sanitized ONCE, here, and used for everything from this point on — the clio dispatch, every
+	// marker path, and the agent-facing reminder text alike — rather than sanitizing at only some of
+	// those call sites. `markerPath` already sanitized internally for filesystem safety, but `emitEvent`
+	// dispatched the RAW value to clio and `reminder()` echoed the RAW value into agent-facing prose;
+	// sanitizing only the reminder text would have made it diverge from the id the floor was actually
+	// recorded under (see the comment on `reminder()`'s call site below), silently splitting one run's
+	// telemetry across two ids. Canonicalizing here instead means every downstream use already agrees,
+	// so there is nothing left to diverge. `sanitizeSessionId` is idempotent and a no-op for the
+	// UUID-shaped ids every supported host actually sends.
+	const sessionId = sanitizeSessionId(rawSessionId);
 	const event = payload?.hook_event_name ?? '';
 	if (event === 'Stop') {
 		reportSessionUsage(payload, sessionId);
@@ -289,7 +299,14 @@ function routeClioCall(payload, sessionId) {
 	// was its own telemetry marked itself `touched`, spent its routing reminder on a telemetry call,
 	// and opened a `session_usage` series. Same class as the `modify-` verb that was missed once
 	// before: the verb that matters travels inside the executor's command.
-	if (TELEMETRY_TOOLS.some(tool => writeVerbSubject(payload) === tool || toolName.endsWith(tool))) {
+	//
+	// Two DIFFERENT comparisons against the same list, deliberately: an entry that names an executor
+	// SUBJECT (`send-telemetry`) can only ever match `subject`, since it is never a whole tool name —
+	// and an entry that names a whole TOOL (a suffix of `toolName`) can only ever match the suffix
+	// check. `subject` does not depend on which `TELEMETRY_TOOLS` entry is being tested, so it is
+	// resolved once rather than once per entry.
+	const subject = writeVerbSubject(payload);
+	if (TELEMETRY_TOOLS.some(tool => subject === tool || toolName.endsWith(tool))) {
 		return;
 	}
 	// Two independent claims, because the floor and the routing answer different questions.
@@ -302,6 +319,15 @@ function routeClioCall(payload, sessionId) {
 	// reports nothing — so the session spent its only reminder there, and the mutating work that
 	// followed got none. Hence also once on the first WRITE of the session, even if this turn was
 	// already reminded.
+	//
+	// This is a real, ongoing token cost for the life of a long session — raised again in review of
+	// PR #96 — traded deliberately against the measured failure above rather than left unconsidered.
+	// `'turn'` is cleared once per `UserPromptSubmit` (see `main()`), so the reminder's actual cadence
+	// is "at most once per assistant turn that calls clio, plus once more on that turn's first write",
+	// never literally per prompt regardless of clio use. Bounding it further (e.g. stop reminding after
+	// N turns) was not attempted here because the failure mode this design already fixed once — a
+	// session going quiet on clio calls for a stretch and then needing the routing again later, with
+	// no new signal to re-trigger it on — is exactly the shape a fixed cutoff would reproduce.
 	//
 	// Consent is checked BEFORE the floor is claimed. Claiming first burned the one-shot marker on a
 	// call made while consent was still `unknown` — the common bootstrap case — and the floor event,
@@ -337,6 +363,15 @@ function routeClioCall(payload, sessionId) {
 
 // The floor is already recorded by the time this runs, so a host that cannot carry the routing text
 // still gets the guaranteed event — it just falls back to its skills and rules for the rest.
+//
+// `null` for every host besides `claude` and `codex`, Cursor included — deliberately, not a gap.
+// Cursor's own `afterMCPExecution` hook is documented as informational: it reaches neither the user
+// nor the agent, so there is no channel this file could return text through even if it built one (see
+// `render_cursor_telemetry_rule` in `installer/install.py`). Cursor's funnel is carried instead by
+// the always-applied Cursor rule the installer writes once at install time — the SAME stage
+// vocabulary and routing prose as `reminder()`, just static rather than session-scoped, because a
+// static rule is Cursor's only agent-facing surface. See docs/telemetry-transport-decision.md,
+// "Cursor's funnel is floor-only from this file" for the fuller comparison of what each host gets.
 function routingOutput(sessionId) {
 	if (HOST === 'claude') {
 		return JSON.stringify({
@@ -352,16 +387,39 @@ function routingOutput(sessionId) {
 	return null;
 }
 
+// Best-effort, like `noteFloorExhausted`: a bug thrown anywhere in `main()` — before `sessionId` is
+// even known, so this cannot be a per-session claimed diagnostic the way that one is — used to leave
+// no trace at all. `main()`'s own body already logs nothing on the paths it controls, so without this
+// a persistently broken environment (a Node version this file does not run under, a corrupted state
+// directory the state-dir module's own checks did not anticipate) would look identical to a healthy
+// one that simply has nothing to report, from the outside. Unconditional rather than rate-limited: a
+// throw here is a bug, not an expected outcome the way a rejected floor dispatch is, so it should stay
+// visible on every occurrence during support rather than fall silent after the first one.
+function noteUnhandledFailure(error) {
+	try {
+		process.stderr.write(`caadt telemetry: hook failed unexpectedly — ${error?.stack || error}\n`);
+	} catch {
+		// A diagnostic that cannot be written is not a reason to fail the hook.
+	}
+}
+
 // Belt and braces around the same promise the header makes: this hook never fails the turn it is
 // attached to, and never prints anything the host could mistake for output. The catch covers a
 // synchronous throw; the two handlers cover anything that could still be in flight, which matters
 // because `UserPromptSubmit` and `Stop` fire on every turn whether or not Creatio is involved.
-process.on('uncaughtException', () => process.exit(0));
-process.on('unhandledRejection', () => process.exit(0));
+process.on('uncaughtException', error => {
+	noteUnhandledFailure(error);
+	process.exit(0);
+});
+process.on('unhandledRejection', error => {
+	noteUnhandledFailure(error);
+	process.exit(0);
+});
 
 try {
 	main();
-} catch {
+} catch (error) {
 	// Never fail the tool call this hook is attached to.
+	noteUnhandledFailure(error);
 }
 process.exit(0);
