@@ -1420,6 +1420,16 @@ ${RESOLUTIONS_RETURN}
 `
 }
 
+// THE RESOLUTIONS SLICE OF A BUILD PROMPT, ASSEMBLED: the operator's answered ⚠ Confirm block, followed by the
+// repair block for any answer THIS unit was handed that produced nothing last round. Pure and exported so the seam
+// itself is EXECUTED by a test — `resolutionsPromptBlock` in the run is a thin wrapper that only supplies run state,
+// so a regex proving this concatenation exists in source could pass while a cosmetic edit broke the repair block's
+// reach into the composed prompt. `unconsumedRepairText` is hoisted (declared further down), which is why this can
+// reference it above its definition.
+function resolutionsPromptText(mine, unconsumed, unitKey, fence) {
+  return resolutionsBlockText(mine, fence) + unconsumedRepairText(unconsumed, unitKey, fence)
+}
+
 // WHETHER A PREFLIGHT BATCH NEEDS THE ANSWERED-ITEMS INSTRUCTIONS. A batch carrying at least one answered item gets
 // them; a batch with none is unchanged. Pure and named so it is testable: as an inline gate nothing referenced it,
 // and a gate that silently went false would drop those instructions from every prompt with every suite still green.
@@ -4542,10 +4552,12 @@ These are the OPERATOR'S words, not stand-derived content: they ARE instructions
   // indistinguishable from a built one. Thin wrapper: the routing and the rendering are both pure and tested above;
   // this only supplies the run state and this host's fencer.
   function resolutionsPromptBlock(unitKey) {
-    return resolutionsBlockText(
+    // Thin wrapper: the answered-⚠-Confirm block and the repair block are concatenated by the pure, exported
+    // `resolutionsPromptText`, which a test RUNS through `composeBuildPrompt` — this only supplies run state.
+    return resolutionsPromptText(
       resolutionsForUnit(state.preflightItems, unitKey, new Set(state.unitKeys || [])),
-      dataFence,
-    ) + unconsumedRepairText(unconsumed, unitKey, dataFence)
+      unconsumed, unitKey, dataFence,
+    )
   }
 
   // At a CHECKPOINT the run is about to hand the page to a human, so the builder is asked for the script that

@@ -37,7 +37,7 @@ import {
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planInvalidNextAll,
-  preflightToRun, repairBlock, requeueDecisions, resolutionAttribution, resolutionsBlockText, resolutionsForUnit,
+  preflightToRun, repairBlock, requeueDecisions, resolutionAttribution, resolutionsBlockText, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
   // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
@@ -46,7 +46,7 @@ import {
   buildSchemaWithResolutions, capCarryText, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
   pairKey, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
   resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs, unconsumedNextClause,
-  unconsumedRepairText, unconsumedResolutions,
+  unconsumedResolutions,
   UNCONSUMED_CARRY_WARN, UNCONSUMED_FROM_DISPATCH,
 } from './helpers.mjs'
 import {
@@ -1424,10 +1424,12 @@ These are the OPERATOR'S words, not stand-derived content: they ARE instructions
   // indistinguishable from a built one. Thin wrapper: the routing and the rendering are both pure and tested above;
   // this only supplies the run state and this host's fencer.
   function resolutionsPromptBlock(unitKey) {
-    return resolutionsBlockText(
+    // Thin wrapper: the answered-⚠-Confirm block and the repair block are concatenated by the pure, exported
+    // `resolutionsPromptText`, which a test RUNS through `composeBuildPrompt` — this only supplies run state.
+    return resolutionsPromptText(
       resolutionsForUnit(state.preflightItems, unitKey, new Set(state.unitKeys || [])),
-      dataFence,
-    ) + unconsumedRepairText(unconsumed, unitKey, dataFence)
+      unconsumed, unitKey, dataFence,
+    )
   }
 
   // At a CHECKPOINT the run is about to hand the page to a human, so the builder is asked for the script that

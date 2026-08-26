@@ -809,6 +809,16 @@ ${RESOLUTIONS_RETURN}
 `
 }
 
+// THE RESOLUTIONS SLICE OF A BUILD PROMPT, ASSEMBLED: the operator's answered ⚠ Confirm block, followed by the
+// repair block for any answer THIS unit was handed that produced nothing last round. Pure and exported so the seam
+// itself is EXECUTED by a test — `resolutionsPromptBlock` in the run is a thin wrapper that only supplies run state,
+// so a regex proving this concatenation exists in source could pass while a cosmetic edit broke the repair block's
+// reach into the composed prompt. `unconsumedRepairText` is hoisted (declared further down), which is why this can
+// reference it above its definition.
+export function resolutionsPromptText(mine, unconsumed, unitKey, fence) {
+  return resolutionsBlockText(mine, fence) + unconsumedRepairText(unconsumed, unitKey, fence)
+}
+
 // WHETHER A PREFLIGHT BATCH NEEDS THE ANSWERED-ITEMS INSTRUCTIONS. A batch carrying at least one answered item gets
 // them; a batch with none is unchanged. Pure and named so it is testable: as an inline gate nothing referenced it,
 // and a gate that silently went false would drop those instructions from every prompt with every suite still green.

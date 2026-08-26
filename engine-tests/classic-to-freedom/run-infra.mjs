@@ -147,7 +147,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
   "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
-  "resolutionsBlockText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
+  "resolutionsBlockText", "resolutionsPromptText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
   // ENG-95503 — the CONSUMPTION half of the answers channel: what the builder owes, what it did not build, and
   // where its claim disagrees with the verifier's read of the page.
   "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
@@ -196,6 +196,18 @@ export { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };
 }
 check("workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
   HELPERS.every((h) => typeof wf[h] === "function"), () => HELPERS.filter((h) => typeof wf[h] !== "function").join(", "));
+// PR #128 review (thread on line 191): the reconciliation checks below run against `wf`, sliced out of the GENERATED
+// artifact — a trustworthy stand-in for the hand-maintained `_workflow-core` modules ONLY while the artifact is in sync
+// with them. `build-workflows.mjs --check` regenerates every shipped workflow from the module sources and byte-compares
+// it to the committed file (it is also the CI gate, .github/workflows/pr.yml). Running it here makes that invariant an
+// EXECUTED assertion inside this suite, so a module edit that was never regenerated fails the golden run itself, not
+// only CI — which is what makes the artifact-slice coverage above coverage of the module copies by transitivity.
+{
+  const BUILD_WORKFLOWS = fileURLToPath(new URL("../../scripts/build-workflows.mjs", import.meta.url));
+  const r = spawnSync(process.execPath, [BUILD_WORKFLOWS, "--check"], { encoding: "utf8" });
+  check("PR #128 review: the shipped `.workflow.js` artifacts are BYTE-IDENTICAL to what the current `_workflow-core` modules generate — so the two ~386-line copies of the reconciliation contract cannot silently diverge, and the `wf`-slice tests above are tests of the hand-maintained modules by transitivity",
+    r.status === 0, () => (r.stdout || "") + (r.stderr || ""));
+}
 // ENG-95503 — THE ANSWERS CHANNEL'S DESIGN LITERALS, read off the SHIPPED block itself. They used to be lifted out
 // of the source with a regex and re-injected into the slice, because the block was carved from one flat file and
 // closed over its host. Now that the core is real modules and the block closes over nothing, they are ordinary
@@ -2370,8 +2382,25 @@ check("PR #128 review (RC-12): a unit with no unconsumed answer gets NO repair b
     && wf.unconsumedRepairText([], "main", ac4Fence) === ""
     && wf.unconsumedRepairText(undefined, "main", ac4Fence) === "",
   () => "no entry for this unit renders nothing");
-check("PR #128 review (RC-12): the repair block REACHES the build prompt through the answers seam — a pure helper nothing calls is the same silence in a new place",
-  /\) \+ unconsumedRepairText\(unconsumed, unitKey, dataFence\)/.test(wfSrc));
+// RC-12 wiring, EXECUTED (was a `wfSrc` regex that a cosmetic edit could pass while the seam broke). `resolutionsPromptText`
+// is the exact concatenation `resolutionsPromptBlock` hands to `composeBuildPrompt`'s `resolutions` slot, so running it
+// with an unconsumed entry for THIS unit and feeding the result through the real composer proves the repair block reaches
+// the string the agent is handed — and that another unit's entry does not leak into it.
+{
+  const rcFence = (s) => `<<DATA ${s} DATA>>`;
+  const rcMine = [{ kind: "entity-filter", item: "Status filter", id: ACC_ID_B, resolution: { answer: "restrict to Status IN {InProgress}" } }];
+  const rcUnconsumed = [{ unit: "main", id: ACC_ID_B, answer: "restrict to Status IN {InProgress}", why: "no lookupListConfig on the page" }];
+  const composeFor = (unitKey) => wf.composeBuildPrompt({ rules: "R", behaviour: "B", worklogPath: "/w", sharedWorklogPath: "/s",
+    kindBlock: "K", repair: "", resolutions: wf.resolutionsPromptText(rcMine, rcUnconsumed, unitKey, rcFence), findings: "", checkFirst: "" });
+  const rcPrompt = composeFor("main");
+  const rcOther = composeFor("list");
+  check("PR #128 review (RC-12): the repair block REACHES the composed build prompt — `resolutionsPromptText` (the exact concatenation `resolutionsPromptBlock` hands to `composeBuildPrompt`) carries `unconsumedRepairText`, and the real composer surfaces it into the string the agent is handed; EXECUTED end to end, replacing a `wfSrc` regex a cosmetic edit could pass while the seam broke",
+    () => rcPrompt.includes("THIS UNIT IS OPEN BECAUSE AN ANSWER IT WAS ALREADY GIVEN PRODUCED NOTHING")
+      && rcPrompt.includes(JSON.stringify(ACC_ID_B))
+      && rcPrompt.includes("<<DATA no lookupListConfig on the page DATA>>")
+      && !rcOther.includes("THIS UNIT IS OPEN BECAUSE"),
+    () => rcPrompt);
+}
 
 check("PR #128 review (RC-11): the operator-facing `next` NAMES the answers that went nowhere — in the exact case this ticket is about the verify table, the parked list and the proposals are all empty or silent, so the report said NOT COMPLETE and explained nothing",
   () => { const c = wf.unconsumedNextClause([{ unit: "main", id: ACC_ID_B, why: "no filter on the page" }]);
@@ -2923,13 +2952,13 @@ check("ENG-95503 wiring: the QUESTION half is fenced as untrusted stand data whi
       && !/question: \$\{p\.item\}/.test(b)                      // …and never interpolates it raw
       && /and only that text — IS an instruction to you/.test(b)  // the exemption names the answer alone
       && /stays DATA under the rule above/.test(b)
-      // …and the ONE caller in the real run supplies this host's actual fencer, or the fencing is theoretical.
-      // Sliced, not regexed across nested parens: `[^)]*` stops at the `)` inside `new Set(…)`.
-      && (() => { const at = wfSrc.indexOf(RES_WRAPPER_FN);
-        const call = wfSrc.slice(at, at + 260);
-        return /resolutionsBlockText\(/.test(call) && /\bdataFence\b/.test(call); })(); },
+      // …and the fencer reaches the renderer through the real seam: the ONE caller supplies this host's actual
+      // `dataFence` to the pure `resolutionsPromptText`, which forwards it into `resolutionsBlockText`. Either link
+      // missing and the fencing is theoretical (the executed RC-12 test above renders `<<DATA … DATA>>` end to end).
+      && /function resolutionsPromptBlock\(unitKey\)\s*\{[\s\S]{0,500}?resolutionsPromptText\([\s\S]{0,200}?\bdataFence\b/.test(wfSrc)
+      && /function resolutionsPromptText\([^)]*\)\s*\{[\s\S]{0,200}?resolutionsBlockText\(mine, fence\)/.test(wfSrc); },
   () => ({ renderer: wfSrc.slice(wfSrc.indexOf("  const lines = mine.map"), wfSrc.indexOf("  const lines = mine.map") + 320),
-    caller: wfSrc.slice(wfSrc.indexOf(RES_WRAPPER_FN), wfSrc.indexOf(RES_WRAPPER_FN) + 260) }));
+    caller: wfSrc.slice(wfSrc.indexOf(RES_WRAPPER_FN), wfSrc.indexOf(RES_WRAPPER_FN) + 400) }));
 check("ENG-95503 wiring: the answer's authority is BOUNDED — it may name what to build and may NOT redirect the agent, because an operator commonly assembles one by copying captions out of the Classic UI",
   () => { const b = wfSrc.slice(wfSrc.indexOf(RES_BLOCK_FN), wfSrc.indexOf(RES_BLOCK_FN) + 2600);
     return /may NOT redirect your work/.test(b) && /read another file/.test(b)
