@@ -884,7 +884,7 @@ Return the schema. Nothing else.`
     // The DECISION — short-after-one-fix AND independently still open AND not already parked — is the pure
     // `inContextParkableKeys` (unit-tested behaviourally). This wrapper only turns the chosen keys into park records
     // and mutates run state, mirroring how `applyParks` wraps `parkableKeys`.
-    const shortByKey = new Map((selfCheckShort || []).filter((s) => s && s.key).map((s) => [s.key, s]))
+    const shortByKey = new Map((selfCheckShort || []).filter((s) => s?.key).map((s) => [s.key, s]))
     const keys = inContextParkableKeys(selfCheckShort, unitOf, state.verify, state.reachabilityState, packageState, parkedSet)
     const fresh = keys.map((k) => parkRecord(k, inContextParkWhy(shortByKey.get(k).shortRows), roundsRun(state.roundOf, localRounds, k)))
     if (!fresh.length) return []
@@ -1004,32 +1004,40 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   // findings channel useless in exactly the case it exists for: a page the gate calls complete because a ported
   // handler carries no verification key, reopened by a finding — `openNow()` returned it and this branch returned
   // before anything was scheduled. If the gate is green AND nothing is open, the message still says so.
-  if (!openNow().length) {
-    const why = zeroWorkReason()
-    log(why)
-    // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
-    yield* persistPending('nothing left to build')
-    return runReturn({
-      complete: state.verify?.complete === true && !parked.length,
-      skipped: true,
-      reason: why,
-      approval,
-      planVersion: state.planVersion || null,
-      rounds: 0,
-      verdict: verdictOf(state.verify),
-      parked,
-      blockedByParked: [...blockedSet],
-      independence,
-      proposals,
-      blocked: blockedItems,
-      discrepancies,
-      pageSchemas,
-      unknownSchema: unknownSchemaNow(),
-      staleQueueKeys: state.staleQueueKeys || [],
-      newKeys: state.newKeys || [],
-      next: zeroWorkNext(),
-    })
+  // Pulled out of `run()`'s own body (Sonar cognitive complexity, ENG-95770): the decision itself is
+  // still `openNow().length`, computed and read exactly where it was — only the branch's own body
+  // (the log line, the pending-park persist, and the zero-work return shape) now lives one call away.
+  function* zeroWorkStop() {
+    if (!openNow().length) {
+      const why = zeroWorkReason()
+      log(why)
+      // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
+      yield* persistPending('nothing left to build')
+      return runReturn({
+        complete: state.verify?.complete === true && !parked.length,
+        skipped: true,
+        reason: why,
+        approval,
+        planVersion: state.planVersion || null,
+        rounds: 0,
+        verdict: verdictOf(state.verify),
+        parked,
+        blockedByParked: [...blockedSet],
+        independence,
+        proposals,
+        blocked: blockedItems,
+        discrepancies,
+        pageSchemas,
+        unknownSchema: unknownSchemaNow(),
+        staleQueueKeys: state.staleQueueKeys || [],
+        newKeys: state.newKeys || [],
+        next: zeroWorkNext(),
+      })
+    }
+    return null
   }
+  const zeroWorkResult = yield* zeroWorkStop()
+  if (zeroWorkResult) return zeroWorkResult
 
   // ---------------------------------------------------------------------------
   // Preflight — resolve the ⚠ Confirm worklist BEFORE the first stand write.
@@ -2271,15 +2279,23 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     })
   }
 
-  while (true) {
-    const open = openNow()
-    // `round` counts rounds that ACTUALLY RAN. Incrementing at the top of the loop instead reported
-    // one round more than happened, because the loop always makes a final pass to find nothing open.
-    if (!open.length) break
-    round += 1
-    const endsHere = yield* oneRound(open)
-    if (endsHere) return endsHere
+  // Pulled out of `run()`'s own body (Sonar cognitive complexity, ENG-95770): same loop, same `round`
+  // counter (still closed over, not duplicated), same per-round call — only the driving `while` and its
+  // two exits (nothing left open; a round ends the run) now score against this function instead of `run`.
+  function* driveRounds() {
+    while (true) {
+      const open = openNow()
+      // `round` counts rounds that ACTUALLY RAN. Incrementing at the top of the loop instead reported
+      // one round more than happened, because the loop always makes a final pass to find nothing open.
+      if (!open.length) break
+      round += 1
+      const endsHere = yield* oneRound(open)
+      if (endsHere) return endsHere
+    }
+    return null
   }
+  const driveResult = yield* driveRounds()
+  if (driveResult) return driveResult
 
   phase('Close')
 
