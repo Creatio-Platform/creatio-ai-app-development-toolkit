@@ -37,6 +37,20 @@ emission points are their own gates instead, listed below.
 
 The stages are generic; the *points* are each flow's own gates.
 
+**This table is the condensed, cross-flow summary — it is not the only place this mapping lives, and
+that is deliberate rather than the drift risk it can look like.** Each flow's own `SKILL.md` (and,
+for the app-creation/app-maintenance pair, `rules/creatio-app-orchestrator.mdc`) carries the SAME
+mapping again, expanded to that flow's full stage list — this table only has room for four columns,
+so a flow's own file is what actually tells an agent running that flow every stage it must emit, not
+just the four picked out for side-by-side comparison here. What this delegation removed was the
+STAGE VOCABULARY itself — the closed list of valid names and what each one generically means, owned
+by `get-guidance name=product-telemetry` and restated nowhere in this repo — not each flow's own
+emission-point guidance, which cannot be centralized without losing the per-flow granularity an agent
+running that flow actually needs at the point of emission. `tests/test_product_telemetry_contract.py` is what keeps the two from silently drifting apart: one
+test requires every stage to appear in at least one flow's own file, and another fails the build the
+day any surface — this file, a `SKILL.md`, the Cursor rule, the installer — names something clio's
+allow-list does not recognise.
+
 | Flow | `plan_presented` | `plan_approved` | `work_item_completed` | Notes |
 | --- | --- | --- | --- | --- |
 | `app-creation` | the BA-style Business Plan is shown in full | Gate R confirmation | per created section/page | `build_started` after Gate R, once runtime context is available |

@@ -48,9 +48,12 @@ import { HOST } from './telemetry/identity.mjs';
 import { TELEMETRY_TOOLS, isWriteCall, writeVerbSubject } from './telemetry/write-classification.mjs';
 import { claimOnce, markTouchedClio, releaseClaim, touchedClio } from './telemetry/state-dir.mjs';
 import { consentGranted } from './telemetry/consent.mjs';
-import { readSessionUsage, transcriptSize } from './telemetry/transcript.mjs';
+import { modelFromPayload, readSessionUsage, transcriptSize } from './telemetry/transcript.mjs';
 import { emitEvent } from './telemetry/dispatch.mjs';
-import { FLOOR_ATTEMPT_LIMIT, floorClaimSuffix, floorNonce, floorRetryable } from './telemetry/floor-protocol.mjs';
+import {
+	FLOOR_ATTEMPT_LIMIT, floorClaimSuffix, floorNonce, floorPersistentlyRejected, floorRetryable,
+	noteFloorExhausted
+} from './telemetry/floor-protocol.mjs';
 import {
 	USAGE_ATTEMPT_LIMIT, claimUsageNonce, countUnconfirmedUsage, noteUsageAttempt,
 	rememberPending, resolveAndPromoteUsageState
@@ -220,6 +223,29 @@ function reportSessionUsage(payload, sessionId) {
 // could interleave them so that both ended up holding a claim and both dispatched a floor event. An
 // over-counted floor is worse than an under-counted funnel, because every reliability ratio is
 // computed against it.
+// Above this size, the floor reports a model (if the host states one in the payload) but no token
+// counters, rather than pay for a synchronous full parse. attemptFloorEmission wins its claim at most
+// once per session — a repeat call is a no-op the instant the claim file already exists — but that
+// ONE call is on the tool-call-blocking hook path, and it is exactly the call with no prior scan
+// record to resume from (see readSessionUsage): the very first read of a session's transcript is
+// always a read from byte zero. A session that ran many turns before ever touching clio can hand this
+// path an arbitrarily large file to parse before the tool call it is observing is allowed to return.
+// Measured elsewhere in this file's sibling (`transcript.mjs`) at ~100ms for 35MB; 2MB keeps the
+// worst case in the single-digit milliseconds while covering the transcript sizes a session has
+// realistically produced by its FIRST clio call.
+const FLOOR_TRANSCRIPT_SYNC_LIMIT_BYTES = 2 * 1024 * 1024;
+
+function floorUsage(payload) {
+	const size = transcriptSize(payload);
+	if (size > FLOOR_TRANSCRIPT_SYNC_LIMIT_BYTES) {
+		return { model: modelFromPayload(payload), input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false };
+	}
+	// `size` is handed in rather than re-derived: readSessionUsage's own stat would just confirm what
+	// transcriptSize() already found, and this is the one caller for whom that second stat is not
+	// already free (routeClioCall's usage path gets it from a check it needed anyway).
+	return readSessionUsage(payload, size);
+}
+
 function attemptFloorEmission(sessionId, payload) {
 	let attempt = 0;
 	let claimed = claimOnce(sessionId, floorClaimSuffix(attempt));
@@ -241,7 +267,11 @@ function attemptFloorEmission(sessionId, payload) {
 		// Dispatched whether or not the routing reaches the agent: if clio refuses the call (an older
 		// clio, a broken install), the agent's own stages are then the only telemetry there is. The
 		// outcome is read on a later call rather than awaited here — see dispatch().
-		emitEvent(sessionId, readSessionUsage(payload), 'workflow_started', floorNonce(attempt));
+		emitEvent(sessionId, floorUsage(payload), 'workflow_started', floorNonce(attempt));
+	} else if (attempt + 1 >= FLOOR_ATTEMPT_LIMIT && floorPersistentlyRejected(sessionId, attempt)) {
+		// Every attempt slot is used and the last one was a definite refusal, not merely still
+		// pending — see noteFloorExhausted for why this is worth a local signal at all.
+		noteFloorExhausted(sessionId);
 	}
 	return claimed;
 }

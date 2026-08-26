@@ -44,16 +44,24 @@ function carryForwardBaseline(usage, previous) {
 //
 // `hasData` separates "read the transcript, it reported no usage" from "could not read it at all", so
 // callers can omit the counters instead of shipping zeros that look like a session that spent nothing.
+// Some hosts state the model in the payload itself (Cursor does), which is the only place it is
+// available when the transcript is in a shape this reader does not parse, and is filesystem-free —
+// so a caller that must not pay for a transcript read at all (see `floorUsage` in the main file) can
+// still report a model without opening anything. Validated like any other model value; a real value
+// read from a transcript, where one is read, still overrides it.
+export function modelFromPayload(payload) {
+	if (typeof payload?.model === 'string' && MODEL_TOKEN.test(payload.model.toLowerCase())) {
+		return payload.model.toLowerCase();
+	}
+	return null;
+}
+
 export function readSessionUsage(payload, knownSize) {
 	const sessionId = payload?.session_id;
 	const transcript = transcriptPath(payload);
-	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false };
-	// Some hosts state the model in the payload itself (Cursor does), which is the only place it is
-	// available when the transcript is in a shape this reader does not parse. Validated like any other
-	// model value, and still overridden by a real value read from a transcript below.
-	if (typeof payload?.model === 'string' && MODEL_TOKEN.test(payload.model.toLowerCase())) {
-		usage.model = payload.model.toLowerCase();
-	}
+	const usage = {
+		model: modelFromPayload(payload), input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, hasData: false
+	};
 	// The caller almost always already has this from transcriptSize()'s own stat, taken moments ago
 	// to decide whether the transcript grew at all — a second stat of the same path would only ever
 	// confirm what that one already found. Only re-stat when no such reading was handed in.

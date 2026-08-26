@@ -4,7 +4,7 @@
 // is separate — the two series are independent state machines that only share the underlying claim
 // and outcome primitives.
 import fs from 'node:fs';
-import { claimOnce, ensureStateDir, markerPath, removeDispatchFiles } from './state-dir.mjs';
+import { claimOnce, ensureStateDir, markerPath, releaseClaim, removeDispatchFiles } from './state-dir.mjs';
 import { readOutcome } from './dispatch.mjs';
 
 // The floor is one event, so FLOOR_ATTEMPT_LIMIT bounds it. `session_usage` is a series and its
@@ -53,6 +53,17 @@ export function resolveAndPromoteUsageState(sessionId) {
 			// this design switched to (up to USAGE_ATTEMPT_LIMIT per session, every session that ever
 			// touches clio) would only ever be reclaimed by the once-a-week sweep.
 			removeDispatchFiles(sessionId, 'usage', stored.pending.nonce);
+			// The `usage-claim-{nonce}` marker claimUsageNonce() created is a SEPARATE file from the
+			// request/outcome pair above, and outlives it if not released here: `noteUsageAttempt`
+			// resets the unconfirmed-count to 0 on every confirmed reading, so the next dispatch's
+			// base count restarts from the same low numbers this session has already used — 'u0',
+			// 'u1', ... — and finds every one of them still claimed forever. After
+			// USAGE_NONCE_CLAIM_ATTEMPTS confirmed readings in one session, every candidate in range
+			// stays claimed and claimUsageNonce() has nothing left to hand out, silently and
+			// permanently ending the series for the rest of the session. Releasing it the moment its
+			// outcome resolves -- confirmed or abandoned, same as the pair above — is safe precisely
+			// because resolution is what retires a nonce; nothing reads this claim again afterward.
+			releaseClaim(sessionId, `usage-claim-${stored.pending.nonce}`);
 		}
 	}
 	return { reported, inFlight };

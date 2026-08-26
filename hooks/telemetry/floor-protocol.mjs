@@ -3,7 +3,7 @@
 // two series mean different things (once per session vs. a per-turn series) and do not share state,
 // only the same claim/outcome primitives underneath.
 import fs from 'node:fs';
-import { markerPath } from './state-dir.mjs';
+import { claimOnce, markerPath, sanitizeSessionId } from './state-dir.mjs';
 import { readOutcome, OUTCOME_GRACE_MS } from './dispatch.mjs';
 
 // A failed floor emit releases its claim so the next clio call retries, but not without end: an
@@ -40,5 +40,34 @@ export function floorRetryable(sessionId, attempt) {
 		return Date.now() - claimed >= OUTCOME_GRACE_MS;
 	} catch {
 		return false;
+	}
+}
+
+// Whether the LAST attempt this session gets was answered with a definite refusal, as opposed to
+// still pending or answered some other way — the caller only reaches here once every attempt slot up
+// to FLOOR_ATTEMPT_LIMIT is used, and a still-pending final attempt is not exhaustion, just a slow
+// clio the retry loop has no more turns left to wait on.
+export function floorPersistentlyRejected(sessionId, lastAttempt) {
+	return readOutcome(sessionId, 'floor', floorNonce(lastAttempt)) === 'rejected';
+}
+
+// A one-time local signal for the case raised again in review of PR #96: a clio that rejects
+// `workflow_started` on every attempt (an unreleased vocabulary, an `unknown-event-name` answer)
+// leaves the session with zero telemetry and, before this, zero indication anything was ever tried —
+// a maintainer would only learn a whole install's floor was dead from the metrics it never sent.
+// `claimOnce` makes the write itself idempotent per session, so routeClioCall and Stop both calling
+// attemptFloorEmission after retries are exhausted logs once, not once per remaining hook invocation.
+export function noteFloorExhausted(sessionId) {
+	if (!claimOnce(sessionId, 'floor-exhausted')) {
+		return;
+	}
+	try {
+		process.stderr.write(
+			'caadt telemetry: workflow_started was rejected on every attempt for session '
+			+ `${sanitizeSessionId(sessionId)} — clio is refusing the floor event (see `
+			+ 'docs/telemetry-transport-decision.md, "The floor\'s exactly-once contract")\n'
+		);
+	} catch {
+		// A diagnostic that cannot be written is not a reason to fail the hook.
 	}
 }

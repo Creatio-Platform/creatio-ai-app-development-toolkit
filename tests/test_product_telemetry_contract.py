@@ -87,6 +87,13 @@ ALLOWED_NON_STAGE_IDENTIFIERS = {
     "workflow_dispatch",
     "exit_plan_mode",
     "plan_style_guide",
+    # The counter-example the installer's Cursor rule keeps on purpose (see
+    # test_cursor_gets_an_always_applied_telemetry_rule) — a per-flow name this design
+    # deliberately does not have, named so an agent does not invent it.
+    "migration_plan_approved",
+    # The payload FIELD clio validates against the allow-list, named in the installer's
+    # Cursor-rule docstring — not itself a stage value.
+    "event_name",
 }
 
 
@@ -363,8 +370,20 @@ class ProductTelemetryContractTests(unittest.TestCase):
             "AGENTS.md": read("AGENTS.md"),
             "product-telemetry.md": read("context", "product-telemetry.md"),
             "cursor-rule": read("rules", "creatio-app-orchestrator.mdc"),
+            # The Cursor rule the installer writes to disk is a second copy of that same
+            # prose, assembled at install time from an f-string rather than read verbatim
+            # from this repo — so a name typo'd only inside `render_cursor_telemetry_rule`
+            # would otherwise reach a Cursor session with no test catching it here.
+            "installer-cursor-rule": section_of(
+                read("installer", "install.py"), "def render_cursor_telemetry_rule"),
         }
-        for name in ("creatio-app-orchestrator", *SKILL_WORKFLOWS):
+        for name in (
+            "creatio-app-orchestrator", *SKILL_WORKFLOWS,
+            # Overlay skills: invoked BY a flow rather than opening their own, but they
+            # still name stages in their own emission guidance and were missing from this
+            # scan entirely.
+            "creatio-schema-naming", "creatio-ui-guidelines",
+        ):
             surfaces[name] = read("skills", name, "SKILL.md")
 
         # snake_case only: every WORKFLOW_VALUES entry is hyphenated, so this pattern already

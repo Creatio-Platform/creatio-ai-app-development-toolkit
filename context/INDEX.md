@@ -55,6 +55,8 @@ Reading rules:
 | DataForge tool parameter contract and response fields | `context/model-discovery-evidence.md` | DataForge tool reference for Agent 1 availability check |
 | Product telemetry consent, events, and payload | `context/product-telemetry.md` | consent flow, the payload fields, the flow-agnostic stage vocabulary, and the `workflow` values that identify each flow (app-creation, classic-to-freedom-migration, mobile-page-conversion, branding, app-maintenance) |
 | MCP transport helper | `runtime/scripts/mcp_client.py` | stdio client wrapper — explicit opt-in escape hatch only, used after the developer opts in on a host with no native clio MCP; never the automatic response to an unavailable server |
+| Telemetry routing hook | `hooks/telemetry-routing.mjs`, `hooks/telemetry/` | `PostToolUse`/`UserPromptSubmit`/`Stop` entry point and its split-out modules (state directory and marker claims, transcript scanning, floor/usage protocols, dispatch, identity, reminder prose) — the code that emits `workflow_started` and `session_usage`, not the vocabulary they carry (see `context/product-telemetry.md` for that) |
+| Why the hook is a second clio transport | `docs/telemetry-transport-decision.md` | ADR: why `hooks/telemetry-routing.mjs` does not share `mcp_client.py`'s implementation, what narrow surface the two do share, and the floor's exactly-once contract and invariants |
 
 ## Canonical MCP Guidance
 
