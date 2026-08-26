@@ -37,6 +37,7 @@ Answer these from the user's perspective before the detailed checks:
 ### Layout and structure
 
 - [ ] Ready templates are reused where possible.
+- [ ] The page was created from the template its composition needs (resolved via `list-page-templates`) — a staged/DCM record uses the progress-bar template, not the default form page with a bar hand-placed into it.
 - [ ] Header is not overloaded.
 - [ ] Important fields fit in the header/profile area.
 - [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
@@ -87,6 +88,9 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
 - [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
 - [ ] The primary display name is auto-composed from key fields where derivable, and kept editable.
+- [ ] Every amount/total/sum field (typed or calculated) has useful analytics on its value nearby — rollup, comparison, or trend as an XS/S island metric or an Analytics-tab chart — not a bare number and not a widget repeating the field.
+- [ ] Every deadline/due-date/SLA field has a timer beside it showing time left/overdue, in the same block, with the date itself still visible and editable.
+- [ ] Every Contact/Account (person or organization) lookup has a read-only related-record profile island — identity plus communication options, captioned for the relationship, visible only when the lookup is filled; multiple profiles stack vertically.
 
 ### Buttons, actions, and dialogs
 
