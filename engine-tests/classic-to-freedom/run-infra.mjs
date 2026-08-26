@@ -2431,7 +2431,10 @@ check("ENG-95683 (R3): a gated-composite resolved:false type yields the install/
     && /install the `CrtCustomer360App` package/.test(gatedComposite.next || "")
     && /enable the `CommonCommunicationsBehavior` feature/.test(gatedComposite.next || "")
     && /re-run the BUILD/.test(gatedComposite.next || "") && /no re-plan is needed/.test(gatedComposite.next || "")
-    && !/re-run .--plan --out., re-approve/.test(gatedComposite.next || "") && /Nothing was built\./.test(gatedComposite.next || ""),
+    && !/re-run .--plan --out., re-approve/.test(gatedComposite.next || "") && /Nothing was built\./.test(gatedComposite.next || "")
+    // ENG-95683 fix: when ALL mismatches are gated, planInvalidNext must NOT emit the plan-failure preamble ("These
+    // do not: / each named component type must resolve") — doing so contradicts "the plan is correct, no re-plan".
+    && !/These do not:/.test(gatedComposite.next || "") && !/each named component type/.test(gatedComposite.next || ""),
   () => (gatedComposite.threw ? `threw: ${gatedComposite.threw}` : `next=${(gatedComposite.next || "").slice(0, 320)}`));
 // Negative control: an UNGATED unresolved type (a fabricated `crt.*`, no typed gate) keeps the original re-plan text
 // and gets NO install/BUILD instruction — the branch must not fire for a plan that a re-plan is the only fix for.

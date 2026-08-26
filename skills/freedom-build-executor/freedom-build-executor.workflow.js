@@ -1222,9 +1222,16 @@ const componentReplanClause = (mismatches) => {
     + ' on the stand, then re-run the BUILD; the plan is correct, so no re-plan is needed.')
   return clauses.join(' ')
 }
-const planInvalidNext = (mismatches, tail) =>
-  'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
-  + 'These do not: ' + componentReplanClause(mismatches) + ' ' + tail
+const planInvalidNext = (mismatches, tail) => {
+  const list = mismatches || []
+  // ENG-95683 — when every unresolved type is a gated COMPOSITE (the plan is correct; the stand needs a package
+  // installed), the "These do not: / This is a PLAN assertion" preamble is wrong. Skip it so the operator only
+  // reads the install/BUILD instruction, not a contradiction.
+  if (list.length > 0 && list.every(gatedComposite))
+    return componentReplanClause(list) + ' ' + tail
+  return 'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
+    + 'These do not: ' + componentReplanClause(list) + ' ' + tail
+}
 
 // --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
 // A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
