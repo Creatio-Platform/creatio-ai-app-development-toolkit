@@ -54,9 +54,10 @@ export const meta = {
 // which units are open, whether a unit is parked, whether the run stops on a plan
 // gap, whether the whole thing is complete — is then arithmetic in this script.
 // That is the point. `--verify --verify-json <file>` PUBLISHES that verdict as
-// JSON — `{ complete, missing, unverified, planGaps, pages: { "<key>": { missing,
-// unverified, complete, openRows } } }` — and VERIFY_RESULT below mirrors that file
-// field for field. The reconcile agent copies the file; it does not read the
+// JSON — `{ complete, missing, unverified, builderOpen, planGaps, pages: { "<key>":
+// { complete, buildComplete, builderOpen, missing, unverified, openRows } } }` — and
+// `RECONCILE_SHAPE` below mirrors that file field for field (the host schema
+// declares the properties; their insides live in that table). The reconcile agent copies the file; it does not read the
 // Markdown table and it does not re-derive a number. Before that file existed the
 // only per-page counts were in a table an agent had to transcribe, which put a
 // paraphrase between the engine's arithmetic and this script's.

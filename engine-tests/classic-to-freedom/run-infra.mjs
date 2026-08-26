@@ -152,7 +152,16 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock",
   // The verifier's per-round read-back scope, and the judge-queue re-file guard.
-  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan"];
+  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan",
+  // ENG-95930 — the check that took over what the response schema stopped enforcing when it had to shrink under the
+  // host's 4096-byte classifier cap. Asserted through the SHIPPED function, like every other helper here.
+  "reconcileShapeErrors", "shapeVocabularyErrors", "shapeFieldNames"];
+// THE RESPONSE SCHEMAS THEMSELVES, DERIVED FROM THE SLICE rather than listed here: a hand-maintained list cannot
+// fail on a schema nobody added to it, which is the one case a cap check exists for. Every `const *_SCHEMA` the
+// shipped block declares is loaded and measured, so a new schema is covered the moment it is written.
+const declaredConsts = (text, re) => [...new Set([...text.matchAll(re)].map((m) => m[1]))].sort();
+const SCHEMA_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-9_]*_SCHEMA(?:_[A-Z0-9_]+)?)\s*=/gm);
+const SHAPE_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-9_]*_SHAPE)\s*=/gm);
 // Non-function members of the same block. Exported so a prompt fragment — and the round budget's own DESIGN VALUE —
 // is asserted against the SHIPPED text rather than a copy of it in this file. `DEFAULT_MAX_ROUNDS` is exported for
 // exactly that reason: the park assertions below build their `localRounds` fixtures from it, and hard-coding a 3 here
@@ -168,7 +177,7 @@ let tmpWf;
 try {
   tmpWf = mkdtempSync(path.join(os.tmpdir(), "wf-helpers-"));
   const modPath = path.join(tmpWf, "helpers.mjs");
-  writeFileSync(modPath, `${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS].join(", ")} };\n`);
+  writeFileSync(modPath, `${wfSrc.slice(from + BEGIN.length, to)}\nexport { ${[...HELPERS, ...BLOCK_CONSTS, ...SCHEMA_EXPORTS, ...SHAPE_EXPORTS].join(", ")} };\n`);
   wf = await import(pathToFileURL(modPath).href);
 } catch (e) {
   check("workflow: the pure-helper block loads as a standalone module (it closes over NOTHING — the round budget is a parameter)", false, e.message);
@@ -1507,55 +1516,201 @@ check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper —
   () => ({ helperCalls: (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length,
     promptSites: (wfSrc.match(/reconcilePrompt\(/g) || []).length,
     insideHelper: reconcileAgentSrc.includes("reconcilePrompt(roundNo)") }));
-// THE SCHEMA-SIZE BUDGET (A3). The rejection that cost the Applicant run its route was reported as "output schema too
-// large to classify safely" at this exact agent, and the host's threshold is not something this repo can reproduce —
-// so the retry above is the fix and this is the guardrail: the Reconcile schema's SERIALIZED size (what the classifier
-// sees; the JS comments around it are not part of it) stays inside a stated budget instead of drifting upward one
-// field at a time. Raising the ceiling is a deliberate act, which is the point.
-const RECONCILE_SCHEMA_BUDGET = 6000;
-let reconcileSchemaBytes = -1;
-let tmpSchema;
+// THE SCHEMA-SIZE BUDGET (ENG-95930). The host BLOCKS an agent whose serialized output schema exceeds this, before
+// the model runs — measured to the byte in the shipped CLI (2.1.212 and 2.1.246 carry the identical guard):
+//
+//     if (permissionMode !== 'auto') return false        // the check runs in `auto`-permission sessions ONLY
+//     if (JSON.stringify(schema).length > 4096) -> "output schema too large to classify safely"
+//
+// The mode gate is why a probe proves nothing outside `auto`: `bypassPermissions` accepts a 500 KB schema, while an
+// `auto` session refuses 4097 bytes and passes 4096. A refused agent costs the run its phase — 0 tokens, no
+// `agentId` — and the condition is deterministic, so no retry budget covers it. The cap below is THE HOST'S OWN
+// LIMIT, not a house style: raising it buys nothing, it moves the failure back into the run.
+const SCHEMA_CLASSIFIER_CAP = 4096;
+// EVERY agent schema of EVERY shipped workflow, not just Reconcile: the cap is a property of the host, so whichever
+// phase declares an oversized schema is the phase that cannot start. The others sit at 213–2026 bytes today; this is
+// what makes the next one that grows fail here instead of in front of an operator.
+const schemaSizes = (mod, names) => names
+  .filter((n) => mod[n] && typeof mod[n] === "object" && "type" in mod[n])
+  .map((n) => ({ name: n, bytes: JSON.stringify(mod[n]).length }));
+const bexSizes = schemaSizes(wf, SCHEMA_EXPORTS);
+check(`ENG-95930: every response schema this suite covers loaded out of the shipped slice — a schema that is not really there measures 0 bytes and would pass the cap check by being absent`,
+  bexSizes.length === SCHEMA_EXPORTS.length && SCHEMA_EXPORTS.length >= 11,
+  () => `loaded ${bexSizes.length} of ${SCHEMA_EXPORTS.length} (derived: ${SCHEMA_EXPORTS.join(", ")})`);
+// The derivation itself: a regex that stopped matching would silently shrink the cap check to nothing, and the
+// count is the one thing a reader can check by eye against the schemas module.
+check("ENG-95930: the schema list is DERIVED from the shipped slice, and the shape table with it — an export nobody listed is still measured",
+  SCHEMA_EXPORTS.includes("RECONCILE_SCHEMA") && SCHEMA_EXPORTS.includes("BUILD_SCHEMA_PAGE_NO_GUIDELINES")
+    && SHAPE_EXPORTS.length === 1 && SHAPE_EXPORTS[0] === "RECONCILE_SHAPE",
+  () => `schemas: ${SCHEMA_EXPORTS.join(", ")} | shapes: ${SHAPE_EXPORTS.join(", ")}`);
+check(`ENG-95930: every agent schema shipped in freedom-build-executor serializes to at most ${SCHEMA_CLASSIFIER_CAP} bytes — the host refuses a larger one before the model runs, so a schema over this line is a phase that cannot start in an \`auto\`-permission session`,
+  bexSizes.every((s) => s.bytes <= SCHEMA_CLASSIFIER_CAP),
+  () => bexSizes.map((s) => `${s.name} ${s.bytes}`).join(", "));
+// The OTHER shipped workflow, sliced the same way. It is nowhere near the cap today (292–987 bytes) and that is
+// exactly why it belongs here: a schema crosses the line one field at a time.
+let tmpBa;
 try {
-  tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
-  const modPath = path.join(tmpSchema, "schema.mjs");
-  const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
-  writeFileSync(modPath, `${slice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT };\n`);
-  const mod = await import(pathToFileURL(modPath).href);
-  reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
-  // ENG-95901 — the SCHEMA-DRIFT GATE. Every golden above constructs `{buildComplete: ...}` fixtures BY HAND and
-  // feeds them straight into the pure functions, bypassing the structured-output schema entirely — none of them
-  // would fail if `buildComplete` were silently dropped from VERIFY_RESULT (the exact regression a code review
-  // caught: an LLM constrained to an undeclared-field schema will not reproduce it, so the live agent-mediated path
-  // would lose the field even though every unit test still passes). Load the REAL schema object — not a copy — and
-  // assert the property is actually declared, the same way the byte-budget check above proves this schema's real
-  // shape rather than trusting a comment about it.
-  check("ENG-95901: VERIFY_RESULT's per-page schema DECLARES `buildComplete: { type: 'boolean' }` — an LLM transcribing `--verify-json` into `state.verify` will not reproduce an undeclared field, so its absence here silently drops `buildComplete` on the ONE path that feeds live runtime state",
-    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.buildComplete?.type === 'boolean',
-    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties);
-  // Declaring the property is not enough — only `required` forces an LLM to actually POPULATE it. Without this,
-  // the agent-mediated path could still legally transcribe a page as `{complete:false, unverified:3}` with
-  // `buildComplete` omitted, and `derivedBuildComplete` would silently fall back to the combined `complete`.
-  check("ENG-95901: VERIFY_RESULT's per-page schema also REQUIRES `buildComplete` (not merely typed) — a declared-but-optional field does not stop an LLM from omitting it",
-    (mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required || []).includes('buildComplete'),
-    () => mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.required);
-  // PR review — `builderOpen` is emitted by `verifyTally`/`verifyUnit`/`renderVerify`/`verifyDigest` alongside
-  // `buildComplete`, so it needs the same declaration for the same reason: an undeclared field is silently dropped
-  // on the agent-mediated transcription path, and this gate is exactly the blind spot a newly-emitted field falls
-  // into (it checks the fields that ARE declared). Typed, not required — unlike `buildComplete` it is a count a
-  // caller reads, not a flag any decision branches on, so an omission degrades a message rather than a verdict.
-  check("ENG-95901 (review): VERIFY_RESULT declares `builderOpen` at BOTH levels — per-page and on the top-level total — so the count that matches `buildComplete` survives the agent-mediated transcription the same way the flag does",
-    mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties?.builderOpen?.type === 'integer'
-      && mod.VERIFY_RESULT?.properties?.builderOpen?.type === 'integer',
-    () => ({ page: mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties,
-      top: mod.VERIFY_RESULT?.properties?.builderOpen }));
+  const BA = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js", import.meta.url));
+  const baSrc = readFileSync(BA, "utf8");
+  const baFrom = baSrc.indexOf(BEGIN), baTo = baSrc.indexOf(END);
+  const BA_SCHEMAS = ["CONTEXT_SCHEMA", "DESCRIBE_SCHEMA", "CRITIQUE_SCHEMA", "MERGE_SCHEMA"];
+  tmpBa = mkdtempSync(path.join(os.tmpdir(), "wf-ba-schema-"));
+  const modPath = path.join(tmpBa, "ba-schemas.mjs");
+  writeFileSync(modPath, `${baSrc.slice(baFrom + BEGIN.length, baTo)}\nexport { ${BA_SCHEMAS.join(", ")} };\n`);
+  const ba = await import(pathToFileURL(modPath).href);
+  const baSizes = schemaSizes(ba, BA_SCHEMAS);
+  check(`ENG-95930: every agent schema shipped in classic-behaviour-analysis serializes to at most ${SCHEMA_CLASSIFIER_CAP} bytes — the same host cap applies to every workflow, so it is asserted per workflow rather than once for the one that hit it`,
+    baSizes.length === BA_SCHEMAS.length && baSizes.every((s) => s.bytes <= SCHEMA_CLASSIFIER_CAP),
+    () => baSizes.map((s) => `${s.name} ${s.bytes}`).join(", "));
 } catch (e) {
-  check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
+  check("ENG-95930: the classic-behaviour-analysis pure block loads as a standalone module", false, e.message);
 } finally {
-  if (tmpSchema) rmSync(tmpSchema, { recursive: true, force: true });
+  if (tmpBa) rmSync(tmpBa, { recursive: true, force: true });
 }
-check(`ENG-95850 (A3): the Reconcile structured-output schema stays inside its stated budget of ${RECONCILE_SCHEMA_BUDGET} serialized bytes — the classifier sees this object, and it is on the critical path of the run's first agent`,
+
+const reconcileSchemaBytes = wf.RECONCILE_SCHEMA ? JSON.stringify(wf.RECONCILE_SCHEMA).length : -1;
+// The Reconcile schema is the one the host actually rejected, and it is the run's FIRST agent, so it carries a
+// tighter line than the cap: ENG-95503 grows this same object, and a schema sitting at 4090 bytes is one field from
+// dead. Raising THIS number is a deliberate act with headroom left; raising the cap above is not available.
+const RECONCILE_SCHEMA_BUDGET = 3500;
+check(`ENG-95930: the Reconcile structured-output schema stays inside its stated budget of ${RECONCILE_SCHEMA_BUDGET} serialized bytes — a working margin under the host's hard ${SCHEMA_CLASSIFIER_CAP}-byte cap, because this is the schema that blocked the run and the one still being extended`,
   reconcileSchemaBytes > 0 && reconcileSchemaBytes <= RECONCILE_SCHEMA_BUDGET,
-  () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET})`);
+  () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET}, host cap ${SCHEMA_CLASSIFIER_CAP})`);
+// EVERY property still declared. The fix for the byte count was to stop describing the INSIDES of the nested
+// objects — not to drop fields — and the core computes on all 41 of them, so a shrink that removed one would be a
+// silent contract change no other test here would notice.
+check("ENG-95930: the loosened Reconcile schema still declares all 41 properties and its 13-entry `required` list — the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 41 && (wf.RECONCILE_SCHEMA?.required || []).length === 13,
+  () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
+    required: (wf.RECONCILE_SCHEMA?.required || []).length }));
+// The shape table is the schema's other half now, so an empty or truncated one is a silent loss of every check the
+// schema used to perform. Pinned by the properties that carry a decision: the verify digest, the preflight answers,
+// and the two `resolved: false` gates.
+check("ENG-95930: `RECONCILE_SHAPE` covers the properties whose inner shape the schema stopped describing — an empty or truncated table would silently accept every malformed answer the schema used to refuse",
+  ["verify", "preflightItems", "reachability", "approval", "componentResolution", "templateResolution",
+    "packageCreatedByRun", "parkedUnits", "proposals", "blocked", "discrepancies", "orphanedPagesOnFile"]
+    .every((k) => wf.RECONCILE_SHAPE?.[k]),
+  () => Object.keys(wf.RECONCILE_SHAPE || {}).join(", "));
+
+// ENG-95901 — THE SCHEMA-DRIFT GATE, NOW AIMED AT THE SHAPE CHECK. Every golden above constructs `{buildComplete:
+// ...}` fixtures BY HAND and feeds them straight into the pure functions, bypassing the response contract entirely —
+// none of them would fail if `buildComplete` stopped being enforced (the exact regression a code review caught: an
+// LLM will not reproduce a field nothing asks for, so the live agent-mediated path would lose it even though every
+// unit test still passes). Until ENG-95930 that enforcement was `VERIFY_RESULT`'s per-page `required`; it is now
+// `RECONCILE_SHAPE.verify.map.pages`, and this check follows it there rather than being deleted with the schema.
+// Asserted through the shipped CHECKER, not by reading the table: what matters is that a page entry without the
+// field is actually refused, whatever the table looks like.
+const missingBuildComplete = wf.reconcileShapeErrors
+  ? wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false } } } })
+  : [];
+check("ENG-95901 + ENG-95930: the shipped shape check REFUSES a verify page entry with no `buildComplete` — the field the loosened schema no longer forces, and the one `derivedBuildComplete` silently replaces with the combined `complete` (which folds in evidence a builder cannot clear) when it goes missing",
+  missingBuildComplete.some((m) => m.includes("buildComplete")),
+  () => missingBuildComplete);
+const goodDigest = {
+  approval: { found: true, version: "v1" },
+  verify: { complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [],
+    pages: { main: { complete: false, buildComplete: false, builderOpen: 1, missing: 1, unverified: 0,
+      openRows: [{ n: 1, deliverable: "d", status: "s", evidence: "e", outcome: "missing", owner: "builder" }] } } },
+  preflightItems: [{ id: "p1", pageKey: "main", resolution: null },
+    { id: "p2", pageKey: "main", resolution: { answer: "yes", decidedBy: "me", date: "2026-08-26" } }],
+  reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"] }],
+  packageCreatedByRun: null,
+};
+check("ENG-95930: the shape check ACCEPTS the digest the engine actually publishes — a checker that refused a valid answer would burn all three Reconcile attempts on every run and stop the build with nothing wrong",
+  wf.reconcileShapeErrors && wf.reconcileShapeErrors(goodDigest).length === 0,
+  () => wf.reconcileShapeErrors && wf.reconcileShapeErrors(goodDigest));
+// `resolution: null` is the engine's own answer for an unanswered ⚠ Confirm item, and the prompt tells the agent to
+// copy it rather than omit the field. A checker that read `null` as a fault would make every un-answered plan
+// unbuildable — the opposite of what the old schema's `['object','null']` union did.
+check("ENG-95930: the shape check keeps `preflightItems[].resolution: null` legal while still requiring `answer` inside a resolution that IS present — the old schema declared an `['object','null']` union, and an unanswered ⚠ Confirm item is the normal case, not a malformed answer",
+  wf.reconcileShapeErrors
+    && wf.reconcileShapeErrors({ preflightItems: [{ id: "a", pageKey: "b", resolution: null }] }).length === 0
+    && wf.reconcileShapeErrors({ preflightItems: [{ id: "a", pageKey: "b", resolution: { decidedBy: "me" } }] }).length === 1,
+  () => wf.reconcileShapeErrors && wf.reconcileShapeErrors({ preflightItems: [{ id: "a", pageKey: "b", resolution: { decidedBy: "me" } }] }));
+// A top-level property that is ABSENT is `RECONCILE_SCHEMA.required`'s business, not the checker's — half of these
+// properties are legitimately optional, and a checker that demanded them all would reject every honest partial answer.
+check("ENG-95930: the shape check does NOT invent requirements for absent top-level properties — `required` still lives in the schema, and `packageCreatedByRun`/`sectionHost` are legitimately absent on older folders and plans",
+  wf.reconcileShapeErrors && wf.reconcileShapeErrors({}).length === 0,
+  () => wf.reconcileShapeErrors && wf.reconcileShapeErrors({}));
+// The prompt is the OTHER half of the trade: the schema no longer lists these fields, so a field the prose does not
+// name is a field the agent drops — and the shape check then refuses every attempt. DERIVED, not a hand-picked
+// sample: every name the shipped shape table binds at any depth is set-tested against the TOKENISED prompt body, so
+// adding a field to the table without naming it in the prompt fails here instead of in front of an operator.
+const promptBody = wfSrc.slice(wfSrc.indexOf("function reconcilePrompt(round)"), wfSrc.indexOf("  phase('Reconcile')"));
+const promptTokens = new Set(promptBody.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []);
+const shapeNames = wf.shapeFieldNames ? [...wf.shapeFieldNames(wf.RECONCILE_SHAPE)] : [];
+const unnamedInPrompt = shapeNames.filter((n) => !promptTokens.has(n));
+check("ENG-95930: EVERY field name the shipped `RECONCILE_SHAPE` binds — property, `required` key and typed key, at every nesting level — is named in the Reconcile prompt, tokenised (a substring match would pass on `id` inside `evidenceIds`)",
+  shapeNames.length > 40 && unnamedInPrompt.length === 0,
+  () => `${shapeNames.length} shape-bound name(s), unnamed in prompt: ${unnamedInPrompt.join(", ") || "(none)"}`);
+// The REVERSE direction: a property the schema declares as a bare object/array-of-object has no host-side check at
+// all, so one with no shape entry is silently unvalidated — the failure mode this whole change introduces.
+const looseProps = Object.entries(wf.RECONCILE_SCHEMA?.properties || {}).filter(([, v]) => {
+  const bareObject = v.type === "object" && !v.properties && !v.additionalProperties;
+  const nullableObject = Array.isArray(v.type) && v.type.includes("object") && !v.properties;
+  const objectArray = v.type === "array" && v.items?.type === "object" && !v.items.properties;
+  return bareObject || nullableObject || objectArray;
+}).map(([k]) => k);
+const looseWithoutShape = looseProps.filter((k) => !wf.RECONCILE_SHAPE?.[k]);
+check("ENG-95930: every LOOSENED property (a bare object / array of objects, which the host cannot validate) has a `RECONCILE_SHAPE` entry — a loosened property with no shape entry is a field nothing checks on either side",
+  looseProps.length === 14 && looseWithoutShape.length === 0,
+  () => `${looseProps.length} loosened: ${looseProps.join(", ")} | without a shape entry: ${looseWithoutShape.join(", ") || "(none)"}`);
+// The table can only enforce what its own vocabulary covers: a mistyped token (`'bool'`) accepts every value, so it
+// is a disabled check that no answer-shaped probe would reveal.
+check("ENG-95930: every `kind` / `types` token in the shipped shape table is inside the closed vocabulary — a typo there silently disables that field's check",
+  wf.shapeVocabularyErrors && wf.shapeVocabularyErrors(wf.RECONCILE_SHAPE).length === 0,
+  () => wf.shapeVocabularyErrors && wf.shapeVocabularyErrors(wf.RECONCILE_SHAPE));
+check("ENG-95930: an unknown token FAULTS instead of accepting everything — both axes, so a table typo cannot fail open",
+  wf.shapeVocabularyErrors
+    && wf.shapeVocabularyErrors({ x: { kind: "arr", types: { a: "bool" } } }).length === 2
+    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: {} } },
+      { verify: { kind: "object", required: [], types: { complete: "boolean-ish" } } }).length === 1,
+  () => wf.shapeVocabularyErrors && wf.shapeVocabularyErrors({ x: { kind: "arr", types: { a: "bool" } } }));
+// One violating value per token in the vocabulary. The change advertises this enforcement in shipped text ("carrying
+// a string where the arithmetic reads a boolean"), and `verify.missing`/`unverified` feed the park/close arithmetic
+// directly — so each token gets a probe rather than the set being trusted because it is short.
+const TYPE_PROBES = [
+  ["string", { discrepancies: [{ unit: 1, claim: "c", found: "f" }] }, "unit"],
+  ["boolean", { reachability: [{ key: "k", appliesWhen: "yes" }] }, "appliesWhen"],
+  ["integer", { verify: { complete: false, missing: "2", unverified: 0, pages: {} } }, "missing"],
+  ["string-or-null", { orphanedPagesOnFile: [{ schema: "S", orphanedBy: 7 }] }, "orphanedBy"],
+  ["string[]", { reachability: [{ key: "k", appliesWhen: true, pages: ["a", 2] }] }, "pages"],
+];
+const typeMisses = TYPE_PROBES.filter(([, payload, field]) => {
+  const faults = wf.reconcileShapeErrors ? wf.reconcileShapeErrors(payload) : [];
+  return !faults.some((f) => f.includes(field));
+}).map(([token]) => token);
+check("ENG-95930: the shape check REJECTS a wrong-typed value for every token in its vocabulary — string, boolean, integer, string-or-null and string[] each have a violating probe, so no token is enforced only in theory",
+  typeMisses.length === 0, () => `tokens with no working rejection: ${typeMisses.join(", ")}`);
+// The fail-fast branches the diff added: a null where an object belongs, a non-array where an array belongs, and a
+// scalar where the page map belongs. Nothing in the shipped run calls these, so only a probe covers them.
+check("ENG-95930: the shape check fails fast on a value of the wrong SHAPE — `null` for a plain object, a non-array for an array, a scalar for the page map, and a non-object answer",
+  wf.reconcileShapeErrors
+    && wf.reconcileShapeErrors({ approval: null }).length === 1
+    && wf.reconcileShapeErrors({ reachability: { key: "k" } }).length === 1
+    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: 7 } }).length === 1
+    && wf.reconcileShapeErrors(null).length === 1
+    && wf.reconcileShapeErrors([]).length === 1,
+  () => JSON.stringify({ nullObject: wf.reconcileShapeErrors({ approval: null }),
+    nonArray: wf.reconcileShapeErrors({ reachability: { key: "k" } }),
+    scalarMap: wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: 7 } }) }));
+// For the classifier's size refusal, "re-run and it may pass" is wrong by construction, so the triage line carries
+// the measured cause instead.
+check("ENG-95930: the repeated-rejection triage names the MEASURED cause of the classifier block (a serialized schema over 4096 bytes in an `auto`-permission session) instead of calling it transient",
+  /output schema too large to classify safely` is deterministic/.test(wfSrc)
+    && /4096 bytes, in an `auto`-permission session/.test(wfSrc)
+    && !/A failure at the run's first agent is transient more often than not/.test(wfSrc));
+// A schema-valid answer that is short of the shape is a DIFFERENT failure from a host that never answered, and the
+// operator's next move differs: re-running helps in one case and cannot help in the other. Both the retry loop and
+// the failure text have to distinguish them, or the run reports the wrong one — and the bad answer must never reach
+// the state, where a missing field becomes `undefined` in the park/close arithmetic.
+check("ENG-95930: a schema-valid Reconcile answer that fails the shape check spends an attempt and is NEVER merged into the state, and the stop text names the offending fields",
+  /const faults = reconcileShapeErrors\(answer\)/.test(wfSrc)
+    && /if \(!faults\.length\) return answer/.test(wfSrc)
+    && /lastShapeFaults = faults/.test(wfSrc)
+    && /const reconcileFailedNext = \(\) => \(lastShapeFaults\.length/.test(wfSrc)
+    && /next: reconcileFailedNext\(\)/.test(wfSrc));
+
 check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fallback persistence only if Verify cannot confirm that write",
   /lastVerifier = yield\* verifyRound\(builtThisRound, claims, carryNow\(\)\)/.test(wfSrc)
     && wfSrc.includes("Return \\`queueWritten: true\\` only after that queue-file merge is saved")
@@ -2288,10 +2443,53 @@ const stillDead = await runWith({}, async () => { deadCalls += 1; return null; }
 check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly three times and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
   !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 3
     && /SAME route/.test(stillDead.next || "") && /switching routes/.test(stillDead.next || "")
-    && (stillDead.next || "").includes("If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it"),
+    && (stillDead.next || "").includes("If the SAME rejection repeats across launches, stop re-running and read the host's own reason"),
   () => (stillDead.threw ? `threw: ${stillDead.threw}` : `stopped=${stillDead.stopped} calls=${deadCalls} next=${(stillDead.next || "").slice(0, 160)}`));
+// --- THE SHAPE-FAULT PATH, EXECUTED. The regexes above prove the branch is WRITTEN; these run it. An inverted
+// `if (!faults.length)`, a fault list that never reaches the retry, or the wrong recovery text passes every
+// source-pin and fails here — which is the standard the rest of this file holds itself to.
+// `shapeShort` is schema-VALID (every required top-level property present) and short of exactly one shape-required
+// field, which is the failure the host can no longer catch.
+const shapeShort = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
+  verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false } } } };
+const shapeOk = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
+  verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false } } } };
+let faultThenOkCalls = 0;
+const faultPrompts = [];
+const faultThenOk = await runWith({}, async (prompt) => {
+  faultThenOkCalls += 1;
+  faultPrompts.push(typeof prompt === "string" ? prompt : "");
+  return faultThenOkCalls === 1 ? shapeShort : (faultThenOkCalls === 2 ? shapeOk : null);
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95930 EXECUTES the shape fault: an answer short of `buildComplete` is NOT accepted — the attempt is spent, the second answer is taken, and the run proceeds instead of computing on a hole",
+  !faultThenOk.threw && faultThenOk.stopped !== "reconcile-failed" && faultThenOkCalls === 2,
+  () => (faultThenOk.threw ? `threw: ${faultThenOk.threw}` : `stopped=${faultThenOk.stopped} calls=${faultThenOkCalls}`));
+// M2 — the retry has to TELL the agent what was short, or a deterministically dropped field is dropped again for the
+// whole budget. `note` is work-item metadata and never reaches the model, so the fault list has to ride the PROMPT.
+check("ENG-95930 EXECUTES the informed retry: the SECOND dispatch's prompt names the field the first answer was missing, and the first one does not — an uninformed retry re-sends byte-identical input and cannot converge",
+  faultPrompts.length >= 2 && /buildComplete/.test(faultPrompts[1] || "")
+    && /REJECTED BY THIS SCRIPT/.test(faultPrompts[1] || "")
+    && !/REJECTED BY THIS SCRIPT/.test(faultPrompts[0] || ""),
+  () => `attempt2 prompt tail: ${(faultPrompts[1] || "").slice(-260)}`);
+let alwaysShortCalls = 0;
+const alwaysShort = await runWith({}, async () => { alwaysShortCalls += 1; return shapeShort; }).catch((e) => ({ threw: e.message }));
+check("ENG-95930 EXECUTES the exhausted shape budget: three short answers stop the run at `reconcile-failed` — and `next` NAMES the offending field instead of sending the operator to look for a host problem",
+  !alwaysShort.threw && alwaysShort.stopped === "reconcile-failed" && alwaysShortCalls === 3
+    && /buildComplete/.test(alwaysShort.next || "") && /the host is not blocking anything/.test(alwaysShort.next || ""),
+  () => (alwaysShort.threw ? `threw: ${alwaysShort.threw}` : `calls=${alwaysShortCalls} next=${(alwaysShort.next || "").slice(0, 200)}`));
+// m1 — THE ATTRIBUTION. One short answer followed by two REFUSALS is a host problem, and the two messages exist only
+// to steer re-run vs shrink: reporting "answered on all attempts, the host is not blocking anything" here is the
+// misdiagnosis class this ticket corrects, reappearing inside its own fix.
+let mixedCalls = 0;
+const shortThenDead = await runWith({}, async () => { mixedCalls += 1; return mixedCalls === 1 ? shapeShort : null; }).catch((e) => ({ threw: e.message }));
+check("ENG-95930: a short answer FOLLOWED BY host refusals reports the REFUSAL, not the stale shape fault — the last attempt's outcome decides which recovery text the operator gets",
+  !shortThenDead.threw && shortThenDead.stopped === "reconcile-failed" && mixedCalls === 3
+    && /returned nothing on 3 attempts/.test(shortThenDead.next || "")
+    && !/the host is not blocking anything/.test(shortThenDead.next || ""),
+  () => (shortThenDead.threw ? `threw: ${shortThenDead.threw}` : `calls=${mixedCalls} next=${(shortThenDead.next || "").slice(0, 200)}`));
+
 check("the repeated-rejection triage sentence is a single constant interpolated into BOTH Reconcile recovery messages — a wording fix cannot land in only one",
-  /const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it'/.test(wfSrc)
+  /const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host/.test(wfSrc)
     && (wfSrc.match(/\$\{REPEATED_REJECTION_TRIAGE\}/g) || []).length === 2);
 // The attempts are CONSECUTIVE dispatches, not spaced ones: the core is a generator that yields work and never holds
 // a clock, so nothing here may claim a delay it does not perform. This pins the budget's reach honestly — three
@@ -2428,7 +2626,11 @@ const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
   const baseline = { ...roundBaseline, unitKeys: units, buildOrder: units };
   const openVerdict = {
     complete: false, missing: units.length, unverified: 0,
-    pages: Object.fromEntries(units.map((u) => [u, { openRows: [{ deliverable: "Fields — 7 expected" }] }])),
+    // ENG-95930 — a page entry carries `complete`/`buildComplete` and a full open row because that is what the
+    // response contract requires and what `reconcileShapeErrors` now checks on arrival. The old schema required the
+    // same fields; this harness bypassed the host and so never had to produce them.
+    pages: Object.fromEntries(units.map((u) => [u, { complete: false, buildComplete: false,
+      openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] }])),
   };
   const agentStub = async (prompt, opts = {}) => {
     const label = opts.label || "";
@@ -2642,7 +2844,7 @@ const runVerifyBranch = (queueWritten, extra = {}) => {
       persistWhys.push(m ? m[1] : "(no why)");
       return { written: true, parkKeys: [] };
     }
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -2677,7 +2879,7 @@ const runFailedJudge = () => {
     if (label.startsWith("build:")) return buildAnswer(false);
     if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
     if (label === "persist:carry") return { written: true, parkKeys: [] };
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { openRows: [{ deliverable: "Fields — 7 expected" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))

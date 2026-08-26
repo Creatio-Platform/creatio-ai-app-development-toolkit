@@ -947,7 +947,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
-      verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true } } },
+      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     };
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));

@@ -4,90 +4,19 @@
 // reads. A host without structured output cannot run this workflow at all, which is why `structuredOutput` is a
 // REQUIRED capability rather than a degradable one.
 
-// Mirrors the `--verify-json` FILE, field for field, plus the CLI's exit code and the PLAN-level
-// stderr lines. Nothing else is allowed to reach the verdict — the reconcile agent copies that file,
-// so this schema is a transport check, not a place where an agent's reading of a table gets in.
-// ENG-95901 — `buildComplete` MUST be declared here, field for field with the engine's `verifyTally`/
-// `verifyDigest` output: a structured-output schema constrains what an LLM transcribing the file will
-// reproduce, so an UNDECLARED field is silently dropped on this agent-mediated path even though the engine
-// genuinely writes it. Losing it here would make `state.verify[key].buildComplete` read `undefined` for
-// every page in the live run — defeating `selfCheckMismatches`'s `verifierBuildComplete` (which would then
-// read every page as "not build-complete" and false-flag an honest `buildComplete:true` self-report as
-// `reported-complete-but-verifier-open`) — the exact regression this ticket exists to fix, reappearing
-// specifically on the schema-constrained path that none of the hand-built-fixture tests below exercise.
-export const VERIFY_RESULT = {
-  type: 'object',
-  required: ['complete', 'missing', 'unverified', 'pages'],
-  properties: {
-    complete: { type: 'boolean' },
-    missing: { type: 'integer' },
-    unverified: { type: 'integer' },
-    // ENG-95901 (PR review) — the count that MATCHES `buildComplete`: how many open rows the builder owns. Declared
-    // for the same reason `buildComplete` is: an undeclared field is silently dropped on the agent-mediated path.
-    builderOpen: { type: 'integer' },
-    planGaps: { type: 'array', items: { type: 'string' } }, // D12: non-empty ⇒ the PLAN is short, not the build
-    pages: {
-      type: 'object',
-      additionalProperties: {
-        type: 'object',
-        // `buildComplete` is REQUIRED, not merely typed: a DECLARED-but-optional property does not force an LLM to
-        // populate it — only `required` does. Without this, the agent-mediated Reconcile path could still legally
-        // transcribe a page as `{complete:false, unverified:3}` with `buildComplete` omitted, and `derivedBuildComplete`
-        // would fall back to the combined `complete`, silently reintroducing the exact conflation this ticket fixes.
-        required: ['complete', 'buildComplete'],
-        properties: {
-          complete: { type: 'boolean' },
-          buildComplete: { type: 'boolean' },
-          builderOpen: { type: 'integer' },
-          missing: { type: 'integer' },
-          unverified: { type: 'integer' },
-          // Every row that is not ✅, as the engine emitted it: the same Deliverable / Status /
-          // Evidence text the table shows. These are what the next build round is handed.
-          openRows: {
-            type: 'array',
-            items: {
-              type: 'object',
-              required: ['deliverable', 'status', 'evidence'],
-              properties: {
-                n: { type: 'integer' },
-                deliverable: { type: 'string' },
-                status: { type: 'string' },
-                evidence: { type: 'string' },
-                outcome: { type: 'string' },
-                // ENG-95901 (PR review) — WHOSE work closes the row: "builder" or "verifier". This, not the
-                // `missing`/`unverified` label, is what `buildComplete` is keyed on and what the one bounded
-                // in-context fix is allowed to act on.
-                owner: { type: 'string' },
-                id: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-}
-
-export const PREFLIGHT_ITEM = {
-  type: 'object',
-  required: ['id', 'pageKey'],
-  properties: {
-    id: { type: 'string' },        // EXACTLY as `--units` published it
-    pageKey: { type: 'string' },
-    kind: { type: 'string' },
-    item: { type: 'string' },
-    requires: { type: 'array', items: { type: 'string' } },
-    // THE OPERATOR'S ANSWER, as `--units.preflight[].resolution` published it. `null` is LEGAL and EXPECTED — the
-    // engine publishes it on every unanswered item, and an object-only schema would force the agent to omit the
-    // field instead, which cannot be told apart from an engine that publishes no answers at all.
-    // An INPUT: Preflight files the record FROM it and the judge still rules on that record; it closes no row.
-    resolution: {
-      type: ['object', 'null'],
-      required: ['answer'],
-      properties: { answer: { type: 'string' }, decidedBy: { type: 'string' }, date: { type: 'string' } },
-    },
-  },
-}
+// THE INNER SHAPE OF THIS RUN'S FIRST ANSWER LIVES IN `RECONCILE_SHAPE` (helpers.mjs), NOT HERE.
+//
+// THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
+// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3500 —
+// it is the run's first agent, so its refusal costs the whole run.
+//
+// Nested objects are therefore declared as a bare `object` / `array of object`. Every property and the `required`
+// list stay: the core computes on all of them. What the schema does not describe, `reconcileShapeErrors` checks
+// when the answer arrives — the same fields, required lists and types. A fault spends an attempt and the retry is
+// told which fields were short; a run whose last attempt is still short stops rather than computing on a hole.
+//
+// An agent reproduces the fields it is told about and drops the rest, so a field named in `RECONCILE_SHAPE` must
+// also be named in `reconcilePrompt`; the two are one contract in two halves.
 
 export const RECONCILE_SCHEMA = {
   type: 'object',
@@ -104,18 +33,9 @@ export const RECONCILE_SCHEMA = {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
     // does not authorise building v3.
-    approval: {
-      type: 'object',
-      required: ['found'],
-      properties: {
-        found: { type: 'boolean' },
-        version: { type: 'string' },
-        date: { type: 'string' },
-        who: { type: 'string' },
-        recordedIn: { type: 'string' },
-        quote: { type: 'string' },   // the entry verbatim, so the caller can check the script's arithmetic
-      },
-    },
+    // `{ found, version, date, who, recordedIn, quote }` — `found` required; `quote` is the entry VERBATIM, so the
+    // caller can check the script's arithmetic rather than take its word.
+    approval: { type: 'object' },
     // VERBATIM from `--units.planVersion` — the engine's own deterministic hash over the manifest inputs that
     // define the plan. NOT read out of `plan.md`, and never composed: `plan.md` is ENGINE-WRITTEN and presented
     // verbatim, so it carries whatever `--plan` printed and nothing an agent could add would survive a re-run.
@@ -141,33 +61,16 @@ export const RECONCILE_SCHEMA = {
     // field, which keeps the old behaviour exactly — a stop — so absence is never read as ownership.
     // NOT REQUIRED, deliberately: an agent that cannot read the file must be able to say nothing rather than guess,
     // and the safe side of "nothing" here is the stop.
-    packageCreatedByRun: {
-      type: ['object', 'null'],
-      required: ['package', 'appUnitComplete'],
-      properties: {
-        package: { type: 'string' },
-        appUnitComplete: { type: 'boolean' },
-        planVersion: { type: ['string', 'null'] },
-        sectionPage: { type: ['string', 'null'] },
-      },
-    },
+    // `{ package, appUnitComplete, planVersion, sectionPage }`, the first two required WHEN THE OBJECT IS PRESENT.
+    // `null` is a first-class answer: an agent that cannot read the file says nothing rather than guessing.
+    packageCreatedByRun: { type: ['object', 'null'] },
     // ENG-95850 (B4/C3) — the orphans an EARLIER run or the other route recorded, read off
     // `build-queue.json`.`standWrites.orphanedPages`. Required for the record to do the job it exists for: the
     // incident it comes from was a LATER diagnosis reading a dead page, so a list this run writes but never reads
     // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
     // session found is still an orphan), never overwritten by it.
-    orphanedPagesOnFile: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['schema'],
-        properties: {
-          schema: { type: 'string' },
-          orphanedBy: { type: ['string', 'null'] },
-          at: { type: ['string', 'null'] },
-        },
-      },
-    },
+    // Each entry `{ schema, orphanedBy, at }`, `schema` required.
+    orphanedPagesOnFile: { type: 'array', items: { type: 'object' } },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -197,18 +100,8 @@ export const RECONCILE_SCHEMA = {
     // component type at all vs a real component whose package/feature is un-installed), and the correct-target
     // half of the message depends on the free-text `note` the agent put here — its quality is agent-dependent by
     // design for now, not an engine-published fact.
-    componentResolution: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['type', 'resolved'],
-        properties: {
-          type: { type: 'string' },
-          resolved: { type: 'boolean' },
-          note: { type: 'string' },
-        },
-      },
-    },
+    // One `{ type, resolved, note }` per entry, `type`/`resolved` required.
+    componentResolution: { type: 'array', items: { type: 'object' } },
     // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
     // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
     // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
@@ -218,18 +111,8 @@ export const RECONCILE_SCHEMA = {
     // explicit `resolved: false` gates, an unreported name is not a failure, and a plan predating the field behaves
     // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
     // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
-    templateResolution: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['name', 'resolved'],
-        properties: {
-          name: { type: 'string' },
-          resolved: { type: 'boolean' },
-          note: { type: 'string' },
-        },
-      },
-    },
+    // One `{ name, resolved, note }` per entry, `name`/`resolved` required.
+    templateResolution: { type: 'array', items: { type: 'object' } },
     // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
     // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
     // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
@@ -246,37 +129,26 @@ export const RECONCILE_SCHEMA = {
     // mappings make it derivable; `null` per key when it is not. Without it the park arithmetic
     // below degrades to an APPROXIMATION and says so in the return.
     parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
-    reachability: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['key', 'appliesWhen'],
-        properties: {
-          key: { type: 'string' },
-          appliesWhen: { type: 'boolean' },
-          pages: { type: 'array', items: { type: 'string' } },
-          what: { type: 'string' },
-          miss: { type: 'string' },
-        },
-      },
-    },
+    // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
+    // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default.
+    reachability: { type: 'array', items: { type: 'object' } },
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
     reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
-    preflightItems: { type: 'array', items: PREFLIGHT_ITEM },
+    // `--units.preflight[]`, verbatim: `{ id, pageKey, kind, item, requires, resolution }`, `id`/`pageKey`
+    // required. `resolution` is THE OPERATOR'S ANSWER as the engine published it — `{ answer, decidedBy, date }`,
+    // or the literal `null` on an unanswered item. `null` is LEGAL and `RECONCILE_SHAPE` accepts it: an
+    // object-only rule pushes the agent to omit the field instead, and an omitted field cannot be told apart
+    // from an engine that publishes no answers at all.
+    preflightItems: { type: 'array', items: { type: 'object' } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
     // the operator believes is applied.
     // IDENTIFIERS ONLY — no `answer` text. An agent retypes every field of this into a tool call each round, and the
     // text is already in the operator's own file; naming which answer missed is the whole job.
-    resolutionsUnmatched: {
-      type: 'array',
-      items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, item: { type: 'string' } } },
-    },
-    resolutionsConflicts: {
-      type: 'array',
-      items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, item: { type: 'string' } } },
-    },
+    // Both carry `{ id, kind, item }` per entry — identifiers only, no `answer` text.
+    resolutionsUnmatched: { type: 'array', items: { type: 'object' } },
+    resolutionsConflicts: { type: 'array', items: { type: 'object' } },
     evidenceIds: { type: 'array', items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
@@ -296,45 +168,28 @@ export const RECONCILE_SCHEMA = {
     // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
     // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
     // round for a unit its predecessor already gave up on and asked the user about.
-    parkedUnits: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['key'],
-        properties: { key: { type: 'string' }, parkedWhy: { type: 'string' }, rounds: { type: 'integer' } },
-      },
-    },
+    // Each `{ key, parkedWhy, rounds }`, `key` required.
+    parkedUnits: { type: 'array', items: { type: 'object' } },
     // Plan deviations, blockers and builder-vs-stand disagreements already in the queue file from an
     // earlier session. They seed this run's lists so a kill does not erase what a previous one recorded.
-    proposals: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['deviation', 'why'],
-        properties: { unit: { type: 'string' }, deviation: { type: 'string' }, why: { type: 'string' }, applied: { type: 'boolean' } },
-      },
-    },
-    blocked: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['what', 'why'],
-        properties: { unit: { type: 'string' }, what: { type: 'string' }, why: { type: 'string' } },
-      },
-    },
-    discrepancies: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['unit', 'claim', 'found'],
-        properties: { unit: { type: 'string' }, claim: { type: 'string' }, found: { type: 'string' }, round: { type: 'integer' } },
-      },
-    },
+    // Each `{ unit, deviation, why, applied }`, `deviation`/`why` required.
+    proposals: { type: 'array', items: { type: 'object' } },
+    // Each `{ unit, what, why }`, `what`/`why` required.
+    blocked: { type: 'array', items: { type: 'object' } },
+    // Each `{ unit, claim, found, round }`, `unit`/`claim`/`found` required.
+    discrepancies: { type: 'array', items: { type: 'object' } },
     // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
     // the run; trusting it silently builds a page nothing gates.
     staleQueueKeys: { type: 'array', items: { type: 'string' } },
     newKeys: { type: 'array', items: { type: 'string' } },
-    verify: VERIFY_RESULT,
+    // The `--verify-json` DIGEST, copied verbatim: `{ complete, missing, unverified, builderOpen, planGaps,
+    // pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified, openRows } }`, each `openRows`
+    // entry `{ n, deliverable, status, evidence, outcome, owner, id }`. The reconcile agent COPIES that file: it
+    // does not read the Markdown table and it does not re-derive a number, so this is a transport check.
+    // `RECONCILE_SHAPE.verify` REQUIRES `buildComplete` per page — it is the `missing`-only axis the park/close
+    // arithmetic reads, and the combined `complete`, which folds in unfiled evidence a builder cannot clear, is
+    // not a substitute for it.
+    verify: { type: 'object' },
     exitCode: { type: 'integer' },
     // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
     // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
@@ -344,6 +199,57 @@ export const RECONCILE_SCHEMA = {
     verifyTablePath: { type: 'string' },
     notes: { type: 'string' },
   },
+}
+
+// THE SHAPE OF THE RECONCILE ANSWER.
+//
+// `RECONCILE_SCHEMA` declares the properties but not their insides: the host refuses a serialized schema over 4096
+// bytes, so the nested objects are `object` / `array of object` there and their contract lives here — checked when
+// the answer arrives rather than before it is produced.
+//
+// WHAT BELONGS HERE: exactly what the schema stopped enforcing. Nothing stricter — a requirement invented here
+// rejects answers the schema accepted, which is a behaviour change, not a check. Nothing looser either:
+// `verify.pages[*].buildComplete` is REQUIRED because an agent reproduces the fields it is told about and drops the
+// rest, and its absence sends `derivedBuildComplete` to the combined `complete`, which folds in evidence a builder
+// cannot clear — every page then reads not-build-complete and honest self-reports flag as mismatches.
+//
+// `kind`: `array` (of objects) · `object` · `object-or-null`. `required` are the keys that must be PRESENT;
+// `types` are checked only when the key is present; `nested` recurses into one named sub-value; `map` recurses into
+// every value of an `additionalProperties`-style map.
+export const RECONCILE_SHAPE = {
+  approval: { kind: 'object', required: ['found'],
+    types: { found: 'boolean', version: 'string', date: 'string', who: 'string', recordedIn: 'string', quote: 'string' } },
+  packageCreatedByRun: { kind: 'object-or-null', required: ['package', 'appUnitComplete'],
+    types: { package: 'string', appUnitComplete: 'boolean', planVersion: 'string-or-null', sectionPage: 'string-or-null' } },
+  orphanedPagesOnFile: { kind: 'array', required: ['schema'],
+    types: { schema: 'string', orphanedBy: 'string-or-null', at: 'string-or-null' } },
+  componentResolution: { kind: 'array', required: ['type', 'resolved'],
+    types: { type: 'string', resolved: 'boolean', note: 'string' } },
+  templateResolution: { kind: 'array', required: ['name', 'resolved'],
+    types: { name: 'string', resolved: 'boolean', note: 'string' } },
+  reachability: { kind: 'array', required: ['key', 'appliesWhen'],
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string', miss: 'string' } },
+  // `resolution: null` is a LEGAL answer and is checked as such — the engine publishes it on every unanswered item.
+  preflightItems: { kind: 'array', required: ['id', 'pageKey'],
+    types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },
+    nested: { resolution: { kind: 'object-or-null', required: ['answer'],
+      types: { answer: 'string', decidedBy: 'string', date: 'string' } } } },
+  // No required keys, matching the old schema exactly: these two were declared with properties and no `required`.
+  resolutionsUnmatched: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  resolutionsConflicts: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
+  proposals: { kind: 'array', required: ['deviation', 'why'],
+    types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
+  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
+  discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
+    types: { unit: 'string', claim: 'string', found: 'string', round: 'integer' } },
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', builderOpen: 'integer', planGaps: 'string[]' },
+    map: { pages: { required: ['complete', 'buildComplete'],
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' },
+      nested: { openRows: { kind: 'array', required: ['deliverable', 'status', 'evidence'],
+        types: { n: 'integer', deliverable: 'string', status: 'string', evidence: 'string', outcome: 'string',
+          owner: 'string', id: 'string' } } } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {

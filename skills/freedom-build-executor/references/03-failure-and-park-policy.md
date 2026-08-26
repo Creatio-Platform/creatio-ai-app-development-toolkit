@@ -254,7 +254,41 @@ branch on the cause. The reason is recorded by the host: in the run's failure li
 transcript directory (`journal.jsonl`, plus the per-agent `agent-<id>.jsonl`). Read those before
 acting on the failure.
 
-Treat the host's label as a symptom, not a measurement. A rejection at the run's first agent is
-transient more often than not: re-run the SAME route. Only the SAME rejection repeating across
-launches is worth stopping for — and then verify the reported cause (measure it) before building a
-fix on it.
+Treat the host's label as a symptom until it is measured. Some rejections are transient — re-run the
+SAME route. **One is not:**
+
+> `blocked by safety classifier: output schema too large to classify safely`
+
+This one is deterministic. The guard, in the CLI:
+
+```js
+if (permissionMode !== 'auto') return false          // the check runs in `auto` sessions ONLY
+if (JSON.stringify(schema).length > 4096) -> "output schema too large to classify safely"
+```
+
+An agent whose SERIALIZED output schema exceeds **4096 bytes** is refused before the model runs — 0
+tokens, no `agentId` — and no re-run or retry attempt clears it. The mode gate is what makes it look
+intermittent: the identical schema passes in `bypassPermissions`/`default`, so the same bytes can
+block every launch in one session and pass every probe in the next. A probe outside `auto` mode
+therefore measures nothing about the cap.
+
+**The fix is to get the schema under the cap** — there is one remedy, not two.
+`engine-tests/classic-to-freedom/run-infra.mjs` asserts every agent schema of every shipped workflow
+against it, with `RECONCILE_SCHEMA` held tighter (3500 bytes) as the run's first agent. When a schema
+has to shrink, loosen the DESCRIPTION of its nested objects — never drop a property the core computes
+on — and move that inner contract into `RECONCILE_SHAPE`, which the script checks when the answer
+arrives.
+
+Leaving `auto` mode is NOT a remedy: it skips the safety check rather than satisfying it, on a
+workflow whose whole purpose is destructive writes to a live stand (`create-app`, minting packages,
+writing page schemas). Its only use here is diagnostic — it explains why a probe outside `auto`
+proves nothing, and it is why the same bytes can look intermittent. Do not run a build that way to
+get past this error.
+
+And clearing the size branch is **necessary, not sufficient**: the dispatch then reaches the real
+classifier, which can refuse with the same `blocked by safety classifier:` prefix for its own
+reasons. A block after the shrink is a different question — do not go hunting for bytes that are
+already inside the cap.
+
+Only the SAME rejection repeating across launches is worth stopping for — and then measure the
+reported cause before building a fix on it, since the label may name a cause nobody checked.

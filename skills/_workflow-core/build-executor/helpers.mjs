@@ -1,5 +1,9 @@
 // build-executor/helpers.mjs — the build run's DECISIONS, as pure functions.
 //
+// `RECONCILE_SHAPE` is IMPORTED, not declared here: the table is a response contract and lives with the
+// schemas. The walker over it is a decision, which is why that half lives here.
+import { RECONCILE_SHAPE } from './schemas.mjs'
+//
 // Repair rounds per unit before it is PARKED. Three is the design value: one round to build, one to repair what
 // the table named, one for the repair that the repair exposed. A fourth round has never been observed to close a
 // unit the third did not — it burns a stand write and a full verify sweep to re-learn the same shortfall.
@@ -256,10 +260,10 @@ export const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachStat
 // Pure: the verdict and the self-reports are handed in; `unitFor` injects the schedule lookup. It changes NO verdict
 // — it only names a discrepancy for the run's audit trail; the post-hoc verifier remains the authoritative evidence.
 // `verifierBuildComplete` reads the SAME shared `derivedBuildComplete` on the VERIFIER's side of the comparison,
-// defense-in-depth: `state.verify` reaches this function through the Reconcile agent's structured output
-// (VERIFY_RESULT, which DOES declare `buildComplete` — see the schema comment), so `buildComplete` should always be
-// present on a fresh verdict; the fallback covers a verdict written before this field existed, or a payload from a
-// caller that has not adopted it. TRI-STATE (PR review, ENG-95901 follow-up): stays `undefined` — not coerced to
+// defense-in-depth: `state.verify` reaches this function through the Reconcile agent's structured output, where
+// `RECONCILE_SHAPE.verify` REQUIRES `buildComplete` on every page entry — the shape check, not the schema, is what
+// refuses an answer without it. So `buildComplete` should always be present on a fresh verdict; the fallback covers
+// a verdict written before this field existed, or a payload from a caller that has not adopted it. TRI-STATE (PR review, ENG-95901 follow-up): stays `undefined` — not coerced to
 // `false` — when the verifier has NO entry for this page at all (`pageStateOf` returns null, e.g. the page has not
 // reached its first post-hoc verify pass yet). Coercing that to `false` made `selfCheckMismatches` read "the
 // verifier has not looked at this page" as "the verifier looked and disagrees", flagging an honest
@@ -1074,4 +1078,127 @@ export function absorbPreflight(results) {
     for (const x of r.resolved || []) if (x?.id && !x.filedAsFalse) toJudge.push(x.id)
   }
   return { unresolved, toJudge, resolvedCount: (results || []).reduce((n, r) => n + (r.resolved || []).length, 0) }
+}
+
+
+const describeValue = (v) => {
+  if (v === null) return 'null'
+  if (Array.isArray(v)) return 'an array'
+  return typeof v
+}
+
+// THE VOCABULARY IS CLOSED, both axes. A `types` or `kind` token outside these sets is a TYPO IN THE TABLE, and
+// the only enforcement left after the schema stopped declaring nested types is this table — so an unrecognised token
+// must fault loudly rather than accept every value, which is how a mistyped `'bool'` would silently disable a field's
+// check. `shapeVocabularyErrors` asserts the same sets over a whole table, so the typo is caught before a run.
+export const SHAPE_KINDS = new Set(['array', 'object', 'object-or-null'])
+export const SHAPE_TYPES = new Set(['string', 'boolean', 'integer', 'string-or-null', 'string[]'])
+
+const shapeTypeOk = (v, t) => {
+  if (t === 'string') return typeof v === 'string'
+  if (t === 'boolean') return typeof v === 'boolean'
+  if (t === 'integer') return Number.isInteger(v)
+  if (t === 'string-or-null') return v === null || typeof v === 'string'
+  if (t === 'string[]') return Array.isArray(v) && v.every((x) => typeof x === 'string')
+  return false
+}
+
+function shapeObjectErrors(where, obj, spec, out) {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    out.push(`${where}: expected an object, got ${describeValue(obj)}`)
+    return
+  }
+  for (const k of spec.required || []) {
+    if (obj[k] === undefined) out.push(`${where}.${k}: required, and it is absent`)
+  }
+  for (const [k, t] of Object.entries(spec.types || {})) {
+    if (!SHAPE_TYPES.has(t)) {
+      out.push(`${where}.${k}: unknown type token '${t}' — a defect in the shape table, not in the answer`)
+      continue
+    }
+    if (obj[k] !== undefined && !shapeTypeOk(obj[k], t)) out.push(`${where}.${k}: expected ${t}, got ${describeValue(obj[k])}`)
+  }
+  for (const [k, sub] of Object.entries(spec.nested || {})) {
+    if (obj[k] !== undefined) shapeValueErrors(`${where}.${k}`, obj[k], sub, out)
+  }
+  for (const [k, sub] of Object.entries(spec.map || {})) {
+    const m = obj[k]
+    if (m === undefined) continue
+    if (m === null || typeof m !== 'object' || Array.isArray(m)) {
+      out.push(`${where}.${k}: expected an object keyed by name, got ${describeValue(m)}`)
+      continue
+    }
+    for (const [mk, mv] of Object.entries(m)) shapeObjectErrors(`${where}.${k}["${mk}"]`, mv, sub, out)
+  }
+}
+
+function shapeValueErrors(where, value, spec, out) {
+  if (!SHAPE_KINDS.has(spec.kind)) {
+    out.push(`${where}: unknown kind '${spec.kind}' — a defect in the shape table, not in the answer`)
+    return
+  }
+  if (spec.kind === 'array') {
+    if (!Array.isArray(value)) {
+      out.push(`${where}: expected an array, got ${describeValue(value)}`)
+      return
+    }
+    value.forEach((item, n) => shapeObjectErrors(`${where}[${n}]`, item, spec, out))
+    return
+  }
+  if (spec.kind === 'object-or-null' && value === null) return
+  shapeObjectErrors(where, value, spec, out)
+}
+
+// WHAT IS WRONG WITH THIS ANSWER'S NESTED SHAPES, as a list of named fields — empty means it is usable.
+// ABSENCE OF A TOP-LEVEL PROPERTY IS NOT THIS FUNCTION'S BUSINESS: `RECONCILE_SCHEMA.required` carries that and the
+// host enforces it, and several of these properties are legitimately optional (`packageCreatedByRun` on a folder
+// written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
+// is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
+// instead of every index of a 200-row array.
+export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12) {
+  if (state === null || typeof state !== 'object' || Array.isArray(state)) {
+    return [`the answer is not an object (got ${describeValue(state)})`]
+  }
+  const out = []
+  for (const [key, spec] of Object.entries(shape)) {
+    if (state[key] === undefined) continue
+    shapeValueErrors(key, state[key], spec, out)
+    if (out.length >= limit) break
+  }
+  return out.slice(0, limit)
+}
+
+// EVERY `kind` / `types` TOKEN IN A SHAPE TABLE, checked against the closed vocabulary. Empty means the table can
+// enforce what it claims; a returned entry names a token that silently checks nothing.
+export function shapeVocabularyErrors(shape) {
+  const out = []
+  const walkSpec = (where, spec) => {
+    if (!spec || typeof spec !== 'object') {
+      out.push(`${where}: not a spec object`)
+      return
+    }
+    if (spec.kind !== undefined && !SHAPE_KINDS.has(spec.kind)) out.push(`${where}.kind: unknown kind '${spec.kind}'`)
+    for (const [k, t] of Object.entries(spec.types || {})) {
+      if (!SHAPE_TYPES.has(t)) out.push(`${where}.types.${k}: unknown type token '${t}'`)
+    }
+    for (const [k, sub] of Object.entries(spec.nested || {})) walkSpec(`${where}.nested.${k}`, sub)
+    for (const [k, sub] of Object.entries(spec.map || {})) walkSpec(`${where}.map.${k}`, sub)
+  }
+  for (const [key, spec] of Object.entries(shape || {})) walkSpec(key, spec)
+  return out
+}
+
+// EVERY FIELD NAME A SHAPE TABLE BINDS, at every nesting level: the property names, their `required` keys and their
+// `types` keys. The prompt has to name each one — an agent reproduces the fields it is told about — so this is what
+// the prompt gate iterates instead of a hand-written list of three.
+export function shapeFieldNames(shape) {
+  const names = new Set()
+  const walkSpec = (spec) => {
+    for (const k of spec.required || []) names.add(k)
+    for (const k of Object.keys(spec.types || {})) names.add(k)
+    for (const [k, sub] of Object.entries(spec.nested || {})) { names.add(k); walkSpec(sub) }
+    for (const [k, sub] of Object.entries(spec.map || {})) { names.add(k); walkSpec(sub) }
+  }
+  for (const [key, spec] of Object.entries(shape || {})) { names.add(key); walkSpec(spec) }
+  return names
 }

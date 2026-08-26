@@ -227,7 +227,10 @@ function buildScenarios() {
     engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "DealSection",
   };
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, planGaps: [], pages, ...extra });
+  // ENG-95930 — `builderOpen` and the per-page `buildComplete` are part of the digest the engine publishes and
+  // `reconcileShapeErrors` now checks them on arrival, so a fixture that omits them is refused before it can be
+  // compared. The old schema required the same fields; a scripted host simply never had to satisfy it.
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -244,12 +247,12 @@ function buildScenarios() {
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
     staleQueueKeys: [], newKeys: [],
-    verify: verify({ "child:Documents": { complete: false, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true }, main: { complete: false, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
+    verify: verify({ "child:Documents": { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true }, main: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
     exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { "child:Documents": { complete: true }, list: { complete: true }, main: { complete: true } } },
+    verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({
