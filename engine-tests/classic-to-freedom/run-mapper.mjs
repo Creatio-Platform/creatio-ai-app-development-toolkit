@@ -10049,13 +10049,23 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   const sumSlices = sliceBytes.reduce((t, b) => t + b, 0);
   // What the run cost BEFORE: every agent opened the whole queue. AFTER: each opens its own row.
   const runBefore = wholeBytes * keys.length, runAfter = sumSlices;
+  // BOTH THRESHOLDS BELOW MEAN SOMETHING; neither is fitted to this fixture's byte counts.
+  // `PARTITION_BAND` is how far the sum may sit from the whole file. It cannot be 1.0: each slice repeats the
+  // run-level fields (`planVersion`, `sectionHost`, `applicationCode`, …), which inflates the sum, while the
+  // whole-run collections (`buildOrder`, `resolutionsUnmatched`) appear in no slice, which deflates it. Neither
+  // side is a defect. Measured sums land at 0.87–0.92 of the whole across the 1-, 2- and 3-page fixtures, so
+  // ±0.25 holds every one of them and still fails the regressions: a slicer that skips one of three files reads
+  // 0.65, and one that writes the whole payload into each reads 3.0. A wider band passed the missing-file case.
+  // `ORDER_OF_MAGNITUDE` is the claim itself — bullet 2 promised a 10x per-agent drop and this asserts it does
+  // NOT happen, so the 10 is the wording, not a calibration. Slices here sit at 2.3-4.6x, well inside it.
+  const PARTITION_BAND = 0.25, ORDER_OF_MAGNITUDE = 10;
   check("ENG-95472: the slices PARTITION the queue — together they are about the whole file, not a fraction of it",
     () => keys.length === 3 && sliceBytes.length === keys.length
-      && sumSlices > wholeBytes * 0.5 && sumSlices < wholeBytes * 2,
+      && sumSlices > wholeBytes * (1 - PARTITION_BAND) && sumSlices < wholeBytes * (1 + PARTITION_BAND),
     () => ({ wholeBytes, sliceBytes, sumSlices, ratio: +(sumSlices / wholeBytes).toFixed(2) }));
   check("ENG-95472: so the saving is the RUN TOTAL and it scales with the page count — not an order of magnitude off any single agent's read",
     () => sliceBytes.length === keys.length && keys.length > 0
-      && runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / 10),
+      && runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / ORDER_OF_MAGNITUDE),
     () => ({ pages: keys.length, runBefore, runAfter, runSaving: +(runBefore / runAfter).toFixed(2),
       perAgent: sliceBytes.map((b) => +(wholeBytes / b).toFixed(2)) }));
   fs.rmSync(d, { recursive: true, force: true });
