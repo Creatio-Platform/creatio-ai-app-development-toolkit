@@ -1355,7 +1355,7 @@ check("findings: a reopened unit gets ONE repair attempt — the constant key se
     // Both halves are pinned: the union must still CONTAIN `findingsPending` (a rename that dropped it would leave a
     // reported defect unscheduled and this check green), and the per-invocation consumption must still happen.
     && /isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, keys, packageState\)\)/.test(wfSrc)
-    && /const openNow = \(\) => \{\s*\n\s*const keys = reopenKeys\(\)/.test(wfSrc)
+    && /const openNow = \(\) => \{\s*const keys = reopenKeys\(\)/.test(wfSrc)
     && /const reopenKeys = \(\) => new Set\(\[\.\.\.findingsPending, \.\.\.resolutionsPending\]\)/.test(wfSrc)
     && /findingsPending\.delete\(unit\.key\)/.test(wfSrc));
 check("findings: a key naming no published unit REFUSES the run — nothing schedules it, so the run would close green with the reported defect untouched",
@@ -2161,7 +2161,7 @@ check("ENG-95503 review fix: the per-unit clear is scoped to DISPATCH-sourced ro
 check("ENG-95503 wiring: an unaccounted answer buys its unit ONE repair round and no more — the same bound the findings channel has, and without it a builder that keeps refusing the contract would loop forever in `auto` mode",
   /const ungranted = gone\.filter\(\(g\) => !resolutionsReopened\.has\(pairKey\(unit\.key, g\.id\)\)\)/.test(wfSrc)
     && /if \(!ungranted\.length\) return/.test(wfSrc)
-    && /for \(const g of ungranted\) resolutionsReopened\.add\(pairKey\(unit\.key, g\.id\)\)\s*\n\s*resolutionsPending\.add\(idKey\(unit\.key\)\)/.test(wfSrc)
+    && /for \(const g of ungranted\) resolutionsReopened\.add\(pairKey\(unit\.key, g\.id\)\)\s*resolutionsPending\.add\(idKey\(unit\.key\)\)/.test(wfSrc)
     && /if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)/.test(wfSrc));
 check("ENG-95503 wiring: the two re-open channels stay SEPARATE at the source — `findings` is the operator re-opening a unit the gate called complete, and overloading it as the answers channel is the workaround this ticket exists to end",
   /const resolutionsPending = new Set\(\)/.test(wfSrc)
@@ -2184,10 +2184,15 @@ check("ENG-95503 review fix: a verifier-confirmed contradiction is APPENDED to `
 // the `!res` early return so a dead build agent does not burn a findings round; this one used to sit ABOVE it, so a
 // builder that died returning `null` spent the answer's only attempt on a dispatch where nothing was ever built.
 check("ENG-95503 review fix: the answer channel's repair round is consumed BELOW the `!res` guard, beside the findings channel's — above it, a build agent that returned nothing burned the answer's one and only repair attempt without building anything",
-  // The closing brace is matched on `\s*`, not two literal spaces: the host-neutral core (ENG-95770) nests this
-  // inside `buildRound`, so the shipped indentation is no longer top-level. The ORDER is what this pins.
-  /if \(!res\) \{[\s\S]*?\n\s*\}\n[\s\S]{0,2000}?if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)/.test(wfSrc)
-    && !/if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)[\s\S]{0,400}?if \(!res\) \{/.test(wfSrc));
+  // The ORDER is what this pins. Indexed, not a two-region `[\s\S]*?…[\s\S]{0,2000}?` regex (Sonar S5852: adjacent
+  // open quantifiers backtrack super-linearly): the sole `resolutionsPending.delete(idKey(unit.key))` must sit below
+  // an `if (!res) {` guard, and the reverse order (a delete shortly ABOVE a guard) must not appear. The host-neutral
+  // core (ENG-95770) nests this inside `buildRound`, so the guard is no longer top-level — `lastIndexOf` finds it.
+  () => { const deleteAt = wfSrc.indexOf("if (resolutionsPending.delete(idKey(unit.key)))");
+    const guardAt = deleteAt === -1 ? -1 : wfSrc.lastIndexOf("if (!res) {", deleteAt);
+    return deleteAt !== -1 && guardAt !== -1
+      && !/if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)[\s\S]{0,400}?if \(!res\) \{/.test(wfSrc); },
+  () => ({ deleteAt: wfSrc.indexOf("if (resolutionsPending.delete(idKey(unit.key)))") }));
 check("ENG-95503 wiring: the verifier is told an answer closes NO row and files NO evidence — the invariant this ticket must not break in the other direction, stated where the agent that files records reads it",
   /You file NO evidence record for these and you close NO row with them/.test(wfSrc));
 
