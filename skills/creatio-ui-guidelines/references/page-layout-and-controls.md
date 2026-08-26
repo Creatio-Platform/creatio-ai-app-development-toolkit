@@ -17,7 +17,7 @@ Scope the catalog to the target platform version by passing `environment-name`; 
 Jump to the section you need:
 
 - **Component names** → "Choosing the component (source of truth)" (above) — resolve via `get-component-info`.
-- **Record/form page** → General product fit · Text, labels, and messages · Page composition · Analytics and metric widgets · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
+- **Record/form page** → General product fit · Text, labels, and messages · Page composition (incl. *Choosing the page template*) · Analytics and metric widgets · Field-driven companions · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
 - **List/section page** → List (section) page layout.
 - **Dialogs** → Dialogs and modals.
 - **Review** → Default Freedom UI behaviors that silently violate the guidelines (below). The full audit checklist (anti-patterns folded in) lives in `./review-checklists.md`.
@@ -63,6 +63,15 @@ Jump to the section you need:
 - **Reference information or tools that accompany a record or page belong in a contextual side panel, not the page body or a modal.** When a page needs supporting context or controls alongside its main content (e.g. a customer summary while handling a case, or managing connected accounts beside a dashboard), use a right-docked panel the user opens from the header and can close — not extra fields inline, not a blocking modal. Reuse the platform's ready panels (attachments, communication) where they exist instead of rebuilding them.
 - **A content/article page uses a full-width reading column, not the record field grid.** For long-form textual content (knowledge-base article, note, digest), lay the body out as one full-width rich-text column with a short meta/byline row above it (type, last updated, author) — not the two-column field grid and not side profile islands, which are for structured data entry. Keep a comfortable reading measure and use the predefined typography presets.
 
+### Choosing the page template (before you create the page)
+
+The template decides the page's skeleton — which slots exist and where. It is fixed when the page is created and **cannot be swapped afterwards**: changing it means creating a new page from the right template and re-authoring the body. So derive the template from the intended composition BEFORE `create-page`, not after the fields are in.
+
+- **Resolve what the target environment actually offers with `list-page-templates`** and choose from that list. Template names are version- and environment-specific — do not author one from memory, and do not assume the default form page is right.
+- **A record with stages/lifecycle needs the template that already includes the stage progress bar (DCM), not the default form page.** If the page is meant to show ordered process state (`crt.EntityStageProgressBar` / DCM stages), create it from the progress-bar template so the bar sits in its native slot with the platform's spacing and behavior. Do NOT create a default page and then hand-place a progress bar into it — that rebuilds a template slot by hand, drifts from the native look, and is exactly the customization these guidelines forbid. Look the exact template name up on the target stand (`list-page-templates`) and, when several look similar, confirm the choice with the developer.
+- The same reasoning applies to the other composition decisions the template owns: header-above-tabs vs a side profile area (see the note above about not wasting side-profile space), record page vs list page vs dashboard page, and the mini-page template for quick add.
+- If the page already exists on the wrong template, say so explicitly and offer the recreate path with its cost (new page from the right template, body re-authored, add/edit page registrations updated) instead of silently patching the current one.
+
 ## Analytics and metric widgets
 
 - A page can host analytic widgets — `crt.IndicatorWidget` (single metric/count), `crt.GaugeWidget` (value on a scale), `crt.ChartWidget` (charts), `crt.ListWidget` (embedded list).
@@ -70,6 +79,36 @@ Jump to the section you need:
 - **If there is a lot of analytics, create a dedicated "Analytics" tab** instead of crowding the main/general tab.
 - **In `SideAreaProfileContainer` keep only metrics, and keep them small** — widget size **XS or S**. For small metrics, add an **icon** to aid quick visual recognition. Do not put large charts in the side island; place those in the content area or the Analytics tab.
 - **A compact summary/relations widget may sit inline as the first cell of the content field grid.** On an information tab you can place a small widget (e.g. a related-records counter) at `column: 1` of the first field band and let the fields flow into the remaining columns beside it, instead of giving it its own full-width row. Keep it XS/S so it reads as one grid cell, and keep the remaining columns' `colSpan` math correct.
+
+## Field-driven companions (amount, deadline, Contact/Account)
+
+Certain fields imply a component beside them. When a page carries one of these, the companion is part of "the field is done", not an optional nicety — the field alone leaves the user doing arithmetic, date math, or navigation that the page should have done for them. Resolve each component or composite with `get-component-info` (`search='indicator' | 'gauge' | 'chart' | 'timer' | 'profile'`, `composite='<caption>'` for ready combinations) — never author `crt.*` names from memory — and place it per the placement/spacing rules above.
+
+### An amount field gets analytics on its value
+
+- **Applies to** any money or quantity field the user reasons about — total, sum, amount, price, cost, budget, discount, revenue, hours, quantity — whether it is **entered by hand or calculated**, on a record page or a section page.
+- Add at least one metric that says something *useful* about that value, not a restatement of it: a rollup across related child records (order lines, payments, submissions), paid vs remaining, plan vs actual, average per unit/period/record, share of a larger total, or a count paired with its sum for a related list.
+- **Placement** follows *Analytics and metric widgets* above: small (**XS/S**) indicator/gauge widgets with an icon at the top of the profile island; trend/breakdown **charts** in the content area or a dedicated **Analytics** tab once there is more than a metric or two. Never a large chart in the side island.
+- A **calculated** amount also needs the read-only-field tooltip explaining how and when it is derived (see *Fields*).
+- Where the amount belongs to a set of records (a section page, or a parent with line items), put the aggregate on the section page's Dashboard component too — that is where users compare across records.
+- Anti-patterns: a page whose only trace of money is one number in a field, with no rollup, comparison, or trend anywhere; a "metric" widget that repeats the field's own value; a wall of amount widgets with no icons crammed at zero spacing.
+
+### A deadline field gets a timer beside it
+
+- **Applies to** any field carrying a point in time the user must act before — due date, deadline, expiry, valid-until, SLA response/solution time, next review, planned finish, expected close date.
+- Add a **timer** component next to that field — same island or group, the adjacent cell or the row under it — bound to the date column, so the user reads **time left / overdue** at a glance instead of subtracting dates in their head. Creatio's case/SLA pages are the reference implementation: mimic their placement, format, and copy. Resolve the component with `get-component-info search='timer'`; if the target version's catalog has no timer component, say so and offer the closest native alternative rather than hand-building a countdown field maintained by a process.
+- The timer **complements** the field: keep the date visible (users still need the exact date and the ability to change it), and keep both in the same visual block so cause and effect read together.
+- Where the deadline drives state (at risk, overdue), express that through the record's existing status/stage indicator rather than a new colored label, and never through color alone (see `./accessibility-and-colors.md`).
+- Anti-patterns: a bare `Due date` on a page whose entire purpose is to act before that date; a "Days left" number field kept up to date by a scheduled process where the platform timer would do it live; a timer without the date, or a timer parked in a different tab from the deadline it counts.
+
+### A Contact or Account field gets that record's profile island
+
+- **Applies to** any lookup to **Contact** or **Account** — and comparable person/organization relationships (responsible, primary contact, customer, supplier, owner, candidate). If the page names who or which company the record belongs to, the user almost always needs to *reach* them next.
+- Add a **related-record profile island** for that lookup: the linked record's identity and reach — name (with photo where available), job title, company, phone, email — plus the platform's communication options, **read-only**, in its own island in the side/profile column (or the template's analog), captioned for the relationship (`Primary contact`, `Customer`, `Recruiter`). Get the assembly from `get-component-info` (`search='profile'`, and `composite=` for the ready combinations such as communication options) — never hand-build the panel out of raw component types.
+- **Keep the lookup field itself** where it belongs in the form. The island is the expanded, read-only view of that link — not a second place to edit it, and not a copy of the related record's fields as editable inputs on this page.
+- **Bind the island's visibility to the lookup** so an unfilled record does not render a blank profile.
+- Two related profiles (e.g. Contact **and** Account) are **two islands stacked vertically**, never side by side, each with the standard island settings (see *New island / card container*). They are also the natural way to fill the left column — see *Balance the page*.
+- Anti-patterns: a Contact lookup and nothing else, forcing the user to open the contact card in another tab to find a phone number; re-adding `Email`/`Phone` as editable fields on this page instead of a profile island; a profile island built from the *current* record's own fields (that is the main profile island, not a related profile).
 
 ## Buttons and actions
 
