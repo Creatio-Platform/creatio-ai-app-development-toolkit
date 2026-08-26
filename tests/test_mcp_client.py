@@ -201,6 +201,21 @@ class McpClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"CLIO_CMD": "dotnet C:/nowhere/clio.dll"}):
             self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/nowhere/clio.dll"])
 
+    def test_resolve_clio_cmd_survives_unbalanced_quotes(self):
+        # `shlex.split()` raises ValueError ("No closing quotation") on a stray unmatched quote -- a
+        # plausible typo in a manually edited env var. This used to abort MCP client startup with an
+        # unhandled exception instead of the normal "clio not found" diagnostic.
+        with patch.dict(os.environ, {"CLIO_CMD": '"clio'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ['"clio'])
+
+    def test_resolve_clio_cmd_reports_the_failing_token_for_a_malformed_multi_word_value(self):
+        # A genuinely malformed value (a typo, a stale two-word leftover) is not a spaced path in
+        # disguise: it has no separator and no executable extension, so the whole-value fallback must
+        # not swallow it. The caller's "not found" diagnostic should name the actual failing token
+        # (`clioo`) rather than the confusing whole string.
+        with patch.dict(os.environ, {"CLIO_CMD": "clioo something"}):
+            self.assertEqual(mcp_client._parse_clio_cmd("clioo something"), ["clioo", "something"])
+
     def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
         client = PersistentMcpClient()
         expected = {"success": True, "data": {"tools": [{"name": "sync-schemas"}]}, "raw": "{}"}

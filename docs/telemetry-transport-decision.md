@@ -102,6 +102,30 @@ effort, since the child is never awaited — at least one for any session that t
    slower grace-period path instead of failing outright. See the comment at the floor retry loop in
    `hooks/telemetry-routing.mjs`.
 
+## Trust-boundary gaps accepted, not overlooked
+
+Three narrower gaps raised in review of PR #96, each accepted for the same reason: closing it
+properly needs either information this hook does not have, or statefulness whose cost has not yet
+been justified by an observed failure.
+
+- **Consent staleness window.** `consentGranted()` (`hooks/telemetry/consent.mjs`) reads clio's
+  on-disk `consent.json` directly rather than asking clio to resolve consent live, so a revocation
+  that has not yet been flushed to that file can still read as granted for one hook invocation. The
+  file read already fails closed on any read/parse error; this is the narrower "the file said yes,
+  but clio's live state just changed to no" case. Reading live would mean a second MCP round trip on
+  a path that is currently one filesystem read, on every matching clio call — a real latency cost to
+  close a window that requires an unlucky race with a revocation the user just performed.
+- **No Windows ownership check.** `assertStateDirIsOurs()` (`hooks/telemetry/state-dir.mjs`) is a
+  POSIX-only uid+mode check; the symlink rejection ahead of it runs on every OS, but on Windows
+  (`process.getuid` unavailable) the per-user temp directory's ACL is the sole backstop against
+  another local process planting or tampering with a marker file. A native ownership check (owning
+  SID, `icacls`) is possible but adds a second platform-specific code path to a security check that,
+  on the only OS lacking it, already inherits the OS's own per-user temp isolation.
+- **7-day marker sweep is age-based, not liveness-based.** `sweepStaleMarkers()`'s `MARKER_TTL_MS`
+  assumes no real session stays open, or gets resumed under the same `session_id`, longer than 7
+  days; it does not check whether a session is still live. See the comment above
+  `sweepStaleMarkers()` for the failure mode if that assumption is ever wrong.
+
 ## Cursor's funnel is floor-only from this file
 
 Raised in review of PR #96: `routeClioCall`'s routing reminder (`hooks/telemetry/reminder.mjs`) is

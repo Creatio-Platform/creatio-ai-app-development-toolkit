@@ -11,6 +11,7 @@ import difflib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -84,20 +85,30 @@ def _parse_clio_cmd(env_cmd):
     # clear "clio not installed" diagnostic this shortcut exists to preserve.
     if bare and Path(bare).is_file():
         return [bare]
-    if sys.platform != "win32":
-        parts = shlex.split(env_cmd)
-    else:
-        parts = [_unquote(part) for part in shlex.split(env_cmd, posix=False)]
-    # A value that splits into several tokens whose FIRST token is not runnable is not a command plus
-    # arguments — it is one path that happens to contain spaces, and splitting it reproduces the very
-    # bug this function exists to fix: `C:\Program Files\clio\clio.exe` becomes `C:\Program` and the
-    # caller reports a file it was never configured with. Returning the whole value keeps the
-    # diagnostic honest in exactly the misconfiguration case where it matters — a stale path after a
-    # reinstall, a typo, an install still in progress.
-    #
-    # `dotnet /path/to/clio.dll` is unaffected: `dotnet` resolves, so the split stands.
-    if len(parts) > 1 and not (shutil.which(parts[0]) or Path(parts[0]).is_file()):
+    try:
+        if sys.platform != "win32":
+            parts = shlex.split(env_cmd)
+        else:
+            parts = [_unquote(part) for part in shlex.split(env_cmd, posix=False)]
+    except ValueError:
+        # Unbalanced quotes (e.g. a stray `"` from a typo) are not a shape shlex can tokenize at all.
+        # Falling back to the bare joined value here is the same fallback the not-runnable-first-token
+        # branch below already uses for an unsplittable-looking value, and it turns what would
+        # otherwise be an unhandled exception aborting client startup into the normal, clear
+        # "clio not found" diagnostic against `bare`.
         return [bare]
+    # A value that splits into several tokens whose FIRST token is not runnable might be one path that
+    # happens to contain spaces (`C:\Program Files\clio\clio.exe` -> `C:\Program`, `Files\clio\clio.exe`),
+    # in which case splitting reproduces the very bug this function exists to fix — OR it might be a
+    # genuinely malformed value (a typo, a stale two-word leftover from an old config) that only looks
+    # like the spaced-path case by accident. Only collapse back to the single joined string when `bare`
+    # itself looks path-shaped (contains a path separator, or ends in a recognizable executable
+    # extension); otherwise return the split tokens so the caller's "not found" diagnostic names the
+    # actual token that failed to resolve, instead of a confusing mismatch against the whole value.
+    if len(parts) > 1 and not (shutil.which(parts[0]) or Path(parts[0]).is_file()):
+        looks_path_shaped = bool(re.search(r"[\\/]", bare)) or Path(bare).suffix.lower() in (".exe", ".dll")
+        if looks_path_shaped:
+            return [bare]
     return parts
 
 

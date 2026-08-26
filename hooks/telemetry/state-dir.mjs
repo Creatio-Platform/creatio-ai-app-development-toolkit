@@ -91,9 +91,15 @@ function sweepIsDue(dir) {
 
 // Marker files are per session and nothing removes them when a session ends, so without this they
 // accumulate for as long as the machine lives. Cleaning on read costs one directory listing on the
-// paths that already touch the directory, and only unlinks what no live session can still claim:
-// `claimOnce` relies on exclusive-create, so removing a marker a running session still holds would
-// let it emit a second floor event.
+// paths that already touch the directory. This is an AGE check, not a liveness check — a marker's
+// mtime is set once, at creation, and never refreshed by a later hook invocation for the same
+// session — so "only unlinks what no live session can still claim" holds only under the assumption
+// that no real session stays open, or gets resumed under the same session_id, past MARKER_TTL_MS.
+// A session that violates that assumption would have its floor/usage marker swept mid-session:
+// `workflow_started` could fire a second time, or the usage series' monotonic baseline could reset.
+// Accepted as a known, documented gap (see docs/telemetry-transport-decision.md) rather than keyed
+// off last-touched, since doing that right means every read path also re-stamping the marker it
+// read, which is more moving parts than the risk has so far justified.
 function sweepStaleMarkers(dir) {
 	try {
 		const cutoff = Date.now() - MARKER_TTL_MS;

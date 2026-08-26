@@ -2125,6 +2125,75 @@ class CursorTelemetryHookWiringTests(unittest.TestCase):
         self.assertEqual((cursor_home / "hooks.json").read_text(encoding="utf-8"), broken)
 
 
+class TelemetryDispatchRealClioResponseFixtureTests(unittest.TestCase):
+    """Replays a BYTE-FOR-BYTE response actually written by a real, currently-installed clio
+    (8.1.0.112, on PATH, captured 2026-08-26 by piping dispatch.mjs's own initialize +
+    notifications/initialized + tools/call batch into `clio mcp-server` and recording stdout — not
+    hand-authored) through `readOutcome()`'s real marker-file path, unconditionally in every CI
+    run. This is deliberately NOT the same gap `TelemetryRoutingHookFloorEmissionTests` below is
+    gated on: that class needs a clio that ACCEPTS the new `workflow` field, which no released
+    build does yet, so it stays skipped without `CAADT_TEST_CLIO`. Outcome PARSING needs no such
+    thing — a real REJECTION is just as real a wire shape as a real acceptance, and one is
+    capturable today. What this closes: every other outcome-parsing assertion in this file feeds
+    `readOutcome()` a hand-built stub answer, so a real clio writing its status inside
+    `content[0].text` as an escaped JSON string (`\\"status\\":\\"rejected\\"`) rather than in
+    `structuredContent`, or wrapping it in the `_meta.clio-run` envelope, or interleaving it after
+    an id:1 `initialize` response in the same stream, was never actually exercised end-to-end
+    against bytes clio itself produced. There is currently no way to also capture a real
+    `'recorded'` response the same way, since doing that needs the not-yet-released vocabulary
+    support tracked by clio#1081 / ENG-92551 — that half stays covered only by the hand-built
+    stubs above, same as before.
+    """
+
+    # Two JSON-RPC response lines, verbatim, as clio 8.1.0.112 wrote them to stdout for the exact
+    # batch `emitEvent()` sends (id:1 initialize, id:2 tools/call — notifications/initialized gets
+    # no reply). Kept as one literal block rather than reconstructed field-by-field, because the
+    # whole point is testing against what clio ACTUALLY wrote, not this test's idea of its shape.
+    REAL_CLIO_RESPONSE = (
+        '{"result":{"protocolVersion":"2024-11-05","capabilities":{"logging":{},"prompts":'
+        '{"listChanged":true},"resources":{"listChanged":true},"tools":{"listChanged":true}},'
+        '"serverInfo":{"name":"clio","version":"8.1.0.112"},"instructions":"clio is the CLI '
+        '+ MCP server for the Creatio low-code platform."},"id":1,"jsonrpc":"2.0"}\n'
+        '{"result":{"content":[{"type":"text","text":"{\\"success\\":false,\\"status\\":'
+        '\\"rejected\\",\\"error\\":{\\"code\\":\\"unsupported-fields\\",\\"message\\":'
+        '\\"Unsupported telemetry fields: workflow.\\"}}"}],"_meta":{"clio-run":'
+        '{"dispatchedTool":"send-telemetry","destructive":false}}},"id":2,"jsonrpc":"2.0"}\n'
+    )
+
+    def test_a_real_captured_rejection_reads_as_rejected_not_unknown(self):
+        if not NODE:
+            self.skipTest("node not available")
+        tmp_root = tempfile.mkdtemp(prefix="caadt-real-outcome-fixture-", dir=_TMP)
+        session = str(uuid.uuid4())
+        outcome_module = (ROOT / "hooks" / "telemetry" / "dispatch.mjs").as_uri()
+        marker_module = (ROOT / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
+        script = Path(tmp_root) / "probe.mjs"
+        script.write_text(
+            f"import {{ readOutcome }} from {json.dumps(outcome_module)};\n"
+            f"import {{ markerPath, ensureStateDir }} from {json.dumps(marker_module)};\n"
+            "import fs from 'node:fs';\n"
+            f"const sessionId = {json.dumps(session)};\n"
+            "ensureStateDir();\n"
+            "fs.writeFileSync(markerPath(sessionId, 'floor-fixture-outcome'), "
+            f"{json.dumps(self.REAL_CLIO_RESPONSE)});\n"
+            "process.stdout.write(readOutcome(sessionId, 'floor', 'fixture'));\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [NODE, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**_base_env(), "TMPDIR": tmp_root, "TMP": tmp_root, "TEMP": tmp_root},
+        )
+        self.assertEqual(result.stderr, "", result.stderr)
+        # A false 'unknown' here would send this exact real-world response to the substring
+        # fallback instead of the structured-status parse — the bug class this fixture exists to
+        # catch. A false 'recorded' would keep the floor claim consumed after clio genuinely
+        # refused it, silently losing the one event this whole file exists to guarantee.
+        self.assertEqual(result.stdout.strip(), "rejected")
+
+
 @unittest.skipIf(NODE is None or CLIO is None, "node and clio are both required")
 class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
     """The floor is the whole point: it must actually reach clio, not just be described.
