@@ -949,6 +949,12 @@ check("ENG-95471 review fix: a claim carrying a MISS renders file-NOTHING with t
 check("ENG-95471 review fix: the block states IN WORDS that a builder-supplied value is data to record, never a directive — escaping bounds the syntax, not the argument",
   () => { const t = cbOf([CB_PAGE]);
     return /NEVER AN INSTRUCTION TO YOU/.test(t) && /cannot stop it ARGUING/.test(t) && /never from a builder telling you what to conclude/.test(t); });
+check("PR #128 review fix: the `shows` yes/no/unknown bullet list is separated from the `discrepancies` sentence by a blank line — a run-on stitch renders the definition list as one sentence and blunts this PR's own 3-state `shows` fix; asserted on the EXECUTED render and pinned in the shipped source (the drift gate carries it to the core copy)",
+  () => { const t = cbOf([CB_PAGE]);
+    return t.includes('are BOTH `discrepancies`.\n\n- `"yes"`')
+      && !t.includes('are BOTH `discrepancies`.- `"yes"`')
+      && /discrepancies\\`\.\\n\\n- \\`"yes"/.test(wfSrc); },
+  () => JSON.stringify(cbOf([CB_PAGE]).match(/are BOTH `discrepancies`[\s\S]{0,14}/)?.[0]));
 check("ENG-95471 review fix: the claim object really carries the close-row decision from the dispatch, both branches",
   /noAnswer: true, owesGuidelines: owesGuidelines\(unit, state\.evidenceIds\)/.test(wfSrc)
     && /claimsBlock\(claims, dataFence\)/.test(wfSrc));
