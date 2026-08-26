@@ -1570,6 +1570,33 @@ check("ENG-95930 T3: the BUILD schema HARD-CAPS the in-context park summary — 
 check(`ENG-95930 T3: every BUILD schema STILL serializes to at most ${SCHEMA_CLASSIFIER_CAP} bytes AFTER the park cap was added — the extra keywords grow the definition, and this is the re-run the plan requires`,
   buildSchemaNames.every((n) => wf[n] && JSON.stringify(wf[n]).length <= SCHEMA_CLASSIFIER_CAP),
   () => buildSchemaNames.map((n) => `${n} ${wf[n] ? JSON.stringify(wf[n]).length : "MISSING"}`).join(", "));
+// ENG-95930 (review) — ALL FIVE capped row fields, not three. A cap on `deliverable`/`status`/`evidence` while
+// `outcome`/`owner` stayed plain strings left the same oversized-answer class open through the other two.
+check("ENG-95930 (review): EVERY string field of the BUILD park summary carries `maxLength`, and the array carries `maxItems` — a partially-capped row reproduces mode B through whichever field was left open",
+  (() => {
+    const p = shortRowsSchema?.items?.properties || {};
+    return shortRowsSchema?.maxItems === 3
+      && ["deliverable", "status", "evidence", "outcome", "owner"].every((f) => p[f]?.maxLength === 80)
+      && wf.BUILD_SCHEMA_PAGE?.properties?.selfCheck?.properties?.remainingRowCount?.type === "integer";
+  })(),
+  () => JSON.stringify(shortRowsSchema?.items?.properties || {}));
+// ENG-95930 (review) — the SAME invariant for the Reconcile answer. The bound lives on the SCHEMA (host-enforced,
+// before serialization), never only in `RECONCILE_SHAPE`, which is walked after an answer arrives: mode B truncates
+// at the transport, so a shape-level bound could report an oversized answer but never prevent one.
+check("ENG-95930 (review): EVERY array property of `RECONCILE_SCHEMA` carries `maxItems` — the mode-B invariant has to hold for the whole answer, not just the one field that caused the incident",
+  (() => {
+    const props = Object.entries(wf.RECONCILE_SCHEMA?.properties || {}).filter(([, v]) => v?.type === "array");
+    return props.length > 0 && props.every(([, v]) => Number.isInteger(v.maxItems));
+  })(),
+  () => Object.entries(wf.RECONCILE_SCHEMA?.properties || {})
+    .filter(([, v]) => v?.type === "array" && !Number.isInteger(v.maxItems)).map(([k]) => k).join(", ") || "(all bounded)");
+// ENG-95930 (review) — BOTH exhaustion paths say they are giving up, and neither claims a retry that will not run.
+check("ENG-95930 (review): the shape-fault and no-answer retry logs are BOTH guarded by `attempt < RECONCILE_ATTEMPTS`, and each exhaustion path logs a distinct giving-up line — a line promising a retry on the final attempt is the misdiagnosis this ticket exists to close",
+  /but the answer is short of the shape this script computes on — retrying:/.test(wfSrc)
+    && /and is STILL short of the shape this script computes on — giving up, nothing was built:/.test(wfSrc)
+    && /returned nothing on attempt \$\{attempt\} of \$\{RECONCILE_ATTEMPTS\} — giving up, nothing was built/.test(wfSrc)
+    && !/RECONCILE_ATTEMPTS\} but the answer is short of the shape this script computes on — retrying: \$\{faults\.join\(' · '\)\}`\)\n\s*continue/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /giving up, nothing was built|— retrying/.test(l)).join("\n").slice(0, 500));
 // The OTHER shipped workflow, sliced the same way. It is nowhere near the cap today (292–987 bytes) and that is
 // exactly why it belongs here: a schema crosses the line one field at a time.
 let tmpBa;
@@ -1921,7 +1948,7 @@ check("workflow: the verifier `evidence` instruction files only the ids this rou
   wfSrc.includes("**FILE ONLY THE IDS THIS ROUND OWNS:**"));
 check("workflow: Reconcile is asked for `pagesRecorded`, without which the read-back scope degrades to the old sweep",
   wfSrc.includes("Also return \\`pagesRecorded\\`")
-    && wfSrc.includes("pagesRecorded: { type: 'array', items: { type: 'string' } }"));
+    && wfSrc.includes("pagesRecorded: { type: 'array', maxItems: 400, items: { type: 'string' } }"));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -3436,13 +3463,23 @@ check("ENG-95472: BOTH engine runs Reconcile already makes carry `--slices`, so 
 // which reads the builder's OWN post-build get-page (`self-built-N.json`) — absent or stale at the START of a repair
 // round. Two contracts, two file pairs.
 check("ENG-95930 T2: `cliRepairCheck` composes the SCOPED gate over `built-N.json` → `repair-verdict-N.json` — the repair seed a round-2 builder reads its own open rows from, in its own context",
-  /const cliRepairCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(builtSliceFile\(key\)\)\} --page \$\{q\(key\)\} --verify-json \$\{q\(repairVerdictFile\(key\)\)\}`\)/.test(wfSrc)
-    && /const repairVerdictFile = \(key\) => `\$\{ctx\.SLICE_DIR\}\/repair-verdict-\$\{unitNoOf\(key\)\}\.json`/.test(wfSrc),
+  /const cliRepairCheck = \(key, roundNo\) => ctx\.cli\(`--verify --built \$\{q\(builtSliceFile\(key\)\)\} --page \$\{q\(key\)\} --verify-json \$\{q\(repairVerdictFile\(key, roundNo\)\)\}`\)/.test(wfSrc)
+    && /const repairVerdictFile = \(key, roundNo\) => `\$\{ctx\.SLICE_DIR\}\/repair-verdict-\$\{unitNoOf\(key\)\}-r\$\{roundNo\}\.json`/.test(wfSrc),
   () => wfSrc.split("\n").filter((l) => /cliRepairCheck|repairVerdictFile/.test(l)).slice(0, 4).join("\n"));
+// ENG-95930 (review) — THE STALENESS GUARD THAT CANNOT FAIL OPEN. `pageKey` and `planVersion` are both constant
+// across a unit's repair rounds, so they cannot distinguish round 2 from round 1's leftover verdict. Since the file
+// is written by the AGENT running the gate — not pushed by the script — a skipped or silently-failed CLI step would
+// otherwise leave round 1's rows in place and pass both checks trivially. The ROUND IS IN THE PATH, so it cannot.
+check("ENG-95930 (review): the repair-verdict path is ROUND-SCOPED — a skipped or failed `cliRepairCheck` in round 2+ cannot silently read the previous round's verdict, which `pageKey`/`planVersion` (constant per unit and per run) can never detect",
+  /repair-verdict-\$\{unitNoOf\(key\)\}-r\$\{roundNo\}\.json/.test(wfSrc)
+    && /repairBlock\(roundNo, MAX_ROUNDS, cliRepairCheck\(unit\.key, roundNo\), repairVerdictFile\(unit\.key, roundNo\), unit\.key\)/.test(wfSrc)
+    && wf.repairBlock(2, 3, "cli", "/m/slices/repair-verdict-2-r2.json", "k").includes("repair-verdict-2-r2.json")
+    && /If the file is not there at all, step 1 did not run or failed/.test(wf.repairBlock(2, 3, "cli", "/p.json", "k")),
+  () => wf.repairBlock(2, 3, "cli", "/m/slices/repair-verdict-2-r2.json", "k").slice(0, 400));
 check("ENG-95930 T2: `cliRepairCheck` reads `built-N.json` (the verifier's last read), NOT `self-built-N.json` — the self-built slice exists only AFTER the builder get-pages, so it is absent/stale at the start of a repair round; the two gates stay distinct",
-  /const cliRepairCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(builtSliceFile\(key\)\)\}/.test(wfSrc)
+  /const cliRepairCheck = \(key, roundNo\) => ctx\.cli\(`--verify --built \$\{q\(builtSliceFile\(key\)\)\}/.test(wfSrc)
     && /const cliSelfCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(selfBuiltFile\(key\)\)\}/.test(wfSrc)
-    && !/const cliRepairCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(selfBuiltFile/.test(wfSrc),
+    && !/const cliRepairCheck = \(key, roundNo\) => ctx\.cli\(`--verify --built \$\{q\(selfBuiltFile/.test(wfSrc),
   () => wfSrc.split("\n").filter((l) => /const cli(Repair|Self)Check/.test(l)).join("\n"));
 check("ENG-95930 T2: the PAGE build prompt's repair round runs `cliRepairCheck`, reads `repair-verdict-N.json`, guards `pageKey`/`planVersion` before repairing, fixes only `owner:\"builder\"` rows, and does NOT return them",
   () => {

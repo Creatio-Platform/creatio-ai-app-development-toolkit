@@ -363,7 +363,12 @@ export function makePaths(ctx, getUnitKeys) {
   // seed `built-N.json` → `repair-verdict-N.json`; post-build self-check `self-built-N.json` → `self-verdict-N.json`.
   // The gate only composes the CLI string — the build agent validates `pageKey`/`planVersion` in the slice before
   // trusting it (a wrong number is another unit's file; a stale `planVersion` is last plan's settled work).
-  const repairVerdictFile = (key) => `${ctx.SLICE_DIR}/repair-verdict-${unitNoOf(key)}.json`
+  // ROUND-SCOPED BY CONSTRUCTION (ENG-95930 review). `pageKey` and `planVersion` are both CONSTANT across a unit's
+  // repair rounds, so they cannot tell round 2 that it is reading round 1's file — and this hand-off is written by
+  // the AGENT running the gate, not pushed by the script, so a skipped or silently-failed CLI step would otherwise
+  // leave a previous round's verdict in place and pass both checks trivially. Before the round is in the PATH, the
+  // only staleness guard was a check that cannot fail. With it, a stale round simply is not found.
+  const repairVerdictFile = (key, roundNo) => `${ctx.SLICE_DIR}/repair-verdict-${unitNoOf(key)}-r${roundNo}.json`
 const cliSpec = (key) => ctx.cli(`--spec --page ${q(key)} --out ${q(specFile(key))}`)
 // The IN-CONTEXT single-unit gate (ENG-95469): the builder's own scoped `--verify` over ITS page, writing a
 // single-unit verdict file. `--verify --page <key> --verify-json` reconciles what the slice DECLARED against what
@@ -372,7 +377,7 @@ const cliSelfCheck = (key) => ctx.cli(`--verify --built ${q(selfBuiltFile(key))}
 // THE REPAIR-SEED gate command (ENG-95930): the scoped single-unit `--verify` over the VERIFIER's last read of this
 // page (`built-N.json`), writing the per-page verdict a repair-round builder reads its open rows from. Same scoped
 // gate as `cliSelfCheck`, over a DIFFERENT (guaranteed-present-at-round-start) built input, to a DIFFERENT verdict.
-const cliRepairCheck = (key) => ctx.cli(`--verify --built ${q(builtSliceFile(key))} --page ${q(key)} --verify-json ${q(repairVerdictFile(key))}`)
+const cliRepairCheck = (key, roundNo) => ctx.cli(`--verify --built ${q(builtSliceFile(key))} --page ${q(key)} --verify-json ${q(repairVerdictFile(key, roundNo))}`)
   // ---8<--- END PER-UNIT FILE NAMES ---8<---
 return { unitNoOf, readablePart, unitFileStem, specFile, worklogFile, sharedWorklogFile, queueSliceFile, builtSliceFile,
   selfBuiltFile, selfVerdictFile, repairVerdictFile, cliSpec, cliSelfCheck, cliRepairCheck }

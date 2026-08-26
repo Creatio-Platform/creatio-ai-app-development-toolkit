@@ -4,7 +4,13 @@
 // reads. A host without structured output cannot run this workflow at all, which is why `structuredOutput` is a
 // REQUIRED capability rather than a degradable one.
 
-// THE INNER SHAPE OF THIS RUN'S FIRST ANSWER LIVES IN `RECONCILE_SHAPE` (helpers.mjs), NOT HERE.
+// THE INNER SHAPE OF THIS RUN'S FIRST ANSWER LIVES IN `RECONCILE_SHAPE`, at the BOTTOM OF THIS FILE — beside the
+// schema it completes. `helpers.mjs` hosts only the checker that walks it (`reconcileShapeErrors`).
+//
+// SIZE BOUNDS BELONG HERE, NOT IN THE SHAPE TABLE. `maxItems` on this schema is enforced by the HOST, before the
+// answer is serialized; `RECONCILE_SHAPE` is walked only AFTER an answer arrives, so a bound there could report an
+// oversized answer but never prevent one — and mode B truncates the payload at the transport, before any of this
+// script's code sees it. Hence every array property below carries `maxItems`.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
 // `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3500 —
@@ -40,8 +46,8 @@ export const RECONCILE_SCHEMA = {
     // define the plan. NOT read out of `plan.md`, and never composed: `plan.md` is ENGINE-WRITTEN and presented
     // verbatim, so it carries whatever `--plan` printed and nothing an agent could add would survive a re-run.
     planVersion: { type: 'string' },
-    unitKeys: { type: 'array', items: { type: 'string' } },        // `--units.pages[].key`, verbatim
-    buildOrder: { type: 'array', items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
+    unitKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },        // `--units.pages[].key`, verbatim
+    buildOrder: { type: 'array', maxItems: 400, items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
     // THE TARGET PACKAGE, and whether it EXISTS. Nothing in the run used to ask, and the omission cost a whole
     // run: on a migration into a NEW application every page unit is unbuildable until the package exists, and
     // `create-app` — the only way to obtain it — also mints the starter pages that are `main`'s deliverable, which
@@ -70,7 +76,7 @@ export const RECONCILE_SCHEMA = {
     // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
     // session found is still an orphan), never overwritten by it.
     // Each entry `{ schema, orphanedBy, at }`, `schema` required.
-    orphanedPagesOnFile: { type: 'array', items: { type: 'object' } },
+    orphanedPagesOnFile: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -87,7 +93,7 @@ export const RECONCILE_SCHEMA = {
     applicationCode: { type: ['string', 'null'] },
     // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
-    componentTypes: { type: 'array', items: { type: 'string' } },
+    componentTypes: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
     // resolved against the TARGET stand: `{ type, resolved, note }`. This is what the pre-build component gate
     // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
@@ -101,18 +107,18 @@ export const RECONCILE_SCHEMA = {
     // half of the message depends on the free-text `note` the agent put here — its quality is agent-dependent by
     // design for now, not an engine-published fact.
     // One `{ type, resolved, note }` per entry, `type`/`resolved` required.
-    componentResolution: { type: 'array', items: { type: 'object' } },
+    componentResolution: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
     // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
     // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
-    templateNames: { type: 'array', items: { type: 'string' } },
+    templateNames: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only resolution of each `templateNames` entry against the TARGET stand:
     // `{ name, resolved, note }`. Same shape, same rules and the same absence rule as `componentResolution`: only an
     // explicit `resolved: false` gates, an unreported name is not a failure, and a plan predating the field behaves
     // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
     // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
     // One `{ name, resolved, note }` per entry, `name`/`resolved` required.
-    templateResolution: { type: 'array', items: { type: 'object' } },
+    templateResolution: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
     // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
     // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
@@ -131,7 +137,7 @@ export const RECONCILE_SCHEMA = {
     parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
     // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
     // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default.
-    reachability: { type: 'array', items: { type: 'object' } },
+    reachability: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
     reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
@@ -140,48 +146,48 @@ export const RECONCILE_SCHEMA = {
     // or the literal `null` on an unanswered item. `null` is LEGAL and `RECONCILE_SHAPE` accepts it: an
     // object-only rule pushes the agent to omit the field instead, and an omitted field cannot be told apart
     // from an engine that publishes no answers at all.
-    preflightItems: { type: 'array', items: { type: 'object' } },
+    preflightItems: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
     // the operator believes is applied.
     // IDENTIFIERS ONLY — no `answer` text. An agent retypes every field of this into a tool call each round, and the
     // text is already in the operator's own file; naming which answer missed is the whole job.
     // Both carry `{ id, kind, item }` per entry — identifiers only, no `answer` text.
-    resolutionsUnmatched: { type: 'array', items: { type: 'object' } },
-    resolutionsConflicts: { type: 'array', items: { type: 'object' } },
-    evidenceIds: { type: 'array', items: { type: 'string' } },
+    resolutionsUnmatched: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    resolutionsConflicts: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    evidenceIds: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
     // judge is only ever handed ids, so a record nobody names is a page that can never close.
-    unjudgedEvidenceIds: { type: 'array', items: { type: 'string' } },
+    unjudgedEvidenceIds: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // WHAT IS ALREADY ANSWERED, so Preflight does not re-derive it. `--units.preflight` is the plan's list of open
     // questions and says nothing about which have been resolved; without these two a resumed run re-ran the whole
     // fan-out over records that were already on file, and the merge would overwrite each one with the second
     // answer. Both are read off the built file, and both may be empty on a first run.
-    evidenceFiled: { type: 'array', items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
-    evidenceRejected: { type: 'array', items: { type: 'string' } },  // ids the judge ruled `convincing: false`
+    evidenceFiled: { type: 'array', maxItems: 400, items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
+    evidenceRejected: { type: 'array', maxItems: 400, items: { type: 'string' } },  // ids the judge ruled `convincing: false`
     // Keys whose `pages` entry already exists in `built.json` — a recorded object, or `false` for "checked,
     // genuinely not built". Absent or empty fetches every key. This is a REPORT, not a verified fact, and the only
     // thing that makes an over-report survivable is Reconcile's own all-keys sweep running every round regardless of
     // what Verify skipped: a wrongly-skipped page is re-read there, and its unit stays open until it is.
-    pagesRecorded: { type: 'array', items: { type: 'string' } },
+    pagesRecorded: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
     // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
     // round for a unit its predecessor already gave up on and asked the user about.
     // Each `{ key, parkedWhy, rounds }`, `key` required.
-    parkedUnits: { type: 'array', items: { type: 'object' } },
+    parkedUnits: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // Plan deviations, blockers and builder-vs-stand disagreements already in the queue file from an
     // earlier session. They seed this run's lists so a kill does not erase what a previous one recorded.
     // Each `{ unit, deviation, why, applied }`, `deviation`/`why` required.
-    proposals: { type: 'array', items: { type: 'object' } },
+    proposals: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // Each `{ unit, what, why }`, `what`/`why` required.
-    blocked: { type: 'array', items: { type: 'object' } },
+    blocked: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // Each `{ unit, claim, found, round }`, `unit`/`claim`/`found` required.
-    discrepancies: { type: 'array', items: { type: 'object' } },
+    discrepancies: { type: 'array', maxItems: 400, items: { type: 'object' } },
     // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
     // the run; trusting it silently builds a page nothing gates.
-    staleQueueKeys: { type: 'array', items: { type: 'string' } },
-    newKeys: { type: 'array', items: { type: 'string' } },
+    staleQueueKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    newKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
     // builderOpen, planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
     // `openRows`. The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
@@ -194,7 +200,7 @@ export const RECONCILE_SCHEMA = {
     exitCode: { type: 'integer' },
     // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
     // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
-    planGaps: { type: 'array', items: { type: 'string' } },
+    planGaps: { type: 'array', maxItems: 400, items: { type: 'string' } },
     roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
     continuationOf: { type: 'object', additionalProperties: { type: 'integer' } },
     verifyTablePath: { type: 'string' },

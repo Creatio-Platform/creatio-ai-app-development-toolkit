@@ -469,7 +469,10 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
         if (attempt < RECONCILE_ATTEMPTS) {
           log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`)
         } else {
-          log(`Reconcile (${label}) answered on all ${RECONCILE_ATTEMPTS} attempts and is still short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
+          // "on this attempt", NOT "on all N": an earlier attempt may have returned NOTHING (the host refused it),
+          // and `lastShapeFaults` is reset on that path, so claiming every attempt answered would tell the operator
+          // the host is fine when it may have blocked half the budget.
+          log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} and is STILL short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
         }
         continue
       }
@@ -478,7 +481,13 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
       // attempts, the host is not blocking anything" while the host blocked the rest, which is the misdiagnosis
       // this whole ticket corrects.
       lastShapeFaults = []
-      if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`)
+      if (attempt < RECONCILE_ATTEMPTS) {
+        log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`)
+      } else {
+        // The exhaustion of THIS path used to log nothing at all, so the last thing an operator saw was a retry
+        // notice for an attempt that had already been spent. Both exhaustion paths now say they are giving up.
+        log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built; read the host's own reason before re-running, since the schema-size refusal is deterministic`)
+      }
     }
     return null
   }
@@ -1316,7 +1325,7 @@ RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this
     // position, so `cliRepairCheck`/`repairVerdictFile` throw for the app/reach units that hold no such slice), so a
     // non-page repair round carries only the round marker and a pointer to the on-disk table.
     let repair = ''
-    if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key), repairVerdictFile(unit.key), unit.key)
+    if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key, roundNo), repairVerdictFile(unit.key, roundNo), unit.key)
     else if (roundNo > 1) repair = `\nTHIS IS REPAIR ROUND ${roundNo} of ${MAX_ROUNDS} for this unit. The gate already ran and this unit is NOT closed — re-read ${VERIFY_TABLE} for what remains, redo exactly that, and do not rebuild what is already ✅.\n`
     const known = pageSchemas[unit.key]
     const continuationBudget = continuationBudgetBlock(BUILD_TURN_BUDGET)

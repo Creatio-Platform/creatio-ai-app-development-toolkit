@@ -310,7 +310,7 @@ const builtSliceFile = (key) => `${SLICE_DIR}/built-${unitNoOf(key)}.json`
 // authoritative evidence — so a short unit is caught before it reports complete, not a round later.
 const selfBuiltFile = (key) => `${SLICE_DIR}/self-built-${unitNoOf(key)}.json`
 const selfVerdictFile = (key) => `${SLICE_DIR}/self-verdict-${unitNoOf(key)}.json`
-const repairVerdictFile = (key) => `${SLICE_DIR}/repair-verdict-${unitNoOf(key)}.json`
+const repairVerdictFile = (key, roundNo) => `${SLICE_DIR}/repair-verdict-${unitNoOf(key)}-r${roundNo}.json`
 // ---8<--- END PER-UNIT FILE NAMES ---8<---
 // SHELL-QUOTE every path that goes into a command line. These strings are handed to an agent to run in a shell, so
 // an unquoted `/tmp/My Migration/manifest.json` splits into two arguments and every engine phase then reads or
@@ -335,7 +335,7 @@ const cliBuiltPage = (key) => cli(`--verify --built ${q(BUILT_FILE)} --page ${q(
 // single-unit verdict file. `--verify --page <key> --verify-json` reconciles what the slice DECLARED against what
 // was built, for this page only, and exits 2 when the build is short — the ONE `--verify` a builder runs.
 const cliSelfCheck = (key) => cli(`--verify --built ${q(selfBuiltFile(key))} --page ${q(key)} --verify-json ${q(selfVerdictFile(key))}`)
-const cliRepairCheck = (key) => cli(`--verify --built ${q(builtSliceFile(key))} --page ${q(key)} --verify-json ${q(repairVerdictFile(key))}`)
+const cliRepairCheck = (key, roundNo) => cli(`--verify --built ${q(builtSliceFile(key))} --page ${q(key)} --verify-json ${q(repairVerdictFile(key, roundNo))}`)
 
 // ---------------------------------------------------------------------------
 // Schemas. Structured output everywhere a later phase or this script COMPUTES on
@@ -352,6 +352,18 @@ const cliRepairCheck = (key) => cli(`--verify --built ${q(builtSliceFile(key))} 
 // read every page as "not build-complete" and false-flag an honest `buildComplete:true` self-report as
 // `reported-complete-but-verifier-open`) — the exact regression this ticket exists to fix, reappearing
 // specifically on the schema-constrained path that none of the hand-built-fixture tests below exercise.
+// ENG-95930 review — WHY THIS SCHEMA IS STILL THE OLD, FULLY-TYPED ONE, DELIBERATELY.
+// `schemas.mjs` shrank `RECONCILE_SCHEMA`/`VERIFY_RESULT` to bare `object`/`array of object` to fit the host's
+// 4096-byte classifier cap, and covered the resulting hole with the `RECONCILE_SHAPE` runtime check plus a
+// shape-fault retry. NONE of that is mirrored here, and that is intentional: the parity contract this fixture
+// serves is phase sequence, dispatch order, prompt text byte-for-byte and return value (see
+// `skills/_workflow-core/README.md`) — NOT schema-object equality. Mirroring the shrink would change nothing the
+// harness compares while making the fixture track an implementation detail it exists to be independent of.
+// The reason that is SAFE rather than merely convenient: this file is executed in exactly one place —
+// `engine-tests/classic-to-freedom/run-workflow-parity.mjs` (its `baseline:` path). It is never installed, never
+// shipped, and never used as a runtime fallback, so its schema objects are never handed to a host and cannot be
+// exposed to mode A or mode B. If that ever stops being true — if anything outside the parity harness loads this
+// file — these declarations have to be brought in line with `schemas.mjs` first.
 const VERIFY_RESULT = {
   type: 'object',
   required: ['complete', 'missing', 'unverified', 'pages'],
@@ -1448,7 +1460,7 @@ function repairBlock(roundNo, maxRounds, repairCheckCli, repairVerdictPath, page
   if (roundNo <= 1) return ''
   return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and this page still has open rows — but they are NOT in this prompt. Read them YOURSELF, at the START of this round, before you build anything:
 1. Run \`${repairCheckCli}\` — the scoped single-unit gate over the verifier's LAST read of THIS page off the stand (\`built-N.json\`, written by the central gate on its exit 2). It writes this page's verdict to \`${repairVerdictPath}\`.
-2. Read \`${repairVerdictPath}\` and CHECK IT IS YOURS before you trust a single row: \`pageKey\` MUST read exactly \`${pageKey}\`, and \`planVersion\` MUST match this run's plan version. If either is absent or different, that slice is stale or from another plan — report it in \`blocked\` and repair NOTHING from it (a wrong number is a different unit's file; a leftover \`planVersion\` is work that no longer exists).
+2. Read \`${repairVerdictPath}\` and CHECK IT IS YOURS before you trust a single row: \`pageKey\` MUST read exactly \`${pageKey}\`, and \`planVersion\` MUST match this run's plan version. If either is absent or different, that slice is stale or from another plan — report it in \`blocked\` and repair NOTHING from it (a wrong number is a different unit's file; a leftover \`planVersion\` is work that no longer exists). **If the file is not there at all, step 1 did not run or failed — report THAT in \`blocked\` and repair nothing; do NOT fall back to another round's file.** The path carries THIS round's number, so a previous round's verdict can never be mistaken for yours: \`pageKey\` and \`planVersion\` are identical in every round of this run and cannot tell the two apart on their own.
 3. For every \`openRows\` entry whose \`owner\` is \`"builder"\`, its Evidence cell IS the repair — a field absent BY NAME, a component type absent, a wrong package, or a rule the slot does not carry. Fix exactly those; do not rebuild what is already ✅, and NEVER touch an \`owner:"verifier"\` row (evidence, judge verdict and reachability are a separate agent's to file).
 4. Do NOT return these open rows in your structured answer — they stay in your context and in \`${repairVerdictPath}\` on disk. Your answer carries counts, flags and at most a capped park summary, never per-row prose.\n`
 }
@@ -3029,7 +3041,7 @@ function buildPrompt(unit, st, roundNo) {
   // ENG-95930 (mode B) — the repair rows are NOT interpolated here; a PAGE repair round reads its own rows via the
   // scoped `cliRepairCheck` gate, and a non-page unit carries only the round marker.
   let repair = ''
-  if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key), repairVerdictFile(unit.key), unit.key)
+  if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key, roundNo), repairVerdictFile(unit.key, roundNo), unit.key)
   else if (roundNo > 1) repair = `\nTHIS IS REPAIR ROUND ${roundNo} of ${MAX_ROUNDS} for this unit. The gate already ran and this unit is NOT closed — re-read ${VERIFY_TABLE} for what remains, redo exactly that, and do not rebuild what is already ✅.\n`
   const known = pageSchemas[unit.key]
   const continuationBudget = continuationBudgetBlock(BUILD_TURN_BUDGET)
