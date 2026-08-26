@@ -371,9 +371,11 @@ export const BUILD_PROPERTIES = {
           type: 'object',
           required: ['deliverable', 'status', 'evidence'],
           // `outcome`/`owner` ride along so the tail cross-check can tell a builder-owned shortfall from a row the
-          // builder was never allowed to close, without re-deriving what the engine already decided.
+          // builder was never allowed to close, without re-deriving what the engine already decided. They carry the
+          // SAME `maxLength` as the other three: a cap on three of five string fields leaves the same overflow open
+          // through the other two, and these are short enum-ish words in practice, so the bound costs nothing.
           properties: { deliverable: { type: 'string', maxLength: 80 }, status: { type: 'string', maxLength: 80 }, evidence: { type: 'string', maxLength: 80 },
-            outcome: { type: 'string' }, owner: { type: 'string' } },
+            outcome: { type: 'string', maxLength: 80 }, owner: { type: 'string', maxLength: 80 } },
         },
       },
       remainingRowCount: { type: 'integer', minimum: 0 },

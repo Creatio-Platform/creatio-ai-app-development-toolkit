@@ -462,7 +462,15 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
         const faults = reconcileShapeErrors(answer)
         if (!faults.length) return answer
         lastShapeFaults = faults
-        log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`)
+        // THE LOG MUST NOT PROMISE A RETRY THE LOOP WILL NOT RUN. On the LAST attempt `continue` exits the loop and
+        // `reconcileAgent` returns null, so a line ending in "retrying" would tell the operator a re-dispatch is
+        // coming when the call is actually being abandoned — the same misdiagnosis class this ticket exists to close.
+        // Guarded exactly like the no-answer branch below, with a distinct giving-up line on the final attempt.
+        if (attempt < RECONCILE_ATTEMPTS) {
+          log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`)
+        } else {
+          log(`Reconcile (${label}) answered on all ${RECONCILE_ATTEMPTS} attempts and is still short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
+        }
         continue
       }
       // THE FAULT LIST IS THIS ATTEMPT'S, NOT THE RUN'S. A host that refuses attempt 2 after attempt 1 answered
