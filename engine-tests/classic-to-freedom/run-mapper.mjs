@@ -10033,17 +10033,29 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
 {
   const d = n2TmpDir("bytes");
   const r = n2RunCli(n2TreeManifest("Education school", "Experience school"), N2_UNITS, N2_SLICES, d);
-  const keys = r.stdout?.trim().startsWith("{") ? JSON.parse(r.stdout).pages.map((p) => p.key) : [];
+  // NOTHING out here may throw. These lines run OUTSIDE a `check` thunk, so an unguarded parse or `statSync`
+  // aborts the runner and hides every assertion after it instead of failing one — the same reason fixture 1
+  // pins its `--units` run before parsing. A missing slice file is exactly what these two checks exist to
+  // catch, so it has to arrive as a red check and not as an exception.
+  let parsed = null;
+  try { parsed = JSON.parse(r.stdout || ""); } catch { parsed = null; }
+  const keys = (parsed?.pages || []).map((p) => p.key);
+  const sliceFiles = keys.map((_, i) => n2SliceFile(d, N2_Q, i + 1));
+  check("ENG-95472: the bytes fixture published three page keys and wrote a slice file for each, so the two measurements below read real files",
+    () => keys.length === 3 && sliceFiles.every((f) => fs.existsSync(f)),
+    () => ({ status: r.status, keys, files: fs.readdirSync(d), stderr: (r.stderr || "").slice(0, 200) }));
   const wholeBytes = Buffer.byteLength(r.stdout || "", "utf8");
-  const sliceBytes = keys.map((k, i) => fs.statSync(n2SliceFile(d, N2_Q, i + 1)).size);
+  const sliceBytes = sliceFiles.filter((f) => fs.existsSync(f)).map((f) => fs.statSync(f).size);
   const sumSlices = sliceBytes.reduce((t, b) => t + b, 0);
   // What the run cost BEFORE: every agent opened the whole queue. AFTER: each opens its own row.
   const runBefore = wholeBytes * keys.length, runAfter = sumSlices;
   check("ENG-95472: the slices PARTITION the queue — together they are about the whole file, not a fraction of it",
-    () => keys.length === 3 && sumSlices > wholeBytes * 0.5 && sumSlices < wholeBytes * 2,
+    () => keys.length === 3 && sliceBytes.length === keys.length
+      && sumSlices > wholeBytes * 0.5 && sumSlices < wholeBytes * 2,
     () => ({ wholeBytes, sliceBytes, sumSlices, ratio: +(sumSlices / wholeBytes).toFixed(2) }));
   check("ENG-95472: so the saving is the RUN TOTAL and it scales with the page count — not an order of magnitude off any single agent's read",
-    () => runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / 10),
+    () => sliceBytes.length === keys.length && keys.length > 0
+      && runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / 10),
     () => ({ pages: keys.length, runBefore, runAfter, runSaving: +(runBefore / runAfter).toFixed(2),
       perAgent: sliceBytes.map((b) => +(wholeBytes / b).toFixed(2)) }));
   fs.rmSync(d, { recursive: true, force: true });
