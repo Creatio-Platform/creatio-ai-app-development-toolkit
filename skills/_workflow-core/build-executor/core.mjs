@@ -149,10 +149,10 @@ export function* run(rawInput, io = {}, opts = {}) {
     SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS,
     MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET, FINDINGS, FINDING_KEYS,
     VERIFICATION_SURFACE_NOTE,
-    QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
+    QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
     REFS_DIR, REFS_INDEX, RESOLUTIONS_FILE,
     CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
-    dataFence, openRowPrompt, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
+    dataFence, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
   } = ctx
   // A finding reopens its unit for ONE repair attempt, and this set is what makes that terminate. It is MUTABLE run
   // state (consumed at dispatch), which is why it lives here and not in the context: reading the constant
@@ -162,7 +162,7 @@ export function* run(rawInput, io = {}, opts = {}) {
   // baseline Reconcile below, and every one of these is only ever called after that.
   const paths = makePaths(ctx, () => state?.unitKeys)
   const { specFile, worklogFile, sharedWorklogFile, queueSliceFile, builtSliceFile,
-    selfBuiltFile, selfVerdictFile, cliSpec, cliSelfCheck } = paths
+    selfBuiltFile, selfVerdictFile, repairVerdictFile, cliSpec, cliSelfCheck, cliRepairCheck } = paths
 
   // The persistence step runs several times per round, so its work-item id has to distinguish the calls — by a
   // COUNTER, never a clock: a resumed run replays the journal by id and must ask for the same ids in the same
@@ -367,8 +367,8 @@ DO SIX THINGS, in order:
    - For a key with NO recorded schema: write NOTHING for it and say so in \`notes\` as "cannot verify, unknown schema". That is an explicit state, not a skip — the key stays unverified, the unit stays open, and the build agent that takes it will report the schema it resolves to.
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. **RETURN BOTH AS \`[]\` WHEN THERE IS NOTHING TO LIST — do not omit them.** Round 1 has nothing filed and nothing rejected, and that is the normal case, not a reason to leave the field out: both are REQUIRED, and the close row reads them to tell an id that is already earned from one that is merely unfiled. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer. Also return \`pagesRecorded\` — EVERY key whose \`pages\` entry already exists in the built file, whether that entry is a recorded object or \`false\`. That is what lets the verifier leave a page this round did not touch alone instead of re-reading the whole section every round; omit it and every page is fetched again, which is correct but wasteful.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
-   - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the machine verdict, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
-   - Return \`verify\` = the CONTENTS of ${VERIFY_DIGEST}, copied verbatim — the DIGEST, not ${VERIFY_JSON}. Same shape, minus the open rows of pages that are already complete (nothing reads those). ${VERIFY_JSON} is still written and is the audit copy; do not transcribe it, it is several times larger and the difference is rows no one consumes. COPY EVERY FIELD OF THE DIGEST, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified, openRows }\` with each \`openRows\` entry \`{ n, deliverable, status, evidence, outcome, owner, id }\`. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, do not summarise \`openRows\` — its \`deliverable\`/\`status\`/\`evidence\` strings are handed to the next build round verbatim, and a paraphrase there sends an agent to repair something the gate did not say. Also return \`exitCode\` and \`verifyTablePath\`.
+   - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the full machine verdict, \`--verify-digest\` the same minus completed pages' rows, \`--verify-summary\` the COUNTS-ONLY verdict you copy below, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
+   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified }\`. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
 
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
@@ -864,29 +864,26 @@ Return the schema. Nothing else.`
   const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
     isUnitOpenWithFindings(u, state.verify, state.reachabilityState, findingsPending, packageState))
 
-  // One open row, rendered as the engine wrote it — Deliverable, Status, Evidence. The evidence cell IS the repair
-  // instruction ("missing: Amount", "built in `X` but the plan targets `Y`", "filed but NOT judged"), so it travels
-  // whole from `--verify-json` to the build agent without anyone restating it.
-  const openRowLine = (r) => `${r.deliverable} — ${r.status} — ${r.evidence}`
   const unitOf = (key) => schedule.find((u) => u.key === key) || { key, kind: 'page' }
 
   // WHY a unit was parked. A park is how this run asks the user a question, and a park with no reason is a
-  // question nobody can answer — so the reason is composed HERE, where the park is decided, out of the
-  // engine's own open rows for that unit. Never blank, never invented after the fact.
+  // question nobody can answer — so the reason is composed HERE, where the park is decided. ENG-95930 (mode B): the
+  // central verify is COUNTS-ONLY now, so the reason carries the counts and a pointer to the on-disk table, never the
+  // open rows themselves — those live in `verify.md`/`verify-digest.json`, one hop away for a human. Never blank.
   function parkWhy(key, rounds) {
     const st = pageStateOf(state.verify, key)
-    const rows = (st?.openRows || []).map(openRowLine)
     const head = `still short after ${rounds} round(s)`
-    if (rows.length) return `${head} — the engine's open rows: ${rows.join(' · ')}`
     const u = unitOf(key)
     if (u.kind === 'reach') return `${head} — ${u.what || 'the on-stand wiring this key names'} was not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
     if (!st) return `${head} — the machine verdict carries no entry for this unit, so nothing confirmed it closed; the usual cause is that no Freedom schema is recorded for the key, which leaves nothing for the verifier to fetch`
-    return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit`
+    return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
   }
   function parkRecord(key, why, rounds) {
     const n = typeof rounds === 'number' ? rounds : roundsRun(state.roundOf, localRounds, key)
     const reason = typeof why === 'string' && why.trim() ? why.trim() : parkWhy(key, n)
-    return { key, kind: unitOf(key).kind || 'page', rounds: n, parkedWhy: reason, shortRows: (pageStateOf(state.verify, key)?.openRows || []).map(openRowLine) }
+    // No inline rows on the record (ENG-95930): the counts-only verify carries none, and the reason already points at
+    // `verify.md`. Kept as a field for shape stability; it is never read back for the queue or the return.
+    return { key, kind: unitOf(key).kind || 'page', rounds: n, parkedWhy: reason, shortRows: [] }
   }
   // Parks come from two places and both must land before the next dispatch: the queue file (a previous
   // session already gave up on the unit) and this round's budget arithmetic. Running it BEFORE the first
@@ -1230,7 +1227,7 @@ IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (EN
 1b. CHECK YOUR OWN READ IS NOT STALE (ENG-95850 / B3). If the bundle's \`fetchedAt\` is OLDER than the page's \`modifiedOn\`, you were handed a cached response describing an earlier state — re-fetch ONCE before you write the file. A stale read makes a page you just built look short, and it would spend your one bounded fix attempt re-doing work that is already there. If it still disagrees, say so in \`notes\` and report \`selfCheck.ran: false\` with that as \`notRunWhy\` rather than gating on a read you cannot trust.
 2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, buildComplete, missing, unverified, openRows }\`. \`buildComplete\` is YOUR axis — it is exit-code-gated and true only when NO open row is yours to close, while rows a separate read-only verifier/judge files (evidence, judge verdict, reachability) may still sit unfiled. A non-zero exit (2) means your build is short — an unfiled-evidence-only page exits 0.
 3. If \`buildComplete\` is NOT true, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` and act on every row whose \`owner\` is \`"builder"\` — each such row's Evidence cell IS the repair (a field absent by name, only some of the expected fields present, a grid with no bound datasource, a partial component count, a component not on the page, a rule the slot does not carry). Fix those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check. NEVER attempt to "fix" a row whose \`owner\` is \`"verifier"\` — the evidence record, the judge verdict and the reachability rows are filed by a separate agent; they are not yours to close, and \`buildComplete\` does not require them. Read \`owner\`, not the \`missing\`/\`unverified\` status: a partially-built page reads \`unverified\` and is still entirely your work.
-4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
+4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and — only when still short — a CAPPED park summary of the verdict's \`openRows\` AFTER the fix: \`stillShortRows\` = AT MOST 3 rows, each with \`deliverable\`/\`status\`/\`evidence\` TRUNCATED to 80 characters (plus \`outcome\`/\`owner\`), and \`remainingRowCount\` = this page's TOTAL open rows minus the number you put in \`stillShortRows\` (0 when they all fit). Do NOT return more than 3 rows and do NOT paste the whole verdict — it stays in \`${selfVerdictFile(unit.key)}\` on disk, and returning all of it is exactly the oversized-answer failure this cap exists to stop. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with that capped summary as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
   }
 
   // THE PREREQUISITE UNIT. It owns `create-app` precisely because that call also mints the starter pages that
@@ -1304,9 +1301,15 @@ IF YOU RE-BIND, SAY WHAT YOU RE-BOUND AWAY FROM (ENG-95850 / B4). \`create-app\`
 RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this page key now resolves to — the page a later \`get-page\` must be handed. Return it whether you created the page or found it already there. \`--units\` cannot publish it (its \`schema\` field is the CLASSIC source, and it is \`null\` for \`main\` and for an unfolded child) and the queue file is its only home. Omit it and nothing can verify this unit, in this session or any later one.`
   }
 
-  function buildPrompt(unit, st, roundNo) {
-    const shortRows = (st?.openRows || []).map((r) => `  - ${openRowPrompt(r)}`).join('\n')
-    const repair = repairBlock(roundNo, shortRows, MAX_ROUNDS, VERIFY_TABLE)
+  function buildPrompt(unit, roundNo) {
+    // ENG-95930 (mode B) — the repair rows are NOT interpolated here. For a PAGE unit `repairBlock` tells the builder
+    // to read its own open rows, in its own context, from a scoped `--verify --page` gate over `built-N.json`; the
+    // verbose rows never cross the Workflow-JS boundary. The gate is page-only (`built-N.json` is numbered by page
+    // position, so `cliRepairCheck`/`repairVerdictFile` throw for the app/reach units that hold no such slice), so a
+    // non-page repair round carries only the round marker and a pointer to the on-disk table.
+    let repair = ''
+    if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key), repairVerdictFile(unit.key), unit.key)
+    else if (roundNo > 1) repair = `\nTHIS IS REPAIR ROUND ${roundNo} of ${MAX_ROUNDS} for this unit. The gate already ran and this unit is NOT closed — re-read ${VERIFY_TABLE} for what remains, redo exactly that, and do not rebuild what is already ✅.\n`
     const known = pageSchemas[unit.key]
     const continuationBudget = continuationBudgetBlock(BUILD_TURN_BUDGET)
     let kindBlock
@@ -1624,7 +1627,6 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
   // ONE UNIT'S DISPATCH — the prompt, the work item, and everything recorded off its answer. Out of the round loop so
   // that loop carries only the round's own control flow, and none of these branches at its nesting depth (Sonar S3776).
   function* dispatchUnit(unit, r) {
-    const st = unit.kind === 'page' ? pageStateOf(state.verify, unit.key) : null
     const nth = Math.max(state.roundOf?.[unit.key] ?? 0, (localRounds[unit.key] ?? 0) + 1)
     // THE WORK-ITEM ID HAS TO BE UNIQUE, and `nth` alone is not (ENG-95474). A granted continuation deliberately
     // charges NO repair round — neither `localRounds` nor `dispatched` moves, so the next Reconcile does not bump
@@ -1633,7 +1635,7 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     // this unit are the discriminator, and a unit that has never continued keeps exactly the id it always had.
     const continuationsSpent = continuations[unit.key] ?? 0
     const itemId = continuationsSpent ? `build.${unit.key}.r${nth}.c${continuationsSpent}` : `build.${unit.key}.r${nth}`
-    const res = yield* dispatch(itemId, buildPrompt(unit, st, nth), {
+    const res = yield* dispatch(itemId, buildPrompt(unit, nth), {
       phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
       // THE ONE STEP THAT WRITES TO THE STAND, and it is dispatched one unit at a time by construction — the
       // stand is a shared mutable resource, so this step is never part of a parallel batch.
@@ -1877,12 +1879,17 @@ Return every verdict you wrote.`,
   // return value rather than a branch in the middle of the run.
   function dryRunReport() {
       const openNowUnits = openNow()
-      const wouldBuild = openNowUnits.map((u) => ({
-        key: u.key,
-        kind: u.kind,
-        schema: pageSchemas[u.key] || null,
-        openRows: (state.verify?.pages?.[u.key]?.openRows || []).map((r) => r.deliverable).slice(0, 8),
-      }))
+      // ENG-95930 (mode B) — COUNTS, not rows. The central verify is counts-only, so the preview reports each unit's
+      // open-row COUNT and points at `verify.md` for the rows themselves, instead of dumping per-row prose.
+      const wouldBuild = openNowUnits.map((u) => {
+        const st = state.verify?.pages?.[u.key]
+        return {
+          key: u.key,
+          kind: u.kind,
+          schema: pageSchemas[u.key] || null,
+          openRowCount: st ? (st.missing ?? 0) + (st.unverified ?? 0) : null,
+        }
+      })
       log(`DRY RUN — nothing was written to the stand. ${wouldBuild.length} unit(s) would build now: ${wouldBuild.map((u) => u.key).join(', ') || '(none — the gate is already green)'}`)
       return runReturn({
         dryRun: true,
@@ -1890,6 +1897,7 @@ Return every verdict you wrote.`,
         rounds: 0,
         verdict: verdictOf(state.verify),
         wouldBuild,
+        verifyTable: VERIFY_TABLE,   // the open rows themselves live here on disk (ENG-95930: the preview carries counts, not prose)
         buildOrder: state.buildOrder || [],
         planGaps: state.planGaps || [],
         unresolvedPreflight,

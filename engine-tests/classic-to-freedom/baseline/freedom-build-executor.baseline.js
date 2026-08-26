@@ -251,6 +251,7 @@ const VERIFY_JSON = `${input.outDir}/verify.json`
 // the full verdict was 102 KB and its Reconcile spent 41 minutes, 19 of 40 shell commands slicing that JSON and
 // three attempts at its structured answer. `verify.json` is still written, unchanged, for audit and the table.
 const VERIFY_DIGEST = `${input.outDir}/verify-digest.json`
+const VERIFY_SUMMARY = `${input.outDir}/verify-summary.json`
 // SHARED KNOWLEDGE, fetched ONCE per run instead of by every fresh-context agent. Measured on that run: tool and
 // component documentation was 40% of everything the build agents consumed (1.83 MB over 118 calls), the same
 // guidance topics and the same six component types over and over, because a fresh context by design starts blank.
@@ -309,6 +310,7 @@ const builtSliceFile = (key) => `${SLICE_DIR}/built-${unitNoOf(key)}.json`
 // authoritative evidence — so a short unit is caught before it reports complete, not a round later.
 const selfBuiltFile = (key) => `${SLICE_DIR}/self-built-${unitNoOf(key)}.json`
 const selfVerdictFile = (key) => `${SLICE_DIR}/self-verdict-${unitNoOf(key)}.json`
+const repairVerdictFile = (key) => `${SLICE_DIR}/repair-verdict-${unitNoOf(key)}.json`
 // ---8<--- END PER-UNIT FILE NAMES ---8<---
 // SHELL-QUOTE every path that goes into a command line. These strings are handed to an agent to run in a shell, so
 // an unquoted `/tmp/My Migration/manifest.json` splits into two arguments and every engine phase then reads or
@@ -323,7 +325,7 @@ const cli = (flags) => `node ${q(ENGINE)} ${q(input.manifest)} ${flags}`
 // failure). So `--units` carries the flag unconditionally and the answers appear the moment the file is written.
 const RESOLUTIONS_FILE = input.resolutionsFile || `${input.outDir}/resolutions.json`
 const CLI_UNITS = cli(`--units --resolutions ${q(RESOLUTIONS_FILE)} --slices ${q(SLICE_DIR)}`)
-const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --slices ${q(SLICE_DIR)}`)
+const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --verify-summary ${q(VERIFY_SUMMARY)} --slices ${q(SLICE_DIR)}`)
 const cliSpec = (key) => cli(`--spec --page ${q(key)} --out ${q(specFile(key))}`)
 const cliChecklistPage = (key) => cli(`--checklist --page ${q(key)}`)
 // The fallbacks when a pre-cut slice is missing: the same row, cut on demand. Never the whole artifact.
@@ -333,6 +335,7 @@ const cliBuiltPage = (key) => cli(`--verify --built ${q(BUILT_FILE)} --page ${q(
 // single-unit verdict file. `--verify --page <key> --verify-json` reconciles what the slice DECLARED against what
 // was built, for this page only, and exits 2 when the build is short — the ONE `--verify` a builder runs.
 const cliSelfCheck = (key) => cli(`--verify --built ${q(selfBuiltFile(key))} --page ${q(key)} --verify-json ${q(selfVerdictFile(key))}`)
+const cliRepairCheck = (key) => cli(`--verify --built ${q(builtSliceFile(key))} --page ${q(key)} --verify-json ${q(repairVerdictFile(key))}`)
 
 // ---------------------------------------------------------------------------
 // Schemas. Structured output everywhere a later phase or this script COMPUTES on
@@ -1438,12 +1441,16 @@ function continuationBudgetBlock(budget) {
   return `\nBUILD CONTINUATION BUDGET: if this unit is approaching about ${budget} assistant turns or the context is getting tight, STOP ONLY AT A SAFE BOUNDARY and return \`continuationRequested: true\`. A safe boundary means no half-written page body, no in-flight browser action, no unresolved create/update call, and all facts you learned are either on the stand, in this unit's worklog file, or in this structured result. Return \`safeContinuationPoint\` naming the boundary and \`continuationReason\` naming what remains. Do NOT call this a blocker and do NOT spend time summarising the whole run. The orchestrator will verify/reconcile what exists, will not charge this as a repair round, and will send this SAME unit to a fresh BUILD agent if it is still open.\n`
 }
 
-// THE REPAIR PREAMBLE, for round 2 and later. Pure and out of `buildPrompt` for the same reason. A round with no open
-// row named still says so rather than rendering an empty list, which reads as "nothing to fix".
-function repairBlock(roundNo, shortRows, maxRounds, verifyTable) {
+// THE REPAIR PREAMBLE, for round 2 and later. Pure and out of `buildPrompt` for the same reason.
+// ENG-95930 (mode B) — the open rows are NO LONGER handed to the builder in this prompt; it reads them from its own
+// scoped gate at the start of the round, and validates the slice is its own before repairing.
+function repairBlock(roundNo, maxRounds, repairCheckCli, repairVerdictPath, pageKey) {
   if (roundNo <= 1) return ''
-  const rows = shortRows || `  - (the verdict named no open row for this unit; re-read ${verifyTable})`
-  return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and these rows are NOT closed — as the engine published them in the machine verdict:\n${rows}\nFix exactly those. The status text already says WHICH repair each needs: a field absent BY NAME, a component type absent, a wrong package, or a record filed but not judged. Do not rebuild what is already ✅.\n`
+  return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and this page still has open rows — but they are NOT in this prompt. Read them YOURSELF, at the START of this round, before you build anything:
+1. Run \`${repairCheckCli}\` — the scoped single-unit gate over the verifier's LAST read of THIS page off the stand (\`built-N.json\`, written by the central gate on its exit 2). It writes this page's verdict to \`${repairVerdictPath}\`.
+2. Read \`${repairVerdictPath}\` and CHECK IT IS YOURS before you trust a single row: \`pageKey\` MUST read exactly \`${pageKey}\`, and \`planVersion\` MUST match this run's plan version. If either is absent or different, that slice is stale or from another plan — report it in \`blocked\` and repair NOTHING from it (a wrong number is a different unit's file; a leftover \`planVersion\` is work that no longer exists).
+3. For every \`openRows\` entry whose \`owner\` is \`"builder"\`, its Evidence cell IS the repair — a field absent BY NAME, a component type absent, a wrong package, or a rule the slot does not carry. Fix exactly those; do not rebuild what is already ✅, and NEVER touch an \`owner:"verifier"\` row (evidence, judge verdict and reachability are a separate agent's to file).
+4. Do NOT return these open rows in your structured answer — they stay in your context and in \`${repairVerdictPath}\` on disk. Your answer carries counts, flags and at most a capped park summary, never per-row prose.\n`
 }
 
 // THE PACKAGE PRECONDITION. Only the cases the run cannot act on are stops — an ABSENT package with a name is not
@@ -2215,8 +2222,8 @@ DO SIX THINGS, in order:
    - For a key with NO recorded schema: write NOTHING for it and say so in \`notes\` as "cannot verify, unknown schema". That is an explicit state, not a skip — the key stays unverified, the unit stays open, and the build agent that takes it will report the schema it resolves to.
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. **RETURN BOTH AS \`[]\` WHEN THERE IS NOTHING TO LIST — do not omit them.** Round 1 has nothing filed and nothing rejected, and that is the normal case, not a reason to leave the field out: both are REQUIRED, and the close row reads them to tell an id that is already earned from one that is merely unfiled. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer. Also return \`pagesRecorded\` — EVERY key whose \`pages\` entry already exists in the built file, whether that entry is a recorded object or \`false\`. That is what lets the verifier leave a page this round did not touch alone instead of re-reading the whole section every round; omit it and every page is fetched again, which is correct but wasteful.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
-   - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the machine verdict, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
-   - Return \`verify\` = the CONTENTS of ${VERIFY_DIGEST}, copied verbatim — the DIGEST, not ${VERIFY_JSON}. Same shape, minus the open rows of pages that are already complete (nothing reads those). ${VERIFY_JSON} is still written and is the audit copy; do not transcribe it, it is several times larger and the difference is rows no one consumes. COPY EVERY FIELD OF THE DIGEST, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified, openRows }\` with each \`openRows\` entry \`{ n, deliverable, status, evidence, outcome, owner, id }\`. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, do not summarise \`openRows\` — its \`deliverable\`/\`status\`/\`evidence\` strings are handed to the next build round verbatim, and a paraphrase there sends an agent to repair something the gate did not say. Also return \`exitCode\` and \`verifyTablePath\`.
+   - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the full machine verdict, \`--verify-digest\` the same minus completed pages' rows, \`--verify-summary\` the COUNTS-ONLY verdict you copy below, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
+   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified }\`. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
 
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
@@ -2634,29 +2641,22 @@ const unknownSchemaNow = () => [...new Set([...unknownSchemaSeen, ...(state.unit
 const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
   isUnitOpenWithFindings(u, state.verify, state.reachabilityState, findingsPending, packageState))
 
-// One open row, rendered as the engine wrote it — Deliverable, Status, Evidence. The evidence cell IS the repair
-// instruction ("missing: Amount", "built in `X` but the plan targets `Y`", "filed but NOT judged"), so it travels
-// whole from `--verify-json` to the build agent without anyone restating it.
-const openRowLine = (r) => `${r.deliverable} — ${r.status} — ${r.evidence}`
 const unitOf = (key) => schedule.find((u) => u.key === key) || { key, kind: 'page' }
 
-// WHY a unit was parked. A park is how this run asks the user a question, and a park with no reason is a
-// question nobody can answer — so the reason is composed HERE, where the park is decided, out of the
-// engine's own open rows for that unit. Never blank, never invented after the fact.
+// WHY a unit was parked. ENG-95930 (mode B): the central verify is counts-only, so the reason carries the counts and
+// a pointer to the on-disk table, never the open rows themselves.
 function parkWhy(key, rounds) {
   const st = pageStateOf(state.verify, key)
-  const rows = (st?.openRows || []).map(openRowLine)
   const head = `still short after ${rounds} round(s)`
-  if (rows.length) return `${head} — the engine's open rows: ${rows.join(' · ')}`
   const u = unitOf(key)
   if (u.kind === 'reach') return `${head} — ${u.what || 'the on-stand wiring this key names'} was not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
   if (!st) return `${head} — the machine verdict carries no entry for this unit, so nothing confirmed it closed; the usual cause is that no Freedom schema is recorded for the key, which leaves nothing for the verifier to fetch`
-  return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit`
+  return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
 }
 function parkRecord(key, why, rounds) {
   const n = typeof rounds === 'number' ? rounds : roundsRun(state.roundOf, localRounds, key)
   const reason = typeof why === 'string' && why.trim() ? why.trim() : parkWhy(key, n)
-  return { key, kind: unitOf(key).kind || 'page', rounds: n, parkedWhy: reason, shortRows: (pageStateOf(state.verify, key)?.openRows || []).map(openRowLine) }
+  return { key, kind: unitOf(key).kind || 'page', rounds: n, parkedWhy: reason, shortRows: [] }
 }
 // Parks come from two places and both must land before the next dispatch: the queue file (a previous
 // session already gave up on the unit) and this round's budget arithmetic. Running it BEFORE the first
@@ -2942,7 +2942,7 @@ IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (EN
 1b. CHECK YOUR OWN READ IS NOT STALE (ENG-95850 / B3). If the bundle's \`fetchedAt\` is OLDER than the page's \`modifiedOn\`, you were handed a cached response describing an earlier state — re-fetch ONCE before you write the file. A stale read makes a page you just built look short, and it would spend your one bounded fix attempt re-doing work that is already there. If it still disagrees, say so in \`notes\` and report \`selfCheck.ran: false\` with that as \`notRunWhy\` rather than gating on a read you cannot trust.
 2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, buildComplete, missing, unverified, openRows }\`. \`buildComplete\` is YOUR axis — it is exit-code-gated and true only when NO open row is yours to close, while rows a separate read-only verifier/judge files (evidence, judge verdict, reachability) may still sit unfiled. A non-zero exit (2) means your build is short — an unfiled-evidence-only page exits 0.
 3. If \`buildComplete\` is NOT true, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` and act on every row whose \`owner\` is \`"builder"\` — each such row's Evidence cell IS the repair (a field absent by name, only some of the expected fields present, a grid with no bound datasource, a partial component count, a component not on the page, a rule the slot does not carry). Fix those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check. NEVER attempt to "fix" a row whose \`owner\` is \`"verifier"\` — the evidence record, the judge verdict and the reachability rows are filed by a separate agent; they are not yours to close, and \`buildComplete\` does not require them. Read \`owner\`, not the \`missing\`/\`unverified\` status: a partially-built page reads \`unverified\` and is still entirely your work.
-4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
+4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and — only when still short — a CAPPED park summary of the verdict's \`openRows\` AFTER the fix: \`stillShortRows\` = AT MOST 3 rows, each with \`deliverable\`/\`status\`/\`evidence\` TRUNCATED to 80 characters (plus \`outcome\`/\`owner\`), and \`remainingRowCount\` = this page's TOTAL open rows minus the number you put in \`stillShortRows\` (0 when they all fit). Do NOT return more than 3 rows and do NOT paste the whole verdict — it stays in \`${selfVerdictFile(unit.key)}\` on disk, and returning all of it is exactly the oversized-answer failure this cap exists to stop. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with that capped summary as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
 }
 
 // THE PREREQUISITE UNIT. It owns `create-app` precisely because that call also mints the starter pages that
@@ -3026,8 +3026,11 @@ RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this
 }
 
 function buildPrompt(unit, st, roundNo) {
-  const shortRows = (st?.openRows || []).map((r) => `  - ${openRowPrompt(r)}`).join('\n')
-  const repair = repairBlock(roundNo, shortRows, MAX_ROUNDS, VERIFY_TABLE)
+  // ENG-95930 (mode B) — the repair rows are NOT interpolated here; a PAGE repair round reads its own rows via the
+  // scoped `cliRepairCheck` gate, and a non-page unit carries only the round marker.
+  let repair = ''
+  if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key), repairVerdictFile(unit.key), unit.key)
+  else if (roundNo > 1) repair = `\nTHIS IS REPAIR ROUND ${roundNo} of ${MAX_ROUNDS} for this unit. The gate already ran and this unit is NOT closed — re-read ${VERIFY_TABLE} for what remains, redo exactly that, and do not rebuild what is already ✅.\n`
   const known = pageSchemas[unit.key]
   const continuationBudget = continuationBudgetBlock(BUILD_TURN_BUDGET)
   let kindBlock
@@ -3570,12 +3573,17 @@ if (pendingJudgeIds.size) {
 const DRY_RUN = input.dryRun === true
 if (DRY_RUN) {
   const openNowUnits = openNow()
-  const wouldBuild = openNowUnits.map((u) => ({
-    key: u.key,
-    kind: u.kind,
-    schema: pageSchemas[u.key] || null,
-    openRows: (state.verify?.pages?.[u.key]?.openRows || []).map((r) => r.deliverable).slice(0, 8),
-  }))
+  // ENG-95930 (mode B) — COUNTS, not rows: the central verify is counts-only, so the preview reports each unit's
+  // open-row COUNT and points at `verify.md` for the rows themselves.
+  const wouldBuild = openNowUnits.map((u) => {
+    const st = state.verify?.pages?.[u.key]
+    return {
+      key: u.key,
+      kind: u.kind,
+      schema: pageSchemas[u.key] || null,
+      openRowCount: st ? (st.missing ?? 0) + (st.unverified ?? 0) : null,
+    }
+  })
   log(`DRY RUN — nothing was written to the stand. ${wouldBuild.length} unit(s) would build now: ${wouldBuild.map((u) => u.key).join(', ') || '(none — the gate is already green)'}`)
   return runReturn({
     dryRun: true,
@@ -3583,6 +3591,7 @@ if (DRY_RUN) {
     rounds: 0,
     verdict: verdictOf(state.verify),
     wouldBuild,
+    verifyTable: VERIFY_TABLE,
     buildOrder: state.buildOrder || [],
     planGaps: state.planGaps || [],
     unresolvedPreflight,

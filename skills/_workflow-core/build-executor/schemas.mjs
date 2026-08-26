@@ -182,13 +182,14 @@ export const RECONCILE_SCHEMA = {
     // the run; trusting it silently builds a page nothing gates.
     staleQueueKeys: { type: 'array', items: { type: 'string' } },
     newKeys: { type: 'array', items: { type: 'string' } },
-    // The `--verify-json` DIGEST, copied verbatim: `{ complete, missing, unverified, builderOpen, planGaps,
-    // pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified, openRows } }`, each `openRows`
-    // entry `{ n, deliverable, status, evidence, outcome, owner, id }`. The reconcile agent COPIES that file: it
-    // does not read the Markdown table and it does not re-derive a number, so this is a transport check.
-    // `RECONCILE_SHAPE.verify` REQUIRES `buildComplete` per page — it is the `missing`-only axis the park/close
-    // arithmetic reads, and the combined `complete`, which folds in unfiled evidence a builder cannot clear, is
-    // not a substitute for it.
+    // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
+    // builderOpen, planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
+    // `openRows`. The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
+    // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
+    // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
+    // open rows from its own scoped `--verify --page` gate instead. `RECONCILE_SHAPE.verify` REQUIRES `buildComplete`
+    // per page — the `missing`-only axis the park/close arithmetic reads, not interchangeable with the combined
+    // `complete`, which folds in unfiled evidence a builder cannot clear.
     verify: { type: 'object' },
     exitCode: { type: 'integer' },
     // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
@@ -243,13 +244,17 @@ export const RECONCILE_SHAPE = {
   blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
   discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
     types: { unit: 'string', claim: 'string', found: 'string', round: 'integer' } },
+  // ENG-95930 (mode B) — COUNTS-ONLY. The central verify Reconcile carries used to nest each page's full `openRows`
+  // prose (`deliverable`/`status`/`evidence` for every open row); on a fresh stand nothing is complete, so that was
+  // ~21 KB the run's FIRST agent had to transcribe into ONE structured answer, which truncated at the host's ~20 KB
+  // tool-input cap and failed the run before it built anything. The rows no longer cross this boundary at all: each
+  // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. Per
+  // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
+  // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
   verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
     types: { complete: 'boolean', missing: 'integer', unverified: 'integer', builderOpen: 'integer', planGaps: 'string[]' },
     map: { pages: { required: ['complete', 'buildComplete'],
-      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' },
-      nested: { openRows: { kind: 'array', required: ['deliverable', 'status', 'evidence'],
-        types: { n: 'integer', deliverable: 'string', status: 'string', evidence: 'string', outcome: 'string',
-          owner: 'string', id: 'string' } } } } } },
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {
@@ -353,17 +358,25 @@ export const BUILD_PROPERTIES = {
       unverified: { type: 'integer' },
       builderOpen: { type: 'integer' },
       fixAttempted: { type: 'boolean' },
+      // ENG-95930 (mode B) — the in-context PARK SUMMARY is the only place a build agent returns any open-row text, and
+      // it is HARD-CAPPED here in the schema, not merely asked for in the prompt: at most 3 rows, each descriptive
+      // field ≤80 chars. So even a page with hundreds of open rows is byte-bounded on the agent's answer and no single
+      // unit can re-create mode B. `remainingRowCount` (= this unit's total open rows − the rows returned here) is the
+      // unconditionally-bounded fact — an integer needs no length keyword — so an operator still sees the true scale
+      // even where the host does not enforce `maxItems`/`maxLength`. The full rows stay in `self-verdict-N.json` on disk.
       stillShortRows: {
         type: 'array',
+        maxItems: 3,
         items: {
           type: 'object',
           required: ['deliverable', 'status', 'evidence'],
           // `outcome`/`owner` ride along so the tail cross-check can tell a builder-owned shortfall from a row the
           // builder was never allowed to close, without re-deriving what the engine already decided.
-          properties: { deliverable: { type: 'string' }, status: { type: 'string' }, evidence: { type: 'string' },
+          properties: { deliverable: { type: 'string', maxLength: 80 }, status: { type: 'string', maxLength: 80 }, evidence: { type: 'string', maxLength: 80 },
             outcome: { type: 'string' }, owner: { type: 'string' } },
         },
       },
+      remainingRowCount: { type: 'integer', minimum: 0 },
       notRunWhy: { type: 'string' },
     },
   },

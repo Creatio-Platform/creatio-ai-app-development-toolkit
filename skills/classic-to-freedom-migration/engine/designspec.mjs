@@ -3631,3 +3631,20 @@ export function verifyDigest(result, v) {
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
 }
+
+// THE COUNTS-ONLY SUMMARY (`--verify-summary <file>`). SAME SHAPE as `verifyDigest` for the totals and the per-page
+// tallies, but `openRows` is dropped on EVERY page — complete or not — so the file is bounded in size no matter how
+// many rows are open (ENG-95930, mode B). The digest still carries the open rows of pages that are OPEN, which on a
+// fresh stand is every page and every row: measured 21,161 B transcribed into the run's first agent's structured
+// answer, which then truncated at the host's ~20 KB tool-input cap and failed the whole run before it built anything.
+// This is what the Reconcile agent copies instead — its answer carries counts and flags, never per-row prose; each
+// build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. The
+// counts here match the digest's by construction (the same per-page `complete`/`buildComplete`/`missing`/`unverified`/
+// `builderOpen` and the same top-level totals), so nothing that schedules on those numbers changes — only the bytes do.
+export function verifySummary(result, v) {
+  const pages = {};
+  for (const [k, p] of Object.entries(v.pages || {})) {
+    pages[k] = { complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen };
+  }
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
+}

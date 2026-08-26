@@ -77,7 +77,7 @@ import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { GATE_KIND } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
+  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 
@@ -2430,7 +2430,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions", "--slices"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--verify-summary", "--page", "--resolutions", "--slices"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2609,6 +2609,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifyDigestFile = valueFlagArg(argv, "--verify-digest", "--verify-digest verify-digest.json", fail);
   if (verifyDigestFile && !verifyMode)
     fail("`--verify-digest <file>` only applies to `--verify` — it writes THAT run's scheduling digest. Add `--verify --built <file>`, or drop `--verify-digest`.");
+  // `--verify-summary <file>` — the COUNTS-ONLY verdict (ENG-95930, mode B): the same totals and per-page tallies as
+  // `--verify-digest`, minus `openRows` on EVERY page, so the file is bounded in size regardless of how many rows are
+  // open. It is what the executor's Reconcile agent transcribes now — on a fresh stand the digest still carries every
+  // open row of every open page (21 KB), which truncated the run's first agent's structured answer at the host cap.
+  // `--verify` only, exactly like `--verify-digest`: no verdict exists to summarise in any other mode.
+  const verifySummaryFile = valueFlagArg(argv, "--verify-summary", "--verify-summary verify-summary.json", fail);
+  if (verifySummaryFile && !verifyMode)
+    fail("`--verify-summary <file>` only applies to `--verify` — it writes THAT run's counts-only verdict. Add `--verify --built <file>`, or drop `--verify-summary`.");
   // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
   // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
   // still needs a filed evidence record and a judge verdict.
@@ -2756,6 +2764,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (verifyJsonFile) {
       try { fs.writeFileSync(verifyJsonFile, JSON.stringify(verifyReport(result, verifyRes), null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
+    }
+    if (verifySummaryFile) {
+      try { fs.writeFileSync(verifySummaryFile, JSON.stringify(verifySummary(result, verifyRes), null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --verify-summary '${verifySummaryFile}': ${e.message}`); }
     }
     if (verifyDigestFile) {
       try { fs.writeFileSync(verifyDigestFile, JSON.stringify(verifyDigest(result, verifyRes), null, 2) + "\n"); }

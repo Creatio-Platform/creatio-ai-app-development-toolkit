@@ -816,7 +816,7 @@ check("ENG-95471 review fix: the close-row log claims no enforcement the code le
 // local stub used elsewhere in this file (for an unrelated buildPrompt-wiring test) is a one-line marker, not the
 // real function's content.
 {
-  const gateBlockSlice = wfSrc.slice(wfSrc.indexOf("function inContextGateBlock(unit)"), wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"));
+  const gateBlockSlice = wfSrc.slice(wfSrc.indexOf("function inContextGateBlock(unit)"), wfSrc.indexOf("function buildPrompt(unit, roundNo)"));
   check("ENG-95901: inContextGateBlock names `buildComplete` as the axis the gate's exit code reads, and states that an unconfirmed-evidence-only page exits 0",
     /buildComplete/.test(gateBlockSlice) && /exits 0/.test(gateBlockSlice));
   // PR review — the restriction is keyed on the row's OWNER, not on its `missing`/`unverified` label. Pinning the
@@ -1344,8 +1344,9 @@ check("workflow: the build agent is handed its OWN page slice and told not to gr
 check("workflow: the slice carries the plan's Adjustments IN FULL — they are the user's agreed corrections and live outside the generated tables by design",
   /APPEND THE PLAN'S \\`Adjustments\\` LIST to EVERY slice file, verbatim and whole/.test(wfSrc)
     && /Do not filter it per page/.test(wfSrc));
-check("workflow: Reconcile transcribes the DIGEST, not the full verdict, and the full one is still written for audit",
-  /--verify-digest \$\{q\(VERIFY_DIGEST\)\}/.test(wfSrc) && /the DIGEST, not \$\{VERIFY_JSON\}/.test(wfSrc));
+check("ENG-95930 (mode B): Reconcile transcribes the COUNTS-ONLY summary — the gate still writes the digest and full verdict for audit, but the run's first agent copies `verify-summary.json`, which carries no open rows",
+  /--verify-digest \$\{q\(VERIFY_DIGEST\)\}/.test(wfSrc) && /--verify-summary \$\{q\(VERIFY_SUMMARY\)\}/.test(wfSrc)
+    && /the CONTENTS of \$\{VERIFY_SUMMARY\}/.test(wfSrc) && /NOT \$\{VERIFY_DIGEST\} and NOT \$\{VERIFY_JSON\}/.test(wfSrc));
 check("workflow: the parent edge is COPIED from `--units`, and reconstructing it from the plan's prose is forbidden",
   /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
 check("ENG-95474 C4: each sequential Build unit writes its own audit file AND appends the same entry to worklog.md, so no Close worklog agent is needed",
@@ -1546,6 +1547,25 @@ check("ENG-95930: the schema list is DERIVED from the shipped slice, and the sha
 check(`ENG-95930: every agent schema shipped in freedom-build-executor serializes to at most ${SCHEMA_CLASSIFIER_CAP} bytes — the host refuses a larger one before the model runs, so a schema over this line is a phase that cannot start in an \`auto\`-permission session`,
   bexSizes.every((s) => s.bytes <= SCHEMA_CLASSIFIER_CAP),
   () => bexSizes.map((s) => `${s.name} ${s.bytes}`).join(", "));
+// ENG-95930 (mode B) T3 — THE BUILD SCHEMA'S PARK-SUMMARY CAP, and the 4096 line held AFTER adding it. The in-context
+// park summary is the only open-row text a build agent returns; it is bounded in the SCHEMA (not just the prompt):
+// `stillShortRows.maxItems = 3`, `deliverable`/`status`/`evidence` `maxLength = 80`, plus a non-negative-integer
+// `remainingRowCount`. The integer is the UNCONDITIONAL bound — it needs no length keyword — so even a host that does
+// not enforce `maxItems`/`maxLength` still gets a byte-bounded answer. Adding these keywords grows the serialized
+// schema, so the cap loop above is re-asserted here on the exact objects that changed.
+const buildSchemaNames = ["BUILD_SCHEMA_PAGE", "BUILD_SCHEMA_PAGE_NO_GUIDELINES", "BUILD_SCHEMA_APP", "BUILD_SCHEMA_REACH"];
+const shortRowsSchema = wf.BUILD_SCHEMA_PAGE?.properties?.selfCheck?.properties?.stillShortRows;
+check("ENG-95930 T3: the BUILD schema HARD-CAPS the in-context park summary — `stillShortRows.maxItems = 3`, each of `deliverable`/`status`/`evidence` `maxLength = 80`, and a non-negative-integer `remainingRowCount` — so a page with hundreds of open rows cannot re-create mode B on the agent's own answer",
+  shortRowsSchema?.maxItems === 3
+    && shortRowsSchema?.items?.properties?.deliverable?.maxLength === 80
+    && shortRowsSchema?.items?.properties?.status?.maxLength === 80
+    && shortRowsSchema?.items?.properties?.evidence?.maxLength === 80
+    && wf.BUILD_SCHEMA_PAGE?.properties?.selfCheck?.properties?.remainingRowCount?.type === "integer"
+    && wf.BUILD_SCHEMA_PAGE?.properties?.selfCheck?.properties?.remainingRowCount?.minimum === 0,
+  () => JSON.stringify(shortRowsSchema));
+check(`ENG-95930 T3: every BUILD schema STILL serializes to at most ${SCHEMA_CLASSIFIER_CAP} bytes AFTER the park cap was added — the extra keywords grow the definition, and this is the re-run the plan requires`,
+  buildSchemaNames.every((n) => wf[n] && JSON.stringify(wf[n]).length <= SCHEMA_CLASSIFIER_CAP),
+  () => buildSchemaNames.map((n) => `${n} ${wf[n] ? JSON.stringify(wf[n]).length : "MISSING"}`).join(", "));
 // The OTHER shipped workflow, sliced the same way. It is nowhere near the cap today (292–987 bytes) and that is
 // exactly why it belongs here: a schema crosses the line one field at a time.
 let tmpBa;
@@ -2086,7 +2106,7 @@ const sliceFn = (name) => {
 };
 const KIND_BLOCK_FN_NAMES = ["appKindBlock", "appSectionHostNoMenuBlock", "appSectionHostMigrationBlock", "reachKindBlock", "pageKindBlock"];
 const buildPromptSrc = KIND_BLOCK_FN_NAMES.map(sliceFn).join("\n")
-  + "\n" + wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, st, roundNo)"), wfSrc.indexOf(BP_END_MARKER, wfSrc.indexOf("function buildPrompt(unit, st, roundNo)")));
+  + "\n" + wfSrc.slice(wfSrc.indexOf("function buildPrompt(unit, roundNo)"), wfSrc.indexOf(BP_END_MARKER, wfSrc.indexOf("function buildPrompt(unit, roundNo)")));
 check("ENG-95503 wiring: the build prompt hands its own unit's resolved-decisions block to the composer, and the composer interpolates it — the executed test above proves the text survives; this pins the seam",
   buildPromptSrc.length > 200
     && /resolutions: resolutionsPromptBlock\(unit\.key\)/.test(buildPromptSrc)
@@ -2821,12 +2841,18 @@ check("ENG-95474 review: `continuationBudgetBlock` renders the budget only for a
     && wf.continuationBudgetBlock(Number("x")) === "",
   () => ({ at80: wf.continuationBudgetBlock(80).slice(0, 80), at0: JSON.stringify(wf.continuationBudgetBlock(0)),
     atInf: JSON.stringify(wf.continuationBudgetBlock(Infinity)) }));
-check("ENG-95474 review: `repairBlock` is empty on round 1 and names the open rows from round 2 — a round with no row named still says so rather than rendering an empty list",
-  () => wf.repairBlock(1, "  - Fields", 3, "/v.md") === ""
-    && wf.repairBlock(2, "  - Fields", 3, "/v.md").includes("REPAIR ROUND 2 of 3")
-    && wf.repairBlock(2, "  - Fields", 3, "/v.md").includes("  - Fields")
-    && wf.repairBlock(2, "", 3, "/v.md").includes("the verdict named no open row for this unit; re-read /v.md"),
-  () => ({ r1: JSON.stringify(wf.repairBlock(1, "x", 3, "/v.md")), noRows: wf.repairBlock(2, "", 3, "/v.md").slice(0, 160) }));
+// ENG-95930 (mode B) — `repairBlock` no longer receives or renders the open rows. It is empty on round 1, and from
+// round 2 it tells the builder to read its OWN rows in its own context via the scoped `cliRepairCheck` gate and
+// validate `pageKey`/`planVersion` before repairing — the rows never cross the Workflow-JS boundary.
+check("ENG-95930: `repairBlock` is empty on round 1 and, from round 2, instructs the in-context repair-check gate + a stale-slice guard instead of pasting rows into the prompt",
+  () => wf.repairBlock(1, 3, "node m --verify --built built-2.json --page child:A --verify-json repair-verdict-2.json", "/m/slices/repair-verdict-2.json", "child:A") === ""
+    && wf.repairBlock(2, 3, "node m --verify --built built-2.json --page child:A --verify-json repair-verdict-2.json", "/m/slices/repair-verdict-2.json", "child:A").includes("REPAIR ROUND 2 of 3")
+    && wf.repairBlock(2, 3, "node m --verify --built built-2.json --page child:A --verify-json repair-verdict-2.json", "/m/slices/repair-verdict-2.json", "child:A").includes("node m --verify --built built-2.json --page child:A --verify-json repair-verdict-2.json")
+    && wf.repairBlock(2, 3, "cli", "/m/slices/repair-verdict-2.json", "child:A").includes("/m/slices/repair-verdict-2.json")
+    && /pageKey. MUST read exactly .child:A/.test(wf.repairBlock(2, 3, "cli", "/rv.json", "child:A"))
+    && /planVersion. MUST match/.test(wf.repairBlock(2, 3, "cli", "/rv.json", "child:A"))
+    && /Do NOT return these open rows/.test(wf.repairBlock(2, 3, "cli", "/rv.json", "child:A")),
+  () => ({ r1: JSON.stringify(wf.repairBlock(1, 3, "cli", "/rv.json", "k")), r2: wf.repairBlock(2, 3, "cli", "/rv.json", "child:A").slice(0, 200) }));
 
 // --- THE `queueWritten` BRANCH as an EXECUTION path (ENG-95474 review). Verify self-reports whether it merged the
 // carry; `true` skips the fallback persistence agent and `false` runs it. Both branches were asserted only by the
@@ -2905,11 +2931,20 @@ check("workflow: the `RULES` preamble every phase receives states the UNTRUSTED-
 check("workflow: the fence strips its own delimiter from the value — a caption cannot close the fence and continue as instruction text",
   /const dataFence\s*=\s*\(s\)\s*=>/.test(wfSrc) && /replaceAll\('<<'/.test(wfSrc) && /replaceAll\('>>'/.test(wfSrc),
   () => wfSrc.split("\n").find((l) => /const dataFence/.test(l)) || "?");
-check("workflow: the un-escaped stand-derived values are FENCED where they enter a prompt — the preflight item and the open rows a build agent is handed",
-  /item: \$\{p\.item \? dataFence\(p\.item\) :/.test(wfSrc)
-  && /const openRowPrompt = \(r\) => `\$\{dataFence\(r\.deliverable\)\}/.test(wfSrc)
-  && /openRows \|\| \[\]\)\.map\(\(r\) => `  - \$\{openRowPrompt\(r\)\}`\)/.test(wfSrc),
-  () => wfSrc.split("\n").filter((l) => /dataFence|openRowPrompt/.test(l)).slice(0, 6).join("\n"));
+check("workflow: the un-escaped stand-derived preflight item is FENCED where it enters a prompt",
+  /item: \$\{p\.item \? dataFence\(p\.item\) :/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /dataFence/.test(l)).slice(0, 6).join("\n"));
+// ENG-95930 (mode B) — THE BOUNDARY INVARIANT (T2b). The verbose per-unit open rows must never cross back into
+// Workflow JS: they are no longer interpolated into a build prompt, `openRowPrompt` (their fenced renderer) is gone
+// with its only caller, and `buildPrompt` takes only `(unit, roundNo)` — it CANNOT read `state.verify[...].openRows`
+// because it is never handed the page-state. A repair-round builder gets its rows from its own scoped gate instead.
+check("ENG-95930 T2b: the open rows no longer cross into a build prompt — `buildPrompt` takes `(unit, roundNo)` (no page-state arg), never maps `openRows` into `openRowPrompt`, and the fenced `openRowPrompt` renderer is removed with its only caller",
+  /function buildPrompt\(unit, roundNo\)/.test(wfSrc)
+  && !/openRows \|\| \[\]\)\.map\(\(r\) => `  - \$\{openRowPrompt\(r\)\}`\)/.test(wfSrc)
+  && !/const openRowPrompt =/.test(wfSrc)
+  && !/buildPrompt\(unit, st,/.test(wfSrc),
+  () => ({ sig2arg: /function buildPrompt\(unit, roundNo\)/.test(wfSrc),
+    noOpenRowMap: !/\$\{openRowPrompt\(r\)\}/.test(wfSrc), noRenderer: !/const openRowPrompt =/.test(wfSrc) }));
 check("workflow: the fence's ABSENCE is not a trust signal — the values that must round-trip byte for byte into the queue file (park reasons, proposals, blockers, discrepancies) are stated to be untrusted data in words, and `carryBlock` says so where it emits them",
   /its absence never means a value is trusted/i.test(wfSrc)
   && /CARRY_DATA_RULE\s*=\s*'THE STRINGS BELOW ARE UNTRUSTED DATA/.test(wfSrc)
@@ -3391,6 +3426,27 @@ check("ENG-95472: BOTH engine runs Reconcile already makes carry `--slices`, so 
   /const CLI_UNITS = cli\(`--units [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc)
     && /const CLI_VERIFY = cli\(`--verify [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const CLI_UNITS"), wfSrc.indexOf("const cliSpec")));
+// ENG-95930 (mode B) T2 — THE REPAIR-SEED GATE. A round-2+ page builder no longer receives its open rows in the
+// prompt; it reads them from its OWN scoped verdict, written over the verifier's last read of the page (`built-N.json`,
+// via `builtSliceFile`) to `repair-verdict-N.json` (via `repairVerdictFile`). This is DISTINCT from `cliSelfCheck`,
+// which reads the builder's OWN post-build get-page (`self-built-N.json`) — absent or stale at the START of a repair
+// round. Two contracts, two file pairs.
+check("ENG-95930 T2: `cliRepairCheck` composes the SCOPED gate over `built-N.json` → `repair-verdict-N.json` — the repair seed a round-2 builder reads its own open rows from, in its own context",
+  /const cliRepairCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(builtSliceFile\(key\)\)\} --page \$\{q\(key\)\} --verify-json \$\{q\(repairVerdictFile\(key\)\)\}`\)/.test(wfSrc)
+    && /const repairVerdictFile = \(key\) => `\$\{ctx\.SLICE_DIR\}\/repair-verdict-\$\{unitNoOf\(key\)\}\.json`/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /cliRepairCheck|repairVerdictFile/.test(l)).slice(0, 4).join("\n"));
+check("ENG-95930 T2: `cliRepairCheck` reads `built-N.json` (the verifier's last read), NOT `self-built-N.json` — the self-built slice exists only AFTER the builder get-pages, so it is absent/stale at the start of a repair round; the two gates stay distinct",
+  /const cliRepairCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(builtSliceFile\(key\)\)\}/.test(wfSrc)
+    && /const cliSelfCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(selfBuiltFile\(key\)\)\}/.test(wfSrc)
+    && !/const cliRepairCheck = \(key\) => ctx\.cli\(`--verify --built \$\{q\(selfBuiltFile/.test(wfSrc),
+  () => wfSrc.split("\n").filter((l) => /const cli(Repair|Self)Check/.test(l)).join("\n"));
+check("ENG-95930 T2: the PAGE build prompt's repair round runs `cliRepairCheck`, reads `repair-verdict-N.json`, guards `pageKey`/`planVersion` before repairing, fixes only `owner:\"builder\"` rows, and does NOT return them",
+  () => {
+    const r2 = wf.repairBlock(2, 3, "node m --verify --built built-2.json --page k --verify-json /m/slices/repair-verdict-2.json", "/m/slices/repair-verdict-2.json", "k");
+    return /repair-verdict-2\.json/.test(r2) && /pageKey. MUST read exactly/.test(r2) && /planVersion. MUST match/.test(r2)
+      && /owner. is .\"?builder/.test(r2) && /NEVER touch an .owner:\"verifier\"/.test(r2) && /Do NOT return these open rows/.test(r2);
+  },
+  () => wf.repairBlock(2, 3, "cli", "/rv.json", "k"));
 check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the plan version, which an operator's answer and a stand-writing round both leave unchanged, so a cached slice would be silently stale",
   /const SLICE_DIR = `\$\{input\.outDir\}\/slices`/.test(wfSrc)
     && !/SLICE_DIR = `\$\{REFS_DIR\}/.test(wfSrc),
@@ -3604,7 +3660,7 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
 // `buildPrompt` RENDERED, every free variable stubbed, for each unit shape it branches on. Nothing else here
 // executes it, so an unresolved interpolation would otherwise surface only when a unit is dispatched.
 {
-  const BP_HEAD = "function buildPrompt(unit, st, roundNo)";
+  const BP_HEAD = "function buildPrompt(unit, roundNo)";
   const bpStart = wfSrc.indexOf(BP_HEAD);
   const bpEnd = wfSrc.indexOf(BP_END_MARKER, bpStart);   // no leading newline: the body is indented inside `run()`
   // The markers are ordinary source text, so a rename moves them. Own check, and the render is SKIPPED when it
@@ -3675,7 +3731,7 @@ const ctx = { REFS_DIR, SLICE_DIR, cli: (a) => "node e.mjs m.json " + a }
     // SCOPE: the LEADING identifier of each `${…}` only. An interpolation opening with punctuation contributes
     // nothing, and a free name inside a member expression is not seen — brace-balancing the expression is not an
     // option, because the prompt prose carries literal braces. The render below covers the rest.
-    const params = new Set(["unit", "st", "roundNo"]);
+    const params = new Set(["unit", "roundNo"]);
     // `buildPrompt` itself now only dispatches; the interpolations it used to carry inline live in the per-kind
     // functions sliced above, so their source is scanned for free variables too, or a typo introduced in one of
     // them would no longer be caught here.
@@ -3713,14 +3769,16 @@ ${fnSrc}
 export { buildPrompt };
 `);
       const { buildPrompt } = await import(pathToFileURL(modPath).href);
-      rendered.main = buildPrompt({ key: "main", kind: "page" }, null, 1);
-      rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, { openRows: [{ deliverable: "Fields — 7 expected" }] }, 2);
-      rendered.list = buildPrompt({ key: "list", kind: "page" }, null, 1);
-      rendered.app = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", entity: "Applicant" }, null, 1);
+      rendered.main = buildPrompt({ key: "main", kind: "page" }, 1);
+      // ENG-95930 — the repair round no longer receives its open rows as an argument: buildPrompt takes (unit,
+      // roundNo) and `repairBlock` tells the builder to read its own rows from the scoped `cliRepairCheck` gate.
+      rendered.repair = buildPrompt({ key: "child:Education", kind: "page" }, 2);
+      rendered.list = buildPrompt({ key: "list", kind: "page" }, 1);
+      rendered.app = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", entity: "Applicant" }, 1);
       // BOTH arms of the app branch: `pages-only-no-menu` ships pages with no menu entry and takes a different
       // path entirely, so the default-arm stub above never compiles it.
-      rendered.appNoMenu = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", sectionHost: "pages-only-no-menu" }, null, 1);
-      rendered.reach = buildPrompt({ key: "sectionRegistered", kind: "reach", pages: ["main"] }, null, 1);
+      rendered.appNoMenu = buildPrompt({ key: "app", kind: "app", package: "UsrPkg", sectionHost: "pages-only-no-menu" }, 1);
+      rendered.reach = buildPrompt({ key: "sectionRegistered", kind: "reach", pages: ["main"] }, 1);
     } catch (e) { renderThrew = e.message; }
     finally { if (tmpBp) rmSync(tmpBp, { recursive: true, force: true }); }
     check("ENG-95472: `buildPrompt` RENDERS for every unit shape it branches on — page, repair round, list, both app arms and reachability",

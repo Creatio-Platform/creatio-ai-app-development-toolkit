@@ -457,12 +457,21 @@ export function continuationBudgetBlock(budget) {
   return `\nBUILD CONTINUATION BUDGET: if this unit is approaching about ${budget} assistant turns or the context is getting tight, STOP ONLY AT A SAFE BOUNDARY and return \`continuationRequested: true\`. A safe boundary means no half-written page body, no in-flight browser action, no unresolved create/update call, and all facts you learned are either on the stand, in this unit's worklog file, or in this structured result. Return \`safeContinuationPoint\` naming the boundary and \`continuationReason\` naming what remains. Do NOT call this a blocker and do NOT spend time summarising the whole run. The orchestrator will verify/reconcile what exists, will not charge this as a repair round, and will send this SAME unit to a fresh BUILD agent if it is still open.\n`
 }
 
-// THE REPAIR PREAMBLE, for round 2 and later. Pure and out of `buildPrompt` for the same reason. A round with no open
-// row named still says so rather than rendering an empty list, which reads as "nothing to fix".
-export function repairBlock(roundNo, shortRows, maxRounds, verifyTable) {
+// THE REPAIR PREAMBLE, for round 2 and later. Pure and out of `buildPrompt` for the same reason.
+// ENG-95930 (mode B) — the open rows are NO LONGER handed to the builder in this prompt. Reconcile's central verify is
+// counts-only now, so the verbose per-unit rows never cross the Workflow-JS boundary; instead the builder reads its
+// OWN open rows, in its own context, from a scoped gate this block tells it to run at the START of the round. Two
+// facts guard it: `pageKey` (a wrong slice number is another unit's file) and `planVersion` (a leftover is settled
+// work that no longer exists). `repairCheckCli` is the scoped `--verify --built built-N.json --page <key>` gate;
+// `repairVerdictPath` is the per-page verdict it writes and the builder reads. The rows stay in the agent's context
+// and on disk — never in its structured answer.
+export function repairBlock(roundNo, maxRounds, repairCheckCli, repairVerdictPath, pageKey) {
   if (roundNo <= 1) return ''
-  const rows = shortRows || `  - (the verdict named no open row for this unit; re-read ${verifyTable})`
-  return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and these rows are NOT closed — as the engine published them in the machine verdict:\n${rows}\nFix exactly those. The status text already says WHICH repair each needs: a field absent BY NAME, a component type absent, a wrong package, or a record filed but not judged. Do not rebuild what is already ✅.\n`
+  return `\nTHIS IS REPAIR ROUND ${roundNo} of ${maxRounds} for this unit. The gate already ran and this page still has open rows — but they are NOT in this prompt. Read them YOURSELF, at the START of this round, before you build anything:
+1. Run \`${repairCheckCli}\` — the scoped single-unit gate over the verifier's LAST read of THIS page off the stand (\`built-N.json\`, written by the central gate on its exit 2). It writes this page's verdict to \`${repairVerdictPath}\`.
+2. Read \`${repairVerdictPath}\` and CHECK IT IS YOURS before you trust a single row: \`pageKey\` MUST read exactly \`${pageKey}\`, and \`planVersion\` MUST match this run's plan version. If either is absent or different, that slice is stale or from another plan — report it in \`blocked\` and repair NOTHING from it (a wrong number is a different unit's file; a leftover \`planVersion\` is work that no longer exists).
+3. For every \`openRows\` entry whose \`owner\` is \`"builder"\`, its Evidence cell IS the repair — a field absent BY NAME, a component type absent, a wrong package, or a rule the slot does not carry. Fix exactly those; do not rebuild what is already ✅, and NEVER touch an \`owner:"verifier"\` row (evidence, judge verdict and reachability are a separate agent's to file).
+4. Do NOT return these open rows in your structured answer — they stay in your context and in \`${repairVerdictPath}\` on disk. Your answer carries counts, flags and at most a capped park summary, never per-row prose.\n`
 }
 
 // THE PACKAGE PRECONDITION. Only the cases the run cannot act on are stops — an ABSENT package with a name is not

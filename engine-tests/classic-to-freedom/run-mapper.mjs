@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -2681,6 +2681,93 @@ try {
     fs.rmSync(bareBuiltPath, { force: true });
     fs.rmSync(bareUnitVerdictPath, { force: true });
     fs.rmSync(bareFullVerdictPath, { force: true });
+  }
+}
+// ENG-95930 (mode B) — THE COUNTS-ONLY `verifySummary` / `--verify-summary`. On a fresh stand nothing is complete, so
+// the digest still carries every open ROW of every open page — measured 21,161 B, which truncated the run's first
+// (Reconcile) agent's structured answer at the host's ~20 KB tool-input cap and failed the run before it built
+// anything. `verifySummary` drops `openRows` on EVERY page, so its size is a function of the page COUNT alone and is
+// INVARIANT in the number of open rows. T1: proven at the function level (deterministic, no CLI) AND through the CLI
+// flag (writes the file, its counts match the digest, and it rejects a bad mode).
+{
+  // A synthetic verdict with a page whose open-row count we can dial. `verifySummary`/`verifyDigest` take (result, v)
+  // and use `result` only for `planGaps`, which is empty on a bare object — so the row count is the only variable.
+  // Only the open-ROW count varies; the per-page and top-level COUNTS are held fixed, so any size difference in the
+  // summary would have to come from the rows themselves — which is exactly the invariant under test.
+  const mkVerdict = (n) => ({
+    complete: false, missing: 2, unverified: 0,
+    pages: {
+      main: {
+        complete: false, buildComplete: false, builderOpen: 2, missing: 2, unverified: 0,
+        openRows: Array.from({ length: n }, (_, i) => ({
+          n: i + 1, deliverable: `Field ${i} — expected`, status: "❌ MISSING",
+          evidence: `missing: Column${i} is absent from the built page by name`, outcome: "missing", owner: "builder", id: `r${i}`,
+        })),
+      },
+    },
+  });
+  const sumSmall = JSON.stringify(verifySummary({}, mkVerdict(1)));
+  const sumBig = JSON.stringify(verifySummary({}, mkVerdict(30)));
+  check("ENG-95930 T1: `verifySummary` serializes to the SAME size for 1 open row and 30 open rows on the same page — the payload is INVARIANT in open-row count (it carries none), which is exactly what stops mode B",
+    sumSmall.length === sumBig.length && sumSmall.length > 0,
+    () => ({ oneRow: sumSmall.length, thirtyRows: sumBig.length }));
+  check("ENG-95930 T1: the `verifySummary` payload contains NO `openRows` (and none of the per-row prose fields) at 30 open rows — the verbose data stays in the digest/verify.md, never in the summary the Reconcile agent copies",
+    !/openRows/.test(sumBig) && !/deliverable/.test(sumBig) && !/is absent from the built page/.test(sumBig),
+    () => sumBig.slice(0, 200));
+  // The digest, by contrast, GROWS with the row count — the property the summary exists to remove. Pinned so a future
+  // change that accidentally made the digest counts-only would not silently make this whole test vacuous.
+  check("ENG-95930 T1: the `verifyDigest` on the SAME open page DOES grow with the row count (30 rows serialize larger than 1) — the summary's invariance is a real difference from the digest, not a property both share",
+    JSON.stringify(verifyDigest({}, mkVerdict(30))).length > JSON.stringify(verifyDigest({}, mkVerdict(1))).length);
+  // The counts a caller schedules on must be identical between the summary and the digest — the summary changes the
+  // bytes, never the arithmetic.
+  const dg = verifyDigest({}, mkVerdict(5));
+  const sm = verifySummary({}, mkVerdict(5));
+  const sameCounts = sm.complete === dg.complete && sm.missing === dg.missing && sm.unverified === dg.unverified
+    && sm.pages.main.complete === dg.pages.main.complete && sm.pages.main.buildComplete === dg.pages.main.buildComplete
+    && sm.pages.main.missing === dg.pages.main.missing && sm.pages.main.unverified === dg.pages.main.unverified
+    && sm.pages.main.builderOpen === dg.pages.main.builderOpen;
+  check("ENG-95930 T1: the summary's counts MATCH the digest's — same top-level totals and same per-page `complete`/`buildComplete`/`missing`/`unverified`/`builderOpen`, so nothing that schedules on the numbers changes",
+    sameCounts, () => ({ summaryMain: sm.pages.main, digestMain: dg.pages.main }));
+
+  // THE CLI FLAG, end to end on the bare fresh-stand manifest (nothing built ⇒ every page open ⇒ open rows present).
+  const csManifest = JSON.stringify({
+    entity: "Bare",
+    entityColumns: { Name: { dataValueType: 1, caption: "Name" } },
+    schemas: [{ pkg: "Bare", body: 'define("Bare",[],function(){return{entitySchemaName:"Bare",diff:[{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:0,colSpan:12},bindTo:"Name",contentType:0,caption:"Name"}}]};});' }],
+    seed: CLEAN_SEED,
+    detailSchemas: {},
+    planMeta: { scope: "single-section", environment: "test", package: "X → Y", approach: "Parallel rebuild", whatItDoes: "bare test.", sectionSchema: "BareSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" },
+    signals: FULL_SIGNALS,
+  });
+  const csBuilt = path.join(os.tmpdir(), `c2f_cs_built_${process.pid}.json`);
+  const csDigest = path.join(os.tmpdir(), `c2f_cs_digest_${process.pid}.json`);
+  const csSummary = path.join(os.tmpdir(), `c2f_cs_summary_${process.pid}.json`);
+  try {
+    // A minimal built file that leaves the page short, so the full verdict has open rows to (not) transcribe.
+    fs.writeFileSync(csBuilt, JSON.stringify({ pages: { main: { viewConfig: { items: [] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" } }, reachability: {} }));
+    const csRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", csBuilt, "--verify-digest", csDigest, "--verify-summary", csSummary], { input: csManifest, encoding: "utf8" });
+    const digestObj = JSON.parse(fs.readFileSync(csDigest, "utf8"));
+    const summaryObj = JSON.parse(fs.readFileSync(csSummary, "utf8"));
+    const summaryText = fs.readFileSync(csSummary, "utf8");
+    check("ENG-95930 T1: `--verify --verify-summary <file>` WRITES a counts-only verdict — same top-level totals as `--verify-digest`, and NO `openRows` anywhere in the file",
+      digestObj.missing === summaryObj.missing && digestObj.unverified === summaryObj.unverified && digestObj.complete === summaryObj.complete && !/openRows/.test(summaryText),
+      () => ({ status: csRun.status, digest: { missing: digestObj.missing, unverified: digestObj.unverified }, summary: { missing: summaryObj.missing, unverified: summaryObj.unverified }, hasOpenRows: /openRows/.test(summaryText) }));
+    // Per-page counts match the digest for the OPEN page (the digest keeps the row array; the summary drops it).
+    check("ENG-95930 T1: the summary's per-page counts equal the digest's for the OPEN `main` page, while only the digest carries that page's `openRows`",
+      summaryObj.pages.main && digestObj.pages.main
+        && summaryObj.pages.main.buildComplete === digestObj.pages.main.buildComplete
+        && summaryObj.pages.main.missing === digestObj.pages.main.missing
+        && summaryObj.pages.main.unverified === digestObj.pages.main.unverified
+        && !("openRows" in summaryObj.pages.main) && Array.isArray(digestObj.pages.main.openRows),
+      () => ({ summaryMain: summaryObj.pages.main, digestMainHasRows: Array.isArray(digestObj.pages?.main?.openRows) }));
+    const csBadMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--verify-summary", csSummary], { input: csManifest, encoding: "utf8" });
+    check("ENG-95930 T1: `--verify-summary` OUTSIDE `--verify` is rejected loudly (exit 1) — a caller must never believe it got a summary it did not",
+      csBadMode.status === 1 && /--verify-summary/.test(csBadMode.stderr || ""),
+      () => ({ status: csBadMode.status, stderr: (csBadMode.stderr || "").slice(0, 160) }));
+  } finally {
+    fs.rmSync(csBuilt, { force: true });
+    fs.rmSync(csDigest, { force: true });
+    fs.rmSync(csSummary, { force: true });
   }
 }
 // review (PR#58 Minor 4) — detectAddMode text-scans a detail's body over the UNION of its replacing chain, so a

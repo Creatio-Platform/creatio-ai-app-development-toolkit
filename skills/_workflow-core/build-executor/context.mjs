@@ -122,9 +122,6 @@ export const q = (v) => `'${String(v).replaceAll("'", SHELL_QUOTE_ESCAPE)}'`
 const DATA_OPEN = '<<UNTRUSTED-DATA>>'
 const DATA_CLOSE = '<</UNTRUSTED-DATA>>'
 const dataFence = (s) => `${DATA_OPEN}${String(s ?? '').replaceAll('<<', '‹').replaceAll('>>', '›')}${DATA_CLOSE}`
-// One open row for a PROMPT: the same Deliverable — Status — Evidence text, with the stand-derived cells fenced.
-// `openRowLine` stays unfenced for the RETURN value (a park reason an operator reads), where a fence is noise.
-const openRowPrompt = (r) => `${dataFence(r.deliverable)} — ${r.status} — ${dataFence(r.evidence)}`
 
 // THE RUN CONTEXT. Everything above, bound to one input.
 export function makeContext(input, selfPath) {
@@ -222,6 +219,13 @@ export function makeContext(input, selfPath) {
   // the full verdict was 102 KB and its Reconcile spent 41 minutes, 19 of 40 shell commands slicing that JSON and
   // three attempts at its structured answer. `verify.json` is still written, unchanged, for audit and the table.
   const VERIFY_DIGEST = `${input.outDir}/verify-digest.json`
+  // THE COUNTS-ONLY SUMMARY (ENG-95930, mode B) — the same verdict as the digest with `openRows` dropped on EVERY
+  // page, so its serialized size is a function of the page COUNT and is INVARIANT in the number of open rows. This is
+  // the file Reconcile transcribes NOW: on a fresh stand nothing is complete, so the digest still carries every open
+  // row of every open page (measured 21,161 B), which truncated the run's first agent's structured answer at the
+  // host's ~20 KB tool-input cap and failed the run before it built anything. The digest is still written, unchanged,
+  // for `verify.md`/audit and for any consumer that wants the rows on disk — but no agent transcribes it any more.
+  const VERIFY_SUMMARY = `${input.outDir}/verify-summary.json`
   // SHARED KNOWLEDGE, fetched ONCE per run instead of by every fresh-context agent. Measured on that run: tool and
   // component documentation was 40% of everything the build agents consumed (1.83 MB over 118 calls), the same
   // guidance topics and the same six component types over and over, because a fresh context by design starts blank.
@@ -242,7 +246,7 @@ export function makeContext(input, selfPath) {
   const SLICE_DIR = `${input.outDir}/slices`
   const RESOLUTIONS_FILE = input.resolutionsFile || `${input.outDir}/resolutions.json`
   const CLI_UNITS = cli(`--units --resolutions ${q(RESOLUTIONS_FILE)} --slices ${q(SLICE_DIR)}`)
-  const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --slices ${q(SLICE_DIR)}`)
+  const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --verify-summary ${q(VERIFY_SUMMARY)} --slices ${q(SLICE_DIR)}`)
   const cliChecklistPage = (key) => cli(`--checklist --page ${q(key)}`)
   // The fallbacks when a pre-cut slice is missing: the same row, cut on demand. Never the whole artifact.
   const cliUnitsPage = (key) => cli(`--units --page ${q(key)} --resolutions ${q(RESOLUTIONS_FILE)}`)
@@ -288,10 +292,10 @@ return {
   SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
   VERIFICATION_SURFACE, VERIFICATION_SURFACE_NOTE,
   FINDINGS, FINDING_KEYS,
-  QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
+  QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
   REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
   cli, CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
-  dataFence, openRowPrompt, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
+  dataFence, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
 }
 }
 
@@ -350,12 +354,26 @@ export function makePaths(ctx, getUnitKeys) {
   // authoritative evidence — so a short unit is caught before it reports complete, not a round later.
   const selfBuiltFile = (key) => `${ctx.SLICE_DIR}/self-built-${unitNoOf(key)}.json`
   const selfVerdictFile = (key) => `${ctx.SLICE_DIR}/self-verdict-${unitNoOf(key)}.json`
+  // THE REPAIR-SEED GATE (ENG-95930, mode B). A round-2+ builder no longer has its open rows handed to it in the
+  // prompt — Reconcile's central verify is counts-only now, so the verbose rows never cross the Workflow-JS boundary.
+  // Instead the builder reads them from its OWN scoped verdict, written HERE over `built-N.json` — the slice the
+  // central `--verify --slices` wrote on its last exit-2, i.e. the read-only verifier's last read of THIS page off the
+  // stand, which exists at round-2 start. DISTINCT from `cliSelfCheck`, which reads `self-built-N.json` (the builder's
+  // OWN post-build get-page, absent or stale at the START of a repair round). Two contracts, two file pairs: repair
+  // seed `built-N.json` → `repair-verdict-N.json`; post-build self-check `self-built-N.json` → `self-verdict-N.json`.
+  // The gate only composes the CLI string — the build agent validates `pageKey`/`planVersion` in the slice before
+  // trusting it (a wrong number is another unit's file; a stale `planVersion` is last plan's settled work).
+  const repairVerdictFile = (key) => `${ctx.SLICE_DIR}/repair-verdict-${unitNoOf(key)}.json`
 const cliSpec = (key) => ctx.cli(`--spec --page ${q(key)} --out ${q(specFile(key))}`)
 // The IN-CONTEXT single-unit gate (ENG-95469): the builder's own scoped `--verify` over ITS page, writing a
 // single-unit verdict file. `--verify --page <key> --verify-json` reconciles what the slice DECLARED against what
 // was built, for this page only, and exits 2 when the build is short — the ONE `--verify` a builder runs.
 const cliSelfCheck = (key) => ctx.cli(`--verify --built ${q(selfBuiltFile(key))} --page ${q(key)} --verify-json ${q(selfVerdictFile(key))}`)
+// THE REPAIR-SEED gate command (ENG-95930): the scoped single-unit `--verify` over the VERIFIER's last read of this
+// page (`built-N.json`), writing the per-page verdict a repair-round builder reads its open rows from. Same scoped
+// gate as `cliSelfCheck`, over a DIFFERENT (guaranteed-present-at-round-start) built input, to a DIFFERENT verdict.
+const cliRepairCheck = (key) => ctx.cli(`--verify --built ${q(builtSliceFile(key))} --page ${q(key)} --verify-json ${q(repairVerdictFile(key))}`)
   // ---8<--- END PER-UNIT FILE NAMES ---8<---
 return { unitNoOf, readablePart, unitFileStem, specFile, worklogFile, sharedWorklogFile, queueSliceFile, builtSliceFile,
-  selfBuiltFile, selfVerdictFile, cliSpec, cliSelfCheck }
+  selfBuiltFile, selfVerdictFile, repairVerdictFile, cliSpec, cliSelfCheck, cliRepairCheck }
 }
