@@ -159,7 +159,11 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
 // THE RESPONSE SCHEMAS THEMSELVES, DERIVED FROM THE SLICE rather than listed here: a hand-maintained list cannot
 // fail on a schema nobody added to it, which is the one case a cap check exists for. Every `const *_SCHEMA` the
 // shipped block declares is loaded and measured, so a new schema is covered the moment it is written.
-const declaredConsts = (text, re) => [...new Set([...text.matchAll(re)].map((m) => m[1]))].sort();
+// The comparator is EXPLICIT, and it reproduces exactly what a bare `.sort()` already did to these
+// strings — UTF-16 code-unit order. Spelling it out is not a behaviour change; it is what keeps the
+// order deterministic instead of leaving it to the engine's default (SonarCloud javascript:S2871).
+const byCodeUnit = (a, b) => { if (a < b) return -1; return a > b ? 1 : 0; };
+const declaredConsts = (text, re) => [...new Set([...text.matchAll(re)].map((m) => m[1]))].sort(byCodeUnit);
 const SCHEMA_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-9_]*_SCHEMA(?:_[A-Z0-9_]+)?)\s*=/gm);
 const SHAPE_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-9_]*_SHAPE)\s*=/gm);
 // Non-function members of the same block. Exported so a prompt fragment — and the round budget's own DESIGN VALUE —
@@ -2940,7 +2944,7 @@ check("workflow: the un-escaped stand-derived preflight item is FENCED where it 
 // because it is never handed the page-state. A repair-round builder gets its rows from its own scoped gate instead.
 check("ENG-95930 T2b: the open rows no longer cross into a build prompt — `buildPrompt` takes `(unit, roundNo)` (no page-state arg), never maps `openRows` into `openRowPrompt`, and the fenced `openRowPrompt` renderer is removed with its only caller",
   /function buildPrompt\(unit, roundNo\)/.test(wfSrc)
-  && !/openRows \|\| \[\]\)\.map\(\(r\) => `  - \$\{openRowPrompt\(r\)\}`\)/.test(wfSrc)
+  && !/openRows \|\| \[\]\)\.map\(\(r\) => ` {2}- \$\{openRowPrompt\(r\)\}`\)/.test(wfSrc)
   && !/const openRowPrompt =/.test(wfSrc)
   && !/buildPrompt\(unit, st,/.test(wfSrc),
   () => ({ sig2arg: /function buildPrompt\(unit, roundNo\)/.test(wfSrc),
@@ -3444,7 +3448,7 @@ check("ENG-95930 T2: the PAGE build prompt's repair round runs `cliRepairCheck`,
   () => {
     const r2 = wf.repairBlock(2, 3, "node m --verify --built built-2.json --page k --verify-json /m/slices/repair-verdict-2.json", "/m/slices/repair-verdict-2.json", "k");
     return /repair-verdict-2\.json/.test(r2) && /pageKey. MUST read exactly/.test(r2) && /planVersion. MUST match/.test(r2)
-      && /owner. is .\"?builder/.test(r2) && /NEVER touch an .owner:\"verifier\"/.test(r2) && /Do NOT return these open rows/.test(r2);
+      && /owner. is ."?builder/.test(r2) && /NEVER touch an .owner:"verifier"/.test(r2) && /Do NOT return these open rows/.test(r2);
   },
   () => wf.repairBlock(2, 3, "cli", "/rv.json", "k"));
 check("ENG-95472: the slices live OUTSIDE `refs/` — that cache is keyed on the plan version, which an operator's answer and a stand-writing round both leave unchanged, so a cached slice would be silently stale",
