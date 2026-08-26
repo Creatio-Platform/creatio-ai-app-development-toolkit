@@ -84,11 +84,16 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
     # --- Defense in depth: Reconcile dropping the field must not be read as a confirmed absence --------
 
     def test_dedicated_package_record_reread_exists_and_is_bounded(self):
+        # ENG-95770 host-neutral core: a workflow script cannot `import`, and cannot suspend on `await` either —
+        # the host evaluates it as a plain function body driven by the CLI/Claude adapters' own event loop, so
+        # every agent call is a `yield*` to a `function*` (a work item the adapter resumes), never an `async`
+        # call. The single-purpose re-read is the same fix, on the same generator protocol as every other
+        # dispatch in this file (`reconcileAgent`, `verifyRound`, ...).
         self.assertIn("const PACKAGE_RECORD_READ_ATTEMPTS", self.workflow)
-        self.assertIn("async function confirmPackageRecordAbsent()", self.workflow)
+        self.assertIn("function* confirmPackageRecordAbsent()", self.workflow)
         # Single-purpose: the prompt must forbid the read from turning into a second Reconcile sweep.
         prompt_start = self.workflow.index("function packageRecordPrompt()")
-        prompt_end = self.workflow.index("\nasync function confirmPackageRecordAbsent", prompt_start)
+        prompt_end = self.workflow.index("\n  function* confirmPackageRecordAbsent", prompt_start)
         prompt_body = self.workflow[prompt_start:prompt_end]
         self.assertIn("ONE single-purpose read", prompt_body)
         self.assertIn("standWrites.packageCreated", prompt_body)
@@ -96,8 +101,8 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
         self.assertRegex(prompt_body, r"do NOT derive it from the stand")
 
     def test_confirm_package_stop_only_fires_the_reread_for_the_two_ownership_stops(self):
-        start = self.workflow.index("async function confirmPackageStop(")
-        end = self.workflow.index("\n}", start)
+        start = self.workflow.index("function* confirmPackageStop(")
+        end = self.workflow.index("\n  }", start)
         body = self.workflow[start:end]
         self.assertIn("'target-package-unknown'", body)
         self.assertIn("'new-app-over-existing-package'", body)
@@ -114,25 +119,26 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
         baseline_start = self.workflow.index("// --- HARD STOP 3: the target package cannot be established")
         baseline_end = self.workflow.index("// --- HARD STOP 3.5", baseline_start)
         baseline = self.workflow[baseline_start:baseline_end]
-        self.assertIn("await confirmPackageStop(stopOnPackage,", baseline)
+        self.assertIn("yield* confirmPackageStop(stopOnPackage,", baseline)
 
         # ... and the mid-run guarantee re-check inside `acceptReconciled`.
-        mid_start = self.workflow.index("async function acceptReconciled(next, whereFrom)")
-        mid_end = self.workflow.index("\n}\n", mid_start)
+        mid_start = self.workflow.index("function* acceptReconciled(next, whereFrom)")
+        mid_end = self.workflow.index("\n  }\n", mid_start)
         mid = self.workflow[mid_start:mid_end]
-        self.assertIn("await confirmPackageStop(stopPkg,", mid)
+        self.assertIn("yield* confirmPackageStop(stopPkg,", mid)
 
-        # `acceptReconciled` became async for this, and both its call sites must await it — a forgotten
-        # `await` would silently resolve to a pending Promise instead of the stop object.
-        self.assertIn("async function acceptReconciled(", self.workflow)
+        # `acceptReconciled` is a generator for this (it may suspend on the dedicated re-read), and both its
+        # call sites must `yield*` it — a forgotten `yield*` would silently hand back the generator object
+        # itself instead of the stop it eventually produces.
+        self.assertIn("function* acceptReconciled(", self.workflow)
         call_sites = re.findall(r".*acceptReconciled\(.*", self.workflow)
         self.assertGreaterEqual(len(call_sites), 3,  # the declaration + two call sites
             "expected the declaration plus two call sites")
         for line in call_sites:
-            if "function acceptReconciled" in line:
+            if "function* acceptReconciled" in line:
                 continue
-            self.assertIn("await acceptReconciled(", line,
-                f"acceptReconciled is now async — every call site must await it: {line!r}")
+            self.assertIn("yield* acceptReconciled(", line,
+                f"acceptReconciled is a generator — every call site must yield* it: {line!r}")
 
     def test_both_call_sites_write_the_resolved_state_back_before_scheduling(self):
         # Review fix (PR #123, Blocker): `packagePreconditionStop` clearing a stop on the run's own record was
@@ -145,7 +151,7 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
         baseline_start = self.workflow.index("// --- HARD STOP 3: the target package cannot be established")
         baseline_end = self.workflow.index("// --- HARD STOP 3.5", baseline_start)
         baseline = self.workflow[baseline_start:baseline_end]
-        confirm_idx = baseline.index("await confirmPackageStop(stopOnPackage,")
+        confirm_idx = baseline.index("yield* confirmPackageStop(stopOnPackage,")
         write_idx = baseline.index(write_back)
         stop_check_idx = baseline.index("if (stopOnPackage) {")
         self.assertLess(confirm_idx, write_idx,
@@ -154,10 +160,10 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
             "the write-back must happen BEFORE the stop branch returns, so Hard Stop 4's `appUnitFor` calls "
             "further down this closure see the resolved state on every path, stopped or not")
 
-        mid_start = self.workflow.index("async function acceptReconciled(next, whereFrom)")
-        mid_end = self.workflow.index("\n}\n", mid_start)
+        mid_start = self.workflow.index("function* acceptReconciled(next, whereFrom)")
+        mid_end = self.workflow.index("\n  }\n", mid_start)
         mid = self.workflow[mid_start:mid_end]
-        mid_confirm_idx = mid.index("await confirmPackageStop(stopPkg,")
+        mid_confirm_idx = mid.index("yield* confirmPackageStop(stopPkg,")
         mid_write_idx = mid.index(write_back)
         mid_schedule_idx = mid.index("schedule = scheduleUnits(")
         self.assertLess(mid_confirm_idx, mid_write_idx)

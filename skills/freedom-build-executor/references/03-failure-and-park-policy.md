@@ -22,9 +22,10 @@ written. The fifth, `⛔ PLAN INCOMPLETE`, is emitted **only in `--plan` mode** 
 for it here; it is listed below only so the line is recognisable when the planner hits it.
 
 The verdict file already classifies them: `verify.json`'s `planGaps` holds the PLAN-level ones,
-and `complete` is the BUILD verdict alone — a run can be `complete: true` with a non-empty
-`planGaps`, which means there is nothing left to build and the run still stops. stderr names each
-one for a human reader:
+and `complete` is the BUILD-side verdict (as opposed to `planGaps`, which is PLAN-level) — a run
+can be `complete: true` with a non-empty `planGaps`, which means there is nothing left to build and
+the run still stops. (`complete` itself still folds `missing` and `unverified` together; the
+builder-owned axis is `buildComplete`, covered below.) stderr names each one for a human reader:
 
 ```
 migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING + 2 unconfirmed …
@@ -69,32 +70,43 @@ but the build left short (a datasource-less grid, a component not on the page, a
 not carry) is caught **as the unit builds**, not a whole round later.
 
 Its park budget is different, and deliberately so. The gate allows **exactly one bounded fix** in
-the builder's own context: if the scoped verdict is not `complete`, the builder repairs the rows the
-verdict's `openRows` name, re-runs the gate **once**, and stops. Still short after that one attempt
-is a valid outcome — the unit **parks immediately**, with `inContextParkWhy` composed from the
-gate's still-short rows. It does **not** spend the 3-round post-hoc budget below: one bounded fix,
-then park, so a unit that cannot be completed in its own context does not burn three stand-writing
-rounds re-learning the same shortfall.
+the builder's own context: if `buildComplete` (ENG-95901 — the OWNER axis; `complete` is
+kept only for the post-hoc CLI verdict and folds in unfiled evidence too) is not `true`, the builder
+repairs the rows the verdict's `openRows` name **whose `owner` is `"builder"`** — never a row
+whose `owner` is `"verifier"`, since that is an evidence/judge/reachability record a separate
+read-only verifier/judge files, not the builder's to close. `owner` is the axis to read, not the
+`missing`/`unverified` status: a partially-built page reads `unverified` and is still entirely the
+builder's work. It re-runs the gate **once**, and stops. Still short
+after that one attempt is a valid outcome — the unit **parks immediately**, with `inContextParkWhy`
+composed from the gate's still-short rows. It does **not** spend the 3-round post-hoc budget below:
+one bounded fix, then park, so a unit that cannot be completed in its own context does not burn three
+stand-writing rounds re-learning the same shortfall. A page whose only open rows are unfiled evidence
+is `buildComplete: true` and never reaches this park path at all — it stays open for the post-hoc
+verifier/judge round instead, which is the round actually able to close it.
 
-Three guards keep this honest. The builder trusts the engine, not itself: `selfCheck.complete` /
-`missing` / `unverified` are copied **verbatim** from the engine's single-unit verdict file, never a
-self-graded claim. The script trusts neither blindly: an in-context park fires only when the
-**post-hoc verifier** (a separate read-only agent, re-reading the stand that round) also reports the
-unit open — a builder that mis-reported "still short" on a page the verifier finds green does not
+Three guards keep this honest. The builder trusts the engine, not itself: `selfCheck.buildComplete` /
+`complete` / `missing` / `unverified` are copied **verbatim** from the engine's single-unit verdict
+file, never a self-graded claim. The script trusts neither blindly: an in-context park fires only when
+the **post-hoc verifier** (a separate read-only agent, re-reading the stand that round) also reports
+the unit open — a builder that mis-reported "still short" on a page the verifier finds green does not
 park it. And the script does not take the *self-report itself* on trust: at the bottom of the round
-it **cross-checks every page unit's `selfCheck` against that same independent verifier** and records
-a discrepancy where they disagree — a builder that self-reported the gate *passed* on a page the
-verifier finds open (a fabricated green the in-context park would miss, since it only fires on
-`complete: false`), or one that returned `ran: false` on a still-open unit (the gate bypassed). The
-cross-check changes no verdict — the `--verify` sweep remains the authoritative evidence — it only
-removes the "nothing independently checks the scoped gate ran" gap by naming where the self-report
-and the independent detector part ways.
+it **cross-checks every page unit's `selfCheck` against that same independent verifier's own
+`buildComplete`** and records a discrepancy where they disagree — a builder that self-reported the
+gate *passed* (`buildComplete: true`) on a page the independent verifier's `buildComplete` says is
+NOT true (a fabricated green the in-context park would miss, since it only fires on
+`buildComplete: false`), or one that returned `ran: false` on a still-open unit (the gate bypassed).
+Comparing `buildComplete` to `buildComplete` — not `complete` to "still open" — is deliberate: a page
+honestly `buildComplete: true` with only unfiled evidence rows is still open per the post-hoc verifier
+(the evidence is unconfirmed), but that is expected, not a self-report/verifier disagreement, so it is
+never flagged. The cross-check changes no verdict — the `--verify` sweep remains the authoritative
+evidence — it only removes the "nothing independently checks the scoped gate ran" gap by naming where
+the self-report and the independent detector part ways.
 
 Read the "never a self-graded claim" guarantee no wider than it holds: it covers exactly
-`complete` / `missing` / `unverified`, the engine's arithmetic transcribed. The two fields the
-in-context park path actually gates on — `selfCheck.ran` and `selfCheck.fixAttempted` — are **not**
-in the engine's verdict file; they are the builder's own self-report, so a builder can keep its own
-unit out of the in-context park by reporting `ran: false` or `fixAttempted: false`. Their only
+`buildComplete` / `complete` / `missing` / `unverified`, the engine's arithmetic transcribed. The two
+fields the in-context park path actually gates on — `selfCheck.ran` and `selfCheck.fixAttempted` —
+are **not** in the engine's verdict file; they are the builder's own self-report, so a builder can keep
+its own unit out of the in-context park by reporting `ran: false` or `fixAttempted: false`. Their only
 backstop is the guard-3 cross-check above, which is **non-blocking** — it records the discrepancy in
 the run's audit trail, it does not force a park — and the round-budget post-hoc park, which still
 catches a genuinely-open unit within its round budget no matter what the self-report claimed. So the
@@ -112,6 +124,15 @@ After 3 rounds a unit is **PARKED**: no further rounds are spent on it, its stat
 ONCE, carrying every stuck unit — not once per stuck unit. A caller asked five separate times
 about five stuck pages will approve the first three and lose track; a caller asked once, with
 five named units and what each is missing, can answer.
+
+ENG-95901 note: a PAGE unit open only because of unfiled evidence (`buildComplete: true`,
+`complete: false`) can still be round-budget parked here like any other stuck unit — the round
+budget is the ONE mechanism bounding the outer round loop (there is no separate global round
+ceiling), so excluding such a page from it would trade a bounded-but-imperfect park for a run that
+never terminates if the evidence is never confirmed. This is a known rough edge (parking over a row
+the build round itself cannot close), not a defect this ticket fixes — it is the round-scheduling
+loop's own tradeoff, tracked separately from the in-context gate and self-check fixes above, which
+DO key off `buildComplete` and are unaffected by this note.
 
 `parkedWhy` is composed **where the park is decided**, from that unit's own `openRows` in
 `verify.json` — the engine's Deliverable / Status / Evidence text, joined. For a reachability unit
@@ -224,3 +245,16 @@ are intact, and a re-run re-reads the stand. The same rule applies to a reconcil
 **Distinguish this from the environment faults above.** Those are Creatio failing to answer a read, and they
 must not spend a repair round. This one is the RUN's own machinery failing, and it must not produce a number
 at all.
+
+## A host-rejected agent: the reason is not in the run's return
+
+When the host rejects an agent before the model runs (e.g. `blocked by safety classifier: …`), the
+script sees only `agent()` returning `null` — no reason attached, so the run can neither log nor
+branch on the cause. The reason is recorded by the host: in the run's failure lines and in the run's
+transcript directory (`journal.jsonl`, plus the per-agent `agent-<id>.jsonl`). Read those before
+acting on the failure.
+
+Treat the host's label as a symptom, not a measurement. A rejection at the run's first agent is
+transient more often than not: re-run the SAME route. Only the SAME rejection repeating across
+launches is worth stopping for — and then verify the reported cause (measure it) before building a
+fix on it.

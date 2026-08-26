@@ -2613,6 +2613,76 @@ try {
 } finally {
   fs.rmSync(builtPath, { force: true });
 }
+// (f) ENG-95901 — THE ACTUAL CLI-BOUNDARY PROOF the two axes diverge, on a BARE manifest built so that ONLY
+// evidence/confirm rows stay open (0 MISSING, 3 unverified: field-control, field-labels, quality-gates — all
+// evidence the builder is contractually forbidden to file itself). Runs the SAME built.json through BOTH CLI
+// entrypoints: the in-context single-unit gate (`--page main --verify-json`) must exit 0 (`buildComplete: true`),
+// while the SAME payload through the unscoped, whole-tree `--verify` (no `--page`) must still exit 2 (`complete:
+// false`, AC7/AC8 unchanged — an unconfirmed row still blocks the human-facing "done" verdict). A regression at the
+// CLI wiring layer (wrong field read, a dropped `buildComplete` in serialization) would break ONE of these two
+// without necessarily breaking the direct verifyUnit()/renderVerify() unit tests above.
+{
+  const bareManifest = JSON.stringify({
+    entity: "Bare",
+    entityColumns: { Name: { dataValueType: 1, caption: "Name" } },
+    schemas: [{ pkg: "Bare", body: 'define("Bare",[],function(){return{entitySchemaName:"Bare",diff:[{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:0,colSpan:12},bindTo:"Name",contentType:0,caption:"Name"}}]};});' }],
+    seed: CLEAN_SEED,
+    detailSchemas: {},
+    planMeta: { scope: "single-section", environment: "test", package: "X → Y", approach: "Parallel rebuild", whatItDoes: "bare test.", sectionSchema: "BareSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" },
+    signals: FULL_SIGNALS,
+  });
+  const bareBuiltPath = path.join(os.tmpdir(), `c2f_bare_built_${process.pid}.json`);
+  const bareUnitVerdictPath = path.join(os.tmpdir(), `c2f_bare_unit_verdict_${process.pid}.json`);
+  const bareFullVerdictPath = path.join(os.tmpdir(), `c2f_bare_full_verdict_${process.pid}.json`);
+  try {
+    fs.writeFileSync(bareBuiltPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+    }));
+    const vScoped = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
+    const scopedVerdict = JSON.parse(fs.readFileSync(bareUnitVerdictPath, "utf8"));
+    check("ENG-95901: the SCOPED in-context gate on a 0-MISSING/evidence-only page exits 0 (`buildComplete: true` drives the CLI exit code, not the combined `complete`)",
+      vScoped.status === 0 && scopedVerdict.missing === 0 && scopedVerdict.unverified > 0 && scopedVerdict.buildComplete === true && scopedVerdict.complete === false,
+      () => ({ status: vScoped.status, scopedVerdict }));
+    const vFull = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath, "--verify-json", bareFullVerdictPath], { input: bareManifest, encoding: "utf8" });
+    const fullVerdict = JSON.parse(fs.readFileSync(bareFullVerdictPath, "utf8"));
+    check("ENG-95901: the SAME built.json through the UNSCOPED, whole-tree `--verify` still exits 2 — AC7/AC8: the post-hoc CLI verdict is UNCHANGED and an unconfirmed row still blocks 'done'",
+      vFull.status === 2 && fullVerdict.missing === 0 && fullVerdict.unverified > 0 && fullVerdict.complete === false && fullVerdict.pages.main.buildComplete === true,
+      () => ({ status: vFull.status, fullVerdict }));
+    // ENG-95901 — a page with BOTH a genuine shortfall AND unfiled evidence: the scoped stderr diagnostic must talk
+    // ONLY about rows the BUILDER owns — no verifier-owned count, no "file the on-stand evidence" advice — so an LLM
+    // builder reading this exit-2 line is never handed a row it cannot legitimately close itself. PR review: the
+    // number is `builderOpen`, not `missing`, because a partial build resolves `unverified` and `missing` would have
+    // printed a zero next to a non-zero exit.
+    const bareBuiltShortPath = path.join(os.tmpdir(), `c2f_bare_built_short_${process.pid}.json`);
+    fs.writeFileSync(bareBuiltShortPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+    }));
+    try {
+      const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
+      check("ENG-95901: the SCOPED stderr diagnostic on a page with BOTH a genuine shortfall and unfiled evidence counts ONLY the rows the BUILDER owns — a non-zero `builderOpen`, no 'unconfirmed' count, no 'file the on-stand evidence' advice, exit 2",
+        vScopedShort.status === 2
+        && (vScopedShort.stderr || "").includes(" open deliverable(s) YOU OWN")
+        && !(vScopedShort.stderr || "").includes("0 open deliverable(s) YOU OWN")
+        && !/unconfirmed/.test(vScopedShort.stderr || "")
+        && !/file the on-stand evidence/.test(vScopedShort.stderr || ""),
+        () => ({ status: vScopedShort.status, stderr: vScopedShort.stderr }));
+    } finally {
+      fs.rmSync(bareBuiltShortPath, { force: true });
+    }
+  } finally {
+    fs.rmSync(bareBuiltPath, { force: true });
+    fs.rmSync(bareUnitVerdictPath, { force: true });
+    fs.rmSync(bareFullVerdictPath, { force: true });
+  }
+}
 // review (PR#58 Minor 4) — detectAddMode text-scans a detail's body over the UNION of its replacing chain, so a
 // large body must NOT trigger catastrophic backtracking (engine.mjs documents a prior ~32s/700KB regex regression
 // fixed with bounded quantifiers). ~700KB of ADVERSARIAL near-matches (many `getAddRecordButtonVisible` heads that
@@ -8080,6 +8150,27 @@ check("digest: a COMPLETE page drops its openRows and keeps its counters — nob
   () => { const done = Object.entries(dgDigest.pages).filter(([, p]) => p.complete === true);
     return done.length >= 1 && done.every(([, p]) => !('openRows' in p) && typeof p.missing === 'number'); },
   () => JSON.stringify(dgDigest.pages));
+// ENG-95901 — the COMPLETE-page compaction branch is a HAND-WRITTEN object literal (unlike the open-page branch,
+// which forwards the whole object for free), so every field it needs has to be listed explicitly. This is the
+// exact literal a workflow's Reconcile agent transcribes into `state.verify`: if `buildComplete` were ever
+// dropped from it, every COMPLETE page reaching the build executor via the digest path would read
+// `buildComplete: undefined`, reopening ENG-95901 in reverse (the round-budget park exclusion and the
+// selfCheckMismatches cross-check both stop trusting a finished page). Pin it directly, and pin that the
+// COMPACTION does not silently COLLAPSE the two axes into one (a complete:false/buildComplete:true page — the
+// axis-split case itself — must still forward buildComplete faithfully via the un-compacted branch).
+check("digest: the COMPLETE-page compaction literal carries `buildComplete` (not just `complete`/`missing`/`unverified`) — it is a hand-written object, so a dropped field here silently reaches the build executor as `undefined`",
+  () => { const done = Object.entries(dgDigest.pages).filter(([, p]) => p.complete === true);
+    return done.length >= 1 && done.every(([, p]) => p.buildComplete === true); },
+  () => JSON.stringify(dgDigest.pages));
+check("digest: an OPEN page with `buildComplete: true` (missing:0, unverified>0 — the axis-split case) forwards `buildComplete` unchanged through the un-compacted branch",
+  () => { // Force this page's ONLY shortfall to be unverified (drop the QG evidence the base fixture supplies) so
+    // complete:false while missing stays 0.
+    const built = m12Built(m12Page(M12_NAMED)); delete built.evidence; delete built.judge;
+    const vSplit = renderVerify(dgRun, dgOpts, built);
+    const d = verifyDigest(dgRun, vSplit);
+    return d.pages.main.complete === false && d.pages.main.missing === 0 && d.pages.main.buildComplete === true; },
+  () => { const built = m12Built(m12Page(M12_NAMED)); delete built.evidence; delete built.judge;
+    return JSON.stringify(verifyDigest(dgRun, renderVerify(dgRun, dgOpts, built)).pages); });
 
 // A GRANDCHILD is a published, scheduled build unit — `--units` recurses. The slice lookup did NOT: it scanned only
 // the immediate childPages/typedPages/miniPage, so every page below depth 1 was a unit whose spec the CLI reported
@@ -9434,6 +9525,134 @@ try {
     attrGap.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "FeatureOn" && /attribute 'FeatureOn'/.test(d.reason)),
     () => attrGap.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
 
+  // ENG-95412 reopening (2026-08-24 QA): a real Applicant run escalated CrtUIPlatform7x base-template attributes
+  // (SecurityOperationName, IsCardOpenedAttribute, IsMainHeaderVisibleAttribute) to a human `parse-gap` decision —
+  // members no CLIENT schema touched, so the ledger already counts them `context` (excluded by design), but
+  // `disposition()` ranks `decision` above `context` and the escalation silently promoted them out of it.
+  const tplGapBase = `define("Base",[],function(){return{attributes:{TplAttr:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapClient = `define("P",[],function(){return{entitySchemaName:"X",diff:[${nameOp}]};});`;
+  const tplGap = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: an unreadable default on an attribute NO CLIENT schema touched raises NO `parse-gap` — it is inherited base-template content, not a value the reader can act on",
+    !tplGap.changeSet.needsDecision.some((d) => d.item === "TplAttr"),
+    () => tplGap.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  check("ENG-95412 follow-up: that attribute's ledger row is `context` (auto-accounted, counted, never a gap) — not `unaccounted` and not `decision`",
+    tplGap.coverage?.rows.find((r) => r.kind === "attribute" && r.name === "TplAttr")?.disposition === "context",
+    () => tplGap.coverage?.rows.filter((r) => r.kind === "attribute"));
+  // Regression guard: the SAME shape, but the CLIENT schema also declares the attribute (schemaTouched) — the
+  // escalation must survive. Only an untouched, purely-inherited member gets suppressed.
+  const tplGapTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",attributes:{TplAttr:{value:true}},diff:[${nameOp}]};});`;
+  const tplGapTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapBase }],
+    schemas: [{ pkg: "P", body: tplGapTouchedClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the same attribute NAME still escalates when the CLIENT schema also declares it — suppression is keyed on `fromTemplate`, not on the name alone",
+    tplGapTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplAttr"),
+    () => tplGapTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+
+  // PR review follow-up: the earlier fixtures only exercised 'attribute'. `TEMPLATE_OWNED_LIST_KEY` covers exactly
+  // the three owner kinds a diagnostic can REACH this escalation with — attribute, message, mixin. (A second review
+  // round showed `detail`/`module` are unreachable for the same reason as `businessRules`: `isStructuralDiag` puts
+  // `details`/`modules` in `STRUCTURAL_ROOTS`, so `reportedElsewhere` drops those diagnostics first. A detail
+  // fixture here asserted a generalization the code does not have and passed for an unrelated reason — the detail's
+  // gap HARD-BLOCKS the gate and never becomes a `parse-gap` either way, so the check stayed green even with the
+  // suppression made impossible. Replaced with the two reachable kinds that were genuinely untested.)
+  const tplGapMsgBase = `define("Base",[],function(){return{messages:{TplMsg:{mode:Terrasoft.Features.getIsEnabled("Widget"),direction:0}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapMsg = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMsgBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the suppression generalizes past 'attribute' — an unreadable `mode` on a MESSAGE no client schema touched raises no `parse-gap`",
+    !tplGapMsg.changeSet.needsDecision.some((d) => d.item === "TplMsg"),
+    () => tplGapMsg.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  const tplGapMsgTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",messages:{TplMsg:{mode:Terrasoft.Features.getIsEnabled("Widget"),direction:0}},diff:[${nameOp}]};});`;
+  const tplGapMsgTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMsgBase }],
+    schemas: [{ pkg: "P", body: tplGapMsgTouchedClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the SAME message still escalates once the CLIENT schema declares it — the message check above is not vacuous",
+    tplGapMsgTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplMsg"),
+    () => tplGapMsgTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  const tplGapMixBase = `define("Base",[],function(){return{mixins:{TplMix:Terrasoft.Features.getIsEnabled("Widget")},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapMix = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMixBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: same for the third reachable kind — an unreadable MIXIN value no client schema touched raises no `parse-gap`",
+    !tplGapMix.changeSet.needsDecision.some((d) => d.item === "TplMix"),
+    () => tplGapMix.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  const tplGapMixTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",mixins:{TplMix:Terrasoft.Features.getIsEnabled("Widget")},diff:[${nameOp}]};});`;
+  const tplGapMixTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapMixBase }],
+    schemas: [{ pkg: "P", body: tplGapMixTouchedClient }] }, { baseDir: FIX });
+  check("ENG-95412 follow-up: the SAME mixin still escalates once the CLIENT schema declares it — the mixin check above is not vacuous",
+    tplGapMixTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplMix"),
+    () => tplGapMixTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+  // And the counterpart of the removed detail fixture, asserting what is actually true: a template-owned DETAIL's
+  // unreadable structural field never reaches `needsDecision` as a `parse-gap` at all — it blocks the gate, with or
+  // without the suppression, so `detail` has nothing to suppress and is correctly absent from the table.
+  const tplGapDetailBase = `define("Base",[],function(){return{details:{TplDetail:{schemaName:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const tplGapDetailClient = `define("P",[],function(){return{entitySchemaName:"X",details:{TplDetail:{schemaName:Terrasoft.Features.getIsEnabled("Widget")}},diff:[${nameOp}]};});`;
+  const tplGapDetail = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: tplGapDetailBase }],
+    schemas: [{ pkg: "P", body: tplGapDetailClient }] }, { baseDir: FIX });
+  check("PR #125 review: a DETAIL's unreadable structural field raises no `parse-gap` even when the CLIENT schema declares it (suppression impossible) — it HARD-BLOCKS the gate instead, which is why `detail` is not in `TEMPLATE_OWNED_LIST_KEY`",
+    !tplGapDetail.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplDetail")
+    && tplGapDetail.gate.blocked
+    && tplGapDetail.gate.reasons.some((r) => /details\.TplDetail\.schemaName/.test(r)),
+    () => ({ needsDecision: tplGapDetail.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`), gate: tplGapDetail.gate.reasons }));
+
+  // PR review follow-up: the PR body claims the fix "does not affect MobilePhone/Email/Skype (client's own Contact
+  // attributes)". Those are attributes a CLIENT schema declares itself (never marked `fromTemplate`), so they must
+  // keep escalating exactly as before — same shape as `tplGapTouched` above, named for the actual scenario.
+  // The seed declares the same three names with the same unreadable shape, so `fromTemplate` is genuinely in play:
+  // the client ALSO declaring them (`schemaTouched`) is what keeps them escalating, not the absence of a template
+  // member. Without the seed side this check only showed that a client attribute with no template counterpart
+  // escalates — a case `tplGapTouched` already covers.
+  const contactAttrsBase = `define("Base",[],function(){return{attributes:{MobilePhone:{value:Terrasoft.Features.getIsEnabled("Widget")},Email:{value:Terrasoft.Features.getIsEnabled("Widget")},Skype:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const contactAttrsClient = `define("P",[],function(){return{entitySchemaName:"Contact",attributes:{MobilePhone:{value:Terrasoft.Features.getIsEnabled("Widget")},Email:{value:Terrasoft.Features.getIsEnabled("Widget")},Skype:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[${nameOp}]};});`;
+  const contactAttrs = runMigration({ entity: "Contact", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: contactAttrsBase }],
+    schemas: [{ pkg: "P", body: contactAttrsClient }] }, { baseDir: FIX });
+  check("PR #125: MobilePhone/Email/Skype declared by the CLIENT's own Contact schema (not template-owned) still escalate — the template-owned suppression does not touch them",
+    ["MobilePhone", "Email", "Skype"].every((n) => contactAttrs.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === n)),
+    () => contactAttrs.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
+
+  // PR #125 review — Major: `templateOwned` is built ONCE from `eff` (the MAIN page's merged attribute/message/…
+  // chain) but was applied to EVERY diagnostic in the pool, including ones from detail/profile/section schemas
+  // that never went through `mergeHierarchy` at all. A detail schema declaring its OWN, unrelated attribute under
+  // a name that happens to collide with a main-page template-owned attribute would be silently suppressed too.
+  // Fixed by gating the lookup on `templateOwnedTags` (the tags of the schemas `eff` actually merged).
+  const crossTagDetailBody = `define("SomeDetail",[],function(){return{entitySchemaName:"SomeEntity",attributes:{TplAttr:{value:Terrasoft.Features.getIsEnabled("Widget")}},diff:[]};});`;
+  const crossTag = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    // `Base` declares the template-owned "TplAttr" of the MAIN chain; the detail below declares its OWN, unrelated one.
+    seed: [{ pkg: "Base", body: tplGapBase }],
+    schemas: [{ pkg: "P", body: tplGapClient }],
+    detailSchemas: { SomeDetail: { body: crossTagDetailBody, entity: "SomeEntity" } } }, { baseDir: FIX });
+  check("PR #125 review fix: a DETAIL schema's own same-named attribute is NOT suppressed by an unrelated main-page template-owned attribute of the same name — exactly one `TplAttr` parse-gap survives (the detail's), the main-page one stays suppressed",
+    crossTag.changeSet.needsDecision.filter((d) => d.kind === "parse-gap" && d.item === "TplAttr").length === 1
+    && crossTag.changeSet.needsDecision.some((d) => d.item === "TplAttr" && /detail:SomeDetail/.test(d.reason)),
+    () => crossTag.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}:${d.reason}`));
+
+  // PR #125 review — investigated, NOT a live bug: `DIAG_OWNER_ROOTS` maps `businessRules`/`rules` to owner kind
+  // "business rule", suggesting a `businessRules.<attr>.…` parse diagnostic could reach the SAME template-owned
+  // escalation path as attribute/message/mixin/detail/module. It cannot: `isStructuralDiag` treats ANY sub-path
+  // under `businessRules`/`rules` as structural unconditionally (`seg[0] !== "diff"` short-circuits to `true`),
+  // so `reportedElsewhere` filters every such diagnostic out BEFORE `diagnosticOwner`/`templateOwned` ever run —
+  // the "business rule" branch of `diagnosticOwner` is unreachable dead code from that direction. The real
+  // consequence is the opposite of "silently escalates to a soft decision": an unresolved business-rule property
+  // — template-owned or not, touched or not — HARD BLOCKS THE WHOLE GATE via `computeGate`'s own `structDiag`
+  // check. That is an existing, deliberate design choice (a rule's condition config genuinely cannot be built
+  // from an unreadable piece), not something this PR's `templateOwnedNames` mechanism was ever positioned to
+  // affect. Proven here rather than assumed.
+  const bizRuleBase = `define("Base",[],function(){return{businessRules:{Contact:{r1:{enabled:Terrasoft.Features.getIsEnabled("Widget"),ruleType:0,property:2}}},diff:[{operation:"insert",name:"Header",values:{itemType:15}}]};});`;
+  const bizRuleClient = `define("P",[],function(){return{entitySchemaName:"X",diff:[${nameOp}]};});`;
+  const bizRule = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
+    seed: [{ pkg: "Base", body: bizRuleBase }],
+    schemas: [{ pkg: "P", body: bizRuleClient }] }, { baseDir: FIX });
+  check("PR #125 review (investigated): an unresolved business-rule property on an UNTOUCHED template-owned attribute never reaches `needsDecision` as a `parse-gap` — it blocks the GATE instead (structural, unconditional), so `templateOwnedNames` has nothing to suppress here",
+    !bizRule.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "Contact")
+    && bizRule.gate.blocked
+    && bizRule.gate.reasons.some((r) => /businessRules\.Contact\.r1\.enabled/.test(r)),
+    () => ({ needsDecision: bizRule.changeSet.needsDecision, gate: bizRule.gate }));
+
   // Drift: unequal severities, by design.
   check("ENG-95412: drift — a value MISMATCH on a pinned member is reported (every element of that kind would be mis-identified)",
     enumDriftIssues({ ViewItemType: { DETAIL: 99 } }).mismatches.join("") === "ViewItemType.DETAIL: engine 2, stand 99",
@@ -9745,6 +9964,25 @@ const N2_NO_SUCH_KEY = "child:NotAPage";
       return Object.keys(thin.pages).length === 0 && !Object.hasOwn(thin.pages, "main")
         && Object.keys(builtSlice(lpUnits, {}, "main").evidence).length === 0; },
     () => JSON.stringify(builtSlice(lpUnits, { pages: {}, reachability: {}, evidence: {}, judge: {} }, "main")));
+  // A slice must carry every `built.*` key the verify rows for that unit read. `reachability` is one of them, and a
+  // slicer that dropped it would have stayed green: the fixture above carries `sectionRegistered` and nothing
+  // asserted it. An empty reachability row reads as an unverified deliverable on a page that is actually complete.
+  const N2_REACH_MAIN = "sectionRegistered", N2_REACH_OTHER = "typedRouting";
+  const reachOfMain = lpUnits.reachability.filter((r) => r.appliesWhen && (r.pages || []).includes("main")).map((r) => r.key);
+  check("ENG-95472: the BUILT slice carries the reachability rows that read on THIS unit, values verbatim",
+    () => bMain.reachability[N2_REACH_MAIN]?.workplaces === 1
+      && (bMain.reachability[N2_REACH_MAIN].names || []).join(",") === "Recruiting"
+      && reachOfMain.includes(N2_REACH_MAIN)
+      && Object.keys(bList.reachability).length === 0,
+    () => JSON.stringify({ main: bMain.reachability, list: bList.reachability, appliesToMain: reachOfMain }));
+  // `typedRouting` is published for this plan but names no page, so a payload carrying it must not reach any
+  // builder — the same narrowing the evidence ids get, on the key family a verify row reads off the stand.
+  const bothReach = builtSlice(lpUnits, { ...builtAll,
+    reachability: { [N2_REACH_MAIN]: { workplaces: 1 }, [N2_REACH_OTHER]: { ok: true } } }, "main");
+  check("ENG-95472: a reachability key is sliced to the page(s) `--units` says it reads on, and to no other",
+    () => Object.hasOwn(bothReach.reachability, N2_REACH_MAIN) && !Object.hasOwn(bothReach.reachability, N2_REACH_OTHER)
+      && reachOfMain.length > 0 && !reachOfMain.includes(N2_REACH_OTHER),
+    () => JSON.stringify({ appliesToMain: reachOfMain, sliced: Object.keys(bothReach.reachability) }));
 }
 
 // The CLI half. Two fixtures, deliberately: a gate-CLEAN single-page manifest pins the exit codes and the flag
@@ -9989,6 +10227,53 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   }
 }
 
+// --- WHAT THE SLICING ACTUALLY SAVES, in bytes, on real files. -------------------------------
+// Slicing PARTITIONS the queue: the slices sum to about the whole file, so no single agent's read shrinks by an
+// order of magnitude. The saving is the RUN total — N agents that each read the whole file now read one row each,
+// so it scales with the page count and is invisible on a one-page plan. Asserted because the numbers are the whole
+// point of the mechanism and nothing else here measures them: a slicer rewritten to hand out the whole payload
+// would pass every structural check above.
+{
+  const d = n2TmpDir("bytes");
+  const r = n2RunCli(n2TreeManifest("Education school", "Experience school"), N2_UNITS, N2_SLICES, d);
+  // NOTHING out here may throw. These lines run OUTSIDE a `check` thunk, so an unguarded parse or `statSync`
+  // aborts the runner and hides every assertion after it instead of failing one — the same reason fixture 1
+  // pins its `--units` run before parsing. A missing slice file is exactly what these two checks exist to
+  // catch, so it has to arrive as a red check and not as an exception.
+  let parsed = null;
+  try { parsed = JSON.parse(r.stdout || ""); } catch { parsed = null; }
+  const keys = (parsed?.pages || []).map((p) => p.key);
+  const sliceFiles = keys.map((_, i) => n2SliceFile(d, N2_Q, i + 1));
+  check("ENG-95472: the bytes fixture published three page keys and wrote a slice file for each, so the two measurements below read real files",
+    () => keys.length === 3 && sliceFiles.every((f) => fs.existsSync(f)),
+    () => ({ status: r.status, keys, files: fs.readdirSync(d), stderr: (r.stderr || "").slice(0, 200) }));
+  const wholeBytes = Buffer.byteLength(r.stdout || "", "utf8");
+  const sliceBytes = sliceFiles.filter((f) => fs.existsSync(f)).map((f) => fs.statSync(f).size);
+  const sumSlices = sliceBytes.reduce((t, b) => t + b, 0);
+  // What the run cost BEFORE: every agent opened the whole queue. AFTER: each opens its own row.
+  const runBefore = wholeBytes * keys.length, runAfter = sumSlices;
+  // BOTH THRESHOLDS BELOW MEAN SOMETHING; neither is fitted to this fixture's byte counts.
+  // `PARTITION_BAND` is how far the sum may sit from the whole file. It cannot be 1.0: each slice repeats the
+  // run-level fields (`planVersion`, `sectionHost`, `applicationCode`, …), which inflates the sum, while the
+  // whole-run collections (`buildOrder`, `resolutionsUnmatched`) appear in no slice, which deflates it. Neither
+  // side is a defect. Measured sums land at 0.87–0.92 of the whole across the 1-, 2- and 3-page fixtures, so
+  // ±0.25 holds every one of them and still fails the regressions: a slicer that skips one of three files reads
+  // 0.65, and one that writes the whole payload into each reads 3.0. A wider band passed the missing-file case.
+  // `ORDER_OF_MAGNITUDE` is the claim itself — bullet 2 promised a 10x per-agent drop and this asserts it does
+  // NOT happen, so the 10 is the wording, not a calibration. Slices here sit at 2.3-4.6x, well inside it.
+  const PARTITION_BAND = 0.25, ORDER_OF_MAGNITUDE = 10;
+  check("ENG-95472: the slices PARTITION the queue — together they are about the whole file, not a fraction of it",
+    () => keys.length === 3 && sliceBytes.length === keys.length
+      && sumSlices > wholeBytes * (1 - PARTITION_BAND) && sumSlices < wholeBytes * (1 + PARTITION_BAND),
+    () => ({ wholeBytes, sliceBytes, sumSlices, ratio: +(sumSlices / wholeBytes).toFixed(2) }));
+  check("ENG-95472: so the saving is the RUN TOTAL and it scales with the page count — not an order of magnitude off any single agent's read",
+    () => sliceBytes.length === keys.length && keys.length > 0
+      && runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / ORDER_OF_MAGNITUDE),
+    () => ({ pages: keys.length, runBefore, runAfter, runSaving: +(runBefore / runAfter).toFixed(2),
+      perAgent: sliceBytes.map((b) => +(wholeBytes / b).toFixed(2)) }));
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 // ===== ENG-95470 — N1: make --verify trustworthy (business rules gated, component role/analog) ================
 // The shared detector's verdict contract, fixed by unit tests BEFORE the engine code (TDD). resolveRuleVk gates a
 // page's business rules against the read-page-business-rules slot; resolveComponentVk accepts a curated Freedom
@@ -10147,8 +10432,8 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   // deliverables, so the in-context gate triggers NO fix attempt on a page the baseline confirmed complete.
   {
     const { unit, agree } = parity(a3Complete);
-    check("ENG-95469 T4 (R8): the baseline-complete Applicant unit passes the in-context gate — complete, 0 MISSING, 0 unverified, no open row (so no fix attempt is triggered)",
-      unit.complete === true && unit.missing === 0 && unit.unverified === 0 && (unit.openRows || []).length === 0,
+    check("ENG-95469 T4 (R8): the baseline-complete Applicant unit passes the in-context gate — complete, buildComplete, 0 MISSING, 0 unverified, no open row (so no fix attempt is triggered)",
+      unit.complete === true && unit.buildComplete === true && unit.missing === 0 && unit.unverified === 0 && (unit.openRows || []).length === 0,
       () => unit);
     check("ENG-95469 T4/R5: verifyUnit is the SAME detector as the post-hoc sweep — its verdict equals renderVerify(...).pages.main byte-for-byte (one module, two call sites)",
       agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, a3Complete).pages.main }));
@@ -10160,12 +10445,82 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   {
     const builtNoGrid = { pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE };
     const { unit, agree } = parity(builtNoGrid);
-    check("ENG-95469 T1 (R2): a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged incomplete by the in-context gate — not skip, not pass",
-      unit.complete === false && unit.missing >= 1
+    check("ENG-95469 T1 (R2): a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged incomplete by the in-context gate — not skip, not pass — on BOTH axes (a genuine MISSING deliverable is never masked by the buildComplete split)",
+      unit.complete === false && unit.buildComplete === false && unit.missing >= 1
         && (unit.openRows || []).some((r) => /Related lists/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)),
       () => unit.openRows);
     check("ENG-95469 T1/R5: the datasource-short verdict matches the post-hoc sweep exactly",
       agree, () => ({ unit, sweep: renderVerify(applicantR1, {}, builtNoGrid).pages.main }));
+  }
+
+  // ENG-95901 PR review — the BUILDER-OWNED `unverified` class, the one the first cut of `buildComplete` let through.
+  // `resolveCountVk` maps `b === 0` to `missing` but ANY partial count to `unverified`, and `resolveFieldsByIdentity`
+  // maps every field count below expected — `0/N` included — to `unverified`. The T1 fixture above happens to pick
+  // the single count shape (`0 of 4`) that still lands on `missing`, so it passed on the label axis by accident; each
+  // case below is short in a way the label calls `unverified` and the OWNER calls the builder's.
+  {
+    // PARTIAL component count — 1 of 4 grids. `missing` is 0; the page is plainly short.
+    const builtOneGrid = { pages: { main: { viewConfig: a3Body(1), businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit, agree } = parity(builtOneGrid);
+    check("ENG-95901 (review): a PARTIAL component count (1 of 4 crt.DataGrid) is NOT build-complete — `missing` is 0 and the row reads `unverified`, but the row is the BUILDER's, so the axis reads the owner",
+      unit.buildComplete === false && unit.missing === 0 && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && r.outcome === "unverified" && /1\/4/.test(r.evidence)),
+      () => unit.openRows);
+    check("ENG-95901 (review): the partial-count verdict matches the post-hoc sweep exactly", agree,
+      () => ({ unit, sweep: renderVerify(applicantR1, {}, builtOneGrid).pages.main }));
+  }
+  {
+    // ZERO of N expected fields by NAME — the reviewer's own reproduction: a form page built with one component that
+    // is not any of the expected fields. Every field row resolves `unverified`, so the label axis called this a
+    // complete build with none of its fields on the page.
+    const builtWrongNames = { pages: { main: { viewConfig: { items: [{ name: "SomethingElse", type: "crt.Input" },
+      ...Array.from({ length: 4 }, (_v, i) => ({ name: "Grid" + i, type: "crt.DataGrid" })),
+      { name: "Comm", type: "crt.CommunicationOptions" }] }, businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit } = parity(builtWrongNames);
+    check("ENG-95901 (review): a page whose components carry NONE of the expected field names is NOT build-complete — 0/N by identity is `unverified` on the label axis and the builder's own work on the owner axis",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && /0\/\d+ expected fields|expected fields present/.test(r.evidence)),
+      () => unit.openRows);
+  }
+  {
+    // PARTIAL fields by name — k of N present. Same class, non-zero k, so it cannot pass for the `b === 0` reason.
+    const someCols = A3_COLS.slice(0, 3);
+    const builtSomeFields = { pages: { main: { viewConfig: { items: [...someCols.map((c) => ({ name: c, type: "crt.Input" })),
+      ...Array.from({ length: 4 }, (_v, i) => ({ name: "Grid" + i, type: "crt.DataGrid" })),
+      { name: "Comm", type: "crt.CommunicationOptions" }] }, businessRules: a3Rules } }, ...QG_EVIDENCE };
+    const { unit } = parity(builtSomeFields);
+    check("ENG-95901 (review): k-of-N expected fields present is NOT build-complete either — a partial field set names the absent fields and they are the builder's to add",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && /expected fields present/.test(r.evidence)),
+      () => unit.openRows);
+  }
+  {
+    // ABSENT `--built.pages` entry for the page — "get-page this page", `unverified`, and unmistakably the builder's.
+    const builtNoEntry = { pages: { list: { viewConfig: { items: [] } } }, ...QG_EVIDENCE };
+    const unit = verifyUnit(applicantR1, {}, builtNoEntry, "main");
+    check("ENG-95901 (review): a page with NO `--built.pages` entry is NOT build-complete — 'get-page this page' is an instruction to the builder, not an evidence record somebody else files",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).every((r) => r.owner === "builder" || r.owner === "verifier"),
+      () => unit.openRows);
+  }
+  {
+    // ABSENT businessRules slot — "run read-page-business-rules for the page", literally step 1 of the gate prompt.
+    const builtNoRuleSlot = { pages: { main: { viewConfig: a3Body(4) } }, ...QG_EVIDENCE };
+    const unit = verifyUnit(applicantR1, {}, builtNoRuleSlot, "main");
+    check("ENG-95901 (review): an absent `businessRules` slot is NOT build-complete — reading the page's rules is the builder's own step 1, however the row is labelled",
+      unit.buildComplete === false && unit.builderOpen >= 1
+        && (unit.openRows || []).some((r) => r.owner === "builder" && /read-page-business-rules/.test(r.evidence)),
+      () => unit.openRows);
+  }
+  {
+    // And the boundary the axis exists for, restated on the owner: with the build genuinely complete, the ONLY open
+    // rows are verifier-owned, and those alone keep `buildComplete` true while `complete` stays false.
+    const builtNoEvidence = { pages: { main: { viewConfig: a3Body(4), businessRules: a3Rules } } };
+    const unit = verifyUnit(applicantR1, {}, builtNoEvidence, "main");
+    check("ENG-95901 (review): the boundary still holds — a complete build whose only open rows are VERIFIER-owned reports buildComplete true, builderOpen 0, complete false",
+      unit.buildComplete === true && unit.builderOpen === 0 && unit.complete === false
+        && (unit.openRows || []).length > 0 && (unit.openRows || []).every((r) => r.owner === "verifier"),
+      () => unit.openRows);
   }
 
   // T2 (R3) — a component built but NOT wired to the parent record is flagged. The Communication-options component
@@ -10229,12 +10584,16 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95469 (review T4): verifyUnit on a key the plan does NOT carry returns a LOUD error verdict (error:'unknown page', complete:false) — never a false complete-empty green that masks a broken gate",
       u.error === "unknown page" && u.complete === false && u.missing === 0 && u.unverified === 0 && (u.openRows || []).length === 0,
       () => u);
+    check("ENG-95901: the SAME unknown-page LOUD error verdict also reports `buildComplete: false` — a broken gate must never read as build-complete either, on EITHER axis",
+      u.buildComplete === false, () => u);
     // The distinction must NOT false-positive on a real page of this plan: `main` is a known page, so it is verdict'd
     // for real (never the unknown-page error), whether it is complete or short.
     const known = verifyUnit(applicantR1, {}, a3Complete, "main");
     check("ENG-95469 (review T4): a KNOWN page of the plan (`main`) is verdict'd for real and is NEVER flagged unknown — the loud path fires only for an unplanned key",
       known.error === undefined && known.complete === true,
       () => known);
+    check("ENG-95901: the SAME known/complete-empty page also reports `buildComplete: true`",
+      known.buildComplete === true, () => known);
     // PR review RC-11: `pageKey` has NO default. A call that OMITS the argument must fail the same LOUD way an
     // unknown key does — never silently resolve to `main` and hand back a confident verdict for the wrong page
     // (the exact silent-wrong-page mode the T4 loud-unknown fix above was added to close).
@@ -10242,6 +10601,33 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95469 (review RC-11): verifyUnit called with pageKey OMITTED is LOUD (error:'unknown page', complete:false) — no default 'main', so a missing arg cannot silently green a wrong page",
       omitted.error === "unknown page" && omitted.complete === false,
       () => omitted);
+    check("ENG-95901: the SAME omitted-pageKey LOUD error verdict also reports `buildComplete: false`",
+      omitted.buildComplete === false, () => omitted);
+  }
+
+  // ===== ENG-95901 — split the conflated `complete` axis: missing=0, unverified>0 ⇒ buildComplete:true ==========
+  // T4 (R8) above pins the no-false-positive boundary using a payload that supplies BOTH `evidence` AND a convincing
+  // `judge` verdict for the quality-gates row — exactly what the in-context gate's own call site can NEVER have (the
+  // builder is contractually forbidden to file that evidence itself; a separate read-only verifier/judge does). A
+  // golden that only ever exercises the QG_EVIDENCE-supplied case re-certifies ENG-95901's bug instead of catching
+  // it. This fixture is otherwise IDENTICAL to `a3Complete` (baseline-complete build: all 4 grids bound, the
+  // component present, every rule present) but DROPS `...QG_EVIDENCE` entirely, so the quality-gates row has no
+  // evidence and no judge verdict — per `./01-evidence-records.md`'s own table an INCOMPLETE record reads
+  // `⚠ unverified`, never `❌ MISSING`. The illustrative count here is ONE unfiled row (quality-gates); the exact
+  // "15" from the second Applicant run (ENG-95471) is not reproduced — the axis split this pins is count-agnostic.
+  {
+    const builtNoEvidence = { pages: { main: { viewConfig: a3Body(4), businessRules: a3Rules } } };
+    const unit = verifyUnit(applicantR1, {}, builtNoEvidence, "main");
+    check("ENG-95901: a build with 0 MISSING deliverables and only an UNFILED quality-gates row is buildComplete:true — the build axis must not fire on evidence the builder cannot legitimately file itself",
+      unit.missing === 0 && unit.unverified > 0 && unit.buildComplete === true,
+      () => unit);
+    check("ENG-95901: the OLD conflated `complete` field is UNCHANGED (still missing||unverified) — the post-hoc `--verify` CLI verdict (AC7/AC8) keeps calling an unconfirmed page not-done",
+      unit.complete === false,
+      () => unit);
+    const sweepPage = renderVerify(applicantR1, {}, builtNoEvidence).pages.main;
+    check("ENG-95901: `buildComplete` is exposed on the post-hoc sweep's per-page tally too (renderVerify(...).pages.main) — one detector, two call sites, and now two axes, still byte-for-byte identical between them",
+      sweepPage.buildComplete === true && sweepPage.missing === 0 && sweepPage.unverified > 0,
+      () => sweepPage);
   }
 }
 
