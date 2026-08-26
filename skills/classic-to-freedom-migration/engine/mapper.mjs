@@ -1833,7 +1833,11 @@ export function comparesLookupGuid(...ruleSets) {
     for (const n of ruleNodes(rules)) {
       if (!LOOKUP_GUID.test(String(n.value ?? ""))) continue;
       const dvt = n.dataValueType;
-      if (dvt === undefined || dvt === null || dvt === "" || Number(dvt) === DVT_LOOKUP) return true;
+      // Fail closed on a dvt that does NOT coerce to a finite number too, not only the absent cases: a malformed
+      // export carrying a string like `"Lookup"` gives `Number(dvt) → NaN`, and `NaN === DVT_LOOKUP` is false, which
+      // would SILENTLY EXCLUDE the GUID-shaped comparison instead of raising it — the exact "a signal that should
+      // surface never does" this ticket closes, one layer earlier. An unrecognised type raises, as the comment says.
+      if (dvt === undefined || dvt === null || dvt === "" || !Number.isFinite(Number(dvt)) || Number(dvt) === DVT_LOOKUP) return true;
     }
   }
   return false;

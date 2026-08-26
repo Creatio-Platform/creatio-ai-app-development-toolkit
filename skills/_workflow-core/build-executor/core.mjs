@@ -43,7 +43,7 @@ import {
   // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
   // import, while the inlined Claude artifact shares one scope and would not have noticed a missing name. The core
   // suite caught exactly that: `reconcileUnconsumed is not defined` on a green baseline the artifact ran fine.
-  buildSchemaWithResolutions, capCarryText, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
+  buildSchemaWithResolutions, capCarryText, completionLine, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
   pairKey, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
   resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs, unconsumedNextClause,
   unconsumedResolutions,
@@ -2565,28 +2565,23 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // loses the question. One short agent, and only when there is something unpersisted.
   yield* persistPending('closing the run')
 
-  // The closing line, as a function: the two sentences report different facts and neither is the verdict itself.
-  function completionLine(isComplete) {
-    return isComplete
-      ? `COMPLETE after ${round} round(s): the engine gate is green`
-      : `NOT COMPLETE after ${round} round(s): ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s)`
-  }
   // ENG-95503 — an UNCONSUMED ANSWER blocks `complete` exactly as a park does. Not because it makes a deliverable
   // short: the gate can be green and the page genuinely built, and an answer the operator gave can still have gone
   // nowhere (a real run's `entity-filter` did). The whole point of the answers channel is that such an answer is never
   // dropped in silence, and a run that reported itself finished while holding one would be that silence.
   const complete = runComplete(state.verify?.complete, parked, unconsumed)
-  log(complete
-    ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s) · ${unconsumed.length} unconsumed answer(s)`)
   if (unconsumed.length) {
     log(`UNCONSUMED OPERATOR ANSWERS: ${unconsumed.map((u) => `\`${u.unit}\`/\`${u.id}\``).join(', ')} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`)
   }
 
-  // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it.
-  log(completionLine(complete))
+  // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it. ONE close-out
+  // line (PR #128 review): `completionLine` carries the unconsumed-answer count in its NOT COMPLETE branch, so there
+  // is no second, near-duplicate verdict `log` beside it; the detail list above names WHICH answers, not just a count.
+  log(completionLine(complete, {
+    round, missing: state.verify?.missing, unverified: state.verify?.unverified,
+    parkedCount: parked.length, unconsumedCount: unconsumed.length,
+  }))
 
-  // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it.
   return runReturn({
     complete,
     rounds: round,

@@ -2051,6 +2051,14 @@ check("PR #128 review (round 8): `comparesLookupGuid` judges each value on ITS O
         { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } }] }])
     && comparesLookupGuid([], undefined, null) === false,
   () => "each value is judged on its own type");
+check("PR #128 review: `comparesLookupGuid` FAILS CLOSED on a non-numeric `dataValueType` — a malformed export carrying a string like `\"Lookup\"` (Number → NaN) RAISES the GUID comparison rather than silently excluding it, matching the fail-closed intent stated above the function; a recognised non-lookup numeric type still does not raise",
+  () => comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: "Lookup" } }] }])
+    && comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: "garbage" } }] }])
+    && !comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } }] }]),
+  () => "a non-numeric dvt on a GUID-shaped value raises, a recognised text type does not");
 /* PR #128 review (RC-8a) — THE SECOND DISJUNCT, EXERCISED. `mapper.mjs` raises the question when a GUID appears in
    `pageBusinessRules` OR in `entityBusinessRules`, and every fixture above is a BINDPARAMETER rule, which lands in
    the PAGE list. `||` short-circuits, so the entity half never evaluated: deleting it left all four tests plus C2

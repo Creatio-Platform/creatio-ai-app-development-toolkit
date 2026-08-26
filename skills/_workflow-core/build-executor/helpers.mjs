@@ -1230,7 +1230,12 @@ export function resolutionClaimsLine(rows, fence) {
     // `JSON.stringify`, matching `guidelinesLine`, neutralises backticks and newlines AND round-trips byte for byte,
     // so the agent can still copy the id into `resolutionChecks[].id` and the pair key still matches. A `dataFence`
     // would be WRONG here: it would corrupt the value the agent has to echo back.
-    return `  · ${JSON.stringify(r.id)} (${r.kind || 'confirm'}) — answer: ${wrap(String(r.answer ?? '').slice(0, CARRY_TEXT_CAP))} — the builder ${said}`
+    // `r.kind` IS NEUTRALISED THE SAME WAY (PR #128 review, defense-in-depth). It is a fixed internal vocabulary today,
+    // so it is not exploitable now — but nothing enforces that it stays a closed enum before this render path, and
+    // `item` (which `r.id` is composed from) is already customer-sourced, so a future `kind` derived similarly would
+    // reopen the exact backtick+newline break-out this PR closed on `id`/`answer`/`how`. `JSON.stringify` (not
+    // `wrap`) keeps the parenthetical readable — `("entity-filter")`, not `(<<DATA … DATA>>)`.
+    return `  · ${JSON.stringify(r.id)} (${JSON.stringify(r.kind || 'confirm')}) — answer: ${wrap(String(r.answer ?? '').slice(0, CARRY_TEXT_CAP))} — the builder ${said}`
   }
   return `OPERATOR ANSWERS THIS UNIT WAS BUILT FROM — check each against the page you just fetched:\n${rows.map(line).join('\n')}`
 }
@@ -1452,6 +1457,17 @@ export function unconsumedNextClause(entries) {
   // in the one render path that had been fixed on one side only.
   const ids = entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
   return ` ALSO: ${entries.length} operator answer(s) reached a build agent and produced NO build action — ${ids}. The engine gate has no row for this and never will; put each one to the user with its \`why\` from \`unconsumedResolutions\`, then either fix the build or record the decision to drop the answer.`
+}
+
+// ENG-95503 / PR #128 review — THE ONE CLOSE-OUT VERDICT LINE. Pure so a test can assert its content, and it is the
+// SINGLE verdict line the run emits (`log(completionLine(...))`), so the unconsumed-answer count this ticket adds
+// lives here rather than in a second, near-duplicate `log(...)` call beside it — two verdict lines let a log-scraper
+// read the one without the count and miss it. `complete` implies zero unconsumed (`runComplete` gates on it), so the
+// count is stated only on the NOT COMPLETE branch, where it can be non-zero.
+export function completionLine(complete, { round, missing, unverified, parkedCount, unconsumedCount } = {}) {
+  return complete
+    ? `COMPLETE after ${round} round(s): the engine gate is green`
+    : `NOT COMPLETE after ${round} round(s): ${missing ?? '?'} MISSING + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }
 
 // ENG-95503 — THE ACCOUNTABILITY OBLIGATION IS CONDITIONAL, so it is ADDED to the schema rather than baked into it.
