@@ -3599,10 +3599,12 @@ const resolutionsReopened = new Set()
   // phase depends on it, so a transient failure there costs the whole run: measured on the Applicant baseline, two
   // consecutive Workflow launches were rejected at this exact call in 9 ms with 0 writes ("output schema too large to
   // classify safely"), a LATER identical launch passed — and in between, the flake read as a hard block and pushed the
-  // run onto the Agent route, which is where the divergent state of A2 came from. One retry is what turns that from a
-  // route switch into a hiccup. Bounded and never silent: each attempt is logged, and exhausting them is still the
-  // honest `reconcile-failed` stop, not a run that proceeds on a state nobody produced.
-  const RECONCILE_ATTEMPTS = 2
+  // run onto the Agent route, which is where the divergent state of A2 came from. Retrying is what turns that from a
+  // route switch into a hiccup. The attempts are consecutive dispatches, not spaced ones — the core yields work and
+  // never holds a clock, so this budget only covers a rejection that does not outlast the attempts themselves.
+  // Bounded and never silent: each attempt is logged, and exhausting them is still the honest `reconcile-failed`
+  // stop, not a run that proceeds on a state nobody produced.
+  const RECONCILE_ATTEMPTS = 3
   function* reconcileAgent(roundNo, id, label, note) {
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
       // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
@@ -3619,7 +3621,8 @@ const resolutionsReopened = new Set()
   // The one wording for both Reconcile failures, and it names the recovery the Applicant run got wrong: re-run THIS
   // route. A rejection at the first agent is not evidence the route is unavailable, and a route switch mid-folder is
   // how two routes ended up with two views of one stand.
-  const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. Nothing was built`
+  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it'
+  const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
 
   let state = yield* reconcileAgent(round, 'reconcile.baseline', 'reconcile:baseline',
     'the baseline: `--units` + `--verify --verify-json`, the queue file, and the round counters')
@@ -4094,7 +4097,7 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
     // The DECISION — short-after-one-fix AND independently still open AND not already parked — is the pure
     // `inContextParkableKeys` (unit-tested behaviourally). This wrapper only turns the chosen keys into park records
     // and mutates run state, mirroring how `applyParks` wraps `parkableKeys`.
-    const shortByKey = new Map((selfCheckShort || []).filter((s) => s && s.key).map((s) => [s.key, s]))
+    const shortByKey = new Map((selfCheckShort || []).filter((s) => s?.key).map((s) => [s.key, s]))
     const keys = inContextParkableKeys(selfCheckShort, unitOf, state.verify, state.reachabilityState, packageState, parkedSet)
     const fresh = keys.map((k) => parkRecord(k, inContextParkWhy(shortByKey.get(k).shortRows), roundsRun(state.roundOf, localRounds, k)))
     if (!fresh.length) return []
@@ -4227,34 +4230,42 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   // findings channel useless in exactly the case it exists for: a page the gate calls complete because a ported
   // handler carries no verification key, reopened by a finding — `openNow()` returned it and this branch returned
   // before anything was scheduled. If the gate is green AND nothing is open, the message still says so.
-  if (!openNow().length) {
-    const why = zeroWorkReason()
-    log(why)
-    // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
-    yield* persistPending('nothing left to build')
-    return runReturn({
-      // `unconsumed` is empty on this path by construction (nothing was dispatched), and the term is written out
-    // anyway via the shared `runComplete` so this site cannot drift from the run's other `complete` decision.
-    complete: runComplete(state.verify?.complete, parked, unconsumed),
-      skipped: true,
-      reason: why,
-      approval,
-      planVersion: state.planVersion || null,
-      rounds: 0,
-      verdict: verdictOf(state.verify),
-      parked,
-      blockedByParked: [...blockedSet],
-      independence,
-      proposals,
-      blocked: blockedItems,
-      discrepancies,
-      pageSchemas,
-      unknownSchema: unknownSchemaNow(),
-      staleQueueKeys: state.staleQueueKeys || [],
-      newKeys: state.newKeys || [],
-      next: zeroWorkNext(),
-    })
+  // Pulled out of `run()`'s own body (Sonar cognitive complexity, ENG-95770): the decision itself is
+  // still `openNow().length`, computed and read exactly where it was — only the branch's own body
+  // (the log line, the pending-park persist, and the zero-work return shape) now lives one call away.
+  function* zeroWorkStop() {
+    if (!openNow().length) {
+      const why = zeroWorkReason()
+      log(why)
+      // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
+      yield* persistPending('nothing left to build')
+      return runReturn({
+        // `unconsumed` is empty on this path by construction (nothing was dispatched), and the term is written out
+        // anyway via the shared `runComplete` so this site cannot drift from the run's other `complete` decision.
+        complete: runComplete(state.verify?.complete, parked, unconsumed),
+        skipped: true,
+        reason: why,
+        approval,
+        planVersion: state.planVersion || null,
+        rounds: 0,
+        verdict: verdictOf(state.verify),
+        parked,
+        blockedByParked: [...blockedSet],
+        independence,
+        proposals,
+        blocked: blockedItems,
+        discrepancies,
+        pageSchemas,
+        unknownSchema: unknownSchemaNow(),
+        staleQueueKeys: state.staleQueueKeys || [],
+        newKeys: state.newKeys || [],
+        next: zeroWorkNext(),
+      })
+    }
+    return null
   }
+  const zeroWorkResult = yield* zeroWorkStop()
+  if (zeroWorkResult) return zeroWorkResult
 
   // ---------------------------------------------------------------------------
   // Preflight — resolve the ⚠ Confirm worklist BEFORE the first stand write.
@@ -5502,7 +5513,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
           planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
           discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
           staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-          next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it`,
+          next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`,
         })
       }
       const stopAfterRound = yield* acceptReconciled(next, `round ${round}'s Reconcile`)
@@ -5638,15 +5649,23 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     })
   }
 
-  while (true) {
-    const open = openNow()
-    // `round` counts rounds that ACTUALLY RAN. Incrementing at the top of the loop instead reported
-    // one round more than happened, because the loop always makes a final pass to find nothing open.
-    if (!open.length) break
-    round += 1
-    const endsHere = yield* oneRound(open)
-    if (endsHere) return endsHere
+  // Pulled out of `run()`'s own body (Sonar cognitive complexity, ENG-95770): same loop, same `round`
+  // counter (still closed over, not duplicated), same per-round call — only the driving `while` and its
+  // two exits (nothing left open; a round ends the run) now score against this function instead of `run`.
+  function* driveRounds() {
+    while (true) {
+      const open = openNow()
+      // `round` counts rounds that ACTUALLY RAN. Incrementing at the top of the loop instead reported
+      // one round more than happened, because the loop always makes a final pass to find nothing open.
+      if (!open.length) break
+      round += 1
+      const endsHere = yield* oneRound(open)
+      if (endsHere) return endsHere
+    }
+    return null
   }
+  const driveResult = yield* driveRounds()
+  if (driveResult) return driveResult
 
   phase('Close')
 

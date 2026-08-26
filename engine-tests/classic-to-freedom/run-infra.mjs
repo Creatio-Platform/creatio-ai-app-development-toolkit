@@ -3252,10 +3252,29 @@ check("workflow EXECUTES the Reconcile retry: a baseline Reconcile that returns 
   () => (afterRetry.threw ? `threw: ${afterRetry.threw}` : `stopped=${afterRetry.stopped} calls=${retryCalls}`));
 let deadCalls = 0;
 const stillDead = await runWith({}, async () => { deadCalls += 1; return null; }).catch((e) => ({ threw: e.message }));
-check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly twice and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
-  !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 2
-    && /SAME route/.test(stillDead.next || "") && /switching routes/.test(stillDead.next || ""),
+check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is attempted exactly three times and then stops honestly — the retry is bounded, and `next` sends the operator back to the SAME route rather than to the other one",
+  !stillDead.threw && stillDead.stopped === "reconcile-failed" && deadCalls === 3
+    && /SAME route/.test(stillDead.next || "") && /switching routes/.test(stillDead.next || "")
+    && (stillDead.next || "").includes("If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it"),
   () => (stillDead.threw ? `threw: ${stillDead.threw}` : `stopped=${stillDead.stopped} calls=${deadCalls} next=${(stillDead.next || "").slice(0, 160)}`));
+check("the repeated-rejection triage sentence is a single constant interpolated into BOTH Reconcile recovery messages — a wording fix cannot land in only one",
+  /const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it'/.test(wfSrc)
+    && (wfSrc.match(/\$\{REPEATED_REJECTION_TRIAGE\}/g) || []).length === 2);
+// The attempts are CONSECUTIVE dispatches, not spaced ones: the core is a generator that yields work and never holds
+// a clock, so nothing here may claim a delay it does not perform. This pins the budget's reach honestly — three
+// back-to-back attempts, which a rejection outlasting them still defeats.
+check("the retry loop takes no clock: no timer call sits between the Reconcile attempts, so the budget is three consecutive dispatches and is not described as spaced",
+  !/setTimeout|setInterval/.test(wfSrc) && !/SPACED|spaced by/.test(wfSrc));
+let burstCalls = 0;
+const afterBurst = await runWith({}, async () => {
+  burstCalls += 1;
+  if (burstCalls <= 2) return null;                       // the burst consumes attempts 1 and 2
+  if (burstCalls === 3) return newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true });
+  return null;
+}).catch((e) => ({ threw: e.message }));
+check("workflow SURVIVES a two-rejection burst: attempts 1 and 2 return nothing, attempt 3 answers, and the run proceeds on that answer with exactly three calls made",
+  !afterBurst.threw && afterBurst.stopped !== "reconcile-failed" && afterBurst.stopped === "unknown-checkpoint-key" && burstCalls === 3,
+  () => (afterBurst.threw ? `threw: ${afterBurst.threw}` : `stopped=${afterBurst.stopped} calls=${burstCalls}`));
 
 // --- HARD STOP 3.5 MID-RUN in `acceptReconciled` as an EXECUTION path (ENG-95468). The baseline gate is executed
 // above; this drives a LATER Reconcile — the post-preflight one, the FIRST `acceptReconciled` call site — through the
