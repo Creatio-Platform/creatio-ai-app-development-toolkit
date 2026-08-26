@@ -2007,8 +2007,13 @@ function collectResolvedGates(changeSet, source) {
   const gates = [];
   for (const [ctype] of runTypes(changeSet)) {
     const gate = gateForComponentType(ctype);
-    if (gate)
-      gates.push({ componentType: ctype, kind: gate.kind, id: gate.id,
+    // ENG-95683 (review) — push ONLY a well-formed gate: a non-blank `kind` and a non-blank string `id`. This is the
+    // producer-side guarantee both consumers rely on — the plan.md provenance line (`gateFragment` in designspec.mjs)
+    // and the `--resolved-gates` JSON artifact — so neither has to guard the shape itself and neither can render a
+    // literal `undefined`/blank backtick pair from an incomplete entry. `gateShapeIssues` already fails the CI table
+    // check on a malformed row, so in practice every row-carried gate is complete; this makes that one home, not two.
+    if (gate && gate.kind && typeof gate.id === "string" && gate.id.trim())
+      gates.push({ componentType: ctype, kind: gate.kind, id: gate.id.trim(),
         ...(gate.feature ? { feature: gate.feature } : {}), source });
   }
   return gates;

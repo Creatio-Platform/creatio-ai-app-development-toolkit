@@ -1159,9 +1159,11 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
 // field, or a transient Reconcile that dropped it), the intersection is SKIPPED and the resolution is trusted as
 // given — the same "absence is not evidence, behave exactly as before" rule the `resolved` filter already applies.
 // ENG-95683 — the gate KIND that selects the install/enable-and-re-BUILD branch. A plain string literal, NOT an
-// import: this file is a Workflow-tool script with no module system at run time, so it MIRRORS the engine's
-// `GATE_KIND.COMPOSITE` in `skills/classic-to-freedom-migration/engine/mapping-table.mjs` — the two must stay equal,
-// and `run-infra.mjs` pins that equality by reading the engine's exported value and asserting this literal matches.
+// import: this module's pure-decision block is INLINED verbatim into `freedom-build-executor.workflow.js`, which the
+// Claude Workflow host evaluates as a function body with NO module system, so an `import` here would not survive that
+// inlining. It therefore MIRRORS the engine's `GATE_KIND.COMPOSITE` in
+// `skills/classic-to-freedom-migration/engine/mapping-table.mjs` — the two must stay equal, and `run-infra.mjs` pins
+// that equality for BOTH copies (this module's and the inlined workflow.js one) against the engine's exported value.
 const GATE_COMPOSITE = 'composite'
 // ENG-95683 — the ONE predicate for "carries a well-formed gated composite" (kind 'composite' + a non-blank string
 // `id`), shared by the carry-through in `componentTypeMismatches` and by `gatedComposite` (which
@@ -1226,7 +1228,9 @@ const planInvalidNext = (mismatches, tail) => {
   const list = mismatches || []
   // ENG-95683 — when every unresolved type is a gated COMPOSITE (the plan is correct; the stand needs a package
   // installed), the "These do not: / This is a PLAN assertion" preamble is wrong. Skip it so the operator only
-  // reads the install/BUILD instruction, not a contradiction.
+  // reads the install/BUILD instruction, not a contradiction. Mirrors the same branch in
+  // `freedom-build-executor.workflow.js` — the two copies of this block must stay behaviourally identical, and the
+  // Codex / generic-CLI adapters reach THIS module's copy through `core.mjs`, so the fix has to live here too.
   if (list.length > 0 && list.every(gatedComposite))
     return componentReplanClause(list) + ' ' + tail
   return 'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '

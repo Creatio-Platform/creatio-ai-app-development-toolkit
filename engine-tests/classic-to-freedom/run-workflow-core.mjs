@@ -40,6 +40,7 @@ import * as bex from "../../skills/_workflow-core/build-executor/core.mjs";
 import { makeContext, makePaths } from "../../skills/_workflow-core/build-executor/context.mjs";
 import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
   packagePreconditionStop, selfCheckStillShort, inContextParkableKeys, selfCheckMismatches,
+  planInvalidNext, componentReplanClause, componentTypeMismatches,
 } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
 import { CLAUDE_HOST, makeExecute, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
@@ -497,6 +498,42 @@ function driveRetry(outcomes, onFailure) {
   check("core: a Critique that returned something UNUSABLE gets its own log line and `critiqueRan:false` — 'returned something unusable' and 'the host never answered' need different repairs",
     result.critiqueRan === false && logs.some((l) => /treating the pass as dead/.test(l)),
     () => JSON.stringify(logs.filter((l) => /Critique|pass as dead/.test(l))));
+}
+
+/* ENG-95683 (review): `planInvalidNext`'s all-gated preamble suppression must hold on the CORE MODULE too, not only
+   in the inlined `freedom-build-executor.workflow.js`. `run-infra.mjs` proves the suppression end-to-end against the
+   sliced workflow block; this asserts the SAME behaviour on `helpers.mjs` directly — the copy the Codex / generic-CLI
+   adapters reach through `core.mjs` (`planInvalidNextAll` → `planInvalidNext`). Without this, the two copies could
+   drift (as they did: the fix landed in workflow.js first) and no host-neutral test would see it. */
+{
+  const gated = componentTypeMismatches([
+    { type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" },
+  ]);
+  const allGatedNext = planInvalidNext(gated, "Nothing was built.");
+  check("ENG-95683 (core module): planInvalidNext SUPPRESSES the plan-failure preamble when every mismatch is a gated composite — the operator reads only install/BUILD, never the contradictory 'These do not:'",
+    /install the `CrtCustomer360App` package/.test(allGatedNext) && /no re-plan is needed/.test(allGatedNext)
+      && !/These do not:/.test(allGatedNext) && !/each named component type/.test(allGatedNext),
+    () => allGatedNext);
+  // Over-suppression guard: a MIXED set (one gated + one fabricated) must KEEP the preamble and carry BOTH clauses.
+  const mixed = componentTypeMismatches([
+    { type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" },
+    { type: "crt.NotAComponent", resolved: false, note: "fabricated" },
+  ]);
+  const mixedNext = planInvalidNext(mixed, "Nothing was built.");
+  check("ENG-95683 (core module): a MIXED stop keeps the 'These do not:' preamble and carries BOTH the install/BUILD and the re-plan clause — suppression fires ONLY when the whole set is gated",
+    /These do not:/.test(mixedNext) && /install the `CrtCustomer360App` package/.test(mixedNext)
+      && /re-run .--plan --out., re-approve/.test(mixedNext),
+    () => mixedNext);
+  // Ungated negative control: pre-ENG-95683 wording is reproduced verbatim (the preamble stands).
+  const ungatedNext = planInvalidNext(componentTypeMismatches([{ type: "crt.NotAComponent", resolved: false, note: "fabricated" }]), "Nothing was built.");
+  check("ENG-95683 (core module): an UNGATED stop reproduces the plan-failure preamble unchanged — the suppression never touches a set a re-plan is the only fix for",
+    /each named component type must resolve/.test(ungatedNext) && /These do not:/.test(ungatedNext)
+      && !/install the/.test(ungatedNext),
+    () => ungatedNext);
+  // `componentReplanClause` is exported alongside; a direct call keeps the symbol used and documents the shared home.
+  check("ENG-95683 (core module): componentReplanClause returns ONLY the install/BUILD clause for an all-gated set (no preamble of its own)",
+    /is a gated COMPOSITE/.test(componentReplanClause(gated)) && !/These do not:/.test(componentReplanClause(gated)),
+    () => componentReplanClause(gated));
 }
 
 /* `critiqueDeathLine` and `isCritiqueShape` — the two pure answers around the retry. Both moved here with the

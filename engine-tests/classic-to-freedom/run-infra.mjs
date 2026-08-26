@@ -2407,6 +2407,15 @@ check("ENG-95468: workflow EXECUTES the mid-run IDENTITY gate — a Reconcile th
 check("ENG-95683: the builder's `GATE_COMPOSITE = 'composite'` literal is present and EQUALS the engine's GATE_KIND.COMPOSITE (mirrored across two files that cannot import each other)",
   /const GATE_COMPOSITE = ['"]composite['"]/.test(wfSrc) && GATE_KIND.COMPOSITE === "composite",
   () => ({ inSource: /const GATE_COMPOSITE = ['"]composite['"]/.test(wfSrc), engineValue: GATE_KIND.COMPOSITE }));
+// The SAME literal lives in the CORE MODULE `_workflow-core/build-executor/helpers.mjs` — the source whose pure block
+// is inlined into the workflow above, and which the Codex / generic-CLI adapters import DIRECTLY through `core.mjs`.
+// The inlining forbids an `import` there too, so it keeps the literal — pin THIS copy against the engine's value as
+// well (only the workflow.js copy was pinned before), or a rename of GATE_KIND.COMPOSITE silently breaks gate
+// matching on the core path while the workflow.js guard stays green.
+const helpersSrc = readFileSync(fileURLToPath(new URL("../../skills/_workflow-core/build-executor/helpers.mjs", import.meta.url)), "utf8");
+check("ENG-95683: the core module helpers.mjs `GATE_COMPOSITE` literal is present and EQUALS the engine's GATE_KIND.COMPOSITE (the second mirror, imported by core.mjs — pins both copies transitively equal)",
+  /const GATE_COMPOSITE = ['"]composite['"]/.test(helpersSrc) && GATE_KIND.COMPOSITE === "composite",
+  () => ({ inHelpers: /const GATE_COMPOSITE = ['"]composite['"]/.test(helpersSrc), engineValue: GATE_KIND.COMPOSITE }));
 
 // The carry-through: only a WELL-FORMED gated composite (kind 'composite' + a non-blank string id) is typed onto the
 // mismatch; a missing id, a wrong kind, or a blank id leaves the mismatch untyped (the generic clause then stands).
