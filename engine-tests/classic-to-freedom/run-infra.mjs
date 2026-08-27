@@ -3149,6 +3149,26 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
     check(`workflow script ${path.basename(file)} is LF on disk — a CR makes the host reject it at the approval dialog, before the script runs`,
       crs === 0, () => `${crs} CR byte(s) present; expected 0 (is \`core.autocrlf\` rewriting it? \`.gitattributes\` pins \`*.workflow.js text eol=lf\`)`);
   }
+  /* SIZE, FOR THE SAME REASON AND THROUGH THE SAME DOOR. The comment above is the whole argument: the permission
+     handler INLINES a `scriptPath` file into the `script` field so the approval dialog can show it. That field has a
+     `maxLength` of 524288, so the shipped file's size is bound by it even though nothing passes the script inline —
+     and a file over the line fails schema validation before a single agent runs, exactly like the CR case, with
+     nothing in the script itself to point at.
+     Nothing measured this before, and the omission has a precedent in this very ticket: `RECONCILE_SCHEMA_BUDGET`
+     sat at 6000 above a real 4096-byte cap and let the schema grow straight past it — the run-killing bug ENG-95930
+     exists to fix. A generated file grows one prompt sentence at a time, so this is the check that has to notice.
+     Two thresholds, matching the schema convention: the HOST's hard limit, and a working budget under it. */
+  const WORKFLOW_SCRIPT_INLINE_CAP = 524288;
+  const WORKFLOW_SCRIPT_BUDGET = 480000;
+  for (const file of wfFiles) {
+    const bytes = statSync(file).size;
+    check(`workflow script ${path.basename(file)} fits the host's ${WORKFLOW_SCRIPT_INLINE_CAP}-byte \`script\` field — the approval handler inlines this file into it, so an oversized file is rejected before the run starts`,
+      bytes <= WORKFLOW_SCRIPT_INLINE_CAP,
+      () => `${bytes} B (${(bytes / WORKFLOW_SCRIPT_INLINE_CAP * 100).toFixed(1)}% of the cap)`);
+    check(`workflow script ${path.basename(file)} stays inside its ${WORKFLOW_SCRIPT_BUDGET}-byte working budget — a margin under the hard cap, because this file is generated and grows a prompt sentence at a time`,
+      bytes <= WORKFLOW_SCRIPT_BUDGET,
+      () => `${bytes} B, ${WORKFLOW_SCRIPT_BUDGET - bytes} B of headroom (hard cap ${WORKFLOW_SCRIPT_INLINE_CAP}). Over budget but under the cap means: shrink prompt text, or raise the budget deliberately and say why.`);
+  }
   // …and the pin that keeps it that way on a fresh clone. Asserted through git's OWN resolution, not by reading
   // the file, so a later `*.js` entry that overrode it would be caught too. When git cannot be consulted (this
   // suite also runs from a plugin install that may not be a checkout) the detail says so rather than the check
