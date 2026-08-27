@@ -1670,6 +1670,43 @@ const goodDigest = {
 check("ENG-95930: the shape check ACCEPTS the digest the engine actually publishes — a checker that refused a valid answer would burn all three Reconcile attempts on every run and stop the build with nothing wrong",
   wf.reconcileShapeErrors && wf.reconcileShapeErrors(goodDigest).length === 0,
   () => wf.reconcileShapeErrors && wf.reconcileShapeErrors(goodDigest));
+// ENG-95930 (review round 3) — THE WORST-CASE SIZE TEST. `maxItems` bounds the count and
+// `additionalProperties.maxLength` bounds one string, but not their product: a SCHEMA-VALID answer (400 items,
+// 400-char strings) is about half a megabyte against a ~20 KB tool-input limit. That combination must be caught,
+// and the fault must NAME the offending field so the informed retry can tell the agent what to cut.
+const schemaValidButHuge = (() => {
+  const big = "x".repeat(400);
+  return {
+    ...goodDigest,
+    preflightItems: Array.from({ length: 400 }, (_, i) => ({ id: `p${i}`, pageKey: "main", kind: "confirm", item: big })),
+  };
+})();
+check("ENG-95930 (review): an answer that is SCHEMA-VALID under `maxItems`/`maxLength` but huge in their PRODUCT is still faulted on total serialized size, and the fault names the largest fields — the bound the two keywords cannot express on their own",
+  (() => {
+    if (!wf.reconcileShapeErrors) return false;
+    const faults = wf.reconcileShapeErrors(schemaValidButHuge);
+    return faults.length > 0
+      && faults.some((f) => /serializes to \d+ bytes/.test(f) && /preflightItems/.test(f));
+  })(),
+  () => `${JSON.stringify(schemaValidButHuge).length} B -> ${JSON.stringify(wf.reconcileShapeErrors ? wf.reconcileShapeErrors(schemaValidButHuge).slice(0, 1) : [])}`);
+check("ENG-95930 (review): the size ceiling does NOT fire on a normal answer — a check that faulted a healthy digest would burn every Reconcile attempt on every run",
+  wf.reconcileShapeErrors && !wf.reconcileShapeErrors(goodDigest).some((f) => /serializes to/.test(f)),
+  () => `${JSON.stringify(goodDigest).length} B`);
+// ENG-95930 (review round 3, Major 1) — the four claims the reviewer could not trace to labelled test blocks.
+// T2/T2b have their own labelled checks further down (`cliRepairCheck`, the PAGE repair prompt, the boundary
+// invariant); these two pin the GUARD-PRESERVATION half in the same labelled style, so each claim maps 1:1.
+check("ENG-95930 (review) guard preserved — ENG-95901: `RECONCILE_SHAPE.verify` still REQUIRES `buildComplete` per page, the field the loosened schema stopped forcing; losing it would make the park/close arithmetic read `undefined`",
+  wf.RECONCILE_SHAPE?.verify?.map?.pages?.required?.includes("buildComplete") === true,
+  () => JSON.stringify(wf.RECONCILE_SHAPE?.verify?.map?.pages?.required));
+// The guard is BOTH halves and the test asserts both: the prompt has to say `""` is a real answer, and the schema
+// has to admit it. A `['string','null']` union is what lets `""` and `null` mean different things — narrowing it to
+// `'string'` alone, or dropping the prompt sentence, each silently re-breaks the `new-app` identity gate.
+check("ENG-95930 (review) guard preserved — empty `SchemaNamePrefix`: the Reconcile prompt still states the empty string is a REAL answer distinct from `null`, AND the schema still admits both via a string/null union",
+  /The empty string is a REAL answer and is not the same as/.test(wfSrc)
+    && Array.isArray(wf.RECONCILE_SCHEMA?.properties?.schemaNamePrefix?.type)
+    && wf.RECONCILE_SCHEMA.properties.schemaNamePrefix.type.includes("string")
+    && wf.RECONCILE_SCHEMA.properties.schemaNamePrefix.type.includes("null"),
+  () => `prompt sentence: ${/The empty string is a REAL answer and is not the same as/.test(wfSrc)} | schema type: ${JSON.stringify(wf.RECONCILE_SCHEMA?.properties?.schemaNamePrefix?.type)}`);
 // `resolution: null` is the engine's own answer for an unanswered ⚠ Confirm item, and the prompt tells the agent to
 // copy it rather than omit the field. A checker that read `null` as a fault would make every un-answered plan
 // unbuildable — the opposite of what the old schema's `['object','null']` union did.

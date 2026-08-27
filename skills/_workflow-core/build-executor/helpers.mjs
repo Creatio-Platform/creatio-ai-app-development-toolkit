@@ -1164,11 +1164,36 @@ function shapeValueErrors(where, value, spec, out) {
 // written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
 // is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
 // instead of every index of a 200-row array.
-export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12) {
+// THE SIZE CEILING THIS ANSWER MUST STAY UNDER, well below the host's ~20 KB tool-input limit. It is a DETECTION
+// layer, and it is honest about what it can do: mode B kills an answer by TRUNCATING it at the transport, before
+// any of this code runs, so an answer that overflowed never reaches here. What this catches is the run that is
+// approaching the cliff — an answer big enough to be alarming but small enough to arrive — and it names the fields
+// to shrink, which the shape-fault retry then hands to the agent. `maxItems` on the schema bounds COUNT and
+// `additionalProperties.maxLength` bounds each string, but neither bounds their PRODUCT: 400 items of 400-character
+// strings is schema-valid and ~500 KB. Only a total-size check speaks to the actual invariant.
+const RECONCILE_ANSWER_MAX_BYTES = 16000
+
+// WHAT IS WRONG WITH THIS ANSWER'S NESTED SHAPES, as a list of named fields — empty means it is usable.
+// ABSENCE OF A TOP-LEVEL PROPERTY IS NOT THIS FUNCTION'S BUSINESS: `RECONCILE_SCHEMA.required` carries that and the
+// host enforces it, and several of these properties are legitimately optional (`packageCreatedByRun` on a folder
+// written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
+// is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
+// instead of every index of a 200-row array.
+export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) {
     return [`the answer is not an object (got ${describeValue(state)})`]
   }
   const out = []
+  // SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
+  // agent guessing which field to cut, and an uninformed retry re-sends the same oversized answer.
+  const size = JSON.stringify(state)?.length ?? 0
+  if (size > maxBytes) {
+    const worst = Object.keys(state)
+      .map((k) => [k, JSON.stringify(state[k])?.length ?? 0])
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([k, n]) => `${k} (${n} B)`).join(', ')
+    out.push(`the answer serializes to ${size} bytes, over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
+  }
   for (const [key, spec] of Object.entries(shape)) {
     if (state[key] === undefined) continue
     shapeValueErrors(key, state[key], spec, out)

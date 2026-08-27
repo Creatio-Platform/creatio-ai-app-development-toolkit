@@ -7,10 +7,23 @@
 // THE INNER SHAPE OF THIS RUN'S FIRST ANSWER LIVES IN `RECONCILE_SHAPE`, at the BOTTOM OF THIS FILE — beside the
 // schema it completes. `helpers.mjs` hosts only the checker that walks it (`reconcileShapeErrors`).
 //
-// SIZE BOUNDS BELONG HERE, NOT IN THE SHAPE TABLE. `maxItems` on this schema is enforced by the HOST, before the
-// answer is serialized; `RECONCILE_SHAPE` is walked only AFTER an answer arrives, so a bound there could report an
-// oversized answer but never prevent one — and mode B truncates the payload at the transport, before any of this
-// script's code sees it. Hence every array property below carries `maxItems`.
+// SIZE: WHAT THESE KEYWORDS DO AND WHAT THEY CANNOT DO. Every array property below carries `maxItems`, and every
+// array-of-object carries `additionalProperties: { maxLength }` so each string inside an item is bounded too
+// (`maxLength` is defined only for strings, so the booleans and integers in those items are untouched). Both are
+// HOST-enforced, before the answer is serialized, which is why they live here and not in the shape table.
+//
+// They REDUCE the mode-B class; they do not CLOSE it, and this comment previously overclaimed that they did.
+// `maxItems` bounds the count and `maxLength` bounds one string, but nothing here bounds their PRODUCT: 400 items
+// of 400-character strings is schema-valid and about half a megabyte, against a ~20 KB tool-input limit. No value
+// of those two keywords both fits a real plan and fits the cap — 11 arrays inside 15 KB works out to roughly one
+// item each. So there are two more layers, deliberately:
+//   · `reconcileShapeErrors` checks the answer's TOTAL serialized size and names the largest fields (detection —
+//     it cannot see an answer that was already truncated at the transport, only one approaching the cliff);
+//   · the real close is keeping the bulk OFF the answer entirely, the way `verify` now carries counts and leaves
+//     the rows in `verify-summary.json` — tracked separately, not done here.
+// Note that size was never bounded on this schema before: the pre-shrink version had no `maxItems` and no
+// `maxLength` at all, so the exposure predates the shrink; what the shrink removed was per-item TYPES, which
+// `RECONCILE_SHAPE` now carries.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
 // `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3500 —
@@ -76,7 +89,7 @@ export const RECONCILE_SCHEMA = {
     // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
     // session found is still an orphan), never overwritten by it.
     // Each entry `{ schema, orphanedBy, at }`, `schema` required.
-    orphanedPagesOnFile: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    orphanedPagesOnFile: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -107,7 +120,7 @@ export const RECONCILE_SCHEMA = {
     // half of the message depends on the free-text `note` the agent put here — its quality is agent-dependent by
     // design for now, not an engine-published fact.
     // One `{ type, resolved, note }` per entry, `type`/`resolved` required.
-    componentResolution: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    componentResolution: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
     // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
     // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
@@ -118,7 +131,7 @@ export const RECONCILE_SCHEMA = {
     // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
     // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
     // One `{ name, resolved, note }` per entry, `name`/`resolved` required.
-    templateResolution: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    templateResolution: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
     // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
     // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
@@ -137,7 +150,7 @@ export const RECONCILE_SCHEMA = {
     parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
     // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
     // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default.
-    reachability: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    reachability: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
     reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
@@ -146,15 +159,15 @@ export const RECONCILE_SCHEMA = {
     // or the literal `null` on an unanswered item. `null` is LEGAL and `RECONCILE_SHAPE` accepts it: an
     // object-only rule pushes the agent to omit the field instead, and an omitted field cannot be told apart
     // from an engine that publishes no answers at all.
-    preflightItems: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    preflightItems: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
     // the operator believes is applied.
     // IDENTIFIERS ONLY — no `answer` text. An agent retypes every field of this into a tool call each round, and the
     // text is already in the operator's own file; naming which answer missed is the whole job.
     // Both carry `{ id, kind, item }` per entry — identifiers only, no `answer` text.
-    resolutionsUnmatched: { type: 'array', maxItems: 400, items: { type: 'object' } },
-    resolutionsConflicts: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    resolutionsUnmatched: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    resolutionsConflicts: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     evidenceIds: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
@@ -175,15 +188,15 @@ export const RECONCILE_SCHEMA = {
     // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
     // round for a unit its predecessor already gave up on and asked the user about.
     // Each `{ key, parkedWhy, rounds }`, `key` required.
-    parkedUnits: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    parkedUnits: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // Plan deviations, blockers and builder-vs-stand disagreements already in the queue file from an
     // earlier session. They seed this run's lists so a kill does not erase what a previous one recorded.
     // Each `{ unit, deviation, why, applied }`, `deviation`/`why` required.
-    proposals: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    proposals: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // Each `{ unit, what, why }`, `what`/`why` required.
-    blocked: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    blocked: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // Each `{ unit, claim, found, round }`, `unit`/`claim`/`found` required.
-    discrepancies: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    discrepancies: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
     // the run; trusting it silently builds a page nothing gates.
     staleQueueKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
