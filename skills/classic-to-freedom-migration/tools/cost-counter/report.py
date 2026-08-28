@@ -295,7 +295,11 @@ def _workflow_labels(session: export_mod.SessionExport, records: dict) -> dict:
     build rounds), the repeats are numbered ``round 1/2/3`` in start-time order.
     Anything without a readable name falls back to its raw run id.
     """
-    info = {wf.name: (records[wf.name].workflow_name,
+    # workflowName is read straight out of the run file, so it carries no more
+    # guarantee than the bare agent's description: clean_label bounds it,
+    # flattens it and returns None for a non-string, which then falls back to
+    # the run id below instead of raising in startswith().
+    info = {wf.name: (export_mod.clean_label(records[wf.name].workflow_name),
                       records[wf.name].start_time or records[wf.name].timestamp)
             for wf in session.workflows}
     round_no = _round_numbers(info)
@@ -312,6 +316,19 @@ def _workflow_labels(session: export_mod.SessionExport, records: dict) -> dict:
     return labels
 
 
+def _start_sort_key(start) -> tuple:
+    """Total order over ``startTime`` values that are not guaranteed to match.
+
+    ``sorted`` compares tuples element-wise, so one run file carrying a string
+    ``startTime`` beside another carrying a number raised TypeError and took the
+    whole report down. Numbers keep their order; anything else unusable follows;
+    absent sorts last, as it did before.
+    """
+    if isinstance(start, bool) or not isinstance(start, (int, float)):
+        return (2, 0.0, "") if start is None else (1, 0.0, str(start))
+    return (0, float(start), "")
+
+
 def _round_numbers(info: dict) -> dict:
     """Map run-id -> round number for workflow names that ran more than once,
     numbered in start-time order. Names that ran once get no entry."""
@@ -323,9 +340,10 @@ def _round_numbers(info: dict) -> dict:
     for runs in groups.values():
         if len(runs) <= 1:
             continue
-        # start-time order; None sorts first so numbering stays deterministic.
+        # start-time order; an absent or unusable start sorts last so the
+        # numbering stays deterministic whatever the run files carry.
         for index, (_, run_id) in enumerate(
-            sorted(runs, key=lambda r: (r[0] is None, r[0])), start=1
+            sorted(runs, key=lambda r: (_start_sort_key(r[0]), r[1])), start=1
         ):
             round_no[run_id] = index
     return round_no
@@ -645,6 +663,16 @@ class Report:
                 "live_agents": counts[attempts_mod.LIVE],
                 "replayed_agents": counts[attempts_mod.REPLAYED],
                 "leftover_agents": counts[attempts_mod.LEFTOVER],
+                # `attribution` is built from session.workflows alone, so a bare
+                # subagent can never land in the three classes above -- yet
+                # leftover_totals() puts its spend in `surviving`. Without this
+                # key the counts described 3 transcripts while the weights
+                # covered 4, and `leftover weighted cost: X of Y total` printed
+                # a denominator whose population had no row in the table above.
+                # Its own class, not folded into live_agents: a bare agent was
+                # never part of an attempt, and merging it would make
+                # live_agents mean two different things.
+                "bare_agents": len(self.session.bare_agents),
                 # Weighted cost of the transcripts no record claims. Still part
                 # of the run total above -- this names it, it does not remove it.
                 "leftover_weighted": self._weighted(leftover),
@@ -698,10 +726,17 @@ class Report:
         """(surviving TranscriptAgg, leftover TranscriptAgg) across every subagent.
 
         Both are plain sums of the transcripts in each class; together they equal
-        the run total, so no spend is hidden by the split. A bare subagent counts
-        as surviving: no attempt ever superseded it (it belongs to no workflow,
-        so no run file was rewritten over it), and leaving it out of both sides
-        would break the identity this method promises.
+        the **subagent** total -- the main driver stage is deliberately outside
+        this split, and the tests close the identity by adding it back. No
+        subagent spend is hidden by the split.
+
+        A bare subagent counts as surviving: no attempt ever superseded it (it
+        belongs to no workflow, so no run file was rewritten over it), and
+        leaving it out of both sides would break that identity. It is counted in
+        ``summary()["attempts"]["bare_agents"]`` for the same reason -- the
+        class counts have to describe the population the weights cover, or a
+        reader deriving an average per surviving agent divides by the wrong
+        number.
         """
         surviving, leftover = TranscriptAgg(), TranscriptAgg()
         for workflow in self._ordered_workflows:

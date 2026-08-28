@@ -30,6 +30,7 @@ import attempts as attempts_mod
 import export as export_mod
 import metrics
 from report import COUNTER_VERSION, Report
+from tables import md_escape
 
 # The shared path-resolution boundary lives with the rest of the repository's
 # Python runtime, not in this tool: `mcp_client.py` and `installer/install.py`
@@ -189,8 +190,14 @@ def _print_attempts(report: Report) -> None:
         if attribution.total_tokens is not None:
             print(f"    {'':34} run file totalTokens: {attribution.total_tokens:,}"
                   " (surviving attempt's live agents, per the harness)")
+    # Name the bare agents in the same breath as the denominator they are part
+    # of: they carry spend on the surviving side but belong to no attempt, so
+    # they have no row in the per-workflow table above this line.
+    bare = summary.get("bare_agents", 0)
+    bare_note = f" (surviving includes {bare} bare subagent(s))" if bare else ""
     print(f"    leftover weighted cost: {summary['leftover_weighted']:,.0f}"
-          f" of {summary['leftover_weighted'] + summary['surviving_weighted']:,.0f} total")
+          f" of {summary['leftover_weighted'] + summary['surviving_weighted']:,.0f}"
+          f" total{bare_note}")
     nothing = summary["produced_nothing_agents"]
     if nothing is None:
         print("    produced-nothing agents: unknown (no readable journal)")
@@ -381,7 +388,10 @@ def _reconcile_markdown(report: Report) -> str:
     for r in rows:
         agents, calls = _reconcile_cells(r)
         note = f" - {r.note}" if r.note else ""
-        lines.append(f"| {r.workflow} | {agents} | {calls}{note} |")
+        # assembled by f-string, not through Table, so the escape that
+        # Table._md_row applies has to be applied here by hand
+        lines.append(
+            f"| {md_escape(r.workflow)} | {agents} | {calls}{md_escape(note)} |")
     lines.append("")
     lines.append(f"_{_reconcile_verdict(rows)}_")
     if report.interrupted:
@@ -406,7 +416,7 @@ def _attempts_markdown(report: Report) -> str:
         total_tokens = ("—" if attribution.total_tokens is None
                         else f"{attribution.total_tokens:,}")
         lines.append(
-            f"| {label} | {attribution.how} | {counts[attempts_mod.LIVE]} |"
+            f"| {md_escape(label)} | {md_escape(attribution.how)} | {counts[attempts_mod.LIVE]} |"
             f" {counts[attempts_mod.REPLAYED]} | {counts[attempts_mod.LEFTOVER]} |"
             f" {total_tokens} |"
         )

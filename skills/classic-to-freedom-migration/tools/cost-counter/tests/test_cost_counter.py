@@ -435,10 +435,6 @@ class CounterVersionEverywhereTest(unittest.TestCase):
         self.assertIn(f"_counter version: {counter.COUNTER_VERSION}_", buf.getvalue())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class BareOnlyExportCliTest(unittest.TestCase):
     """An export whose session spawned only bare subagents -- no root
     transcript.jsonl and no workflows/ directory anywhere.
@@ -588,3 +584,7 @@ class CompareAcrossVersionsTest(_CompareExportTestCase):
         self.assertIn(str(report_mod.COUNTER_VERSION), doc["version_note"])
         # and the ratio was never computed over the mismatched pair
         self.assertNotIn("cheaper", doc["verdict"])
+
+
+if __name__ == "__main__":
+    unittest.main()

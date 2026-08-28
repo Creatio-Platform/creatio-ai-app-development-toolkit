@@ -30,6 +30,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import export
 import parsing
 
 # How the surviving run's record accounts for a transcript.
@@ -99,11 +100,11 @@ def read_run_record(path: Optional[str]) -> RunRecord:
 
     This is the single reader for ``workflows/<wf>.json``, so the
     degrade-on-malformed-JSON behaviour cannot drift between its callers. The
-    read itself is ``parsing.read_json_object`` -- shared with the bare agent's
+    read itself is ``export.read_json_object`` -- shared with the bare agent's
     meta sidecar, so the two cannot disagree about what "unusable" means; only
     the fallback value differs.
     """
-    data = parsing.read_json_object(path)
+    data = export.read_json_object(path)
     if data is None:
         return RunRecord()
 

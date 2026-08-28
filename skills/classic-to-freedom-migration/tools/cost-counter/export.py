@@ -27,11 +27,10 @@ side of a ``--compare`` (where it ran as a workflow) and not on the other.
 from __future__ import annotations
 
 import glob
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Optional
-
-import parsing
 
 
 @dataclass
@@ -104,6 +103,44 @@ class SessionExport:
         return files
 
 
+def read_json_object(path: Optional[str]) -> Optional[dict]:
+    """The JSON object in ``path``; ``None`` when absent, unparseable or not an
+    object.
+
+    The single reader for the small sidecar files an export carries beside a
+    transcript -- a workflow's ``workflows/<wf>.json`` run record and a bare
+    agent's ``agent-<id>.meta.json``. Both degrade identically by construction
+    rather than through two hand-kept copies of the same seven lines, which is
+    what stops the degrade contract drifting between consumers. It lives here,
+    beside the layout it reads and the ``within_root`` guard its callers pair it
+    with, rather than in ``parsing`` -- that module is pure functions over a
+    decoded transcript line, and this is filesystem I/O over a sidecar.
+
+    Never raises, and the exception tuple is the whole contract:
+
+    * ``ValueError`` -- ``json.JSONDecodeError`` subclasses it: a truncated or
+      malformed sidecar.
+    * ``OSError`` -- an unreadable, vanishing or permission-denied file.
+      Catching only the decode error would let a half-copied export crash the
+      tool instead of costing one file its metadata.
+    * ``RecursionError`` -- ``json.load`` raises it on a deeply nested document
+      (measured: ~5000 levels of ``[``, a 10 KB file), and it is a
+      ``RuntimeError``, so neither of the above covers it. Leaving it out turned
+      this degrade into a crash that aborted ``discover()`` before any transcript
+      was counted.
+
+    The transcript's cost is counted in every one of those cases.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError, RecursionError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def within_root(root: str, path: str) -> bool:
     """True when ``path``, fully resolved, still lives inside ``root``.
 
@@ -147,12 +184,12 @@ def _read_agent_meta(path: str, root: str) -> dict:
 
     This function owns only the confinement decision (the meta path is derived
     from the transcript path, so a symlink could point out of the export); the
-    read and its degrade rule are ``parsing.read_json_object``, shared with the
-    workflow run-record reader.
+    read and its degrade rule are ``read_json_object``, shared with the workflow
+    run-record reader.
     """
     if not within_root(root, path):
         return {}
-    return parsing.read_json_object(path) or {}
+    return read_json_object(path) or {}
 
 
 # A stage/role label is a table cell, not prose. `description` is free text
@@ -162,7 +199,7 @@ def _read_agent_meta(path: str, root: str) -> dict:
 _MAX_LABEL_CHARS = 96
 
 
-def _clean_label(value) -> Optional[str]:
+def clean_label(value) -> Optional[str]:
     """One model-authored meta string, reduced to something safe to print.
 
     Anything that is not a non-empty string degrades to ``None`` so the caller
@@ -173,6 +210,11 @@ def _clean_label(value) -> Optional[str]:
     description is truncated rather than allowed to push every column off the
     line. Markdown's cell separator is escaped by the Markdown renderer, which
     is the layer that owns that format.
+
+    Public because ``report._workflow_labels`` needs it too: ``workflowName``
+    comes out of the run file with no more guarantee behind it than
+    ``description`` has, and giving the hygiene to one label and not the other
+    was an asymmetry this tool created for itself.
     """
     if not isinstance(value, str):
         return None
@@ -198,8 +240,8 @@ def _bare_agents(subagents_dir: str, session_results: Optional[str], root: str) 
         meta = _read_agent_meta(path[:-len(".jsonl")] + ".meta.json", root)
         agents.append(BareAgent(
             path,
-            _clean_label(meta.get("description")),
-            _clean_label(meta.get("agentType")),
+            clean_label(meta.get("description")),
+            clean_label(meta.get("agentType")),
             session_results,
         ))
     return agents

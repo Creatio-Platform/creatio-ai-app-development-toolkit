@@ -70,7 +70,7 @@ class Fixture:
         return path
 
     def run_file(self, agents, agent_count=None, status="completed", total_tokens=1234,
-                 tool_calls=0):
+                 tool_calls=0, workflow_name="creatio-freedom-build-executor"):
         """``agents`` is [(agentId, cached_bool), ...]; cached=False writes NO key."""
         progress = [{"type": "workflow_phase", "index": 1, "title": "Build"}]
         for index, (agent_id, cached) in enumerate(agents, start=1):
@@ -82,7 +82,7 @@ class Fixture:
         payload = {
             "agentCount": len(agents) if agent_count is None else agent_count,
             "totalToolCalls": tool_calls,
-            "workflowName": "creatio-freedom-build-executor",
+            "workflowName": workflow_name,
             "startTime": 1000,
             "status": status,
             "totalTokens": total_tokens,
@@ -96,6 +96,21 @@ class Fixture:
         with open(self.journal_path, "w", encoding="utf-8") as f:
             for kind, key, agent_id in entries:
                 f.write(_line({"type": kind, "key": key, "agentId": agent_id}))
+
+    def bare_agent(self, agent_id, out=5):
+        """A plain-Agent subagent: transcript straight in ``subagents/``, with
+        no run-id directory and so no attempt to belong to."""
+        subagents = os.path.dirname(os.path.dirname(self.wf_dir))
+        path = os.path.join(subagents, f"agent-{agent_id}.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_line({"message": {"role": "user", "content": "Analyse the page."}}))
+            f.write(_line({"message": {"role": "assistant", "id": f"m-{agent_id}",
+                                       "usage": _usage(inp=10, cw=100, cr=50, out=out)}}))
+        with open(os.path.join(subagents, f"agent-{agent_id}.meta.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({"spawnDepth": 1, "description": "analysis",
+                       "agentType": "general-purpose"}, f)
+        return path
 
     def report(self):
         return Report(export_mod.discover(self.root), metrics.CostConfig())
@@ -522,6 +537,150 @@ class InterruptedRunReportTest(unittest.TestCase):
                 field,
             )
         self.assertGreater(self.report.summary()["attempts"]["leftover_weighted"], 0)
+
+
+class InterruptedRunWithABareAgentTest(unittest.TestCase):
+    """An interrupted workflow AND a bare subagent in one export.
+
+    `attribution` is built from `session.workflows` alone, so a bare agent can
+    never land in live / replayed / leftover -- while `leftover_totals()` puts
+    its spend on the surviving side regardless. The counts then described three
+    transcripts while the weights covered four, and `leftover weighted cost:
+    X of Y total` printed a denominator whose population had no row in the table
+    above it. Nothing covered this combination, which is why it was invisible.
+    """
+
+    def setUp(self):
+        self.fx = Fixture()
+        for agent_id in ("a1", "a2", "a3"):
+            self.fx.agent(agent_id)
+        self.fx.journal([("started", "k1", "a1"), ("result", "k1", "a1"),
+                         ("started", "k2", "a2"), ("result", "k2", "a2")])
+        # the record claims a1 (live) and a2 (replayed); a3 is left over
+        self.fx.run_file([("a1", False), ("a2", True)], agent_count=2, status="killed")
+        self.fx.bare_agent("bbb")
+        self.report = self.fx.report()
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def _attempts(self):
+        return self.report.summary()["attempts"]
+
+    def test_the_run_is_interrupted_and_the_bare_agent_is_present(self):
+        self.assertTrue(self.report.interrupted)
+        self.assertEqual(len(self.report.session.bare_agents), 1)
+        self.assertEqual(len(self.report.session.agent_files), 4)
+
+    def test_the_bare_agent_is_in_no_attempt_class(self):
+        payload = self._attempts()
+        self.assertEqual(payload["live_agents"], 1)
+        self.assertEqual(payload["replayed_agents"], 1)
+        self.assertEqual(payload["leftover_agents"], 1)
+        self.assertEqual(payload["bare_agents"], 1)
+
+    def test_the_class_counts_cover_every_transcript_the_weights_do(self):
+        # The identity that was broken: counts and weights must describe one
+        # population. Without `bare_agents` this summed to 3 against 4 files.
+        payload = self._attempts()
+        counted = (payload["live_agents"] + payload["replayed_agents"]
+                   + payload["leftover_agents"] + payload["bare_agents"])
+        self.assertEqual(counted, len(self.report.session.agent_files))
+
+    def test_the_weighted_split_still_hides_no_spend(self):
+        surviving, leftover = self.report.leftover_totals()
+        main_agg = self.report.stage_aggs[0][1]
+        for field in ("input", "output", "cache_write", "cache_read"):
+            self.assertEqual(
+                getattr(surviving, field) + getattr(leftover, field) + getattr(main_agg, field),
+                getattr(self.report.totals, field),
+                field,
+            )
+
+    def test_the_bare_agent_spend_is_on_the_surviving_side(self):
+        surviving, leftover = self.report.leftover_totals()
+        bare_agg = self.report._agent_aggs[self.report.session.bare_agents[0].path]
+        # three surviving transcripts on the workflow side would be 2 agents;
+        # the bare one makes the third contributor to `surviving`
+        self.assertGreaterEqual(surviving.cache_read, bare_agg.cache_read)
+        self.assertEqual(leftover.cache_read, 50)   # a3 alone
+
+    def test_the_printed_denominator_names_the_bare_agents(self):
+        # The text block's "of Y total" line now says what is in Y that has no
+        # row in the per-workflow table above it.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cost_counter._print_attempts(self.report)
+        out = buf.getvalue()
+        self.assertIn("leftover weighted cost:", out)
+        self.assertIn("surviving includes 1 bare subagent(s)", out)
+
+    def test_an_interrupted_run_without_bare_agents_says_nothing_extra(self):
+        # The note must not appear on the ordinary interrupted export, so the
+        # existing report stays byte-identical for it.
+        os.remove(self.report.session.bare_agents[0].path)
+        os.remove(os.path.join(
+            os.path.dirname(self.report.session.bare_agents[0].path),
+            "agent-bbb.meta.json"))
+        report = self.fx.report()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cost_counter._print_attempts(report)
+        self.assertNotIn("bare subagent", buf.getvalue())
+        self.assertEqual(report.summary()["attempts"]["bare_agents"], 0)
+
+
+class HandBuiltMarkdownEscapingTest(unittest.TestCase):
+    """`tables.md_escape` runs inside `Table._md_row`, but two Markdown tables in
+    `cost_counter` are assembled by f-string and never go through `Table`. They
+    have to reach the same rule, or "the renderer owns the format" holds for
+    three emitters out of five and the next label source wired in silently
+    reintroduces the column shift."""
+
+    def setUp(self):
+        self.fx = Fixture()
+        self.fx.agent("a1")
+        self.fx.agent("a2")
+        self.fx.journal([("started", "k1", "a1"), ("result", "k1", "a1"),
+                         ("started", "k2", "a2"), ("result", "k2", "a2")])
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    @staticmethod
+    def _columns(row):
+        """Cell separators in one Markdown row, ignoring escaped pipes."""
+        return row.count("|") - row.count(r"\|")
+
+    def test_a_pipe_in_the_workflow_label_cannot_split_a_reconcile_row(self):
+        self.fx.run_file([("a1", False), ("a2", False)], agent_count=2,
+                         workflow_name="creatio-build | 999 | 999")
+        md = cost_counter._reconcile_markdown(self.fx.report()).splitlines()
+        header = next(l for l in md if l.startswith("| workflow"))
+        expected = self._columns(header)
+        for row in md[md.index(header) + 2:]:
+            if row.startswith("|"):
+                self.assertEqual(self._columns(row), expected, row)
+        self.assertIn(r"build \| 999 \| 999", "\n".join(md))
+
+    def test_a_pipe_in_the_stage_label_cannot_split_an_attempts_row(self):
+        # An interrupted run, so the attempts table is emitted at all.
+        self.fx.agent("a3")
+        self.fx.run_file([("a1", False), ("a2", True)], agent_count=2,
+                         status="killed", workflow_name="creatio-build | 999")
+        md = cost_counter._attempts_markdown(self.fx.report()).splitlines()
+        header = next(l for l in md if l.startswith("| stage") or l.startswith("| workflow"))
+        expected = self._columns(header)
+        for row in md[md.index(header) + 2:]:
+            if row.startswith("|"):
+                self.assertEqual(self._columns(row), expected, row)
+        self.assertIn(r"\|", "\n".join(md))
+
+    def test_an_ordinary_label_is_left_alone_in_both_tables(self):
+        self.fx.run_file([("a1", False), ("a2", False)], agent_count=2)
+        out = cost_counter._reconcile_markdown(self.fx.report())
+        self.assertIn("| freedom-build-executor |", out)
+        self.assertNotIn("\\", out)
 
 
 if __name__ == "__main__":

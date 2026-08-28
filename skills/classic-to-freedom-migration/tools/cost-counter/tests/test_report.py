@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 
 import export as export_mod
 import metrics
@@ -902,9 +903,122 @@ class BareSubagentTest(_BareAgentExportTestCase):
             )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
+class ReadJsonObjectTest(unittest.TestCase):
+    """The single reader for the export's sidecar JSON files -- a workflow's
+    ``workflows/<wf>.json`` and a bare agent's ``agent-<id>.meta.json``. Both
+    callers degrade through this one function, so the "unusable" rule cannot
+    drift between them; only their fallback values differ.
+
+    Every branch of its exception tuple is exercised here, because "never
+    raises" is the whole contract and each member of that tuple was added for a
+    reason a comment alone cannot enforce.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="cc-json-obj-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _write(self, text):
+        path = os.path.join(self.dir, "sidecar.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def test_a_json_object_is_returned(self):
+        self.assertEqual(export_mod.read_json_object(self._write('{"a": 1}')), {"a": 1})
+
+    def test_none_path_is_none(self):
+        self.assertIsNone(export_mod.read_json_object(None))
+
+    def test_a_missing_file_is_none(self):
+        self.assertIsNone(
+            export_mod.read_json_object(os.path.join(self.dir, "nope.json")))
+
+    def test_a_directory_is_none(self):
+        self.assertIsNone(export_mod.read_json_object(self.dir))
+
+    def test_invalid_json_is_none(self):
+        self.assertIsNone(export_mod.read_json_object(self._write("{not json")))
+
+    def test_an_empty_file_is_none(self):
+        self.assertIsNone(export_mod.read_json_object(self._write("")))
+
+    def test_a_json_list_is_none(self):
+        self.assertIsNone(export_mod.read_json_object(self._write("[1, 2]")))
+
+    def test_a_json_scalar_is_none(self):
+        self.assertIsNone(export_mod.read_json_object(self._write('"text"')))
+        self.assertIsNone(export_mod.read_json_object(self._write("null")))
+
+    def test_an_unreadable_file_degrades_rather_than_raising(self):
+        # Narrowing the catch to JSONDecodeError alone would let an OSError out
+        # of discover() and crash the tool on a half-copied export.
+        path = self._write('{"a": 1}')
+        real_open = open
+
+        def exploding_open(*args, **kwargs):
+            if args and args[0] == path:
+                raise OSError("device not ready")
+            return real_open(*args, **kwargs)
+
+        with unittest.mock.patch("builtins.open", exploding_open):
+            self.assertIsNone(export_mod.read_json_object(path))
+
+    def test_a_deeply_nested_document_degrades_rather_than_raising(self):
+        # json.load raises RecursionError -- a RuntimeError, so neither OSError
+        # nor ValueError catches it -- on a deeply nested document. Leaving it
+        # out of the tuple turned this degrade into a crash. 10 KB of brackets
+        # is enough; the C scanner has its own budget, so 2000 levels still
+        # parse and only the deeper file trips it.
+        self.assertIsNone(export_mod.read_json_object(
+            self._write("[" * 5000 + "]" * 5000)))
+
+    def test_a_shallow_nested_document_still_parses_to_none_as_a_non_object(self):
+        # The guard above must not be doing its work by accident: this one is
+        # nested but parses fine, and is None only because a list is not an
+        # object.
+        self.assertIsNone(export_mod.read_json_object(
+            self._write("[" * 2000 + "]" * 2000)))
+
+
+class DeepMetaDoesNotAbortDiscoveryTest(unittest.TestCase):
+    """The crash the narrowed catch caused, at the layer where it hurt: a single
+    unusable sidecar must cost that agent its label, never abort the run before
+    anything is counted."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_discover_survives_a_deeply_nested_meta_and_still_counts_the_agent(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 meta_raw="[" * 5000 + "]" * 5000)
+        session = export_mod.discover(self.fx.root)      # must not raise
+        self.assertEqual(len(session.bare_agents), 1)
+        self.assertIsNone(session.bare_agents[0].description)
+        report = Report(session, metrics.CostConfig())
+        self.assertEqual(report.summary()["agents"], 1)
+
+    def test_a_deeply_nested_run_file_degrades_the_same_way(self):
+        # The other caller of the same reader: attempts.read_run_record.
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        with open(os.path.join(self.fx.session, "workflows", "wf_a.json"),
+                  "w", encoding="utf-8") as f:
+            f.write("[" * 5000 + "]" * 5000)
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        self.assertFalse(report.interrupted)
+        self.assertGreater(report.weighted_total(), 0)
 
 class BareAgentMetaDegradeTest(_BareAgentExportTestCase):
     """Every branch of the bare agent's meta reader.
@@ -1018,16 +1132,36 @@ class BareAgentLabelHygieneTest(_BareAgentExportTestCase):
     report label, so it is bounded and flattened at the trust boundary."""
 
     def _labels(self):
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         return [label for label, _ in report.stage_aggs], report
+
+    def test_the_label_bound_is_pinned_to_its_value(self):
+        # The bound is a display contract -- it has to fit the fixed-width text
+        # renderer's stage column -- so changing it should be a deliberate edit
+        # here, not something a tuning change makes silently. Same reasoning as
+        # the COUNTER_VERSION literal.
+        self.assertEqual(export_mod._MAX_LABEL_CHARS, 96)
 
     def test_an_over_long_description_is_truncated(self):
         self.fx.write_bare_agent("bbb", _bare_lines(500), description="A" * 400)
         labels, _ = self._labels()
         stage = next(l for l in labels if l.startswith("A"))
-        # bounded, and the truncation is visible rather than silent
-        self.assertLess(len(stage), 120)
+        # Pin the bound to the constant, not to a looser literal: asserting
+        # "< 120" against a 96-char limit is the same "test the symbol, not the
+        # value" weakness this PR fixed for COUNTER_VERSION, in reverse.
+        self.assertEqual(len(stage.split(" (1 agent)")[0]),
+                         export_mod._MAX_LABEL_CHARS)
         self.assertIn("...", stage)
+
+    def test_a_description_at_the_bound_is_not_truncated(self):
+        # The other side of the bound, so the truncation cannot silently start
+        # one character early.
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 description="A" * export_mod._MAX_LABEL_CHARS)
+        labels, _ = self._labels()
+        stage = next(l for l in labels if l.startswith("A"))
+        self.assertNotIn("...", stage)
+        self.assertEqual(stage, "A" * export_mod._MAX_LABEL_CHARS + " (1 agent)")
 
     def test_newlines_are_flattened_so_the_text_table_stays_intact(self):
         self.fx.write_bare_agent("bbb", _bare_lines(500),
@@ -1067,7 +1201,7 @@ class BareAgentLabelUniquenessTest(_BareAgentExportTestCase):
                                  description="analysis")
         self.fx.write_bare_agent("ccc", _bare_lines(700, timestamp="1970-01-01T00:00:03.000Z"),
                                  description="analysis")
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         labels = [label for label, _ in report.stage_aggs]
         self.assertIn("analysis · 1 (1 agent)", labels)
         self.assertIn("analysis · 2 (1 agent)", labels)
@@ -1080,7 +1214,7 @@ class BareAgentLabelUniquenessTest(_BareAgentExportTestCase):
 
     def test_a_description_that_occurs_once_is_left_alone(self):
         self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         self.assertIn("analysis (1 agent)", [label for label, _ in report.stage_aggs])
 
     def test_both_rows_survive_into_the_per_agent_table(self):
@@ -1088,7 +1222,7 @@ class BareAgentLabelUniquenessTest(_BareAgentExportTestCase):
                                  description="analysis")
         self.fx.write_bare_agent("ccc", _bare_lines(700, timestamp="1970-01-01T00:00:03.000Z"),
                                  description="analysis")
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         ids = sorted(agent_id for _, agent_id, _, _ in report.agent_rows)
         self.assertEqual(ids, ["aaa", "bbb", "ccc"])
 
@@ -1117,6 +1251,16 @@ class StageOrderingAcrossKindsTest(_BareAgentExportTestCase):
         self.assertEqual(len(labels), 2)
         self.assertEqual(labels, ["wf_a (1 agents)", "analysis (1 agent)"])
 
+    def test_a_bare_agent_with_no_usable_timestamp_sorts_last(self):
+        # The bare half of the same fallback rule. `first_timestamp_ms`
+        # returning None is pinned at the parsing layer; that it then puts the
+        # stage at the end of the report was only exercised incidentally.
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        labels = self._stage_labels()
+        self.assertEqual(labels, ["freedom-build-executor (1 agents)",
+                                  "analysis (1 agent)"])
+
     def test_a_workflow_with_no_usable_timestamp_anywhere_sorts_last(self):
         # The fallback is a fallback, not a new rule: with nothing to key on the
         # workflow still goes to the end, deterministically.
@@ -1140,14 +1284,14 @@ class PerAgentIdColumnTest(_BareAgentExportTestCase):
     def test_a_workflow_agent_id_carries_no_file_extension(self):
         # The workflow branch hand-sliced the "agent-" prefix off and left the
         # ".jsonl" on, so it rendered "aaa.jsonl" beside the bare agent's "bbb".
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         ids = sorted(agent_id for _, agent_id, _, _ in report.agent_rows)
         self.assertEqual(ids, ["aaa", "bbb"])
         for agent_id in ids:
             self.assertNotIn(".jsonl", agent_id)
 
     def test_the_rendered_table_shows_both_ids_the_same_way(self):
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         rendered = report.per_agent_table().render()
         self.assertNotIn(".jsonl", rendered)
 
@@ -1166,10 +1310,96 @@ class AgentRowOrderTest(_BareAgentExportTestCase):
         # Same cache_read as the workflow agent (500), but it ran first.
         self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp="1970-01-01T00:00:01.000Z"),
                                  description="analysis")
-        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        report = self._report()
         self.assertEqual([r[3].cache_read for r in report.agent_rows], [500, 500])
         self.assertEqual([agent_id for _, agent_id, _, _ in report.agent_rows],
                          ["bbb", "aaa"])
-        # and the stable sort in per_agent_table preserves it
-        rows = sorted(report.agent_rows, key=lambda r: -r[3].cache_read)
-        self.assertEqual([agent_id for _, agent_id, _, _ in rows], ["bbb", "aaa"])
+        # Drive per_agent_table() itself rather than re-sorting a local copy:
+        # re-implementing the key here only asserted that CPython's sorted() is
+        # stable, and would stay green if the production key changed.
+        labels = [label for label, _ in report.per_agent_table().rows]
+        self.assertEqual(len(labels), 2)
+        self.assertTrue(labels[0].endswith(" bbb"), labels)
+        self.assertTrue(labels[1].endswith(" aaa"), labels)
+
+class WorkflowLabelHygieneTest(unittest.TestCase):
+    """`workflowName` comes out of the run file with no more guarantee behind it
+    than the bare agent's `description`. Giving the hygiene to one and not the
+    other was an asymmetry this tool created for itself."""
+
+    def _labels(self, names, starts=None):
+        starts = starts or [1000] * len(names)
+        records, session = {}, type("S", (), {})()
+        session.workflows = []
+        for i, (name, start) in enumerate(zip(names, starts)):
+            run_id = f"wf_{i}"
+            session.workflows.append(type("W", (), {"name": run_id})())
+            records[run_id] = type("R", (), {
+                "workflow_name": name, "start_time": start, "timestamp": None})()
+        return report_mod._workflow_labels(session, records)
+
+    def test_a_newline_in_the_name_is_flattened(self):
+        # A raw newline splits a fixed-width text row in half mid-table.
+        labels = self._labels(["creatio-build\nagent"])
+        self.assertEqual(list(labels.values()), ["build agent"])
+
+    def test_a_non_string_name_falls_back_to_the_run_id(self):
+        # Previously `5 .startswith(...)` raised AttributeError and took the
+        # whole report down.
+        self.assertEqual(list(self._labels([5]).values()), ["wf_0"])
+        self.assertEqual(list(self._labels([None]).values()), ["wf_0"])
+        self.assertEqual(list(self._labels([{"a": 1}]).values()), ["wf_0"])
+
+    def test_an_over_long_name_is_truncated(self):
+        label = list(self._labels(["creatio-" + "N" * 400]).values())[0]
+        self.assertEqual(len(label), export_mod._MAX_LABEL_CHARS - len("creatio-"))
+        self.assertIn("...", label)
+
+    def test_control_characters_are_dropped(self):
+        self.assertEqual(list(self._labels(["creatio-a\x07b"]).values()), ["ab"])
+
+    def test_an_ordinary_name_is_untouched(self):
+        self.assertEqual(list(self._labels(["creatio-freedom-build-executor"]).values()),
+                         ["freedom-build-executor"])
+
+
+class StartTimeSortSafetyTest(unittest.TestCase):
+    """Two run files whose `startTime` types differ must not take the report
+    down: `sorted` compares tuples element-wise, so int against str raised
+    TypeError inside the round numbering."""
+
+    def _round_labels(self, starts):
+        records, session = {}, type("S", (), {})()
+        session.workflows = []
+        for i, start in enumerate(starts):
+            run_id = f"wf_{i}"
+            session.workflows.append(type("W", (), {"name": run_id})())
+            records[run_id] = type("R", (), {
+                "workflow_name": "creatio-build", "start_time": start,
+                "timestamp": None})()
+        return report_mod._workflow_labels(session, records)
+
+    def test_mixed_start_time_types_do_not_raise(self):
+        labels = self._round_labels([1000, "not-a-number"])
+        self.assertEqual(len(labels), 2)
+        self.assertEqual(sorted(labels.values()), ["build \u00b7 round 1", "build \u00b7 round 2"])
+
+    def test_a_numeric_start_still_sorts_before_an_unusable_one(self):
+        labels = self._round_labels(["junk", 1000])
+        self.assertEqual(labels["wf_1"], "build \u00b7 round 1")   # the numeric one
+        self.assertEqual(labels["wf_0"], "build \u00b7 round 2")
+
+    def test_an_absent_start_sorts_last(self):
+        labels = self._round_labels([None, 1000])
+        self.assertEqual(labels["wf_1"], "build \u00b7 round 1")
+        self.assertEqual(labels["wf_0"], "build \u00b7 round 2")
+
+    def test_booleans_are_not_treated_as_numbers(self):
+        # isinstance(True, int) is True in Python; a bool startTime is junk.
+        labels = self._round_labels([True, 1000])
+        self.assertEqual(labels["wf_1"], "build \u00b7 round 1")
+
+
+
+if __name__ == "__main__":
+    unittest.main()

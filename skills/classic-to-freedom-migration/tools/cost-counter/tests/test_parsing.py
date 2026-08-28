@@ -4,7 +4,6 @@ import os
 import shutil
 import tempfile
 import unittest
-import unittest.mock
 
 import parsing
 
@@ -118,65 +117,6 @@ class OffloadRefTest(unittest.TestCase):
 
     def test_no_reference(self):
         self.assertIsNone(parsing.offloaded_filename("ordinary inline result"))
-
-
-class ReadJsonObjectTest(unittest.TestCase):
-    """The single reader for the export's sidecar JSON files -- a workflow's
-    ``workflows/<wf>.json`` and a bare agent's ``agent-<id>.meta.json``. Both
-    callers degrade through this one function, so the "unusable" rule cannot
-    drift between them; only their fallback values differ."""
-
-    def setUp(self):
-        self.dir = tempfile.mkdtemp(prefix="cc-json-obj-")
-
-    def tearDown(self):
-        shutil.rmtree(self.dir, ignore_errors=True)
-
-    def _write(self, text):
-        path = os.path.join(self.dir, "sidecar.json")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        return path
-
-    def test_a_json_object_is_returned(self):
-        self.assertEqual(parsing.read_json_object(self._write('{"a": 1}')), {"a": 1})
-
-    def test_none_path_is_none(self):
-        self.assertIsNone(parsing.read_json_object(None))
-
-    def test_a_missing_file_is_none(self):
-        self.assertIsNone(parsing.read_json_object(os.path.join(self.dir, "nope.json")))
-
-    def test_a_directory_is_none(self):
-        self.assertIsNone(parsing.read_json_object(self.dir))
-
-    def test_invalid_json_is_none(self):
-        self.assertIsNone(parsing.read_json_object(self._write("{not json")))
-
-    def test_an_empty_file_is_none(self):
-        self.assertIsNone(parsing.read_json_object(self._write("")))
-
-    def test_a_json_list_is_none(self):
-        self.assertIsNone(parsing.read_json_object(self._write("[1, 2]")))
-
-    def test_a_json_scalar_is_none(self):
-        self.assertIsNone(parsing.read_json_object(self._write('"text"')))
-        self.assertIsNone(parsing.read_json_object(self._write("null")))
-
-    def test_an_unreadable_file_degrades_rather_than_raising(self):
-        # Narrowing the catch to JSONDecodeError alone would let an OSError out
-        # of discover() and crash the tool on a half-copied export. This asserts
-        # the OSError branch is still handled.
-        path = self._write('{"a": 1}')
-        real_open = open
-
-        def exploding_open(*args, **kwargs):
-            if args and args[0] == path:
-                raise OSError("device not ready")
-            return real_open(*args, **kwargs)
-
-        with unittest.mock.patch("builtins.open", exploding_open):
-            self.assertIsNone(parsing.read_json_object(path))
 
 
 if __name__ == "__main__":

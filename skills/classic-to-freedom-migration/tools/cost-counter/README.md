@@ -241,13 +241,22 @@ holding 41 `agent-*.jsonl` files for a run whose record says `agentCount: 18`.
 The counter does **not** drop those transcripts: every total still sums all of
 them, so the headline figure remains "everything this directory cost", and
 `--compare` stays a like-for-like comparison. What it adds is a classification
-of each transcript against the run's own record:
+of each subagent transcript against the run's own record (the main driver stage
+sits outside this split):
 
 - **live** — in `workflowProgress`, ran in the surviving attempt;
 - **replayed** — in `workflowProgress` with `cached: true`, its result reused
   from an earlier attempt rather than recomputed;
 - **leftover** — no record claims it: superseded attempts, killed agents,
-  abandoned retries.
+  abandoned retries;
+- **bare** — a plain-Agent subagent. It belongs to no workflow, so no run record
+  could ever claim it and it cannot fall into the three classes above. Its spend
+  is nevertheless on the *surviving* side of the weighted split (no attempt
+  superseded it), so it is counted here too: the class counts and the weighted
+  split have to describe the same population, or an average derived per
+  surviving agent divides by the wrong number. The text block says so on the
+  `of N total` line rather than leaving a denominator whose population has no
+  row in the table above it.
 
 Alongside it the block reports **produced-nothing** agents — a journal `started`
 with no matching `result`, i.e. spend that yielded no output — and the run
