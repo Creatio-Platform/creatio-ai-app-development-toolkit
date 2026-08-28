@@ -1977,8 +1977,29 @@ check("ENG-95503: `resolutionsMatched` counts the questions that actually got an
       { kind: KIND_LIST_COLUMNS, item: "a key that matches nothing here", answer: "x" }] } });
     return matched >= 1 && readButMissed.resolutionsRead === true && readButMissed.resolutionsMatched === 0
       && readButMissed.resolutionsUnmatched.length === 1
-      && matched === pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.filter((p) => p.resolution).length; },
+      && matched === pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.filter((p) => p.resolution != null).length; },
   () => ({ matched: pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsMatched }));
+/* PR #128 review (round 15, Minor) — WHY `resolutionsMatched` MAY USE A PRESENCE TEST AT ALL. The review asked
+   whether a falsy-but-matched `resolution` undercounts this diagnostic. It cannot today, and TWO independent
+   invariants are why: `resolutionProblem` refuses any entry whose `answer` is blank, so an empty answer never
+   enters the index; and `matchResolution` returns EITHER `null` OR an object (`{answer, ...}`), which is truthy
+   whatever the answer text is. The count now reads `!= null` so it states the second invariant rather than
+   relying on it — and this check pins the invariant itself, because that is the thing whose loss would make the
+   concern real: a later `matchResolution` that returned `hit.answer` directly would hand a falsy-but-matched
+   value to this filter, and only a test of the RETURN SHAPE catches that before the count starts lying. */
+check("PR #128 review (round 15): `matchResolution` returns `null` or an OBJECT — never a bare answer string — so a matched question can never be falsy, which is what lets `resolutionsMatched` count by presence instead of by truthiness",
+  () => { const ix = buildResolutionIndex({ resolutions: [
+      { kind: KIND_LIST_COLUMNS, item: "cols", answer: "0" },
+      { kind: KIND_LIST_COLUMNS, item: "blank", answer: "   " }] });
+    const hit = matchResolution(ix, { kind: KIND_LIST_COLUMNS, item: "cols" });
+    const miss = matchResolution(ix, { kind: KIND_LIST_COLUMNS, item: "nothing" });
+    return typeof hit === "object" && hit !== null && hit.answer === "0"
+      // a falsy ANSWER still yields a truthy match object — the property the count depends on
+      && !!hit === true && miss === null
+      // and the blank answer was refused at index time, so it is not a match to begin with
+      && matchResolution(ix, { kind: KIND_LIST_COLUMNS, item: "blank" }) === null
+      && ix.bad.length === 1; },
+  () => JSON.stringify(buildResolutionIndex({ resolutions: [{ kind: KIND_LIST_COLUMNS, item: "blank", answer: "   " }] }).bad));
 /* ---- ENG-95503 — THE `lookup-value` QUESTION NOW HAS AN ID. It used to be pushed straight into the RENDERED
    worklist by `renderConfirmWorklist`, bypassing `needsDecision` entirely — so it had no evidence id, no
    `--units.preflight` row, and no key an answer could bind to. On the run this ticket was verified against, the
@@ -3353,6 +3374,24 @@ check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] res
 check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACTLY ONCE — a re-added render-time push would double-render it, one copy carrying an id and one not, and `.test()` is blind to that",
   () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1,
   () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length);
+/* PR #128 review (round 15, Major) — AND THE FILTER MUST NOT SWALLOW IT. Before this PR the lookup-value prompt was
+   pushed straight into the rendered `confirm` array, bypassing all filtering. It now arrives as a `needsDecision`
+   entry and passes through `SHOWN_ELSEWHERE` on BOTH surfaces — `renderConfirmWorklist` (what the operator reads)
+   and `confirmWorklistRows` (what `--units.preflight` publishes for an answer to bind to). If `lookup-value` ever
+   joined that Set the question would vanish from both at once: the operator is never asked, and no id exists to
+   answer — this ticket's own failure mode ("a question that reaches nowhere"), on the question side.
+   `SHOWN_ELSEWHERE` is module-private and stays that way (the export surface is itself a review finding), so this
+   pins the RELATION behaviourally, through the real render and the real publish. It is deliberately ONE check
+   naming the cause: the surrounding goldens do go red if the Set grows, but they read as three unrelated failures.
+   The accidental route is real and not hypothetical — `SHOWN_ELSEWHERE` spreads `IMPERATIVE_MEMBER_KINDS`, so
+   adding a `lookup-value` entry to `MEMBER_KIND_NOTE` for its prose would silently enrol it in the filter. */
+check("PR #128 review (round 15): `lookup-value` survives the `SHOWN_ELSEWHERE` filter on BOTH surfaces — it renders in the ⚠ Confirm worklist AND publishes a `--units.preflight` row. A kind in that Set is dropped from both at once, so the operator is never asked and no id exists for an answer to bind to",
+  () => { const rendered = (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1
+        && /#### ⚠ Confirm before I build/.test(guidCs.designSpec);
+    const published = pageUnits(guidCs, checklistOpts({})).preflight.filter((r) => r.kind === "lookup-value");
+    return rendered && published.length === 1 && published[0].id.includes("#confirm:lookup-value:"); },
+  () => ({ rendered: (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length,
+    published: pageUnits(guidCs, checklistOpts({})).preflight.map((r) => r.kind) }));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",

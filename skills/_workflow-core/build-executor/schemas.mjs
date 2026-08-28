@@ -632,8 +632,15 @@ export const VERIFIER_SCHEMA = {
         // plus an honest "I cannot tell from here" produced a contradiction that is not one -- and this ticket's own
         // new `lookup-value` id is the systematic case, because its effect lands in `BusinessRule_*` schemas that are
         // invisible to `viewConfig`. `unknown` is that state, and it reads exactly like an absent row.
+        // `found` is CAPPED like every other agent-authored free-text field that can ride into another agent's
+        // prompt (`unconsumedResolutions.item/answer/why/how` above). `reconcileUnconsumed`/`resolutionContradictions`
+        // already run it through `capCarryText` at record time, but that binds only what this process records --
+        // the SCHEMA is what bounds the verifier's own output before any of that runs. An uncapped declaration
+        // here is the same gap earlier rounds closed on the sibling fields, left open on the one that carries a
+        // page-read description into the repair prompt.
         properties: { unit: { type: 'string' }, id: { type: 'string' },
-          shows: { type: 'string', enum: [SHOWS_YES, SHOWS_NO, SHOWS_UNKNOWN] }, found: { type: 'string' } },
+          shows: { type: 'string', enum: [SHOWS_YES, SHOWS_NO, SHOWS_UNKNOWN] },
+          found: { type: 'string', maxLength: CARRY_TEXT_CAP } },
       },
     },
     // Where the builder's claim and the stand disagree. Kept, not reconciled.

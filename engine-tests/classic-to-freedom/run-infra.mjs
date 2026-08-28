@@ -1611,13 +1611,18 @@ try {
   tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
   const modPath = path.join(tmpSchema, "schema.mjs");
   const slice = wfSrc.slice(wfSrc.indexOf("const VERIFY_RESULT"), wfSrc.indexOf("const PREFLIGHT_SCHEMA"));
+  // PR #128 review (round 15) - VERIFIER_SCHEMA sits BELOW `PREFLIGHT_SCHEMA`, so the slice above never reached it
+  // and its declarations could only be regexed. Take it as its own slice and load it for real, for the same reason
+  // the drift gate below loads `VERIFY_RESULT`: a regex proves the TEXT is there, not that the shipped OBJECT
+  // declares it. It rides the same injected literals (`CARRY_TEXT_CAP`, the `shows` enum).
+  const verifierSlice = wfSrc.slice(wfSrc.indexOf("const VERIFIER_SCHEMA"), wfSrc.indexOf("const JUDGE_SCHEMA"));
   // ENG-95503 — the slice reads the answers channel's DESIGN LITERALS (the `shows` enum, the two source tags, and the
   // text cap the `maxLength` bounds are built from), and those are declared with the pure helpers far above this
   // window. Injected at their SHIPPED values, exactly as the helper-block slice does it, so this measures the real
   // schema instead of failing to load — and they cannot drift, because they come off the imported block.
   const SCHEMA_LITERALS = [`const CARRY_TEXT_CAP = ${JSON.stringify(CARRY_TEXT_CAP)};`,
     ...SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`)].join("\n");
-  writeFileSync(modPath, `${SCHEMA_LITERALS}\n${slice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT };\n`);
+  writeFileSync(modPath, `${SCHEMA_LITERALS}\n${slice}\n${verifierSlice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT, VERIFIER_SCHEMA };\n`);
   const mod = await import(pathToFileURL(modPath).href);
   reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
   // ENG-95901 — the SCHEMA-DRIFT GATE. Every golden above constructs `{buildComplete: ...}` fixtures BY HAND and
@@ -1646,6 +1651,15 @@ try {
       && mod.VERIFY_RESULT?.properties?.builderOpen?.type === 'integer',
     () => ({ page: mod.VERIFY_RESULT?.properties?.pages?.additionalProperties?.properties,
       top: mod.VERIFY_RESULT?.properties?.builderOpen }));
+  // PR #128 review (round 15, Minor) - THE CAP IS ON THE SCHEMA, not only at record time. `resolutionChecks[].found`
+  // is verifier-authored page-read text that rides into a downstream prompt through `resolutionContradictions` ->
+  // `discrepancies[].found` and the unconsumed carry. `capCarryText` bounds it once this process HAS it; the schema
+  // is what bounds what the agent may emit in the first place, and every sibling free-text field on this contract
+  // (`unconsumedResolutions.item/answer/why/how`) already carries that bound. Asserted against the SHIPPED object
+  // and against the shipped `CARRY_TEXT_CAP`, so a re-typed `400` would not satisfy it either.
+  check("PR #128 review (round 15): the shipped `VERIFIER_SCHEMA.resolutionChecks[].found` declares `maxLength: CARRY_TEXT_CAP` - the last agent-authored free-text field on this contract that could reach a downstream prompt unbounded, while every sibling is capped",
+    mod.VERIFIER_SCHEMA?.properties?.resolutionChecks?.items?.properties?.found?.maxLength === CARRY_TEXT_CAP,
+    () => mod.VERIFIER_SCHEMA?.properties?.resolutionChecks?.items?.properties);
 } catch (e) {
   check("ENG-95850 (A3): the Reconcile schema slice loads as a standalone module", false, e.message);
 } finally {
@@ -2669,7 +2683,10 @@ check("PR #128 review (round 7, G1): a pair round-trips through `pairParts` byte
     return p.unit === "child:Education@Via" && p.id === 'main#confirm:entity-filter:(1 lookup) "x"'
       && wf.pairKey(p.unit, p.id) === k
       // and the serialised form carries no raw NUL -- splitting the pair before it is written is the whole point
-      && !/[\u0000]/.test(JSON.stringify(p)); },
+      // `includes` rather than a regex: a NUL inside a character class is what SonarCloud S6324 flags (a
+      // control character in a pattern is nearly always a paste accident) and here it is deliberate -- so
+      // assert the substring directly: the rule has nothing to fire on, and the assertion is unchanged.
+      && !JSON.stringify(p).includes("\u0000"); },
   () => JSON.stringify(wf.pairParts(wf.pairKey("a", "b"))));
 
 // Round-7 Major (G2) — the cap binds on the way IN. `unconsumed` is rehydrated from an agent-written file,

@@ -2724,7 +2724,12 @@ export function pageUnits(result, opts = {}) {
     // `resolutions.json` 79 minutes AFTER the only `--units` invocation, so every item published `resolution: null`
     // and nothing said why. `false` here is that fact, machine-readable, on the artifact the executor transcribes.
     resolutionsRead: opts.resolutions != null,
-    resolutionsMatched: preflight.filter((p) => p.resolution).length,
+    // `!= null`, not truthiness. `matchResolution` returns EITHER `null` or an object, so the two agree today --
+    // but this is the count that distinguishes "the answers file arrived late" from "there were no answers",
+    // and it must read the SAME presence rule `preflightUnits` writes (`resolution: null` for an open question).
+    // Pinning it explicitly means a future answer shape that is falsy-but-present cannot silently undercount
+    // the one diagnostic whose whole job is to be believed.
+    resolutionsMatched: preflight.filter((p) => p.resolution != null).length,
     // ENG-95859 — dedupe by id: `qualityGateRows` now publishes TWO rows (`part: "filed"` / `"judged"`) sharing
     // ONE evidence id, so a naive `.map` here would publish that id twice. The build-agent filing contract
     // (`references/01-evidence-records.md` in freedom-build-executor) names ONE id per page — keep that true.
