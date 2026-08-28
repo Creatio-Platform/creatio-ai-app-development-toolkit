@@ -108,3 +108,42 @@ class TextColumnTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MarkdownEscapeTest(unittest.TestCase):
+    """A row is built by joining cells with ``|``, so a ``|`` inside a cell
+    opens a new column and every figure after it shifts one header to the left.
+    Labels are the exposed side: a stage label carries a model-authored agent
+    ``description`` and a workflow name read straight from the run file."""
+
+    def _table(self, label):
+        table = Table(
+            columns=[Column("n", "agents", "int"), Column("cr", "cacheR", "mb", share=True)],
+            label_header="stage",
+        )
+        table.add(label, {"n": 1, "cr": 1_000_000})
+        return table
+
+    def test_a_pipe_in_a_label_does_not_add_a_column(self):
+        md = self._table("analysis | 999 | 999").to_markdown().splitlines()
+        header_columns = md[0].count("|")
+        for row in md[2:]:
+            self.assertEqual(row.count("|") - row.count(r"\|"), header_columns, row)
+
+    def test_the_pipe_is_still_visible_to_the_reader(self):
+        md = self._table("a | b").to_markdown()
+        self.assertIn(r"a \| b", md)
+
+    def test_an_ordinary_label_is_untouched(self):
+        md = self._table("freedom-build-executor").to_markdown()
+        self.assertIn("| freedom-build-executor |", md)
+        self.assertNotIn("\\", md)
+
+    def test_the_bold_total_row_is_escaped_too(self):
+        table = self._table("ok")
+        table.columns = [Column("kind", "kind", "text")] + table.columns
+        table.rows = [("a | b", {"kind": "x | y", "n": 1, "cr": 1_000_000})]
+        md = table.to_markdown().splitlines()
+        header_columns = md[0].count("|")
+        for row in md[2:]:
+            self.assertEqual(row.count("|") - row.count(r"\|"), header_columns, row)

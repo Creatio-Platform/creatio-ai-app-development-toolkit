@@ -101,6 +101,18 @@ def _count(value) -> str:
     return "-" if value is None else str(value)
 
 
+def _is_empty(session) -> bool:
+    """True when an export holds no transcript the counter could read.
+
+    Every kind of transcript has to be named here, bare subagents included: a
+    session that spawned only bare subagents has no root ``transcript.jsonl``
+    and no ``workflows`` directory, so a guard that asks about those two alone
+    rejects an export whose cost discovery just found -- the same silent loss
+    the counter exists to remove, one layer up.
+    """
+    return not (session.main_transcript or session.workflows or session.bare_agents)
+
+
 def _reconcile_verdict(rows: list) -> str:
     """Footer line for the cross-check table.
 
@@ -108,6 +120,13 @@ def _reconcile_verdict(rows: list) -> str:
     ``n/a`` verified nothing, so the footer counts it rather than claiming every
     workflow reconciled. A real MISMATCH outranks both.
     """
+    if not rows:
+        # all([]) is True and sum(...) over no rows is 0, so without this guard
+        # an empty table falls through both checks and prints a pass. Nothing
+        # was compared, which is exactly the overclaim the *_comparable rule
+        # exists to remove -- and the shape is reachable: a session that spawned
+        # only bare subagents has no workflows, so it has no reconcile rows.
+        return "no workflows to reconcile"
     if not all(row.agents_ok and row.tool_calls_ok for row in rows):
         return "DISCREPANCIES ABOVE"
     # Either cell can be the suppressed one: an interrupted run suppresses the
@@ -121,19 +140,32 @@ def _reconcile_verdict(rows: list) -> str:
     return "all workflows reconcile"
 
 
+def _reconcile_cells(row) -> tuple[str, str]:
+    """The (agents, toolCalls) cells for one cross-check row.
+
+    n/a, not ok, wherever nothing was actually compared: an interrupted run's
+    tool-call counts are on different bases, and a workflow with no run file has
+    no meta count on either axis. "ok" would overclaim, and a dash rather than a
+    count says the figure is absent, not zero.
+
+    Both renderers call this. They used to hold a verbatim copy each, so an edit
+    that reached only one left the other printing ``None/2 ok`` over a
+    never-verified workflow -- with the suite green, because only the text copy
+    was covered.
+    """
+    agents = (f"{_count(row.agents_meta)}/{row.agents_seen} "
+              f"{_mark(row.agents_ok, row.agents_comparable)}")
+    tool_calls = (f"{_count(row.tool_calls_meta)}/{row.tool_calls_seen} "
+                  f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
+    return agents, tool_calls
+
+
 def _print_check(report: Report) -> None:
     print("cross-checks vs workflow journals (R8):")
     print(f"    {'workflow':34} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
     rows = report.reconcile()
     for row in rows:
-        # n/a, not ok, wherever nothing was actually compared: an interrupted
-        # run's tool-call counts are on different bases, and a workflow with no
-        # run file has no meta count on either axis. "ok" would overclaim, and
-        # a dash rather than a count says the figure is absent, not zero.
-        agents = (f"{_count(row.agents_meta)}/{row.agents_seen} "
-                  f"{_mark(row.agents_ok, row.agents_comparable)}")
-        toolcalls = (f"{_count(row.tool_calls_meta)}/{row.tool_calls_seen} "
-                     f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
+        agents, toolcalls = _reconcile_cells(row)
         print(f"    {row.workflow:34} {agents:>20} {toolcalls:>24}")
         if row.note:
             print(f"    {'':34} {row.note}")
@@ -347,10 +379,7 @@ def _reconcile_markdown(report: Report) -> str:
     ]
     rows = report.reconcile()
     for r in rows:
-        agents = (f"{_count(r.agents_meta)}/{r.agents_seen} "
-                  f"{_mark(r.agents_ok, r.agents_comparable)}")
-        calls = (f"{_count(r.tool_calls_meta)}/{r.tool_calls_seen} "
-                 f"{_mark(r.tool_calls_ok, r.tool_calls_comparable)}")
+        agents, calls = _reconcile_cells(r)
         note = f" - {r.note}" if r.note else ""
         lines.append(f"| {r.workflow} | {agents} | {calls}{note} |")
     lines.append("")
@@ -576,7 +605,7 @@ def _load_summary(path_or_dir: str, name: str, cfg: metrics.CostConfig) -> dict:
                 f"cost_counter.py <export> summary --format json"
             ) from None
     session = export_mod.discover(path_or_dir)
-    if not session.main_transcript and not session.workflows:
+    if _is_empty(session):
         raise ValueError(
             f"no transcripts found in the {name} export -- is it a session export?"
         )
@@ -701,7 +730,7 @@ def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
 def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
         fmt: str = "text") -> int:
     session = export_mod.discover(export_dir)
-    if not session.main_transcript and not session.workflows:
+    if _is_empty(session):
         print(f"no transcripts found under {export_dir!r} -- is this a session export?",
               file=sys.stderr)
         return 2

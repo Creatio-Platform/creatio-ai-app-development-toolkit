@@ -335,11 +335,21 @@ def _workflow_sort_key(workflow, records: dict) -> tuple:
     """Execution order: sort workflows by their `startTime` (epoch ms) from the
     meta, so stages read in the order they actually ran (behaviour-analysis,
     build round 1, 2, 3 …) rather than by the opaque run-id directory name.
-    Workflows without a numeric start time sort last, then by name for stability.
+    A workflow whose run file is missing or carries no numeric ``startTime``
+    falls back to its earliest agent transcript -- the same epoch-ms axis
+    ``_bare_agent_sort_key`` uses -- so it is still ordered by when it ran.
+    Without that fallback it dropped to the end of the report while a bare agent
+    that ran *after* it printed first, and "a workflow with no run file" is
+    exactly the population the n/a cross-check rule addresses. Only a workflow
+    with no usable timestamp anywhere sorts last, then by name for stability.
     """
     start = records[workflow.name].start_time
     if isinstance(start, (int, float)):
         return (0, start, workflow.name)
+    stamps = [ms for ms in (parsing.first_timestamp_ms(f)
+                            for f in workflow.agent_files) if ms is not None]
+    if stamps:
+        return (0, min(stamps), workflow.name)
     return (1, 0, workflow.name)
 
 
@@ -356,6 +366,28 @@ def _bare_agent_sort_key(bare) -> tuple:
     return (0, start, name)
 
 
+def _bare_labels(ordered_bare: list) -> dict:
+    """Stage label per bare subagent, keyed by transcript path.
+
+    Two agents spawned with the same ``description`` -- the harness has no rule
+    against it -- would otherwise produce two identically-labelled stage rows:
+    indistinguishable in the report, and silently collapsed by any consumer that
+    keys stages by label (this tool's own tests do). Repeats are numbered in
+    execution order, the same disambiguation ``_workflow_labels`` applies to a
+    workflow that ran more than once.
+    """
+    totals = collections.Counter(bare.label for bare in ordered_bare)
+    seen: dict = collections.defaultdict(int)
+    labels: dict = {}
+    for bare in ordered_bare:
+        label = bare.label
+        if totals[label] > 1:
+            seen[label] += 1
+            label = f"{label} · {seen[label]}"
+        labels[bare.path] = label
+    return labels
+
+
 def _bare_agent_role(bare) -> str:
     """Role cell for a bare subagent: the ``agentType`` the harness recorded.
 
@@ -363,7 +395,10 @@ def _bare_agent_role(bare) -> str:
     and ``opening_role`` does not merely fail to match it -- it returns the first
     word after "You are", so "You are running the classic-ui-expert skill" would
     enter the by-role table as a role called ``RUNNING``. The meta file says what
-    kind of agent this actually was; ``?`` only when it is missing or unusable.
+    kind of agent this actually was. ``?`` covers every case that leaves no
+    usable ``agentType``: no meta file, a meta that will not parse, and -- the
+    case easy to miss -- a perfectly valid meta that simply has no ``agentType``
+    key, or whose value is empty or not a string.
     """
     return bare.agent_type or "?"
 
@@ -455,6 +490,40 @@ class Report:
         self._ordered_workflows = [unit for kind, unit in self._ordered_units
                                    if kind == "workflow"]
 
+        # Stage labels for bare agents, numbered where a description repeats.
+        # Built from the ordered units so the numbering follows run order.
+        self.bare_labels = _bare_labels(
+            [unit for kind, unit in self._ordered_units if kind == "agent"]
+        )
+
+        self._collect_stages_and_agents()
+
+        # global effective cache-write weight (from every transcript)
+        total = TranscriptAgg()
+        for _, agg in self.stage_aggs:
+            total.add(agg)
+        self.totals = total
+        self.effective_w = metrics.effective_cache_write_weight(
+            total.ephemeral_5m, total.ephemeral_1h, cfg
+        )
+
+        self.built_pages = _built_pages(session)
+
+    def _collect_stages_and_agents(self) -> None:
+        """Fill ``_stages`` and ``agent_rows`` from the ordered units.
+
+        Both views are built in one pass so they cannot disagree about which
+        transcripts exist: a stage can never appear in a total without its
+        agents appearing in the per-agent table, or the other way round.
+
+        ``agent_rows`` is therefore in **execution order**, not the declaration
+        order of ``session.workflows`` it followed before bare agents joined the
+        same axis. ``per_agent_table()`` sorts on ``-cache_read`` and that sort
+        is stable, so rows with an equal ``cache_read`` now print in the order
+        they ran rather than the order the directory listing happened to yield.
+        """
+        session = self.session
+
         # per-stage aggregates as (kind, label, agg) in execution order. `kind`
         # is what the by-stage table's column reports; `stage_aggs` exposes the
         # (label, agg) view every other consumer uses, so the two cannot drift.
@@ -472,43 +541,40 @@ class Report:
                  aggregate_transcript(session.main_transcript, session.tool_results_dir))
             )
 
-        # per-agent aggregates (subagents only -- workflow and bare alike),
-        # filled alongside the stages so the two views cannot disagree about
-        # which transcripts exist.
         self.agent_rows: list[tuple[str, str, str, TranscriptAgg]] = []
         for kind, unit in self._ordered_units:
             if kind == "workflow":
-                friendly = self.workflow_labels.get(unit.name, unit.name)
-                agg = TranscriptAgg()
-                for agent_file in unit.agent_files:
-                    agg.add(self._agent_aggs[agent_file])
-                    role = parsing.opening_role(agent_file) or "?"
-                    agent_id = os.path.basename(agent_file)[len("agent-"):][:14]
-                    self.agent_rows.append(
-                        (friendly, agent_id, role, self._agent_aggs[agent_file])
-                    )
-                self._stages.append(
-                    ("subagents", f"{friendly} ({len(unit.agent_files)} agents)", agg)
-                )
+                self._add_workflow_stage(unit)
             else:
-                # One stage row per bare agent, labelled from the meta's
-                # description -- there is no workflowName to group it under.
-                agg = self._agent_aggs[unit.path]
-                self._stages.append(("agent", f"{unit.label} (1 agent)", agg))
-                self.agent_rows.append(
-                    (unit.label, unit.agent_id[:14], _bare_agent_role(unit), agg)
-                )
+                self._add_bare_agent_stage(unit)
 
-        # global effective cache-write weight (from every transcript)
-        total = TranscriptAgg()
-        for _, agg in self.stage_aggs:
-            total.add(agg)
-        self.totals = total
-        self.effective_w = metrics.effective_cache_write_weight(
-            total.ephemeral_5m, total.ephemeral_1h, cfg
+    def _add_workflow_stage(self, workflow) -> None:
+        """One ``subagents`` stage row, plus a per-agent row per transcript."""
+        friendly = self.workflow_labels.get(workflow.name, workflow.name)
+        agg = TranscriptAgg()
+        for agent_file in workflow.agent_files:
+            agg.add(self._agent_aggs[agent_file])
+            role = parsing.opening_role(agent_file) or "?"
+            # attempts.agent_id_of is the single rule for turning a transcript
+            # path into an id. Hand-slicing it here left the ".jsonl" on, so a
+            # workflow agent rendered as "aaa.jsonl" beside a bare agent's "bbb".
+            agent_id = attempts_mod.agent_id_of(agent_file)[:14]
+            self.agent_rows.append(
+                (friendly, agent_id, role, self._agent_aggs[agent_file])
+            )
+        self._stages.append(
+            ("subagents", f"{friendly} ({len(workflow.agent_files)} agents)", agg)
         )
 
-        self.built_pages = _built_pages(session)
+    def _add_bare_agent_stage(self, bare) -> None:
+        """One stage row per bare agent, labelled from the meta's description --
+        there is no workflowName to group it under."""
+        agg = self._agent_aggs[bare.path]
+        label = self.bare_labels.get(bare.path, bare.label)
+        self._stages.append(("agent", f"{label} (1 agent)", agg))
+        self.agent_rows.append(
+            (label, bare.agent_id[:14], _bare_agent_role(bare), agg)
+        )
 
     # ---- derived scalars -------------------------------------------------
 

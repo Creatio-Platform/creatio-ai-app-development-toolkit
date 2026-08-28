@@ -365,6 +365,48 @@ class UnreadableRunFileTest(unittest.TestCase):
         self.assertFalse(payload["agents_comparable"])
         self.assertFalse(payload["tool_calls_comparable"])
 
+    def test_the_markdown_renderer_says_n_a_too(self):
+        # The three renderers used to hold a verbatim copy each of the cell
+        # rule, and only the text one was covered -- so an edit reaching two of
+        # three left this table printing "None/2 ok" over a never-verified
+        # workflow with the suite green. --format md is the Jira-paste path.
+        self.fx.journal([("started", "k1", "a1"), ("result", "k1", "a1"),
+                         ("started", "k2", "a2"), ("result", "k2", "a2")])
+        out = cost_counter._reconcile_markdown(self.fx.report())
+
+        self.assertIn("| -/2 n/a |", out)
+        self.assertNotIn("None", out)
+        self.assertNotIn(" ok |", out)
+        self.assertIn("_all comparable checks reconcile (1 n/a)_", out)
+        self.assertNotIn("all workflows reconcile", out)
+
+    def test_the_markdown_renderer_still_says_ok_on_a_verified_workflow(self):
+        # The other half of the three-state rule: a row that really was checked
+        # must keep reading "ok", so the n/a fix did not simply mute the table.
+        self.fx.journal([("started", "k1", "a1"), ("result", "k1", "a1"),
+                         ("started", "k2", "a2"), ("result", "k2", "a2")])
+        self.fx.run_file([("a1", False), ("a2", False)], agent_count=2,
+                         status="completed", tool_calls=0)
+        out = cost_counter._reconcile_markdown(self.fx.report())
+
+        self.assertIn("| 2/2 ok |", out)
+        self.assertNotIn("n/a", out)
+        self.assertIn("_all workflows reconcile_", out)
+
+    def test_a_verified_run_carries_no_comparable_keys_in_the_json(self):
+        # *_comparable rides along only to explain a suppressed check, so an
+        # ordinary export's payload must be byte-for-byte what it always was.
+        self.fx.journal([("started", "k1", "a1"), ("result", "k1", "a1"),
+                         ("started", "k2", "a2"), ("result", "k2", "a2")])
+        self.fx.run_file([("a1", False), ("a2", False)], agent_count=2,
+                         status="completed", tool_calls=0)
+        payload = cost_counter._reconcile_payload(self.fx.report())[0]
+
+        self.assertTrue(payload["agents_ok"])
+        self.assertTrue(payload["tool_calls_ok"])
+        self.assertNotIn("agents_comparable", payload)
+        self.assertNotIn("tool_calls_comparable", payload)
+
     def test_non_object_run_file_degrades_the_same_way(self):
         with open(self.fx.meta_path, "w", encoding="utf-8") as f:
             f.write("null")

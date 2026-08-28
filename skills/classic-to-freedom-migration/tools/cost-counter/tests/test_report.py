@@ -14,6 +14,7 @@ import unittest
 
 import export as export_mod
 import metrics
+import report as report_mod
 from report import Report, aggregate_transcript
 
 
@@ -36,7 +37,7 @@ def _usage(inp=0, cw=0, cr=0, out=0, m5=None, h1=None):
     return u
 
 
-def _assistant_record(msg_id=None, usage=None, content=None):
+def _assistant_record(msg_id=None, usage=None, content=None, timestamp=None):
     """One JSONL record for an assistant turn, optionally carrying a
     ``message.id`` -- the field ENG-95856's dedup keys on. A real turn is
     split across several such records (thinking / text / tool_use), each
@@ -48,7 +49,12 @@ def _assistant_record(msg_id=None, usage=None, content=None):
         message["usage"] = usage
     if content is not None:
         message["content"] = content
-    return _line({"message": message})
+    record = {"message": message}
+    if timestamp is not None:
+        # ISO-8601, the axis first_timestamp_ms() converts to epoch ms so a
+        # workflow stage and a bare-agent stage can be ordered together.
+        record["timestamp"] = timestamp
+    return _line(record)
 
 
 class ExportFixture:
@@ -77,24 +83,38 @@ class ExportFixture:
         return path
 
     def write_bare_agent(self, agent_id, lines, description=None, agent_type=None,
-                         meta=True):
+                         meta=True, meta_raw=None):
         """A subagent spawned with the plain Agent tool: transcript straight in
         ``subagents/``, with the sibling meta the harness writes beside it.
-        ``meta=False`` omits that file, the degraded case."""
+
+        ``meta=False`` omits that file (the missing-meta case). ``meta_raw``
+        writes the given text verbatim instead of a JSON object, which is how a
+        test reaches the reader's other degrade paths -- invalid JSON, or valid
+        JSON that is not an object. Both are reachable in a real export: a meta
+        file can be truncated mid-copy.
+        """
         subagents = os.path.dirname(os.path.dirname(self.wf_dir))
         path = os.path.join(subagents, f"agent-{agent_id}.jsonl")
         with open(path, "w", encoding="utf-8") as f:
             f.writelines(lines)
-        if meta:
+        meta_path = os.path.join(subagents, f"agent-{agent_id}.meta.json")
+        if meta_raw is not None:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                f.write(meta_raw)
+        elif meta:
             payload = {"spawnDepth": 1}
             if description is not None:
                 payload["description"] = description
             if agent_type is not None:
                 payload["agentType"] = agent_type
-            with open(os.path.join(subagents, f"agent-{agent_id}.meta.json"),
-                      "w", encoding="utf-8") as f:
+            with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f)
         return path
+
+    def bare_meta_path(self, agent_id):
+        """Where write_bare_agent puts the sibling meta for ``agent_id``."""
+        subagents = os.path.dirname(os.path.dirname(self.wf_dir))
+        return os.path.join(subagents, f"agent-{agent_id}.meta.json")
 
     def write_offload(self, name, size):
         with open(os.path.join(self.tool_results, name), "w", encoding="utf-8") as f:
@@ -785,16 +805,31 @@ class BareSubagentTest(unittest.TestCase):
         # One axis, two clocks: the workflow's epoch-ms startTime (2000) against
         # the bare agent's ISO timestamp. Appending bare agents last would print
         # the earliest stage at the bottom.
+        #
+        # Each subcase writes its OWN agent id and compares the FULL label list.
+        # Collapsing the result to "bare"/"workflow" hid how many stages there
+        # were, and reusing one filename across subcases made the second case
+        # depend on "w" truncating the first -- correct, but only by accident.
         early = "1970-01-01T00:00:01.000Z"     # 1000 ms -> before the workflow
         late = "1970-01-01T00:00:03.000Z"      # 3000 ms -> after it
-        for stamp, expected_first in ((early, "bare"), (late, "workflow")):
+        cases = (
+            ("bbb", early, ["analysis-bbb (1 agent)", "freedom-build-executor (1 agents)"]),
+            ("ccc", late, ["freedom-build-executor (1 agents)", "analysis-ccc (1 agent)"]),
+        )
+        for agent_id, stamp, expected in cases:
             with self.subTest(stamp=stamp):
-                self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp=stamp),
-                                         description="analysis")
-                # index 0 is always the main driver stage
-                labels = [label for label, _ in self._report().stage_aggs][1:]
-                first = "bare" if labels[0].startswith("analysis") else "workflow"
-                self.assertEqual(first, expected_first, labels)
+                path = self.fx.write_bare_agent(
+                    agent_id, _bare_lines(500, timestamp=stamp),
+                    description=f"analysis-{agent_id}")
+                try:
+                    # index 0 is always the main driver stage
+                    labels = [label for label, _ in self._report().stage_aggs][1:]
+                    self.assertEqual(labels, expected)
+                finally:
+                    # each subcase writes its own id, so clear it before the
+                    # next one rather than relying on a filename collision
+                    os.remove(path)
+                    os.remove(self.fx.bare_meta_path(agent_id))
 
     def test_bare_agents_produce_no_cross_check_row(self):
         # There is no workflows/<wf>.json for a bare agent and never could be,
@@ -841,3 +876,354 @@ class BareSubagentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BareAgentMetaDegradeTest(unittest.TestCase):
+    """Every branch of the bare agent's meta reader.
+
+    The contract is "never raises: a missing, unparseable or non-object meta
+    file costs the agent its label and role, never its cost". Only the missing
+    branch was exercised, so the degrade promise and the two path-confinement
+    calls this reader added rested on reading the code.
+    """
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def _bare(self):
+        session = export_mod.discover(self.fx.root)
+        self.assertEqual(len(session.bare_agents), 1)
+        return session.bare_agents[0], Report(session, metrics.CostConfig())
+
+    def _assert_counted_but_unlabelled(self, agent_id="bbb"):
+        """The whole point of degrading: the agent is still discovered and its
+        cost still counted; only the label and role fall back."""
+        bare, report = self._bare()
+        self.assertIsNone(bare.description)
+        self.assertIsNone(bare.agent_type)
+        self.assertEqual(bare.label, agent_id)          # falls back to the id
+        self.assertEqual(report.summary()["agents"], 2)  # workflow agent + this one
+        roles = [role for _, _, role, _ in report.agent_rows]
+        self.assertIn("?", roles)
+        return report
+
+    def test_invalid_json_degrades_without_raising(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), meta_raw="{not json at all")
+        report = self._assert_counted_but_unlabelled()
+        self.assertIn("bbb (1 agent)", [label for label, _ in report.stage_aggs])
+
+    def test_a_truncated_meta_degrades_without_raising(self):
+        # the shape a half-copied export actually produces
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 meta_raw='{"spawnDepth": 1, "descrip')
+        self._assert_counted_but_unlabelled()
+
+    def test_a_json_list_is_not_an_object_and_degrades(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), meta_raw='["description"]')
+        self._assert_counted_but_unlabelled()
+
+    def test_a_json_scalar_is_not_an_object_and_degrades(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), meta_raw='"just a string"')
+        self._assert_counted_but_unlabelled()
+
+    def test_an_empty_meta_file_degrades(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), meta_raw="")
+        self._assert_counted_but_unlabelled()
+
+    def test_a_valid_meta_with_no_agent_type_still_yields_a_question_mark(self):
+        # The README used to say `?` means the meta was missing or unusable.
+        # This meta is neither -- it parses and carries a description.
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        bare, report = self._bare()
+        self.assertEqual(bare.label, "analysis")
+        self.assertIsNone(bare.agent_type)
+        self.assertEqual(report_mod._bare_agent_role(bare), "?")
+
+    def test_a_non_string_agent_type_never_reaches_the_role_table(self):
+        # A number here would land in by_role_table as a non-string label.
+        self.fx.write_bare_agent(
+            "bbb", _bare_lines(500),
+            meta_raw='{"spawnDepth": 1, "description": "analysis", "agentType": 7}')
+        bare, report = self._bare_typed()
+        self.assertIsNone(bare.agent_type)
+        self.assertEqual(report_mod._bare_agent_role(bare), "?")
+        for role in report.by_role_table().rows:
+            self.assertIsInstance(role[0], str)
+
+    def test_an_empty_agent_type_is_treated_as_absent(self):
+        self.fx.write_bare_agent(
+            "bbb", _bare_lines(500),
+            meta_raw='{"spawnDepth": 1, "description": "analysis", "agentType": ""}')
+        bare, _ = self._bare_typed()
+        self.assertIsNone(bare.agent_type)
+
+    def test_a_non_string_description_is_treated_as_absent(self):
+        self.fx.write_bare_agent(
+            "bbb", _bare_lines(500),
+            meta_raw='{"spawnDepth": 1, "description": {"a": 1}}')
+        self._assert_counted_but_unlabelled()
+
+    def _bare_typed(self):
+        session = export_mod.discover(self.fx.root)
+        self.assertEqual(len(session.bare_agents), 1)
+        return session.bare_agents[0], Report(session, metrics.CostConfig())
+
+    def test_a_meta_symlinked_outside_the_root_is_not_read(self):
+        # The meta path is derived from the transcript path, so it is a second
+        # place a symlink could carry the reader out of the export. The
+        # analogous workflow-agent path has SymlinkConfinementTest; this one had
+        # nothing.
+        outside = tempfile.mkdtemp(prefix="cc-outside-meta-")
+        self.addCleanup(shutil.rmtree, outside, True)
+        foreign = os.path.join(outside, "foreign.json")
+        with open(foreign, "w", encoding="utf-8") as f:
+            json.dump({"description": "LEAKED", "agentType": "leaked-type"}, f)
+
+        self.fx.write_bare_agent("bbb", _bare_lines(500), meta=False)
+        try:
+            os.symlink(foreign, self.fx.bare_meta_path("bbb"))
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symlink creation not permitted here: {exc}")
+
+        bare, report = self._bare()
+        self.assertIsNone(bare.description)
+        self.assertIsNone(bare.agent_type)
+        self.assertNotIn("LEAKED", report.by_stage_table().render())
+        # and the transcript is still counted -- confinement costs the label only
+        self.assertEqual(report.summary()["agents"], 2)
+
+
+class BareAgentLabelHygieneTest(unittest.TestCase):
+    """`description` is free text written by the spawning model and it becomes a
+    report label, so it is bounded and flattened at the trust boundary."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def _labels(self):
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        return [label for label, _ in report.stage_aggs], report
+
+    def test_an_over_long_description_is_truncated(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="A" * 400)
+        labels, _ = self._labels()
+        stage = next(l for l in labels if l.startswith("A"))
+        # bounded, and the truncation is visible rather than silent
+        self.assertLess(len(stage), 120)
+        self.assertIn("...", stage)
+
+    def test_newlines_are_flattened_so_the_text_table_stays_intact(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 description="first line\nsecond line")
+        labels, report = self._labels()
+        self.assertIn("first line second line (1 agent)", labels)
+        rendered = report.by_stage_table().render()
+        # every rendered line is one table row -- no row split in half
+        self.assertNotIn("second line\n", rendered.replace("first line second line", "x"))
+
+    def test_control_characters_are_dropped(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 description="analysis\x07\x00 done")
+        labels, _ = self._labels()
+        self.assertIn("analysis done (1 agent)", labels)
+
+    def test_a_pipe_in_a_description_cannot_split_a_markdown_row(self):
+        # Unescaped, this shifts every figure one header to the left and the
+        # table silently misreports.
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 description="analysis | 999 | 999")
+        _, report = self._labels()
+        md = report.by_stage_table().to_markdown().splitlines()
+        header_cells = md[0].count("|")
+        for row in md[2:]:
+            self.assertEqual(row.count("|") - row.count("\\|"), header_cells,
+                             f"row has a different column count: {row}")
+
+
+class BareAgentLabelUniquenessTest(unittest.TestCase):
+    """Two bare agents may carry the same `description` -- the harness has no
+    rule against it -- and two identically-labelled stage rows are collapsed by
+    any consumer that keys stages by label, including this suite."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_repeated_descriptions_are_numbered_in_run_order(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp="1970-01-01T00:00:01.000Z"),
+                                 description="analysis")
+        self.fx.write_bare_agent("ccc", _bare_lines(700, timestamp="1970-01-01T00:00:03.000Z"),
+                                 description="analysis")
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        labels = [label for label, _ in report.stage_aggs]
+        self.assertIn("analysis · 1 (1 agent)", labels)
+        self.assertIn("analysis · 2 (1 agent)", labels)
+        # no label appears twice, so keying stages by label loses nothing
+        self.assertEqual(len(labels), len(set(labels)))
+        # the earlier agent is the one numbered 1
+        stages = dict(report.stage_aggs)
+        self.assertEqual(stages["analysis · 1 (1 agent)"].cache_read, 500)
+        self.assertEqual(stages["analysis · 2 (1 agent)"].cache_read, 700)
+
+    def test_a_description_that_occurs_once_is_left_alone(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        self.assertIn("analysis (1 agent)", [label for label, _ in report.stage_aggs])
+
+    def test_both_rows_survive_into_the_per_agent_table(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp="1970-01-01T00:00:01.000Z"),
+                                 description="analysis")
+        self.fx.write_bare_agent("ccc", _bare_lines(700, timestamp="1970-01-01T00:00:03.000Z"),
+                                 description="analysis")
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        ids = sorted(agent_id for _, agent_id, _, _ in report.agent_rows)
+        self.assertEqual(ids, ["aaa", "bbb", "ccc"])
+
+
+class StageOrderingAcrossKindsTest(unittest.TestCase):
+    """The case the bare-agent time-axis fallback originally left out: a
+    workflow whose run file is missing, so it has no ``startTime`` to key on.
+
+    Ordering with a run file present is covered by
+    ``BareSubagentTest.test_stages_stay_in_run_order_across_both_kinds``."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", timestamp="1970-01-01T00:00:02.000Z",
+                              usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def _stage_labels(self):
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        # index 0 is always the main driver stage
+        return [label for label, _ in report.stage_aggs][1:]
+
+    def test_a_workflow_with_no_run_file_still_sorts_by_when_it_ran(self):
+        # No write_meta() at all: the run file is absent, so there is no
+        # startTime. The workflow's own agent transcript is stamped 2000 ms, the
+        # bare agent 3000 ms, so the workflow ran FIRST and must print first.
+        # Keying workflows on startTime alone dropped it to the end of the
+        # report -- on exactly the population the n/a cross-check rule covers.
+        self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp="1970-01-01T00:00:03.000Z"),
+                                 description="analysis")
+        labels = self._stage_labels()
+        self.assertEqual(len(labels), 2)
+        self.assertEqual(labels, ["wf_a (1 agents)", "analysis (1 agent)"])
+
+    def test_a_workflow_with_no_usable_timestamp_anywhere_sorts_last(self):
+        # The fallback is a fallback, not a new rule: with nothing to key on the
+        # workflow still goes to the end, deterministically.
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp="1970-01-01T00:00:03.000Z"),
+                                 description="analysis")
+        labels = self._stage_labels()
+        self.assertEqual(labels, ["analysis (1 agent)", "wf_a (1 agents)"])
+
+
+class PerAgentIdColumnTest(unittest.TestCase):
+    """The per-agent table's id cell follows one rule for both kinds of agent."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_a_workflow_agent_id_carries_no_file_extension(self):
+        # The workflow branch hand-sliced the "agent-" prefix off and left the
+        # ".jsonl" on, so it rendered "aaa.jsonl" beside the bare agent's "bbb".
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        ids = sorted(agent_id for _, agent_id, _, _ in report.agent_rows)
+        self.assertEqual(ids, ["aaa", "bbb"])
+        for agent_id in ids:
+            self.assertNotIn(".jsonl", agent_id)
+
+    def test_the_rendered_table_shows_both_ids_the_same_way(self):
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        rendered = report.per_agent_table().render()
+        self.assertNotIn(".jsonl", rendered)
+
+
+class AgentRowOrderTest(unittest.TestCase):
+    """`agent_rows` is built in execution order now that bare agents share the
+    axis, not in `session.workflows` declaration order. per_agent_table() sorts
+    stably on -cache_read, so equal-cost rows follow that order."""
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", timestamp="1970-01-01T00:00:02.000Z",
+                              usage=_usage(cw=100, cr=500, out=10, m5=100)),
+        ])
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def test_equal_cost_rows_follow_run_order(self):
+        # Same cache_read as the workflow agent (500), but it ran first.
+        self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp="1970-01-01T00:00:01.000Z"),
+                                 description="analysis")
+        report = Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+        self.assertEqual([r[3].cache_read for r in report.agent_rows], [500, 500])
+        self.assertEqual([agent_id for _, agent_id, _, _ in report.agent_rows],
+                         ["bbb", "aaa"])
+        # and the stable sort in per_agent_table preserves it
+        rows = sorted(report.agent_rows, key=lambda r: -r[3].cache_read)
+        self.assertEqual([agent_id for _, agent_id, _, _ in rows], ["bbb", "aaa"])

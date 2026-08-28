@@ -159,7 +159,18 @@ A bare agent has no run file and never could have one, so it produces **no**
 cross-check row. It does get its own **stage row** — labelled from the meta's
 `description`, or the agent id when that is absent — marked `agent` in the
 `kind` column, ordered among the workflow stages by its transcript's first
-timestamp, and counted in the `agents` headline and the per-agent table.
+timestamp, and counted in the `agents` headline and the per-agent table. Two
+agents sharing a `description` are numbered (`analysis · 1`, `analysis · 2`),
+so two stage rows are never labelled identically. A `description` is free text
+written by the spawning model, so it is length-bounded and flattened to a single
+printable line before it becomes a label.
+
+A session that spawned **only** bare subagents has no root `transcript.jsonl`
+and no `workflows/` directory at all. That is a supported input: `run()` and
+`--compare` both accept it and report its spend. Its cross-check table is
+necessarily empty, and an empty table reconciles nothing — the footer says
+`no workflows to reconcile`, never `all workflows reconcile`. A directory with
+no transcripts of any kind is still rejected with exit code 2.
 
 ## The metric
 
@@ -205,8 +216,10 @@ report. Change a price there — never in a computation.
   (e.g. `general-purpose`) instead: its opening prompt is not written in that
   vocabulary, and parsing it does not merely fail to match — "You are running
   the classic-ui-expert skill" would enter the table as a role called
-  `RUNNING`. Lower-case entries are therefore agent *types*, not parsed roles;
-  `?` still means the meta file was missing or unusable.
+  `RUNNING`. Lower-case entries are therefore agent *types*, not parsed roles.
+  `?` covers every case that leaves no usable `agentType`: no meta file, a meta
+  that will not parse — and, easy to miss, a perfectly valid meta that simply
+  carries no `agentType` key, or one whose value is empty or not a string.
 - **agent** — per subagent: turns, startup context (first-turn cache write +
   input), cache write, cache read, output.
 - **ttl** — the cache-write TTL split and the effective weight.
@@ -253,7 +266,9 @@ Each cross-check cell therefore has three states, not two — `ok` (compared and
 equal), `n/a` (not comparable, so nothing was verified), and `MISMATCH` (a real
 disagreement). The footer says `all comparable checks reconcile (N n/a)` when
 anything was suppressed, so a skipped check is never folded into an unqualified
-pass. In the JSON payload the same distinction is `"tool_calls_ok": null`
+pass, and `no workflows to reconcile` when there are no rows at all — `all([])`
+is `True`, so without that case an empty table read as a clean pass over a
+comparison that never happened. In the JSON payload the same distinction is `"tool_calls_ok": null`
 alongside `"tool_calls_comparable": false` (and `"agents_ok"` /
 `"agents_comparable"` on the other axis); a `true` there always means the
 comparison actually ran. An agent-count gap that the leftover bucket accounts

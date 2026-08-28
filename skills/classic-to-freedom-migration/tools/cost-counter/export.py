@@ -27,10 +27,11 @@ side of a ``--compare`` (where it ran as a workflow) and not on the other.
 from __future__ import annotations
 
 import glob
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Optional
+
+import parsing
 
 
 @dataclass
@@ -143,15 +144,45 @@ def _read_agent_meta(path: str, root: str) -> dict:
 
     Never raises: a missing, unparseable or non-object meta file costs the agent
     its label and role, never its cost -- the transcript is counted either way.
+
+    This function owns only the confinement decision (the meta path is derived
+    from the transcript path, so a symlink could point out of the export); the
+    read and its degrade rule are ``parsing.read_json_object``, shared with the
+    workflow run-record reader.
     """
-    if not os.path.isfile(path) or not within_root(root, path):
+    if not within_root(root, path):
         return {}
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            data = json.load(handle)
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+    return parsing.read_json_object(path) or {}
+
+
+# A stage/role label is a table cell, not prose. `description` is free text
+# written by the spawning model, so it is the one report label whose length and
+# contents nothing upstream constrains; bound it here at the trust boundary
+# rather than in each of the three renderers.
+_MAX_LABEL_CHARS = 96
+
+
+def _clean_label(value) -> Optional[str]:
+    """One model-authored meta string, reduced to something safe to print.
+
+    Anything that is not a non-empty string degrades to ``None`` so the caller
+    falls back exactly as it does for a missing meta -- an ``agentType`` that
+    arrives as a number must not reach the by-role table as a non-string label.
+    Whitespace is flattened and non-printable characters dropped (a newline
+    would break the fixed-width text renderer mid-table), and an over-long
+    description is truncated rather than allowed to push every column off the
+    line. Markdown's cell separator is escaped by the Markdown renderer, which
+    is the layer that owns that format.
+    """
+    if not isinstance(value, str):
+        return None
+    flattened = " ".join(value.split())
+    printable = "".join(ch for ch in flattened if ch.isprintable())
+    if len(printable) > _MAX_LABEL_CHARS:
+        # ASCII ellipsis: this label is also read on a cp1252 Windows console,
+        # where _reconfigure_stdout() is only best-effort.
+        printable = printable[: _MAX_LABEL_CHARS - 3].rstrip() + "..."
+    return printable or None
 
 
 def _bare_agents(subagents_dir: str, session_results: Optional[str], root: str) -> list:
@@ -165,12 +196,10 @@ def _bare_agents(subagents_dir: str, session_results: Optional[str], root: str) 
         if not within_root(root, path):
             continue
         meta = _read_agent_meta(path[:-len(".jsonl")] + ".meta.json", root)
-        description = meta.get("description")
-        agent_type = meta.get("agentType")
         agents.append(BareAgent(
             path,
-            description if isinstance(description, str) and description else None,
-            agent_type if isinstance(agent_type, str) and agent_type else None,
+            _clean_label(meta.get("description")),
+            _clean_label(meta.get("agentType")),
             session_results,
         ))
     return agents

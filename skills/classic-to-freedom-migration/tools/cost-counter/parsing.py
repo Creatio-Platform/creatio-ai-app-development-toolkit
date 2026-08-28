@@ -9,8 +9,36 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import re
 from typing import Iterator, Optional
+
+
+def read_json_object(path: Optional[str]) -> Optional[dict]:
+    """The JSON object in ``path``; ``None`` when absent, unparseable or not an
+    object.
+
+    The single reader for the small sidecar files the export carries beside a
+    transcript -- a workflow's ``workflows/<wf>.json`` run record and a bare
+    agent's ``agent-<id>.meta.json``. Both degrade identically by construction
+    rather than through two hand-kept copies of the same seven lines, which is
+    what stops the degrade contract drifting between consumers.
+
+    Never raises. ``OSError`` is caught alongside the decode error on purpose:
+    narrowing this to ``json.JSONDecodeError`` alone would let a half-copied or
+    permission-denied export crash the tool instead of costing one file its
+    metadata. The transcript's cost is counted either way.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        # json.JSONDecodeError is a ValueError; OSError covers an unreadable or
+        # vanishing file. Both mean "no usable sidecar", never "stop counting".
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def iter_jsonl(path: str) -> Iterator[dict]:
