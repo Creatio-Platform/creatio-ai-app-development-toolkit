@@ -4,3 +4,14 @@
 *.md text eol=lf
 *.json text eol=lf
 *.workflow.js text eol=lf
+
+# ENG-95683 review — the JS toolchain is LF-ONLY, and this is a correctness rule, not a style one.
+# `scripts/build-workflows.mjs` inlines `_workflow-core/*.mjs` into `*.workflow.js` (already pinned LF above) and
+# then byte-compares the result. On a CRLF checkout the sources arrive CRLF, the generated file is pinned LF, and
+# `--check` reports EVERY line as drifted — which makes the one gate protecting the generated artifacts unreadable
+# rather than merely noisy, and hides real drift inside the noise (that is exactly how the blank-line drift this
+# PR removes survived). `run-workflow-parity.mjs` fails the same way: it slices the shipped script and evaluates
+# it, and CRLF breaks the slice with `SyntaxError: Unexpected token 'export'`.
+# Every blob is ALREADY stored LF, so this changes only what lands in a working tree — no file content moves.
+*.mjs text eol=lf
+*.js text eol=lf
