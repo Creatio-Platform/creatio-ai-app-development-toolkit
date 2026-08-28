@@ -1,8 +1,13 @@
 name: PR checks
 
 on:
+  # ENG-95683 review — NO `branches:` filter. It used to be `[main]`, which meant these checks (the workspace
+  # suites AND `build-workflows.mjs --check`, the ONLY gate that stops a generated `.workflow.js` from drifting
+  # from its `_workflow-core/` source) never ran on a PR targeting anything else. This PR targets a feature base
+  # (`ENG-94529-migration-stage-2-poc`), so it got ZERO workflow runs — and a hand-edit to the generated
+  # `freedom-build-executor.workflow.js` (commit 3b6261a) landed green, with the source left behind, until a
+  # reviewer caught it by eye. A stacked PR is exactly where drift is most likely and was least checked.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read

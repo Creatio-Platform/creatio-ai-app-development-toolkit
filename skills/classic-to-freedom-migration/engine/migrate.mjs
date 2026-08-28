@@ -2044,9 +2044,19 @@ function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 }
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
-// that function's nesting weight. Exported (like `buildCoverage` / `registrySettleGuidance`) so a test can drive
-// it against a hand-built changeSet — the only way to exercise the `enginePositioned` tableElements branch in
-// isolation, since a real run always emits a table element into `viewConfigDiff.values.type` as well.
+// that function's nesting weight.
+//
+// TEST-ONLY EXPORT — no production caller outside this module. `runMigration` is the public surface; this is
+// exported (like `buildCoverage` / `registrySettleGuidance`, the same convention) so a test can drive it against a
+// hand-built changeSet. ENG-95683 review: the decision to KEEP it was taken explicitly rather than left implicit.
+// The reason it cannot be replaced by an end-to-end fixture is a property of the mapper, not a gap in the tests:
+// `resolveProps` ALWAYS also writes `values.type` for a table element, so in any changeSet a real run can produce,
+// the `viewConfigDiff` source of `enginePositioned` already covers every type the `tableElements` source would —
+// a "realistic fixture that naturally emits a table element" therefore cannot isolate the `tableElements` branch,
+// because the other branch would satisfy the assertion first. Deleting that line would leave the e2e test green.
+// The branch's OUTCOME is covered end-to-end regardless (`run-mapper.mjs` asserts the `registry-composite-only`
+// items `runMigration` does and does not push); this export exists solely so the tableElements SOURCE has a
+// non-vacuous regression test of its own. Do not call it from production code.
 export function reportRegistryFindings(changeSet, manifest, baseDir) {
   // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
   // against the registry it could resolve — the stand's own export when the manifest carries one, else the
