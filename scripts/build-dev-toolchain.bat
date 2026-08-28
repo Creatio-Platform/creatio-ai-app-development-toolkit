@@ -40,7 +40,7 @@ REM Required key: CLIO_SRC. Optional keys (sane defaults): MARKETPLACE_NAME, KN_
 REM       KN_REL_OWNER, KN_REL_REPO, KN_REL_ASSET, KN_REL_API (release-mode github-release source identity).
 REM The CAADT repo path is auto-derived from this script's location -- do NOT configure it.
 REM The knowledge source is chosen at step [0/7]: MODE (branch|release) via `release` 1st arg / KN_MODE env /
-REM menu (default branch); in BRANCH mode the ref is 1st arg / KN_BRANCH env / interactive menu / master.
+REM menu (default release); in BRANCH mode the ref is 1st arg / KN_BRANCH env / interactive menu / master.
 REM
 REM IMPORTANT: both a running MCP server and Claude Code hold the OLD state in
 REM memory. After this script finishes you MUST:
@@ -267,8 +267,9 @@ REM (re)create a CLEAN junction: plain rmdir removes only the link, never the ta
 if exist "%GEN_MP_DIR%\!REPO_LEAF!" rmdir "%GEN_MP_DIR%\!REPO_LEAF!" >nul 2>&1
 mklink /J "%GEN_MP_DIR%\!REPO_LEAF!" "%REPO_ROOT%" >nul 2>&1
 if errorlevel 1 (
-  echo   [mp] directory junction unavailable -- using the repo's parent as the marketplace root
   for %%I in ("%REPO_ROOT%\..") do set "MP_ROOT=%%~fI"
+  echo   [mp] directory junction unavailable -- using the repo's parent as the marketplace root:
+  echo        !MP_ROOT! ^(a ".claude-plugin\marketplace.json" is written there and NOT auto-removed^).
 )
 echo - generating local dev marketplace ^(root: !MP_ROOT!; plugin source: ./!REPO_LEAF! -^> %REPO_ROOT%^)
 set "MP_NAME=%MARKETPLACE_NAME%"
