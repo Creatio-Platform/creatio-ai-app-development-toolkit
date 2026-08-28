@@ -66,6 +66,19 @@ if not defined KN_REL_REPO      set "KN_REL_REPO=clio-knowledge"
 if not defined KN_REL_ASSET     set "KN_REL_ASSET=clio-knowledge-bundle.zip"
 if not defined KN_REL_API       set "KN_REL_API=https://api.github.com/"
 if not defined CLIO_SRC (echo. & echo CLIO_SRC is not set in "%CONFIG_FILE%" & exit /b 1)
+REM Fail early if CLIO_SRC points nowhere -- otherwise step [1/7] would kill the user's clio.exe and
+REM step [2/7] would only discover the bad path at the pushd, after side effects have already happened.
+if not exist "%CLIO_SRC%\" (echo. & echo CLIO_SRC path does not exist: "%CLIO_SRC%" & exit /b 1)
+REM --- Harden against command injection ---------------------------------------------------------------
+REM KN_URL / KN_REL_* / KN_BRANCH / KN_MODE flow into the PowerShell steps below. They are passed to
+REM PowerShell as ENVIRONMENT VARIABLES ($env:KN_*), never string-concatenated into the -Command text, so
+REM a value containing a quote/backtick/$ cannot break out of the script and run arbitrary code. As an
+REM extra guard we also validate each against a strict allow-list here and abort on anything else. The
+REM check runs INSIDE PowerShell reading $env:* -- NOT `echo %VAR%|findstr`, because piping an echoed value
+REM re-parses cmd metacharacters (&, |, <, >) in the pipe's child shell, which would itself be exploitable.
+REM (KN_BRANCH is resolved later in [0/7], so it is validated there once known.)
+powershell -NoProfile -Command "$bad=@(); if($env:KN_URL -notmatch '^[A-Za-z0-9._:@/-]+$'){$bad+='KN_URL'}; if($env:KN_REL_OWNER -notmatch '^[A-Za-z0-9._-]+$'){$bad+='KN_REL_OWNER'}; if($env:KN_REL_REPO -notmatch '^[A-Za-z0-9._-]+$'){$bad+='KN_REL_REPO'}; if($env:KN_REL_ASSET -notmatch '^[A-Za-z0-9._-]+$'){$bad+='KN_REL_ASSET'}; if($env:KN_REL_API -notmatch '^[A-Za-z0-9._:@/-]+$'){$bad+='KN_REL_API'}; if($bad){[Console]::Error.WriteLine('  config value(s) outside allow-list: '+($bad -join ', ')); exit 1}"
+if errorlevel 1 (echo. & echo Aborting: a knowledge-source config value contains disallowed characters ^(allowed: letters digits . _ : @ / -^). & exit /b 1)
 REM Plugin identity is read from the repo's OWN .claude-plugin\plugin.json (no hardcode); the local dev
 REM marketplace is GENERATED under TEMP at step 7 with its plugin source = REPO_ROOT -- nothing by hand.
 set "PLUGIN_NAME=creatio-ai-app-development-toolkit"
@@ -136,6 +149,14 @@ call set "KN_BRANCH=%%KN_BR_%KN_PICK%%%"
 if not defined KN_BRANCH ( set "KN_BRANCH=master" & echo   ^(number out of range -- using master^) )
 :kn_branch_ready
 if not defined KN_BRANCH set "KN_BRANCH=master"
+REM KN_BRANCH is the key UNTRUSTED input -- it can come straight from `git ls-remote` on the remote or
+REM from free-text menu input. It is consumed at step [6/7] via $env:KN_BRANCH (never concatenated into
+REM the PowerShell command), but validate it here too: reject anything outside a strict git-ref allow-list
+REM so a ref with a quote/backtick/$ cannot reach the PowerShell/appsettings edit at all. Validation runs
+REM inside PowerShell over $env:KN_BRANCH (NOT `echo|findstr`, which would re-parse an embedded & in a
+REM child shell).
+powershell -NoProfile -Command "if($env:KN_BRANCH -match '^[A-Za-z0-9._/-]+$'){exit 0}else{exit 1}"
+if errorlevel 1 (echo. & echo Invalid knowledge branch/tag name ^(allowed: letters digits . _ / -^). & echo   value: !KN_BRANCH! & exit /b 1)
 set "KN_REF_LABEL=%KN_BRANCH%"
 echo Selected knowledge branch: %KN_BRANCH%
 :kn_select_done
@@ -228,7 +249,7 @@ REM generic "Git knowledge synchronization failed / previous revision restored" 
 REM swallowed). A plain `git fetch --prune --tags` on the cached repo makes the new ref visible so the
 REM sync resolves it. Best-effort: never fails the rebuild; release mode has no git cache so it is skipped.
 if /I not "%KN_MODE%"=="release" powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $src=Join-Path $h 'knowledge\sources'; if(Test-Path $src){ Get-ChildItem $src -Directory -ErrorAction SilentlyContinue | ForEach-Object { $r=Join-Path $_.FullName 'repository'; if(Test-Path (Join-Path $r '.git')){ Write-Host ('  [kn] refreshing git cache (fetch --prune --tags): '+$_.Name); git -C $r fetch --prune --tags origin 2>&1 | Out-Null } } } else { Write-Host '  [kn] no knowledge git cache yet -- sync will clone fresh' }"
-powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $p=Join-Path $h 'appsettings.json'; $mode='%KN_MODE%'; $ref='%KN_BRANCH%'; $gitUrl='%KN_URL%'; $relOwner='%KN_REL_OWNER%'; $relRepo='%KN_REL_REPO%'; $relAsset='%KN_REL_ASSET%'; $relApi='%KN_REL_API%'; $j=Get-Content $p -Raw|ConvertFrom-Json; $s=$j.knowledge.sources.'creatio-curated'; if(-not $s){Write-Host '  [kn] creatio-curated source missing in appsettings; skipping edit'; exit 0}; 'branch','tag','commit','package-id','repository-owner','repository-name','asset-name','trusted-key-id','trusted-public-key-path'|%%{$s.PSObject.Properties.Remove($_)}; if($mode -eq 'release'){Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'github-release' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $relApi -Force; Add-Member -InputObject $s -NotePropertyName 'repository-owner' -NotePropertyValue $relOwner -Force; Add-Member -InputObject $s -NotePropertyName 'repository-name' -NotePropertyValue $relRepo -Force; Add-Member -InputObject $s -NotePropertyName 'asset-name' -NotePropertyValue $relAsset -Force; Write-Host ('  [kn] creatio-curated -> github-release '+$relOwner+'/'+$relRepo+' asset '+$relAsset+' (latest)')}else{if(-not $j.features){Add-Member -InputObject $j -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) -Force}; if($j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$true}else{Add-Member -InputObject $j.features -NotePropertyName 'knowledge-allow-unsequenced' -NotePropertyValue $true -Force}; $kind=if($ref -match '^\d+\.\d+'){'tag'}else{'branch'}; Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'git' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $gitUrl -Force; Add-Member -InputObject $s -NotePropertyName $kind -NotePropertyValue $ref -Force; Write-Host ('  [kn] creatio-curated -> '+$kind+' '+$ref+'; allow-unsequenced=true')}; [IO.File]::WriteAllText($p,($j|ConvertTo-Json -Depth 40))"
+powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $p=Join-Path $h 'appsettings.json'; $mode=$env:KN_MODE; $ref=$env:KN_BRANCH; $gitUrl=$env:KN_URL; $relOwner=$env:KN_REL_OWNER; $relRepo=$env:KN_REL_REPO; $relAsset=$env:KN_REL_ASSET; $relApi=$env:KN_REL_API; $j=Get-Content $p -Raw|ConvertFrom-Json; $s=$j.knowledge.sources.'creatio-curated'; if(-not $s){Write-Host '  [kn] creatio-curated source missing in appsettings; skipping edit'; exit 0}; 'branch','tag','commit','package-id','repository-owner','repository-name','asset-name','trusted-key-id','trusted-public-key-path'|%%{$s.PSObject.Properties.Remove($_)}; if($mode -eq 'release'){Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'github-release' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $relApi -Force; Add-Member -InputObject $s -NotePropertyName 'repository-owner' -NotePropertyValue $relOwner -Force; Add-Member -InputObject $s -NotePropertyName 'repository-name' -NotePropertyValue $relRepo -Force; Add-Member -InputObject $s -NotePropertyName 'asset-name' -NotePropertyValue $relAsset -Force; Write-Host ('  [kn] creatio-curated -> github-release '+$relOwner+'/'+$relRepo+' asset '+$relAsset+' (latest)')}else{if(-not $j.features){Add-Member -InputObject $j -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) -Force}; if($j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$true}else{Add-Member -InputObject $j.features -NotePropertyName 'knowledge-allow-unsequenced' -NotePropertyValue $true -Force}; $kind=if($ref -match '^\d+\.\d+'){'tag'}else{'branch'}; Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'git' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $gitUrl -Force; Add-Member -InputObject $s -NotePropertyName $kind -NotePropertyValue $ref -Force; Write-Host ('  [kn] creatio-curated -> '+$kind+' '+$ref+'; allow-unsequenced=true')}; [IO.File]::WriteAllText($p,($j|ConvertTo-Json -Depth 40))"
 clio install-knowledge --source creatio-curated
 if errorlevel 1 (
   echo   [warn] knowledge sync did not complete ^(offline, bad ref, or incompatible bundle^). non-fatal.
@@ -268,8 +289,12 @@ if exist "%GEN_MP_DIR%\!REPO_LEAF!" rmdir "%GEN_MP_DIR%\!REPO_LEAF!" >nul 2>&1
 mklink /J "%GEN_MP_DIR%\!REPO_LEAF!" "%REPO_ROOT%" >nul 2>&1
 if errorlevel 1 (
   for %%I in ("%REPO_ROOT%\..") do set "MP_ROOT=%%~fI"
+  REM Record the out-of-TEMP artifact so the [cleanup] step removes it after install (it is only needed
+  REM through `claude plugin install`, which copies the plugin into Claude's cache); this keeps the
+  REM fallback from leaving a stray marketplace.json above the repo checkout.
+  set "MP_FALLBACK_JSON=!MP_ROOT!\.claude-plugin\marketplace.json"
   echo   [mp] directory junction unavailable -- using the repo's parent as the marketplace root:
-  echo        !MP_ROOT! ^(a ".claude-plugin\marketplace.json" is written there and NOT auto-removed^).
+  echo        !MP_ROOT! ^(its ".claude-plugin\marketplace.json" is removed by the [cleanup] step below^).
 )
 echo - generating local dev marketplace ^(root: !MP_ROOT!; plugin source: ./!REPO_LEAF! -^> %REPO_ROOT%^)
 set "MP_NAME=%MARKETPLACE_NAME%"
@@ -300,6 +325,16 @@ call claude mcp remove clio -s user >nul 2>&1
 if "%errorlevel%"=="0" (echo   removed user-scope 'clio' duplicate ^(plugin's clio remains^).) else (echo   no user-scope 'clio' duplicate ^(ok^).)
 
 :done
+
+REM Remove the out-of-TEMP marketplace artifact left by the junction fallback (set only on that path).
+REM The plugin was already copied into Claude's cache by `plugin install` above, so the file is no longer
+REM needed. rmdir (non-recursive) deletes the generated .claude-plugin folder ONLY if it is now empty --
+REM it never touches the repo's parent directory itself or any pre-existing sibling content.
+if defined MP_FALLBACK_JSON if exist "!MP_FALLBACK_JSON!" (
+  del /q "!MP_FALLBACK_JSON!" >nul 2>&1
+  for %%D in ("!MP_FALLBACK_JSON!\..") do rmdir "%%~fD" >nul 2>&1
+  echo   - removed fallback marketplace artifact outside TEMP: !MP_FALLBACK_JSON!
+)
 
 echo.
 echo === [cleanup] Removing stale knowledge-source lock markers ===
