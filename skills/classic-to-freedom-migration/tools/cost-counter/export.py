@@ -5,18 +5,29 @@ The export the counter reads has this shape (only the parts we use):
     <export-root>/
         transcript.jsonl                    <- main driver session (discovery+plan)
         <session-id>/
-            subagents/workflows/<wf>/
-                agent-*.jsonl               <- one subagent transcript each
-                journal.jsonl               <- workflow journal (cross-checks)
+            subagents/
+                agent-*.jsonl               <- a BARE subagent (plain Agent tool)
+                agent-*.meta.json           <- its agentType / description
+                workflows/<wf>/
+                    agent-*.jsonl           <- one workflow subagent transcript each
+                    journal.jsonl           <- workflow journal (cross-checks)
             workflows/<wf>.json             <- agentCount / totalToolCalls
             tool-results/<name>.txt         <- offloaded tool outputs
 
 Discovery is tolerant of the session-id level (it is a UUID that varies per
-run) by locating every ``subagents/workflows`` directory under the root.
+run) by locating every ``subagents`` directory under the root.
+
+Both kinds of subagent are discovered. A subagent spawned through the plain
+Agent tool has no workflow run-id directory: its transcript sits directly in
+``subagents/``, and only the sibling ``agent-<id>.meta.json`` names it. Globbing
+for ``subagents/workflows`` alone skipped those files entirely, so their whole
+cost went missing from every total -- and worse, the same stage counted on one
+side of a ``--compare`` (where it ran as a workflow) and not on the other.
 """
 from __future__ import annotations
 
 import glob
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Optional
@@ -36,6 +47,35 @@ class Workflow:
 
 
 @dataclass
+class BareAgent:
+    """One subagent spawned with the plain Agent tool, outside any workflow.
+
+    It has no workflow run-id directory, so there is no ``workflows/<wf>.json``
+    to reconcile it against and no ``workflowName`` to label it: the harness
+    records only ``agentType`` and a free-text ``description`` in the sibling
+    ``agent-<id>.meta.json``. That description is therefore the label the
+    report uses, and ``agent_type`` stands in for the role (a bare agent's
+    opening prompt is not written in the workflow role vocabulary, so parsing
+    it yields a junk role rather than a recognised one).
+    """
+    path: str
+    description: Optional[str] = None
+    agent_type: Optional[str] = None
+    # tool-results/ of the session this agent belongs to, same contract as
+    # Workflow.tool_results_dir (R9).
+    tool_results_dir: Optional[str] = None
+
+    @property
+    def agent_id(self) -> str:
+        return os.path.basename(self.path)[len("agent-"):-len(".jsonl")]
+
+    @property
+    def label(self) -> str:
+        """Stage label: the recorded description, or the agent id when absent."""
+        return self.description or self.agent_id
+
+
+@dataclass
 class SessionExport:
     root: str
     main_transcript: Optional[str]
@@ -48,11 +88,18 @@ class SessionExport:
     tool_results_dir: Optional[str]
     workflows: list = field(default_factory=list)
 
+    # Subagents that ran outside any workflow (plain Agent tool). Kept apart
+    # from `workflows` because they have no run file to reconcile against --
+    # they must not appear as cross-check rows -- but they ARE subagents, so
+    # every cost total, the per-agent table and the `agents` headline count them.
+    bare_agents: list = field(default_factory=list)
+
     @property
     def agent_files(self) -> list:
         files = []
         for workflow in self.workflows:
             files.extend(workflow.agent_files)
+        files.extend(agent.path for agent in self.bare_agents)
         return files
 
 
@@ -91,22 +138,65 @@ def _make_workflow(wf_dir: str, name: str, session_dir: str,
     return Workflow(name, wf_dir, agents, journal, meta, session_results)
 
 
-def _session_workflows(wf_parent: str, root: str) -> tuple[str, Optional[str], list]:
-    """Session dir, its tool-results/ (if any), and every workflow under one
-    ``subagents/workflows`` parent. Paths that escape ``root`` are skipped."""
-    session_dir = os.path.dirname(os.path.dirname(wf_parent))
+def _read_agent_meta(path: str, root: str) -> dict:
+    """``agent-<id>.meta.json`` as a dict; ``{}`` when absent or unusable.
+
+    Never raises: a missing, unparseable or non-object meta file costs the agent
+    its label and role, never its cost -- the transcript is counted either way.
+    """
+    if not os.path.isfile(path) or not within_root(root, path):
+        return {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _bare_agents(subagents_dir: str, session_results: Optional[str], root: str) -> list:
+    """Transcripts sitting directly in ``subagents/`` -- plain-Agent subagents.
+
+    The ``agent-*.jsonl`` glob cannot pick up an ``agent-*.meta.json`` sibling
+    (different extension), so this returns one entry per real transcript.
+    """
+    agents = []
+    for path in sorted(glob.glob(os.path.join(subagents_dir, "agent-*.jsonl"))):
+        if not within_root(root, path):
+            continue
+        meta = _read_agent_meta(path[:-len(".jsonl")] + ".meta.json", root)
+        description = meta.get("description")
+        agent_type = meta.get("agentType")
+        agents.append(BareAgent(
+            path,
+            description if isinstance(description, str) and description else None,
+            agent_type if isinstance(agent_type, str) and agent_type else None,
+            session_results,
+        ))
+    return agents
+
+
+def _session_subagents(subagents_dir: str, root: str) -> tuple[str, Optional[str], list, list]:
+    """Session dir, its tool-results/ (if any), and both kinds of subagent found
+    under one ``subagents`` directory. Paths that escape ``root`` are skipped."""
+    session_dir = os.path.dirname(subagents_dir)
     candidate_results = os.path.join(session_dir, "tool-results")
     session_results = (
         candidate_results
         if os.path.isdir(candidate_results) and within_root(root, candidate_results)
         else None
     )
-    workflows = [
-        _make_workflow(os.path.join(wf_parent, name), name, session_dir, session_results, root)
-        for name in sorted(os.listdir(wf_parent))
-        if os.path.isdir(os.path.join(wf_parent, name))
-    ]
-    return session_dir, session_results, workflows
+    wf_parent = os.path.join(subagents_dir, "workflows")
+    workflows = []
+    if os.path.isdir(wf_parent) and within_root(root, wf_parent):
+        workflows = [
+            _make_workflow(os.path.join(wf_parent, name), name, session_dir,
+                           session_results, root)
+            for name in sorted(os.listdir(wf_parent))
+            if os.path.isdir(os.path.join(wf_parent, name))
+        ]
+    bare = _bare_agents(subagents_dir, session_results, root)
+    return session_dir, session_results, workflows, bare
 
 
 def discover(root: str) -> SessionExport:
@@ -121,17 +211,22 @@ def discover(root: str) -> SessionExport:
     session_dir: Optional[str] = None
     tool_results_dir: Optional[str] = None
     workflows: list = []
+    bare_agents: list = []
 
-    wf_parents = sorted(
+    # Anchored on `subagents`, not `subagents/workflows`: a session that spawned
+    # only bare subagents has no `workflows` directory at all, and the narrower
+    # glob made every such transcript invisible to the counter.
+    subagent_dirs = sorted(
         p for p in set(
-            glob.glob(os.path.join(root, "**", "subagents", "workflows"), recursive=True)
+            glob.glob(os.path.join(root, "**", "subagents"), recursive=True)
         )
-        if within_root(root, p)
+        if os.path.isdir(p) and within_root(root, p)
     )
-    for wf_parent in wf_parents:
-        session_dir, session_results, wfs = _session_workflows(wf_parent, root)
+    for subagents_dir in subagent_dirs:
+        session_dir, session_results, wfs, bare = _session_subagents(subagents_dir, root)
         if session_results:
             tool_results_dir = session_results
         workflows.extend(wfs)
+        bare_agents.extend(bare)
 
-    return SessionExport(root, main, session_dir, tool_results_dir, workflows)
+    return SessionExport(root, main, session_dir, tool_results_dir, workflows, bare_agents)

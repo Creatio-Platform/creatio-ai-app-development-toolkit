@@ -10,6 +10,8 @@ The export invariants pinned here:
 * a re-run agent reuses the cache ``key`` of the attempt it replaces, so journal
   outcomes are matched on ``agentId``.
 """
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -315,7 +317,53 @@ class UnreadableRunFileTest(unittest.TestCase):
         for row in report.reconcile():
             self.assertFalse(row.explained)
             self.assertIsNone(row.note)        # nothing to compare against
-            self.assertTrue(row.agents_ok)     # no meta count -> no claim
+            # No meta count -> nothing to disagree with, so *_ok stays True,
+            # but nothing was verified either: the cell must render n/a.
+            self.assertTrue(row.agents_ok)
+            self.assertFalse(row.agents_comparable)
+            self.assertFalse(row.tool_calls_comparable)
+            self.assertEqual(
+                cost_counter._mark(row.agents_ok, row.agents_comparable), "n/a")
+            self.assertEqual(
+                cost_counter._mark(row.tool_calls_ok, row.tool_calls_comparable), "n/a")
+
+    def test_a_journal_without_a_run_file_is_not_reported_as_reconciled(self):
+        # The shape a session exported mid-run has: the workflow ran (journal
+        # present, transcripts present) but `workflows/<wf>.json` was never
+        # written. Nothing can be cross-checked, so the row must render n/a and
+        # the footer must not claim "all workflows reconcile" -- it did so over
+        # a real 6-agent / 190-tool-call workflow that nobody had checked.
+        self.fx.journal([("started", "k1", "a1"), ("result", "k1", "a1"),
+                         ("started", "k2", "a2"), ("result", "k2", "a2")])
+        self.assertFalse(os.path.exists(self.fx.meta_path))
+        report = self.fx.report()
+
+        rows = report.reconcile()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertIsNone(row.agents_meta)
+        self.assertIsNone(row.tool_calls_meta)
+        self.assertEqual(row.agents_seen, 2)
+        self.assertEqual(
+            cost_counter._reconcile_verdict(rows),
+            "all comparable checks reconcile (1 n/a)",
+        )
+
+        # The printed cells: an absent meta count reads as a dash, not None.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cost_counter._print_check(report)
+        out = buf.getvalue()
+        self.assertIn("-/2 n/a", out)
+        self.assertNotIn("None", out)
+        self.assertNotIn(" ok", out)
+
+        # ... and the JSON says null on both axes, never a bare true.
+        payload = cost_counter._reconcile_payload(report)[0]
+        self.assertIsNone(payload["agents_ok"])
+        self.assertIsNone(payload["tool_calls_ok"])
+        self.assertFalse(payload["agents_comparable"])
+        self.assertFalse(payload["tool_calls_comparable"])
 
     def test_non_object_run_file_degrades_the_same_way(self):
         with open(self.fx.meta_path, "w", encoding="utf-8") as f:

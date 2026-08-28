@@ -76,9 +76,10 @@ Three guards from the ticket's comparison protocol:
   comparison also depends on ENG-95470 (N1) landing first.
 - **Same counter version only.** A single invocation always measures both
   sides with today's `counter_version`, so this only matters across a
-  counting-rule change (like ENG-95856's dedup fix): save the pre-fix side
-  with `... summary --format json > before.json` first, then compare that
-  file against a live post-fix export —
+  counting-rule change (ENG-95856's dedup fix bumped it to 2; counting bare
+  subagents bumped it to 3): save the pre-fix side with
+  `... summary --format json > before.json` first, then compare that file
+  against a live post-fix export —
   `python cost_counter.py before.json --compare <post-fix-export>`. Either
   `--compare` operand may be a live export directory or such a saved summary
   file; a genuine version mismatch prints `REFUSED` instead of a number.
@@ -126,15 +127,39 @@ stand up fixtures in a temp directory).
 <export-dir>/
     transcript.jsonl                       # main driver session (discovery + plan)
     <session-id>/
-        subagents/workflows/<wf>/
-            agent-*.jsonl                  # one subagent transcript each
-            journal.jsonl                  # workflow journal (used for cross-checks)
+        subagents/
+            agent-*.jsonl                  # a BARE subagent (plain Agent tool)
+            agent-*.meta.json              # its agentType / description
+            workflows/<wf>/
+                agent-*.jsonl              # one workflow subagent transcript each
+                journal.jsonl              # workflow journal (used for cross-checks)
         workflows/<wf>.json                # agentCount / totalToolCalls
         tool-results/<name>.txt            # offloaded (large) tool outputs
 ```
 
 Discovery tolerates the session-id level (a per-run UUID) by locating every
-`subagents/workflows` directory under the export root.
+`subagents` directory under the export root.
+
+### Two kinds of subagent
+
+A subagent spawned through a **workflow** gets a run-id directory under
+`subagents/workflows/`, a `journal.jsonl`, and a `workflows/<wf>.json` run file
+to reconcile against. A subagent spawned with the **plain Agent tool** gets none
+of that: its transcript sits directly in `subagents/`, and the only thing naming
+it is the sibling `agent-<id>.meta.json` (`agentType`, `description`).
+
+Both are counted. Anchoring discovery on `subagents/workflows` alone skipped
+every bare transcript, so its whole cost was missing from every total — and
+worse than a flat undercount, because the *same* stage can run as a workflow in
+one export and as a bare agent in another, which put the two sides of a
+`--compare` on different bases (measured: 34.35M reported against a true
+35.25M, +2.6%, for a stage that the baseline export counted in full).
+
+A bare agent has no run file and never could have one, so it produces **no**
+cross-check row. It does get its own **stage row** — labelled from the meta's
+`description`, or the agent id when that is absent — marked `agent` in the
+`kind` column, ordered among the workflow stages by its transcript's first
+timestamp, and counted in the `agents` headline and the per-agent table.
 
 ## The metric
 
@@ -159,8 +184,9 @@ report. Change a price there — never in a computation.
 
 ## What each section reports
 
-- **stage** — the main discovery+plan session and each workflow, with a `kind`
-  column (`main` driver vs `subagents` workflow) and input / cacheW / cacheR /
+- **stage** — the main discovery+plan session, each workflow, and each bare
+  subagent, in the order they ran, with a `kind` column (`main` driver /
+  `subagents` workflow / `agent` bare subagent) and input / cacheW / cacheR /
   output as separate share columns and a weighted total. `kind` explains why the
   by-role table (subagents only) totals less than this table's grand total: the
   `main` stage runs the driver itself, no subagents. input leads the measures
@@ -175,14 +201,21 @@ report. Change a price there — never in a computation.
 - **role** — subagents grouped by the role parsed from each agent's opening
   prompt (BUILD / REFS / RECONCILE / PREFLIGHT / VERIFY / JUDGE / PERSISTENCE /
   CONTEXT / MERGE / CLOSE / CRITIQUE / DESCRIBE). Unrecognised openings fall
-  into a `?` bucket.
+  into a `?` bucket. A **bare** subagent is keyed off its recorded `agentType`
+  (e.g. `general-purpose`) instead: its opening prompt is not written in that
+  vocabulary, and parsing it does not merely fail to match — "You are running
+  the classic-ui-expert skill" would enter the table as a role called
+  `RUNNING`. Lower-case entries are therefore agent *types*, not parsed roles;
+  `?` still means the meta file was missing or unusable.
 - **agent** — per subagent: turns, startup context (first-turn cache write +
   input), cache write, cache read, output.
 - **ttl** — the cache-write TTL split and the effective weight.
 - **check** — reconciles `agentCount` and `totalToolCalls` from each
   `workflows/<wf>.json` against what the transcripts actually contain, and
-  reports built-page normalization. For a run that was resumed or killed it also
-  prints the leftover block described below.
+  reports built-page normalization. A workflow with no run file has nothing to
+  reconcile against, so its counts print as `-/<seen> n/a` rather than `ok`. For
+  a run that was resumed or killed it also prints the leftover block described
+  below.
 
 ## Resumed and killed runs
 
@@ -221,10 +254,21 @@ equal), `n/a` (not comparable, so nothing was verified), and `MISMATCH` (a real
 disagreement). The footer says `all comparable checks reconcile (N n/a)` when
 anything was suppressed, so a skipped check is never folded into an unqualified
 pass. In the JSON payload the same distinction is `"tool_calls_ok": null`
-alongside `"tool_calls_comparable": false`; a `true` there always means the
+alongside `"tool_calls_comparable": false` (and `"agents_ok"` /
+`"agents_comparable"` on the other axis); a `true` there always means the
 comparison actually ran. An agent-count gap that the leftover bucket accounts
 for stays `ok` with a note, because that one *is* verified — the leftovers are
 exactly the difference.
+
+There are two ways a check ends up `n/a`. An interrupted run suppresses the
+tool-call check alone, for the reason above. A workflow whose
+`workflows/<wf>.json` is **absent** — still in flight when the session was
+exported, or a partially-copied export — suppresses *both*: there is no
+`agentCount` and no `totalToolCalls`, so neither axis was compared. Its meta
+cells print `-`, not a count, and the footer degrades accordingly. Reporting
+those as `ok` claimed a verification that never ran and let the footer say "all
+workflows reconcile" over a real 6-agent, 190-tool-call workflow that nobody had
+checked.
 
 A gap in the other direction — fewer transcripts than the record claims ran — is
 a truncated or partially-copied export, and is reported as missing transcripts
@@ -266,8 +310,9 @@ python -m unittest discover -s tests -t .
 > `Applicant_FormPage`) — that export is not currently available on this
 > machine. `counter_version` is a new field: the code that produced this table
 > predates it and printed no version at all. Any report showing
-> `counter_version: 2` was measured after this fix; do not diff a report that
-> carries no `counter_version` against one that does.
+> `counter_version: 2` was measured after that fix, and `3` after bare
+> subagents began to be counted; do not diff reports whose `counter_version`
+> differs, or one that carries no `counter_version` against one that does.
 
 Against the preserved Applicant baseline export the tool reproduces the
 published numbers:

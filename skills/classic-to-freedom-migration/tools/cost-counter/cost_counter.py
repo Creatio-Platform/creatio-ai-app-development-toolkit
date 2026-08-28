@@ -95,6 +95,12 @@ def _mark(ok: bool, comparable: bool = True) -> str:
     return "ok" if comparable else "n/a"
 
 
+def _count(value) -> str:
+    """A meta count for display: a dash when the run file did not supply one,
+    so the cell reads as an absent figure rather than leaking Python's None."""
+    return "-" if value is None else str(value)
+
+
 def _reconcile_verdict(rows: list) -> str:
     """Footer line for the cross-check table.
 
@@ -104,7 +110,12 @@ def _reconcile_verdict(rows: list) -> str:
     """
     if not all(row.agents_ok and row.tool_calls_ok for row in rows):
         return "DISCREPANCIES ABOVE"
-    skipped = sum(1 for row in rows if not row.tool_calls_comparable)
+    # Either cell can be the suppressed one: an interrupted run suppresses the
+    # tool-call check alone, while a workflow with no run file at all has
+    # nothing to check on either axis. Counting only the tool-call side let a
+    # never-verified workflow pass as "all workflows reconcile".
+    skipped = sum(1 for row in rows
+                  if not (row.agents_comparable and row.tool_calls_comparable))
     if skipped:
         return f"all comparable checks reconcile ({skipped} n/a)"
     return "all workflows reconcile"
@@ -115,10 +126,13 @@ def _print_check(report: Report) -> None:
     print(f"    {'workflow':34} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
     rows = report.reconcile()
     for row in rows:
-        # n/a, not ok: on an interrupted run nothing verifies the tool-call
-        # counts against each other, and "ok" would overclaim.
-        agents = f"{row.agents_meta}/{row.agents_seen} {_mark(row.agents_ok)}"
-        toolcalls = (f"{row.tool_calls_meta}/{row.tool_calls_seen} "
+        # n/a, not ok, wherever nothing was actually compared: an interrupted
+        # run's tool-call counts are on different bases, and a workflow with no
+        # run file has no meta count on either axis. "ok" would overclaim, and
+        # a dash rather than a count says the figure is absent, not zero.
+        agents = (f"{_count(row.agents_meta)}/{row.agents_seen} "
+                  f"{_mark(row.agents_ok, row.agents_comparable)}")
+        toolcalls = (f"{_count(row.tool_calls_meta)}/{row.tool_calls_seen} "
                      f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
         print(f"    {row.workflow:34} {agents:>20} {toolcalls:>24}")
         if row.note:
@@ -235,13 +249,15 @@ def _reconcile_payload(report: Report) -> list:
             "run_id": r.run_id,
             "agents_meta": r.agents_meta,
             "agents_seen": r.agents_seen,
-            "agents_ok": r.agents_ok,
+            # null, not true, when the comparison was suppressed: reading either
+            # *_ok key alone must never show a pass over a check that did not
+            # run, and the matching *_comparable: false rides along to say why.
+            # Both keys keep a plain bool on a workflow that really was checked,
+            # so an ordinary export's payload is unchanged.
+            "agents_ok": r.agents_ok if r.agents_comparable else None,
+            **({} if r.agents_comparable else {"agents_comparable": False}),
             "tool_calls_meta": r.tool_calls_meta,
             "tool_calls_seen": r.tool_calls_seen,
-            # null, not true, when the comparison was suppressed: reading this
-            # key alone must never show a pass over a check that did not run.
-            # `tool_calls_comparable: false` rides along to say why. Neither
-            # appears unless the run was interrupted.
             "tool_calls_ok": r.tool_calls_ok if r.tool_calls_comparable else None,
             **({} if r.tool_calls_comparable else {"tool_calls_comparable": False}),
             **({"note": r.note} if r.note else {}),
@@ -331,8 +347,9 @@ def _reconcile_markdown(report: Report) -> str:
     ]
     rows = report.reconcile()
     for r in rows:
-        agents = f"{r.agents_meta}/{r.agents_seen} {_mark(r.agents_ok)}"
-        calls = (f"{r.tool_calls_meta}/{r.tool_calls_seen} "
+        agents = (f"{_count(r.agents_meta)}/{r.agents_seen} "
+                  f"{_mark(r.agents_ok, r.agents_comparable)}")
+        calls = (f"{_count(r.tool_calls_meta)}/{r.tool_calls_seen} "
                  f"{_mark(r.tool_calls_ok, r.tool_calls_comparable)}")
         note = f" - {r.note}" if r.note else ""
         lines.append(f"| {r.workflow} | {agents} | {calls}{note} |")
@@ -652,13 +669,13 @@ def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
         _print_ttl(report)
 
     if section in ("all", "stage"):
-        print(_section("by stage (main discovery+plan, then each workflow)"))
+        print(_section("by stage (main discovery+plan, then workflows / bare agents in run order)"))
         print(report.by_stage_table().render())
     if section in ("all", "tool"):
         print(_section("by tool (calls + tool_result bytes into context)"))
         print(report.by_tool_table().render())
     if section in ("all", "role"):
-        print(_section("by agent role (subagents, keyed off each opening prompt)"))
+        print(_section("by agent role (subagents, keyed off each opening prompt / agentType)"))
         print(report.by_role_table().render())
     if section in ("all", "agent"):
         print(_section("per agent (turns, startup context, cache, output)"))

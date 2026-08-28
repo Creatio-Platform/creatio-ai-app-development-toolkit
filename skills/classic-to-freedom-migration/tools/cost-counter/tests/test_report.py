@@ -1,8 +1,10 @@
 """Integration tests over a small synthetic session export.
 
 Covers offloaded-byte attribution by tool-use id (R9), journal reconciliation
-(R8), the by-role split (R5), and per-built-page normalization (R7) without
-needing the multi-hundred-MB real export.
+(R8), the by-role split (R5), per-built-page normalization (R7), and bare
+subagents -- the ones spawned with the plain Agent tool, which live directly in
+``subagents/`` with no workflow directory -- without needing the
+multi-hundred-MB real export.
 """
 import json
 import os
@@ -72,6 +74,27 @@ class ExportFixture:
         path = os.path.join(self.wf_dir, f"agent-{agent_id}.jsonl")
         with open(path, "w", encoding="utf-8") as f:
             f.writelines(lines)
+        return path
+
+    def write_bare_agent(self, agent_id, lines, description=None, agent_type=None,
+                         meta=True):
+        """A subagent spawned with the plain Agent tool: transcript straight in
+        ``subagents/``, with the sibling meta the harness writes beside it.
+        ``meta=False`` omits that file, the degraded case."""
+        subagents = os.path.dirname(os.path.dirname(self.wf_dir))
+        path = os.path.join(subagents, f"agent-{agent_id}.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        if meta:
+            payload = {"spawnDepth": 1}
+            if description is not None:
+                payload["description"] = description
+            if agent_type is not None:
+                payload["agentType"] = agent_type
+            with open(os.path.join(subagents, f"agent-{agent_id}.meta.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+        return path
 
     def write_offload(self, name, size):
         with open(os.path.join(self.tool_results, name), "w", encoding="utf-8") as f:
@@ -81,10 +104,14 @@ class ExportFixture:
         with open(os.path.join(self.wf_dir, "journal.jsonl"), "w", encoding="utf-8") as f:
             f.writelines(lines)
 
-    def write_meta(self, agent_count, total_tool_calls):
+    def write_meta(self, agent_count, total_tool_calls, start_time=None):
         path = os.path.join(self.session, "workflows", "wf_a.json")
+        payload = {"agentCount": agent_count, "totalToolCalls": total_tool_calls}
+        if start_time is not None:
+            payload["startTime"] = start_time
+            payload["workflowName"] = "creatio-freedom-build-executor"
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"agentCount": agent_count, "totalToolCalls": total_tool_calls}, f)
+            json.dump(payload, f)
 
 
 class AttributionTest(unittest.TestCase):
@@ -631,6 +658,185 @@ class UsageDedupTest(unittest.TestCase):
         agg = aggregate_transcript(os.path.join(self.fx.wf_dir, "agent-aaa.jsonl"))
         self.assertEqual(agg.turns, 2)
         self.assertEqual(agg.cache_read, 300)
+
+
+def _bare_lines(cache_read, timestamp=None, tool=None):
+    """A one-turn bare-agent transcript. Its opening prompt deliberately does
+    NOT use the workflow role vocabulary -- that is what a real one looks like."""
+    user = {"message": {"role": "user",
+                        "content": "You are running the classic-ui-expert skill."}}
+    if timestamp is not None:
+        user["timestamp"] = timestamp
+    content = [{"type": "tool_use", "id": "bt1", "name": tool}] if tool else None
+    return [
+        _line(user),
+        _assistant_record(msg_id="bm1",
+                          usage=_usage(inp=1, cw=20, cr=cache_read, out=2, m5=20),
+                          content=content),
+    ]
+
+
+class BareSubagentTest(unittest.TestCase):
+    """A subagent spawned with the plain Agent tool writes its transcript to
+    ``<session>/subagents/agent-<id>.jsonl`` with no workflow directory. Globbing
+    only for ``subagents/workflows`` skipped those files, so their entire cost
+    was missing from every total -- and the same stage counted on one side of a
+    ``--compare`` (where it ran as a workflow) and not on the other.
+    """
+
+    def setUp(self):
+        self.fx = ExportFixture()
+        self.fx.write_main([
+            _assistant_record(msg_id="main1", usage=_usage(inp=5, cw=40, cr=200, out=8, h1=40)),
+        ])
+        self.fx.write_agent("aaa", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m1", usage=_usage(cw=100, cr=1000, out=10, m5=100)),
+        ])
+        self.fx.write_meta(agent_count=1, total_tool_calls=0, start_time=2000)
+
+    def tearDown(self):
+        self.fx.cleanup()
+
+    def _report(self):
+        return Report(export_mod.discover(self.fx.root), metrics.CostConfig())
+
+    def test_discovery_finds_a_transcript_with_no_workflow_directory(self):
+        path = self.fx.write_bare_agent(
+            "bbb", _bare_lines(500), description="Classic UI behaviour analysis",
+            agent_type="general-purpose")
+        session = export_mod.discover(self.fx.root)
+        self.assertEqual(len(session.bare_agents), 1)
+        bare = session.bare_agents[0]
+        # discover() realpaths the export root, which on Windows expands an
+        # 8.3 short path segment in the temp dir -- compare resolved paths.
+        self.assertEqual(bare.path, os.path.realpath(path))
+        self.assertEqual(bare.label, "Classic UI behaviour analysis")
+        self.assertEqual(bare.agent_type, "general-purpose")
+        # It resolves offloaded bytes against its own session's tool-results.
+        self.assertEqual(bare.tool_results_dir, os.path.realpath(self.fx.tool_results))
+        # ... and it is a subagent, so the agents headline counts it.
+        self.assertIn(os.path.realpath(path), session.agent_files)
+        self.assertEqual(len(session.agent_files), 2)
+
+    def test_a_session_with_only_bare_agents_is_still_discovered(self):
+        # The regression at its worst: no `workflows` directory anywhere under
+        # `subagents`, so the old glob matched nothing and the export read as
+        # having no subagents at all.
+        shutil.rmtree(os.path.dirname(self.fx.wf_dir))
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        session = export_mod.discover(self.fx.root)
+        self.assertEqual(session.workflows, [])
+        self.assertEqual(len(session.bare_agents), 1)
+        self.assertEqual(len(session.agent_files), 1)
+
+    def test_its_cost_lands_in_the_totals_and_gets_its_own_stage_row(self):
+        before = self._report()
+        self.fx.write_bare_agent("bbb", _bare_lines(500),
+                                 description="Classic UI behaviour analysis",
+                                 agent_type="general-purpose")
+        after = self._report()
+
+        self.assertEqual(after.totals.cache_read, before.totals.cache_read + 500)
+        self.assertGreater(after.weighted_total(), before.weighted_total())
+        self.assertEqual(after.summary()["agents"], 2)
+
+        labels = [label for label, _ in after.stage_aggs]
+        self.assertIn("Classic UI behaviour analysis (1 agent)", labels)
+        self.assertEqual(len(labels), len(before.stage_aggs) + 1)
+
+        # The by-stage table reconciles to the run total, bare agent included.
+        table = after.by_stage_table()
+        rows = {label: values for label, values in table.rows}
+        self.assertEqual(
+            rows["Classic UI behaviour analysis (1 agent)"]["cache_read"], 500)
+        self.assertEqual(table.total_values()["cache_read"], after.totals.cache_read)
+
+    def test_the_stage_row_is_marked_agent_not_workflow_subagents(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        table = self._report().by_stage_table()
+        kinds = {label: values["kind"] for label, values in table.rows}
+        self.assertEqual(kinds["analysis (1 agent)"], "agent")
+        self.assertEqual(kinds["main (discovery+plan)"], "main")
+        self.assertEqual(kinds["freedom-build-executor (1 agents)"], "subagents")
+
+    def test_the_role_is_the_recorded_agent_type_not_a_parsed_junk_role(self):
+        # "You are running the ..." parses to a role called RUNNING, which would
+        # sit in the by-role table as if it were a real workflow role.
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis",
+                                 agent_type="general-purpose")
+        roles = {label: values for label, values in self._report().by_role_table().rows}
+        self.assertIn("general-purpose", roles)
+        self.assertNotIn("RUNNING", roles)
+        self.assertEqual(roles["general-purpose"]["n"], 1)
+        self.assertEqual(roles["general-purpose"]["cache_read"], 500)
+
+    def test_a_missing_meta_costs_the_label_and_role_never_the_cost(self):
+        self.fx.write_bare_agent("bbb", _bare_lines(500), meta=False)
+        report = self._report()
+        self.assertEqual(report.totals.cache_read, 1700)   # 200 main + 1000 wf + 500 bare
+        labels = [label for label, _ in report.stage_aggs]
+        self.assertIn("bbb (1 agent)", labels)      # falls back to the agent id
+        roles = {label for label, _ in report.by_role_table().rows}
+        self.assertIn("?", roles)
+        self.assertNotIn("RUNNING", roles)
+
+    def test_stages_stay_in_run_order_across_both_kinds(self):
+        # One axis, two clocks: the workflow's epoch-ms startTime (2000) against
+        # the bare agent's ISO timestamp. Appending bare agents last would print
+        # the earliest stage at the bottom.
+        early = "1970-01-01T00:00:01.000Z"     # 1000 ms -> before the workflow
+        late = "1970-01-01T00:00:03.000Z"      # 3000 ms -> after it
+        for stamp, expected_first in ((early, "bare"), (late, "workflow")):
+            with self.subTest(stamp=stamp):
+                self.fx.write_bare_agent("bbb", _bare_lines(500, timestamp=stamp),
+                                         description="analysis")
+                # index 0 is always the main driver stage
+                labels = [label for label, _ in self._report().stage_aggs][1:]
+                first = "bare" if labels[0].startswith("analysis") else "workflow"
+                self.assertEqual(first, expected_first, labels)
+
+    def test_bare_agents_produce_no_cross_check_row(self):
+        # There is no workflows/<wf>.json for a bare agent and never could be,
+        # so it must not add an unverifiable n/a row to the reconcile table.
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        report = self._report()
+        self.assertEqual([row.run_id for row in report.reconcile()], ["wf_a"])
+        # Not vacuous: the agent really was discovered and did get a stage row.
+        self.assertIn("analysis (1 agent)", [label for label, _ in report.stage_aggs])
+
+    def test_offloaded_bytes_of_a_bare_agent_resolve_against_tool_results(self):
+        self.fx.write_offload("bare-big.txt", 700)
+        lines = _bare_lines(500, tool="Bash")
+        lines.append(_line({"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "bt1",
+             "content": "Output too large. saved to /t/tool-results/bare-big.txt"},
+        ]}}))
+        self.fx.write_bare_agent("bbb", lines, description="analysis")
+        table = self._report().by_tool_table()
+        tools = {label: values for label, values in table.rows}
+        self.assertEqual(tools["Bash"]["bytes"], 700)
+
+    def test_the_surviving_leftover_split_still_hides_no_spend(self):
+        # A bare agent belongs to no workflow, so no attempt superseded it: it
+        # counts as surviving. Dropping it from both sides would break the
+        # identity leftover_totals() promises.
+        self.fx.write_agent("ccc", [
+            _line({"message": {"role": "user", "content": "You are a BUILD agent."}}),
+            _assistant_record(msg_id="m2", usage=_usage(cr=300, out=1, m5=10)),
+        ])
+        self.fx.write_meta(agent_count=2, total_tool_calls=0, start_time=2000)
+        self.fx.write_bare_agent("bbb", _bare_lines(500), description="analysis")
+        report = self._report()
+        surviving, leftover = report.leftover_totals()
+        main_agg = report.stage_aggs[0][1]
+        for field in ("input", "output", "cache_write", "cache_read"):
+            self.assertEqual(
+                getattr(surviving, field) + getattr(leftover, field)
+                + getattr(main_agg, field),
+                getattr(report.totals, field),
+                field,
+            )
 
 
 if __name__ == "__main__":
