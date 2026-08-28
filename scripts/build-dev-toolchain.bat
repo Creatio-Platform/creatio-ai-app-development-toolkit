@@ -80,8 +80,11 @@ REM a value containing a quote/backtick/$ cannot break out of the script and run
 REM extra guard we also validate each against a strict allow-list here and abort on anything else. The
 REM check runs INSIDE PowerShell reading $env:* -- NOT `echo %VAR%|findstr`, because piping an echoed value
 REM re-parses cmd metacharacters (&, |, <, >) in the pipe's child shell, which would itself be exploitable.
-REM (KN_BRANCH is resolved later in [0/7], so it is validated there once known.)
-powershell -NoProfile -Command "$bad=@(); if($env:KN_URL -notmatch '^[A-Za-z0-9._:@/-]+$'){$bad+='KN_URL'}; if($env:KN_REL_OWNER -notmatch '^[A-Za-z0-9._-]+$'){$bad+='KN_REL_OWNER'}; if($env:KN_REL_REPO -notmatch '^[A-Za-z0-9._-]+$'){$bad+='KN_REL_REPO'}; if($env:KN_REL_ASSET -notmatch '^[A-Za-z0-9._-]+$'){$bad+='KN_REL_ASSET'}; if($env:KN_REL_API -notmatch '^[A-Za-z0-9._:@/-]+$'){$bad+='KN_REL_API'}; if($bad){[Console]::Error.WriteLine('  config value(s) outside allow-list: '+($bad -join ', ')); exit 1}"
+REM (KN_BRANCH is resolved later in [0/7], so it is validated there once known.) Each allow-list REQUIRES an
+REM alphanumeric FIRST character so a value can never begin with '-'/'--' and be parsed as a git option
+REM (argument injection) on a positional git argument; every git call consuming these also uses a `--`
+REM end-of-options marker as defense in depth.
+powershell -NoProfile -Command "$bad=@(); if($env:KN_URL -notmatch '^[A-Za-z0-9]([A-Za-z0-9._:@/-]*)$'){$bad+='KN_URL'}; if($env:KN_REL_OWNER -notmatch '^[A-Za-z0-9]([A-Za-z0-9._-]*)$'){$bad+='KN_REL_OWNER'}; if($env:KN_REL_REPO -notmatch '^[A-Za-z0-9]([A-Za-z0-9._-]*)$'){$bad+='KN_REL_REPO'}; if($env:KN_REL_ASSET -notmatch '^[A-Za-z0-9]([A-Za-z0-9._-]*)$'){$bad+='KN_REL_ASSET'}; if($env:KN_REL_API -notmatch '^[A-Za-z0-9]([A-Za-z0-9._:@/-]*)$'){$bad+='KN_REL_API'}; if($bad){[Console]::Error.WriteLine('  config value(s) outside allow-list: '+($bad -join ', ')); exit 1}"
 if errorlevel 1 (echo. & echo Aborting: a knowledge-source config value contains disallowed characters ^(allowed: letters digits . _ : @ / -^). & exit /b 1)
 REM Plugin identity is read from the repo's OWN .claude-plugin\plugin.json (no hardcode); the local dev
 REM marketplace is GENERATED under TEMP at step 7 with its plugin source = REPO_ROOT -- nothing by hand.
@@ -138,7 +141,9 @@ if not "%~1"=="" ( set "KN_BRANCH=%~1" & echo Branch from argument: !KN_BRANCH! 
 if defined KN_BRANCH ( echo Branch from KN_BRANCH env var: !KN_BRANCH! & goto :kn_branch_ready )
 echo Fetching branches from %KN_URL% ...
 set "KN_IDX=0"
-for /f "usebackq tokens=1,2" %%a in (`git ls-remote --heads "%KN_URL%" 2^>nul`) do (
+REM `--` ends git option parsing so KN_URL is always the positional repo, never a git option, even if a
+REM future edit weakened the allow-list (which already forbids a leading '-').
+for /f "usebackq tokens=1,2" %%a in (`git ls-remote --heads -- "%KN_URL%" 2^>nul`) do (
   set "KN_REF=%%b"
   set "KN_NAME=!KN_REF:refs/heads/=!"
   set /a KN_IDX+=1
@@ -163,9 +168,10 @@ REM from free-text menu input. It is consumed at step [6/7] via $env:KN_BRANCH (
 REM the PowerShell command), but validate it here too: reject anything outside a strict git-ref allow-list
 REM so a ref with a quote/backtick/$ cannot reach the PowerShell/appsettings edit at all. Validation runs
 REM inside PowerShell over $env:KN_BRANCH (NOT `echo|findstr`, which would re-parse an embedded & in a
-REM child shell).
-powershell -NoProfile -Command "if($env:KN_BRANCH -match '^[A-Za-z0-9._/-]+$'){exit 0}else{exit 1}"
-if errorlevel 1 (echo. & echo Invalid knowledge branch/tag name ^(allowed: letters digits . _ / -^). & echo   value: !KN_BRANCH! & exit /b 1)
+REM child shell). The allow-list REQUIRES an alphanumeric first character so a ref can never begin with
+REM '-'/'--' and be mistaken for a git option on a positional argument.
+powershell -NoProfile -Command "if($env:KN_BRANCH -match '^[A-Za-z0-9]([A-Za-z0-9._/-]*)$'){exit 0}else{exit 1}"
+if errorlevel 1 (echo. & echo Invalid knowledge branch/tag name ^(letters digits . _ / -, must start alphanumeric^). & echo   value: !KN_BRANCH! & exit /b 1)
 set "KN_REF_LABEL=%KN_BRANCH%"
 echo Selected knowledge branch: %KN_BRANCH%
 :kn_select_done
