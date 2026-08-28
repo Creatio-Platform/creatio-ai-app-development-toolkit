@@ -1,5 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
+REM Exit code carried to the single :done funnel. Step [7/7] failures set RC=1 and `goto :done` (instead of
+REM a bare `exit /b 1`) so the [cleanup] block -- which removes the junction-fallback marketplace artifact --
+REM always runs before the script exits with the failure code.
+set "RC=0"
 REM ===========================================================================
 REM build-dev-toolchain.bat  --  LOCAL DEV rebuild harness
 REM   (rebuilds clio binary + knowledge + CAADT plugin instructions from local sources)
@@ -128,8 +132,10 @@ if /I "%KN_MODE%"=="release" (
 )
 
 REM ===== BRANCH mode: pick WHICH clio-knowledge branch/tag Stage C (step 6) syncs =====
-if not "%~1"=="" ( set "KN_BRANCH=%~1" & echo Branch from argument: %~1 & goto :kn_branch_ready )
-if defined KN_BRANCH ( echo Branch from KN_BRANCH env var: %KN_BRANCH% & goto :kn_branch_ready )
+REM Echo untrusted values only via delayed expansion (!VAR!): `echo %VAR%` re-expands an embedded & as a
+REM cmd operator and would execute it. The value is validated at :kn_branch_ready below before any use.
+if not "%~1"=="" ( set "KN_BRANCH=%~1" & echo Branch from argument: !KN_BRANCH! & goto :kn_branch_ready )
+if defined KN_BRANCH ( echo Branch from KN_BRANCH env var: !KN_BRANCH! & goto :kn_branch_ready )
 echo Fetching branches from %KN_URL% ...
 set "KN_IDX=0"
 for /f "usebackq tokens=1,2" %%a in (`git ls-remote --heads "%KN_URL%" 2^>nul`) do (
@@ -143,7 +149,10 @@ if %KN_IDX% EQU 0 ( set "KN_BRANCH=master" & echo   ^(could not list branches --
 set "KN_PICK="
 set /p "KN_PICK=Select a branch by number or name [master]: "
 if not defined KN_PICK ( set "KN_BRANCH=master" & goto :kn_branch_ready )
-echo %KN_PICK%| findstr /r "^[1-9][0-9]*$" >nul
+REM Classify KN_PICK (raw operator input -- typed or pasted) as an INDEX vs a branch NAME inside
+REM PowerShell over $env:KN_PICK. NOT `echo %KN_PICK%|findstr`: piping an echoed value re-parses cmd
+REM metacharacters (&, |, <, >) in the pipe's child shell and could execute an injected trailing command.
+powershell -NoProfile -Command "if($env:KN_PICK -match '^[1-9][0-9]*$'){exit 0}else{exit 1}"
 if errorlevel 1 ( set "KN_BRANCH=%KN_PICK%" & goto :kn_branch_ready )
 call set "KN_BRANCH=%%KN_BR_%KN_PICK%%%"
 if not defined KN_BRANCH ( set "KN_BRANCH=master" & echo   ^(number out of range -- using master^) )
@@ -183,8 +192,10 @@ REM before CoreCompile. So build first, then pack --no-build. The version is
 REM passed explicitly -- the csproj only auto-derives it when AssemblyVersion
 REM == 0.0.0.0, and that path is unreliable under --no-build (yields 0.0.0).
 if exist "%PACK_OUT%" rmdir /S /Q "%PACK_OUT%"
-rmdir /S /Q "clio\bin\Release" >nul 2>&1
-rmdir /S /Q "clio\obj\Release" >nul 2>&1
+REM Clear the SAME configuration that [3/7] builds/packs (CONFIG is user-overridable, default Release) --
+REM otherwise a CONFIG=Debug run would leave the stale output that the build-before-pack step guards against.
+rmdir /S /Q "clio\bin\%CONFIG%" >nul 2>&1
+rmdir /S /Q "clio\obj\%CONFIG%" >nul 2>&1
 dotnet build clio\clio.csproj -c %CONFIG% -p:Version=!VER! -p:AssemblyVersion=!VER! -p:FileVersion=!VER!
 if errorlevel 1 (echo. & echo BUILD FAILED. & popd & exit /b 1)
 dotnet pack clio\clio.csproj -c %CONFIG% --no-build -o "%PACK_OUT%" -p:Version=!VER! -p:PackageVersion=!VER!
@@ -249,7 +260,17 @@ REM generic "Git knowledge synchronization failed / previous revision restored" 
 REM swallowed). A plain `git fetch --prune --tags` on the cached repo makes the new ref visible so the
 REM sync resolves it. Best-effort: never fails the rebuild; release mode has no git cache so it is skipped.
 if /I not "%KN_MODE%"=="release" powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $src=Join-Path $h 'knowledge\sources'; if(Test-Path $src){ Get-ChildItem $src -Directory -ErrorAction SilentlyContinue | ForEach-Object { $r=Join-Path $_.FullName 'repository'; if(Test-Path (Join-Path $r '.git')){ Write-Host ('  [kn] refreshing git cache (fetch --prune --tags): '+$_.Name); git -C $r fetch --prune --tags origin 2>&1 | Out-Null } } } else { Write-Host '  [kn] no knowledge git cache yet -- sync will clone fresh' }"
-powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $p=Join-Path $h 'appsettings.json'; $mode=$env:KN_MODE; $ref=$env:KN_BRANCH; $gitUrl=$env:KN_URL; $relOwner=$env:KN_REL_OWNER; $relRepo=$env:KN_REL_REPO; $relAsset=$env:KN_REL_ASSET; $relApi=$env:KN_REL_API; $j=Get-Content $p -Raw|ConvertFrom-Json; $s=$j.knowledge.sources.'creatio-curated'; if(-not $s){Write-Host '  [kn] creatio-curated source missing in appsettings; skipping edit'; exit 0}; 'branch','tag','commit','package-id','repository-owner','repository-name','asset-name','trusted-key-id','trusted-public-key-path'|%%{$s.PSObject.Properties.Remove($_)}; if($mode -eq 'release'){Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'github-release' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $relApi -Force; Add-Member -InputObject $s -NotePropertyName 'repository-owner' -NotePropertyValue $relOwner -Force; Add-Member -InputObject $s -NotePropertyName 'repository-name' -NotePropertyValue $relRepo -Force; Add-Member -InputObject $s -NotePropertyName 'asset-name' -NotePropertyValue $relAsset -Force; Write-Host ('  [kn] creatio-curated -> github-release '+$relOwner+'/'+$relRepo+' asset '+$relAsset+' (latest)')}else{if(-not $j.features){Add-Member -InputObject $j -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) -Force}; if($j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$true}else{Add-Member -InputObject $j.features -NotePropertyName 'knowledge-allow-unsequenced' -NotePropertyValue $true -Force}; $kind=if($ref -match '^\d+\.\d+'){'tag'}else{'branch'}; Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'git' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $gitUrl -Force; Add-Member -InputObject $s -NotePropertyName $kind -NotePropertyValue $ref -Force; Write-Host ('  [kn] creatio-curated -> '+$kind+' '+$ref+'; allow-unsequenced=true')}; [IO.File]::WriteAllText($p,($j|ConvertTo-Json -Depth 40))"
+powershell -NoProfile -Command "try{ $h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $p=Join-Path $h 'appsettings.json'; $mode=$env:KN_MODE; $ref=$env:KN_BRANCH; $gitUrl=$env:KN_URL; $relOwner=$env:KN_REL_OWNER; $relRepo=$env:KN_REL_REPO; $relAsset=$env:KN_REL_ASSET; $relApi=$env:KN_REL_API; $j=Get-Content $p -Raw|ConvertFrom-Json; $s=$j.knowledge.sources.'creatio-curated'; if(-not $s){Write-Host '  [kn] creatio-curated source missing in appsettings; skipping edit'; exit 0}; 'branch','tag','commit','package-id','repository-owner','repository-name','asset-name','trusted-key-id','trusted-public-key-path'|%%{$s.PSObject.Properties.Remove($_)}; if($mode -eq 'release'){Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'github-release' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $relApi -Force; Add-Member -InputObject $s -NotePropertyName 'repository-owner' -NotePropertyValue $relOwner -Force; Add-Member -InputObject $s -NotePropertyName 'repository-name' -NotePropertyValue $relRepo -Force; Add-Member -InputObject $s -NotePropertyName 'asset-name' -NotePropertyValue $relAsset -Force; Write-Host ('  [kn] creatio-curated -> github-release '+$relOwner+'/'+$relRepo+' asset '+$relAsset+' (latest)')}else{if(-not $j.features){Add-Member -InputObject $j -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) -Force}; if($j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$true}else{Add-Member -InputObject $j.features -NotePropertyName 'knowledge-allow-unsequenced' -NotePropertyValue $true -Force}; $kind=if($ref -match '^\d+\.\d+'){'tag'}else{'branch'}; Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'git' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $gitUrl -Force; Add-Member -InputObject $s -NotePropertyName $kind -NotePropertyValue $ref -Force; Write-Host ('  [kn] creatio-curated -> '+$kind+' '+$ref+'; allow-unsequenced=true')}; [IO.File]::WriteAllText($p,($j|ConvertTo-Json -Depth 40)) }catch{ [Console]::Error.WriteLine('  [kn] appsettings.json update failed: '+$_.Exception.Message); exit 1 }"
+REM Fail LOUDLY if the appsettings rewrite itself errored (locked/malformed file, or a schema the freshly
+REM rebuilt Stage A binary changed) rather than syncing against a stale/unknown config and letting the
+REM non-fatal install-knowledge outcome below mask it. NOTE (cross-repo): this edit assumes clio's
+REM appsettings knowledge-source contract; a schema/version guard against Stage A's local build belongs in
+REM the clio repo (flagged). Best-effort still: a rewrite failure skips only the sync, not the rebuild.
+if errorlevel 1 (
+  echo   [error] could not update the knowledge-source config in appsettings.json -- SKIPPING knowledge sync.
+  echo           ^(The clio binary rebuilt in Stage A may have changed the appsettings schema this edit assumes.^)
+  goto :kn_done
+)
 clio install-knowledge --source creatio-curated
 if errorlevel 1 (
   echo   [warn] knowledge sync did not complete ^(offline, bad ref, or incompatible bundle^). non-fatal.
@@ -257,6 +278,7 @@ if errorlevel 1 (
   if /I "%KN_MODE%"=="release" (echo Knowledge synced from latest release.) else (echo Knowledge synced from "%KN_BRANCH%".)
 )
 clio info-knowledge 2>nul | findstr /i "Valid Revision"
+:kn_done
 
 echo.
 echo === [7/7] Refreshing CAADT plugin instructions ^(Claude Code^) ===
@@ -301,7 +323,7 @@ set "MP_NAME=%MARKETPLACE_NAME%"
 set "MP_PLUGIN=%PLUGIN_NAME%"
 set "MP_LEAF=!REPO_LEAF!"
 powershell -NoProfile -Command "$dir=Join-Path $env:MP_ROOT '.claude-plugin'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $mp=[ordered]@{ name=$env:MP_NAME; version='1.0.0'; description='Local dev marketplace generated by build-dev-toolchain.bat.'; owner=[ordered]@{ name='Creatio' }; plugins=@([ordered]@{ name=$env:MP_PLUGIN; description='CAADT plugin (local working copy).'; source=('./'+$env:MP_LEAF); category='development' }) }; [IO.File]::WriteAllText((Join-Path $dir 'marketplace.json'),($mp|ConvertTo-Json -Depth 10))"
-if not exist "!MP_ROOT!\.claude-plugin\marketplace.json" (echo. & echo MARKETPLACE GENERATION FAILED. & exit /b 1)
+if not exist "!MP_ROOT!\.claude-plugin\marketplace.json" (echo. & echo MARKETPLACE GENERATION FAILED. & set "RC=1" & goto :done)
 REM Clean reinstall so Claude re-copies the local files into its plugin cache.
 echo - uninstalling existing plugin ^(ignored if absent^)
 call claude plugin uninstall "%PLUGIN_SOURCE%" >nul 2>&1
@@ -309,10 +331,10 @@ echo - removing existing '%MARKETPLACE_NAME%' marketplace ^(ignored if absent^)
 call claude plugin marketplace remove "%MARKETPLACE_NAME%" >nul 2>&1
 echo - registering generated local marketplace: !MP_ROOT!
 call claude plugin marketplace add "!MP_ROOT!"
-if errorlevel 1 (echo. & echo MARKETPLACE ADD FAILED. & exit /b 1)
+if errorlevel 1 (echo. & echo MARKETPLACE ADD FAILED. & set "RC=1" & goto :done)
 echo - installing plugin: %PLUGIN_SOURCE%
 call claude plugin install "%PLUGIN_SOURCE%"
-if errorlevel 1 (echo. & echo PLUGIN INSTALL FAILED. & exit /b 1)
+if errorlevel 1 (echo. & echo PLUGIN INSTALL FAILED. & set "RC=1" & goto :done)
 
 echo - deduplicating clio MCP server
 REM The CAADT plugin (installed just above) registers its OWN 'clio' MCP server (mcp-server) via
@@ -350,6 +372,7 @@ REM from blocking the MCP initialize handshake; it does not replace it.
 powershell -NoProfile -Command "$locks=Join-Path $env:LOCALAPPDATA 'creatio\clio\knowledge\sources\.locks'; if(Test-Path $locks){ $removed=0; Get-ChildItem $locks -Filter *.lock -File -ErrorAction SilentlyContinue | ForEach-Object { try { $s=[IO.File]::Open($_.FullName,'Open','ReadWrite','None'); $s.Close(); Remove-Item $_.FullName -Force -ErrorAction Stop; $removed++; Write-Host ('  - removed stale lock: '+$_.Name) } catch { Write-Host ('  - kept in-use lock: '+$_.Name) } }; if($removed -eq 0){ Write-Host '  - no stale locks to remove' } } else { Write-Host '  - no .locks directory (nothing to clean)' }"
 
 echo.
+if not "%RC%"=="0" goto :failed_summary
 echo ===========================================================================
 echo  Done.
 echo   STAGE A: clio global tool rebuilt ^(version !VER!^); auto-update DISABLED so the released
@@ -366,4 +389,12 @@ echo   - a full restart spawns ONE fresh clio server on the new binary; a bare r
 echo     can leave the old server running and re-create the two-server contention.
 echo   - confirm afterwards: 'Get-Process clio' shows exactly ONE process.
 echo ===========================================================================
-endlocal
+goto :end
+:failed_summary
+echo ===========================================================================
+echo  build-dev-toolchain FAILED during Stage B ^(plugin refresh^) -- see the error above.
+echo  Stage A ^(clio binary^) and Stage C ^(knowledge^) completed if their steps reported success;
+echo  any junction-fallback marketplace artifact was cleaned up. Re-run after resolving the error.
+echo ===========================================================================
+:end
+endlocal & exit /b %RC%
