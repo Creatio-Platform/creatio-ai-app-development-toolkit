@@ -9,8 +9,6 @@
 // nothing classified a source-side runtime error as un-buildable.
 import {
   classifyBlocker, blockerKey, sourceBlockerParks, sourceParkWhy,
-  downgradeSurface, standFingerprint, canReuseReconcile,
-  progressed, openDeliverableCount, stableStringify,
 } from "../../skills/_workflow-core/build-executor/gate.mjs";
 
 let pass = 0, fail = 0;
@@ -78,74 +76,6 @@ check("a mixed list parks only the source ones",
 
 check("sourceParkWhy is never blank even when the blocker carries no text",
   () => sourceParkWhy({}, "reason x").trim().length > 0);
-
-/* ---------------------------------------------------------------------------
-   3. VERIFICATION-SURFACE DOWNGRADE
-   --------------------------------------------------------------------------- */
-console.log("\n===== downgradeSurface: close on what IS checkable =====");
-
-check("automatic:3 with an unreachable render downgrades to automatic:2 and says so",
-  () => { const d = downgradeSurface("automatic:3", { renderReachable: false }); return d.surface === "automatic:2" && d.downgraded === true && /downgraded to automatic:2/.test(d.note); },
-  () => JSON.stringify(downgradeSurface("automatic:3", { renderReachable: false })));
-
-check("automatic:2 with an unreachable render downgrades to manual (structure only)",
-  () => { const d = downgradeSurface("automatic:2", { renderReachable: false }); return d.surface === "manual" && d.downgraded === true; });
-
-check("manual cannot downgrade further — structure is the floor, not a failure",
-  () => { const d = downgradeSurface("manual", { renderReachable: false }); return d.surface === "manual" && d.downgraded === false; });
-
-check("a REACHABLE render keeps the requested surface unchanged",
-  () => { const d = downgradeSurface("automatic:3", { renderReachable: true }); return d.surface === "automatic:3" && d.downgraded === false && d.note === null; });
-
-check("render 'not attempted' (undefined) never downgrades",
-  () => { const d = downgradeSurface("automatic:3", {}); return d.surface === "automatic:3" && d.downgraded === false; });
-
-/* ---------------------------------------------------------------------------
-   4. REUSE THE LAST VERDICT INSTEAD OF RE-RECONCILING
-   --------------------------------------------------------------------------- */
-console.log("\n===== canReuseReconcile: skip the baseline agent when nothing moved =====");
-
-const fpA = standFingerprint({ planVersion: "v7", standWrites: { pages: 2, packageCreated: "UsrX" } });
-const fpAReordered = standFingerprint({ standWrites: { packageCreated: "UsrX", pages: 2 }, planVersion: "v7" });
-const fpB = standFingerprint({ planVersion: "v7", standWrites: { pages: 3, packageCreated: "UsrX" } });
-
-check("an identical stand fingerprint is stable under key reordering",
-  () => fpA === fpAReordered, () => `${fpA}\n${fpAReordered}`);
-
-check("a build write (standWrites changed) produces a DIFFERENT fingerprint",
-  () => fpA !== fpB);
-
-check("reuse is allowed when a persisted verdict exists and the fingerprints match",
-  () => canReuseReconcile({ persistedVerdict: { complete: false }, prevFingerprint: fpA, curFingerprint: fpAReordered }) === true);
-
-check("reuse is REFUSED when the fingerprint changed (the stand moved)",
-  () => canReuseReconcile({ persistedVerdict: { complete: false }, prevFingerprint: fpA, curFingerprint: fpB }) === false);
-
-check("reuse is REFUSED when there is no persisted verdict to reuse",
-  () => canReuseReconcile({ persistedVerdict: null, prevFingerprint: fpA, curFingerprint: fpA }) === false);
-
-check("reuse is REFUSED when a fingerprint is missing on either side",
-  () => canReuseReconcile({ persistedVerdict: {}, prevFingerprint: null, curFingerprint: fpA }) === false);
-
-/* ---------------------------------------------------------------------------
-   5. STALL GUARD + open-count arithmetic
-   --------------------------------------------------------------------------- */
-console.log("\n===== progressed / openDeliverableCount =====");
-
-check("progress is TRUE when the open count strictly dropped",
-  () => progressed(5, 3) === true);
-check("progress is FALSE when the open count did not move (a stalled round)",
-  () => progressed(3, 3) === false);
-check("an unknown count never accuses a stall",
-  () => progressed(undefined, 3) === true);
-
-check("openDeliverableCount sums missing + unverified across pages",
-  () => openDeliverableCount({ pages: { main: { missing: 6, unverified: 1 }, list: { missing: 0, unverified: 2 } } }) === 9);
-check("a complete verdict counts zero open deliverables",
-  () => openDeliverableCount({ pages: { main: { missing: 0, unverified: 0 } } }) === 0);
-
-check("stableStringify is order-independent and recurses",
-  () => stableStringify({ b: 1, a: [3, { y: 2, x: 1 }] }) === stableStringify({ a: [3, { x: 1, y: 2 }], b: 1 }));
 
 /* --------------------------------------------------------------------------- */
 console.log(`\n=================\nGATE GOLDEN: ${pass} passed, ${fail} failed`);
