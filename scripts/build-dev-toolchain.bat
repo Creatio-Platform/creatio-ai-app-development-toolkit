@@ -327,16 +327,20 @@ REM working tree, so unreleased/uncommitted edits are picked up). If the junctio
 REM TEMP is not NTFS), fall back to the repo's PARENT as the marketplace root (still a descending ./<leaf>).
 for %%I in ("%REPO_ROOT%") do set "REPO_LEAF=%%~nxI"
 set "MP_ROOT=%GEN_MP_DIR%"
-REM Ownership guard: %GEN_MP_DIR% is a fixed path under %TEMP%. Before reusing/relinking it, require a marker
-REM file this script itself wrote. If the directory exists WITHOUT the marker, refuse to touch it -- on a
-REM shared/multi-user %TEMP% another process could have pre-created (or symlinked) that exact path, and we
-REM must not rmdir/relink through a directory we do not own. A fresh run creates the dir and writes the marker.
+REM Safety guard for the fixed %TEMP% path: on a shared/multi-user %TEMP% the real risk is that
+REM %GEN_MP_DIR% ITSELF was pre-planted as a junction/symlink (a reparse point) that would redirect our
+REM writes -- and the leaf junction we create -- to an attacker-chosen target. Refuse that. A PLAIN
+REM directory is safe to reuse even if we didn't create it: every run regenerates the marker, the
+REM .claude-plugin\marketplace.json and the leaf junction inside it, overwriting any prior content (so a
+REM directory left by an earlier run of this script -- e.g. before the marker existed -- reuses cleanly).
 set "MP_MARKER=%GEN_MP_DIR%\.build-dev-toolchain-owned"
 if exist "%GEN_MP_DIR%" (
-  if not exist "%MP_MARKER%" (
-    echo. & echo MARKETPLACE TEMP DIR EXISTS BUT IS NOT OWNED BY THIS SCRIPT:
+  set "MP_IS_REPARSE=0"
+  for /f "usebackq delims=" %%R in (`powershell -NoProfile -Command "try{if((Get-Item -LiteralPath $env:GEN_MP_DIR -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){'1'}else{'0'}}catch{'1'}" 2^>nul`) do set "MP_IS_REPARSE=%%R"
+  if "!MP_IS_REPARSE!"=="1" (
+    echo. & echo MARKETPLACE TEMP DIR IS A JUNCTION/SYMLINK, not a normal directory:
     echo   "%GEN_MP_DIR%"
-    echo Refusing to reuse it ^(possible squatting on a shared TEMP^). Remove it and re-run.
+    echo Refusing to write through a redirected path ^(possible squatting on a shared TEMP^). Remove it and re-run.
     set "RC=1" & goto :done
   )
 ) else (
