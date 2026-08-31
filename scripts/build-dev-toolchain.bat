@@ -58,7 +58,7 @@ for %%I in ("%~dp0..") do set "REPO_ROOT=%%~fI"
 
 REM --- Load the machine path(s) from the companion config file next to this script (only CLIO_SRC is required) ---
 set "CONFIG_FILE=%~dp0build-dev-toolchain.config"
-if not exist "%CONFIG_FILE%" (echo. & echo Missing config file: "%CONFIG_FILE%" & echo Create it with at least CLIO_SRC=... ^(see this script's header^). & exit /b 1)
+if not exist "%CONFIG_FILE%" (echo. & echo Missing config file: "%CONFIG_FILE%" & echo Copy "%~dp0build-dev-toolchain.config.example" to it and set CLIO_SRC to your local clio checkout. & exit /b 1)
 for /f "usebackq eol=# tokens=1* delims==" %%K in ("%CONFIG_FILE%") do set "%%K=%%L"
 REM Optional keys fall back to defaults; only CLIO_SRC is required.
 if not defined MARKETPLACE_NAME set "MARKETPLACE_NAME=creatio"
@@ -77,15 +77,18 @@ REM --- Harden against command injection ---------------------------------------
 REM KN_URL / KN_REL_* / KN_BRANCH / KN_MODE flow into the PowerShell steps below. They are passed to
 REM PowerShell as ENVIRONMENT VARIABLES ($env:KN_*), never string-concatenated into the -Command text, so
 REM a value containing a quote/backtick/$ cannot break out of the script and run arbitrary code. As an
-REM extra guard we also validate each against a strict allow-list here and abort on anything else. The
-REM check runs INSIDE PowerShell reading $env:* -- NOT `echo %VAR%|findstr`, because piping an echoed value
-REM re-parses cmd metacharacters (&, |, <, >) in the pipe's child shell, which would itself be exploitable.
-REM (KN_BRANCH is resolved later in [0/7], so it is validated there once known.) Each allow-list REQUIRES an
-REM alphanumeric FIRST character so a value can never begin with '-'/'--' and be parsed as a git option
-REM (argument injection) on a positional git argument; every git call consuming these also uses a `--`
-REM end-of-options marker as defense in depth.
-powershell -NoProfile -Command "$bad=@(); if($env:KN_URL -notmatch '^[A-Za-z0-9]([A-Za-z0-9._:@/-]*)$'){$bad+='KN_URL'}; if($env:KN_REL_OWNER -notmatch '^[A-Za-z0-9]([A-Za-z0-9._-]*)$'){$bad+='KN_REL_OWNER'}; if($env:KN_REL_REPO -notmatch '^[A-Za-z0-9]([A-Za-z0-9._-]*)$'){$bad+='KN_REL_REPO'}; if($env:KN_REL_ASSET -notmatch '^[A-Za-z0-9]([A-Za-z0-9._-]*)$'){$bad+='KN_REL_ASSET'}; if($env:KN_REL_API -notmatch '^[A-Za-z0-9]([A-Za-z0-9._:@/-]*)$'){$bad+='KN_REL_API'}; if($bad){[Console]::Error.WriteLine('  config value(s) outside allow-list: '+($bad -join ', ')); exit 1}"
-if errorlevel 1 (echo. & echo Aborting: a knowledge-source config value contains disallowed characters ^(allowed: letters digits . _ : @ / -^). & exit /b 1)
+REM extra guard, EVERY untrusted value is validated by ONE shared gate -- the :vtoken subroutine (bottom of
+REM file) -- so new inputs / new git call sites inherit the hardening by construction, not by memory. The
+REM gate reads the value via $env inside PowerShell (NOT `echo %VAR%|findstr`, which would re-parse cmd
+REM metacharacters &, |, <, > in the pipe's child shell) and its allow-list REQUIRES an alphanumeric FIRST
+REM character, so a value can never begin with '-'/'--' and be parsed as a git option (argument injection).
+REM Every git call consuming one of these also uses a `--` end-of-options marker as defense in depth.
+REM (KN_BRANCH is resolved later in [0/7], so it is gated there once known.)
+call :vtoken KN_URL       "^[A-Za-z0-9]([A-Za-z0-9._:@/-]*)$" || exit /b 1
+call :vtoken KN_REL_OWNER "^[A-Za-z0-9]([A-Za-z0-9._-]*)$"    || exit /b 1
+call :vtoken KN_REL_REPO  "^[A-Za-z0-9]([A-Za-z0-9._-]*)$"    || exit /b 1
+call :vtoken KN_REL_ASSET "^[A-Za-z0-9]([A-Za-z0-9._-]*)$"    || exit /b 1
+call :vtoken KN_REL_API   "^[A-Za-z0-9]([A-Za-z0-9._:@/-]*)$" || exit /b 1
 REM Plugin identity is read from the repo's OWN .claude-plugin\plugin.json (no hardcode); the local dev
 REM marketplace is GENERATED under TEMP at step 7 with its plugin source = REPO_ROOT -- nothing by hand.
 set "PLUGIN_NAME=creatio-ai-app-development-toolkit"
@@ -167,11 +170,9 @@ REM KN_BRANCH is the key UNTRUSTED input -- it can come straight from `git ls-re
 REM from free-text menu input. It is consumed at step [6/7] via $env:KN_BRANCH (never concatenated into
 REM the PowerShell command), but validate it here too: reject anything outside a strict git-ref allow-list
 REM so a ref with a quote/backtick/$ cannot reach the PowerShell/appsettings edit at all. Validation runs
-REM inside PowerShell over $env:KN_BRANCH (NOT `echo|findstr`, which would re-parse an embedded & in a
-REM child shell). The allow-list REQUIRES an alphanumeric first character so a ref can never begin with
-REM '-'/'--' and be mistaken for a git option on a positional argument.
-powershell -NoProfile -Command "if($env:KN_BRANCH -match '^[A-Za-z0-9]([A-Za-z0-9._/-]*)$'){exit 0}else{exit 1}"
-if errorlevel 1 (echo. & echo Invalid knowledge branch/tag name ^(letters digits . _ / -, must start alphanumeric^). & echo   value: !KN_BRANCH! & exit /b 1)
+REM via the SAME shared :vtoken gate as the config values (reads $env, alphanumeric-first allow-list) so a
+REM ref can never begin with '-'/'--' and be mistaken for a git option on a positional argument.
+call :vtoken KN_BRANCH "^[A-Za-z0-9]([A-Za-z0-9._/-]*)$" || exit /b 1
 set "KN_REF_LABEL=%KN_BRANCH%"
 echo Selected knowledge branch: %KN_BRANCH%
 :kn_select_done
@@ -256,7 +257,9 @@ REM   branch  -> type=git, location=<KN_URL>, branch|tag=<ref>  (ref auto-classi
 REM              plus feature flag 'knowledge-allow-unsequenced'=true -- the raw bundle-source.json on a
 REM              branch has no "sequence", so only a flag-aware clio can derive it and install cleanly.
 REM   release -> type=github-release, repository-owner/name + asset-name; the SIGNED release manifest
-REM              carries "sequence", so it validates on any clio and the flag is left untouched.
+REM              carries "sequence", so it validates on any clio. Release mode also RESETS
+REM              'knowledge-allow-unsequenced' back to false (if a prior branch-mode run set it), so the
+REM              signed-bundle trust model is not left durably weakened after switching back to release.
 REM All transport-specific fields are cleared first, so the validator never sees a git ref on a
 REM github-release source (or a release asset on a git source), which it rejects.
 REM BRANCH mode only: refresh the cached knowledge git repo BEFORE the sync. clio's git transport only
@@ -265,8 +268,8 @@ REM clone. So a freshly-pushed branch/tag is invisible in the stale cache and it
 REM generic "Git knowledge synchronization failed / previous revision restored" (the real git error is
 REM swallowed). A plain `git fetch --prune --tags` on the cached repo makes the new ref visible so the
 REM sync resolves it. Best-effort: never fails the rebuild; release mode has no git cache so it is skipped.
-if /I not "%KN_MODE%"=="release" powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $src=Join-Path $h 'knowledge\sources'; if(Test-Path $src){ Get-ChildItem $src -Directory -ErrorAction SilentlyContinue | ForEach-Object { $r=Join-Path $_.FullName 'repository'; if(Test-Path (Join-Path $r '.git')){ Write-Host ('  [kn] refreshing git cache (fetch --prune --tags): '+$_.Name); git -C $r fetch --prune --tags origin 2>&1 | Out-Null } } } else { Write-Host '  [kn] no knowledge git cache yet -- sync will clone fresh' }"
-powershell -NoProfile -Command "try{ $h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $p=Join-Path $h 'appsettings.json'; $mode=$env:KN_MODE; $ref=$env:KN_BRANCH; $gitUrl=$env:KN_URL; $relOwner=$env:KN_REL_OWNER; $relRepo=$env:KN_REL_REPO; $relAsset=$env:KN_REL_ASSET; $relApi=$env:KN_REL_API; $j=Get-Content $p -Raw|ConvertFrom-Json; $s=$j.knowledge.sources.'creatio-curated'; if(-not $s){Write-Host '  [kn] creatio-curated source missing in appsettings; skipping edit'; exit 0}; 'branch','tag','commit','package-id','repository-owner','repository-name','asset-name','trusted-key-id','trusted-public-key-path'|%%{$s.PSObject.Properties.Remove($_)}; if($mode -eq 'release'){Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'github-release' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $relApi -Force; Add-Member -InputObject $s -NotePropertyName 'repository-owner' -NotePropertyValue $relOwner -Force; Add-Member -InputObject $s -NotePropertyName 'repository-name' -NotePropertyValue $relRepo -Force; Add-Member -InputObject $s -NotePropertyName 'asset-name' -NotePropertyValue $relAsset -Force; Write-Host ('  [kn] creatio-curated -> github-release '+$relOwner+'/'+$relRepo+' asset '+$relAsset+' (latest)')}else{if(-not $j.features){Add-Member -InputObject $j -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) -Force}; if($j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$true}else{Add-Member -InputObject $j.features -NotePropertyName 'knowledge-allow-unsequenced' -NotePropertyValue $true -Force}; $kind=if($ref -match '^\d+\.\d+'){'tag'}else{'branch'}; Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'git' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $gitUrl -Force; Add-Member -InputObject $s -NotePropertyName $kind -NotePropertyValue $ref -Force; Write-Host ('  [kn] creatio-curated -> '+$kind+' '+$ref+'; allow-unsequenced=true')}; [IO.File]::WriteAllText($p,($j|ConvertTo-Json -Depth 40)) }catch{ [Console]::Error.WriteLine('  [kn] appsettings.json update failed: '+$_.Exception.Message); exit 1 }"
+if /I not "%KN_MODE%"=="release" powershell -NoProfile -Command "$h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $src=Join-Path $h 'knowledge\sources'; if(Test-Path $src){ Get-ChildItem $src -Directory -ErrorAction SilentlyContinue | ForEach-Object { $r=Join-Path $_.FullName 'repository'; if(Test-Path (Join-Path $r '.git')){ Write-Host ('  [kn] refreshing git cache (fetch --prune --tags): '+$_.Name); git -C $r fetch --prune --tags origin 2>&1 | Out-Null; if($LASTEXITCODE -ne 0){ Write-Host ('  [kn] WARNING: fetch failed for '+$_.Name+' (exit '+$LASTEXITCODE+') -- proceeding with locally cached refs; synced knowledge may be stale') } } } } else { Write-Host '  [kn] no knowledge git cache yet -- sync will clone fresh' }"
+powershell -NoProfile -Command "try{ $h=if($env:CLIO_HOME){$env:CLIO_HOME}else{Join-Path $env:LOCALAPPDATA 'creatio\clio'}; $p=Join-Path $h 'appsettings.json'; $mode=$env:KN_MODE; $ref=$env:KN_BRANCH; $gitUrl=$env:KN_URL; $relOwner=$env:KN_REL_OWNER; $relRepo=$env:KN_REL_REPO; $relAsset=$env:KN_REL_ASSET; $relApi=$env:KN_REL_API; $j=Get-Content $p -Raw|ConvertFrom-Json; $s=$j.knowledge.sources.'creatio-curated'; if(-not $s){Write-Host '  [kn] creatio-curated source missing in appsettings; skipping edit'; exit 0}; 'branch','tag','commit','package-id','repository-owner','repository-name','asset-name','trusted-key-id','trusted-public-key-path'|%%{$s.PSObject.Properties.Remove($_)}; if($mode -eq 'release'){Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'github-release' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $relApi -Force; Add-Member -InputObject $s -NotePropertyName 'repository-owner' -NotePropertyValue $relOwner -Force; Add-Member -InputObject $s -NotePropertyName 'repository-name' -NotePropertyValue $relRepo -Force; Add-Member -InputObject $s -NotePropertyName 'asset-name' -NotePropertyValue $relAsset -Force; Write-Host ('  [kn] creatio-curated -> github-release '+$relOwner+'/'+$relRepo+' asset '+$relAsset+' (latest)'); if($j.features -and $j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$false; Write-Host '  [kn] allow-unsequenced=false (release requires signed/sequenced bundles)'}}else{if(-not $j.features){Add-Member -InputObject $j -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) -Force}; if($j.features.PSObject.Properties['knowledge-allow-unsequenced']){$j.features.'knowledge-allow-unsequenced'=$true}else{Add-Member -InputObject $j.features -NotePropertyName 'knowledge-allow-unsequenced' -NotePropertyValue $true -Force}; $kind=if($ref -match '^\d+\.\d+'){'tag'}else{'branch'}; Add-Member -InputObject $s -NotePropertyName type -NotePropertyValue 'git' -Force; Add-Member -InputObject $s -NotePropertyName location -NotePropertyValue $gitUrl -Force; Add-Member -InputObject $s -NotePropertyName $kind -NotePropertyValue $ref -Force; Write-Host ('  [kn] creatio-curated -> '+$kind+' '+$ref+'; allow-unsequenced=true')}; [IO.File]::WriteAllText($p,($j|ConvertTo-Json -Depth 40)) }catch{ [Console]::Error.WriteLine('  [kn] appsettings.json update failed: '+$_.Exception.Message); exit 1 }"
 REM Fail LOUDLY if the appsettings rewrite itself errored (locked/malformed file, or a schema the freshly
 REM rebuilt Stage A binary changed) rather than syncing against a stale/unknown config and letting the
 REM non-fatal install-knowledge outcome below mask it. NOTE (cross-repo): this edit assumes clio's
@@ -404,3 +407,17 @@ echo  any junction-fallback marketplace artifact was cleaned up. Re-run after re
 echo ===========================================================================
 :end
 endlocal & exit /b %RC%
+
+REM ===========================================================================
+REM :vtoken -- shared allow-list gate for ONE untrusted value. Args: %1 = env var NAME,
+REM   %2 = anchored allow-list regex (quoted). The value is read via $env INSIDE PowerShell -- never
+REM   interpolated into the command text -- so a quote/backtick/$/& in the value cannot break out; the
+REM   regex must start with [A-Za-z0-9] so no value can begin with '-'/'--' (git argument injection).
+REM   Returns exit /b 1 on reject; callers use `call :vtoken NAME "regex" || exit /b 1` to abort. Every
+REM   untrusted %env% variable and every git call that consumes one go through this single gate so future
+REM   inputs/call sites inherit the hardening by construction. (Reached only via `call`.)
+REM ===========================================================================
+:vtoken
+powershell -NoProfile -Command "if([Environment]::GetEnvironmentVariable('%~1') -match '%~2'){exit 0}else{exit 1}"
+if errorlevel 1 (echo. & echo Invalid %~1: value is empty or contains characters outside its allow-list ^(must start alphanumeric; letters digits . _ and, per key, : @ / -^). & exit /b 1)
+goto :eof

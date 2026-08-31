@@ -2,17 +2,20 @@
 scripts/build-dev-toolchain.bat.
 
 This gate has already needed multiple fix rounds to close real injection
-vectors (string-interpolated PowerShell ``-Command`` breakout, and
-``echo %VAR%|findstr`` re-parsing cmd metacharacters in a child shell). The
-tests below pin the current, hardened behaviour so a future edit that weakens a
-regex or reintroduces an unsafe interpolation/pipe pattern fails CI.
+vectors (string-interpolated PowerShell ``-Command`` breakout, ``echo
+%VAR%|findstr`` re-parsing cmd metacharacters in a child shell, and a
+leading-hyphen ``git`` argument-injection gap). Every untrusted value now flows
+through ONE shared gate -- the ``:vtoken`` subroutine, invoked as
+``call :vtoken <NAME> "<regex>"`` -- and these tests pin that behaviour so a
+future edit that weakens a regex, drops a variable from the gate, or
+reintroduces an unsafe interpolation/pipe pattern fails CI.
 
-The tests are intentionally host-agnostic: they read the actual regexes out of
-the script and evaluate them with Python's ``re`` (PowerShell ``-match`` /
-``-notmatch`` on an anchored ``^...$`` pattern is equivalent to a Python
-``re.search`` for single-line values), and they assert structural properties of
-the script text. No cmd.exe / PowerShell / dotnet / clio / claude execution is
-required, so this runs on any CI platform.
+The tests are host-agnostic: they read the actual regexes out of the script and
+evaluate them with Python's ``re`` (PowerShell ``-match`` on an anchored
+``^...$`` pattern is equivalent to a Python ``re.search`` for the single-line
+values this gate handles), plus structural assertions on the script text. No
+cmd.exe / PowerShell / dotnet / clio / claude execution is required, so this
+runs on any CI platform.
 """
 
 import re
@@ -43,18 +46,19 @@ MALICIOUS = [
     "",  # empty is not a valid value either
 ]
 
-VALID_URLS = [
-    "https://github.com/Advance-Technologies-Foundation/clio-knowledge.git",
-    "git@github.com:org/repo.git",
-    "https://api.github.com/",
-]
-
-VALID_BRANCHES = [
-    "master",
-    "feature/eng-93152_fab-1.2",
-    "1.13.20",
-    "release-2.0",
-]
+# Legitimate values per gated variable (used to prove the allow-list isn't
+# over-tight). Keyed by the env var name passed to :vtoken.
+VALID = {
+    "KN_URL": [
+        "https://github.com/Advance-Technologies-Foundation/clio-knowledge.git",
+        "git@github.com:org/repo.git",
+    ],
+    "KN_REL_OWNER": ["Advance-Technologies-Foundation"],
+    "KN_REL_REPO": ["clio-knowledge"],
+    "KN_REL_ASSET": ["clio-knowledge-bundle.zip"],
+    "KN_REL_API": ["https://api.github.com/"],
+    "KN_BRANCH": ["master", "feature/eng-93152_fab-1.2", "1.13.20", "release-2.0"],
+}
 
 
 def _read_script():
@@ -74,12 +78,6 @@ def _strip_comments(text):
     return "\n".join(out)
 
 
-def _extract(pattern, text, label):
-    m = re.search(pattern, text)
-    assert m, f"could not locate the {label} validation regex in {SCRIPT.name}"
-    return m.group(1)
-
-
 def _matches(dotnet_pattern, value):
     # PowerShell -match on an anchored ^...$ pattern == Python re.search for the
     # single-line values this gate handles.
@@ -91,70 +89,62 @@ class BuildDevToolchainValidationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = _read_script()
         cls.code = _strip_comments(cls.text)
-        cls.url_pat = _extract(r"KN_URL -notmatch '([^']*)'", cls.text, "KN_URL")
-        cls.branch_pat = _extract(r"KN_BRANCH -match '([^']*)'", cls.text, "KN_BRANCH")
-        cls.pick_pat = _extract(r"KN_PICK -match '([^']*)'", cls.text, "KN_PICK")
+        # Every untrusted value is gated by `call :vtoken <NAME> "<regex>"`.
+        cls.gates = dict(re.findall(r'call :vtoken (\w+)\s+"([^"]*)"', cls.code))
+        assert cls.gates, "no `call :vtoken NAME \"regex\"` gates found in the script"
+        # KN_PICK is classified (index vs name), not abort-validated, so it has
+        # its own -match and is extracted separately.
+        m = re.search(r"KN_PICK -match '([^']*)'", cls.code)
+        assert m, "could not locate the KN_PICK classifier regex"
+        cls.pick_pat = m.group(1)
 
-    # -- the allow-lists reject every known-malicious payload -----------------
-    def test_url_allowlist_rejects_malicious(self):
-        for payload in MALICIOUS:
-            self.assertFalse(
-                _matches(self.url_pat, payload),
-                f"KN_URL allow-list must reject: {payload!r}",
+    # -- every gated variable is covered (KN_URL, KN_REL_*, KN_BRANCH) ---------
+    def test_all_untrusted_config_vars_are_gated(self):
+        for expected in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "KN_BRANCH"):
+            self.assertIn(expected, self.gates, f"{expected} must be validated via :vtoken")
+
+    def test_every_gate_rejects_malicious(self):
+        for name, pat in self.gates.items():
+            for payload in MALICIOUS:
+                self.assertFalse(_matches(pat, payload), f"{name} gate must reject: {payload!r}")
+
+    def test_every_gate_accepts_its_valid_values(self):
+        for name, pat in self.gates.items():
+            for good in VALID.get(name, []):
+                self.assertTrue(_matches(pat, good), f"{name} gate must accept: {good!r}")
+
+    def test_every_gate_requires_alphanumeric_first_char(self):
+        for name, pat in self.gates.items():
+            self.assertTrue(
+                pat.startswith("^[A-Za-z0-9]"),
+                f"{name} gate must anchor an alphanumeric first char (blocks leading -/--), got: {pat}",
             )
+            for lead in ("-x", "--upload-pack", "-"):
+                self.assertFalse(_matches(pat, lead), f"{name} must reject {lead!r}")
 
-    def test_branch_allowlist_rejects_malicious(self):
-        for payload in MALICIOUS:
-            self.assertFalse(
-                _matches(self.branch_pat, payload),
-                f"KN_BRANCH allow-list must reject: {payload!r}",
-            )
-
+    # -- KN_PICK index classifier ---------------------------------------------
     def test_pick_classifier_rejects_non_numeric_and_injection(self):
-        # KN_PICK is only ever treated as an index when it matches; anything
-        # else (including injection payloads) falls through to a name and is
-        # then re-validated by the KN_BRANCH allow-list.
         for payload in MALICIOUS + ["1a", "-1", "0"]:
-            self.assertFalse(
-                _matches(self.pick_pat, payload),
-                f"KN_PICK index classifier must not match: {payload!r}",
-            )
+            self.assertFalse(_matches(self.pick_pat, payload), f"KN_PICK must not match: {payload!r}")
         for good in ["1", "2", "17"]:
             self.assertTrue(_matches(self.pick_pat, good), good)
 
-    # -- the allow-lists still accept the legitimate values -------------------
-    def test_url_allowlist_accepts_valid(self):
-        for url in VALID_URLS:
-            self.assertTrue(_matches(self.url_pat, url), url)
-
-    def test_branch_allowlist_accepts_valid(self):
-        for branch in VALID_BRANCHES:
-            self.assertTrue(_matches(self.branch_pat, branch), branch)
-
-    # -- leading-hyphen (git argument injection) is specifically blocked ------
-    def test_allowlists_require_alphanumeric_first_char(self):
-        for label, pat in (
-            ("KN_URL", self.url_pat),
-            ("KN_BRANCH", self.branch_pat),
-        ):
-            self.assertTrue(
-                pat.startswith("^[A-Za-z0-9]"),
-                f"{label} allow-list must anchor an alphanumeric first char, got: {pat}",
-            )
-            for lead in ("-x", "--upload-pack", "-"):
-                self.assertFalse(_matches(pat, lead), f"{label} must reject {lead!r}")
-
     # -- structural guarantees in the script itself ---------------------------
+    def test_validation_is_centralized_in_one_helper(self):
+        self.assertIn(":vtoken", self.code, "a shared :vtoken gate must exist")
+        # No ad-hoc per-variable -notmatch/-match allow-list should remain
+        # outside the shared helper (KN_PICK's classifier is the only -match).
+        stray = re.findall(r"KN_(?:URL|BRANCH|REL_\w+) -(?:not)?match", self.code)
+        self.assertEqual(stray, [], f"untrusted vars must be gated only via :vtoken, found stray: {stray}")
+
     def test_git_ls_remote_uses_end_of_options_separator(self):
         self.assertRegex(
-            self.text,
+            self.code,
             r"git ls-remote --heads -- \"%KN_URL%\"",
             "git ls-remote must pass KN_URL after a `--` end-of-options marker",
         )
 
     def test_no_single_quote_interpolation_of_untrusted_values(self):
-        # The appsettings edit must read $env:*, never concatenate '%VAR%' into
-        # the PowerShell -Command string (the original breakout vector).
         for var in ("KN_BRANCH", "KN_URL", "KN_MODE", "KN_REL_OWNER", "KN_REL_API"):
             self.assertNotIn(
                 f"'%{var}%'",
@@ -171,16 +161,29 @@ class BuildDevToolchainValidationTests(unittest.TestCase):
             "KN_PICK must not be piped through echo|findstr (child-shell re-parse)",
         )
 
-    def test_untrusted_values_are_validated_before_first_use(self):
-        # KN_URL validation must precede the git ls-remote that consumes it, and
-        # KN_BRANCH validation must precede the appsettings edit that reads it.
-        url_check = self.text.index("KN_URL -notmatch")
-        ls_remote = self.text.index("git ls-remote --heads --")
-        self.assertLess(url_check, ls_remote, "KN_URL must be validated before ls-remote")
+    def test_release_mode_resets_allow_unsequenced_flag(self):
+        # Branch mode enables the flag; release mode must reset it to false so a
+        # later switch back to release does not leave the signed-bundle trust
+        # model durably weakened.
+        self.assertRegex(
+            self.code,
+            r"knowledge-allow-unsequenced'\s*=\s*\$true",
+            "branch mode should set knowledge-allow-unsequenced = $true",
+        )
+        self.assertRegex(
+            self.code,
+            r"knowledge-allow-unsequenced'\s*=\s*\$false",
+            "release mode must reset knowledge-allow-unsequenced = $false",
+        )
 
-        branch_check = self.text.index("KN_BRANCH -match")
-        appsettings = self.text.index("appsettings.json update failed")
-        self.assertLess(branch_check, appsettings, "KN_BRANCH must be validated before the appsettings edit")
+    def test_untrusted_values_are_validated_before_first_use(self):
+        url_check = self.code.index("call :vtoken KN_URL")
+        ls_remote = self.code.index("git ls-remote --heads --")
+        self.assertLess(url_check, ls_remote, "KN_URL must be gated before ls-remote")
+
+        branch_check = self.code.index("call :vtoken KN_BRANCH")
+        appsettings = self.code.index("appsettings.json update failed")
+        self.assertLess(branch_check, appsettings, "KN_BRANCH must be gated before the appsettings edit")
 
 
 if __name__ == "__main__":

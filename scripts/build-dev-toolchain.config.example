@@ -1,10 +1,12 @@
 # build-dev-toolchain.config -- local machine paths for build-dev-toolchain.bat
 # Format: KEY=VALUE, one per line. No spaces around '='. Lines starting with '#' are comments.
-# Edit these to match YOUR local checkout layout.
+#
+# SETUP: copy this file to "build-dev-toolchain.config" (same folder) and edit the values for YOUR
+#        machine. The real config is gitignored, so your local paths never show up as a repo diff.
 
 # clio source checkout -- Stage A builds + packs this into the global tool.
-# This is the ONLY required key.
-CLIO_SRC=C:\Projects\clio
+# REQUIRED. Replace the placeholder with the absolute path to your local clio checkout.
+CLIO_SRC=<path-to-your-local-clio-checkout>
 
 # NOTE: the CAADT repo path is NO LONGER configured here. This script lives inside the repo
 # (<repo>\scripts\), so Stage B derives the repo root from its own location and GENERATES the
@@ -14,10 +16,11 @@ CLIO_SRC=C:\Projects\clio
 # MARKETPLACE_NAME=creatio
 
 # clio-knowledge git URL -- Stage C git-override source. Branch is chosen at run time (step [0/7]).
-KN_URL=https://github.com/Advance-Technologies-Foundation/clio-knowledge.git
+# Optional (default: the Advance-Technologies-Foundation/clio-knowledge repo below).
+# KN_URL=https://github.com/Advance-Technologies-Foundation/clio-knowledge.git
 
 # Optional default knowledge branch (skips the step [0/7] menu when set). A script arg overrides this.
 # KN_BRANCH=master
 
-# dotnet build configuration for the clio build/pack.
-CONFIG=Release
+# dotnet build configuration for the clio build/pack. Optional (default: Release).
+# CONFIG=Release
