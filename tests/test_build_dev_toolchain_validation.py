@@ -18,12 +18,22 @@ cmd.exe / PowerShell / dotnet / clio / claude execution is required, so this
 runs on any CI platform.
 """
 
+import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "build-dev-toolchain.bat"
+
+# Windows PowerShell (the .NET regex engine the script actually runs). When present, a subset of the
+# tests re-run the allow-list checks and the Stage C appsettings rewrite through the REAL engine, so a
+# Python-re-vs-.NET-regex divergence (or a behavioural regression in the rewrite) is caught on CI.
+PWSH = shutil.which("powershell") or shutil.which("pwsh")
 
 # Payloads that MUST be rejected by every allow-list. Covers the classes that
 # have bitten this script: quote/backtick/$ PowerShell breakout, cmd operators
@@ -82,6 +92,44 @@ def _matches(dotnet_pattern, value):
     # PowerShell -match on an anchored ^...$ pattern == Python re.search for the
     # single-line values this gate handles.
     return re.search(dotnet_pattern, value) is not None
+
+
+def _ps_match(pattern, value):
+    # Evaluate the gate exactly as the script does: the pattern (a script constant) is inlined into the
+    # -Command, but the untrusted VALUE is passed via $env and never interpolated. Returns True on match.
+    env = dict(os.environ)
+    env["VTOK_VAL"] = value
+    r = subprocess.run(
+        [PWSH, "-NoProfile", "-Command", f"if($env:VTOK_VAL -match '{pattern}'){{exit 0}}else{{exit 1}}"],
+        env=env,
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+def _extract_appsettings_command(text):
+    # Pull the Stage C appsettings rewrite out of the .bat and undo cmd's %%->% reduction so it can run
+    # directly under -Command.
+    line = next(l for l in text.splitlines() if "appsettings.json update failed" in l)
+    pre = 'powershell -NoProfile -Command "'
+    assert line.startswith(pre) and line.endswith('"'), "unexpected appsettings command shape"
+    return line[len(pre):-1].replace("%%", "%")
+
+
+def _run_appsettings(cmd, home, mode, *, branch="", url="https://github.com/x/clio-knowledge.git"):
+    env = dict(os.environ)
+    env.update(
+        CLIO_HOME=home,
+        KN_MODE=mode,
+        KN_BRANCH=branch,
+        KN_URL=url,
+        KN_REL_OWNER="Advance-Technologies-Foundation",
+        KN_REL_REPO="clio-knowledge",
+        KN_REL_ASSET="clio-knowledge-bundle.zip",
+        KN_REL_API="https://api.github.com/",
+    )
+    subprocess.run([PWSH, "-NoProfile", "-Command", cmd], env=env, capture_output=True, check=True)
+    return json.loads((Path(home) / "appsettings.json").read_text(encoding="utf-8"))
 
 
 class BuildDevToolchainValidationTests(unittest.TestCase):
@@ -175,6 +223,45 @@ class BuildDevToolchainValidationTests(unittest.TestCase):
             r"knowledge-allow-unsequenced'\s*=\s*\$false",
             "release mode must reset knowledge-allow-unsequenced = $false",
         )
+
+    # -- REAL-engine checks (Windows PowerShell): parity + behaviour ----------
+    @unittest.skipUnless(PWSH, "PowerShell required to exercise the real .NET regex engine")
+    def test_real_powershell_match_agrees_with_python(self):
+        # Guards against Python-re vs .NET-regex divergence for the exact patterns/payloads the script runs.
+        for name, pat in self.gates.items():
+            for payload in MALICIOUS:
+                self.assertFalse(_ps_match(pat, payload), f"[real PS] {name} must reject {payload!r}")
+            for good in VALID.get(name, []):
+                self.assertTrue(_ps_match(pat, good), f"[real PS] {name} must accept {good!r}")
+        for payload in MALICIOUS:
+            self.assertFalse(_ps_match(self.pick_pat, payload), f"[real PS] KN_PICK must reject {payload!r}")
+        for good in ("1", "2", "17"):
+            self.assertTrue(_ps_match(self.pick_pat, good), f"[real PS] KN_PICK must accept {good!r}")
+
+    @unittest.skipUnless(PWSH, "PowerShell required to execute the Stage C appsettings rewrite")
+    def test_appsettings_rewrite_release_and_branch(self):
+        # Runs the ACTUAL Stage C rewrite (extracted from the .bat) against a fixture, both modes.
+        cmd = _extract_appsettings_command(self.text)
+        seed = {
+            "knowledge": {"sources": {"creatio-curated": {"type": "git", "location": "u", "branch": "old"}}},
+            "features": {"knowledge-allow-unsequenced": True},
+        }
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / "appsettings.json").write_text(json.dumps(seed), encoding="utf-8")
+            # release mode: source becomes github-release AND the flag is reset to false
+            rel = _run_appsettings(cmd, home, "release")
+            src = rel["knowledge"]["sources"]["creatio-curated"]
+            self.assertEqual(src["type"], "github-release")
+            self.assertEqual(src["repository-owner"], "Advance-Technologies-Foundation")
+            self.assertNotIn("branch", src, "release must clear the git branch field")
+            self.assertFalse(rel["features"]["knowledge-allow-unsequenced"], "release must reset the flag to false")
+            # branch mode: source becomes git branch AND the flag is set true
+            br = _run_appsettings(cmd, home, "branch", branch="feature/eng-1")
+            src = br["knowledge"]["sources"]["creatio-curated"]
+            self.assertEqual(src["type"], "git")
+            self.assertEqual(src["branch"], "feature/eng-1")
+            self.assertNotIn("asset-name", src, "branch must clear the release asset field")
+            self.assertTrue(br["features"]["knowledge-allow-unsequenced"], "branch must set the flag true")
 
     def test_untrusted_values_are_validated_before_first_use(self):
         url_check = self.code.index("call :vtoken KN_URL")
