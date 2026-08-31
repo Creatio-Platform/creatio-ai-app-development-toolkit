@@ -112,7 +112,8 @@ def _extract_appsettings_command(text):
     # directly under -Command.
     line = next(l for l in text.splitlines() if "appsettings.json update failed" in l)
     pre = 'powershell -NoProfile -Command "'
-    assert line.startswith(pre) and line.endswith('"'), "unexpected appsettings command shape"
+    assert line.startswith(pre), "appsettings command must start with the powershell -Command prefix"
+    assert line.endswith('"'), "appsettings command must end with the closing quote"
     return line[len(pre):-1].replace("%%", "%")
 
 
