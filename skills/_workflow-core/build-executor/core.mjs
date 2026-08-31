@@ -353,7 +353,7 @@ let unconsumed = []
       if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
         log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
       }
-      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = the \`id\` of every row you wrote. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
+      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
       // PR #128 review (N2) — THE ANSWER-CHANNEL REPAIR GRANTS RIDE THE CARRY TOO. The grant markers used to be derived
       // from `unconsumedResolutions` on resume, but a transient build death (`!res`) files an unconsumed row WITHOUT
       // spending the grant, so the derivation over-marked those units and denied them their one repair round. Persisted
@@ -1054,11 +1054,18 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       // purpose is surviving a resume. Reported ids are compared against what was handed over; a shortfall does
       // not withhold the carry (the write DID happen, and re-sending it next round is harmless and idempotent),
       // but it is named, because an operator reading a green close is otherwise told nothing.
-      const owedWrite = unconsumed.map((u) => idKey(u.id))
-      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map(idKey))
-      const unconfirmedWrite = owedWrite.filter((id) => !confirmedWrite.has(id))
+      // PAIR-KEYED (PR #128 review, round 16). `(unit, id)` is the identity of an unconsumed answer everywhere
+      // else in this channel, and it has to be here too: `resolutionOwner` hands a `list-*` answer to the list
+      // unit while one is published and to `main` while none is, so the SAME id can sit in the carry under TWO
+      // units -- `hasUnconsumedPair` deliberately keeps both. Keyed on the id alone, a writer confirming one of
+      // those rows cleared the warning for the other one too, which had never been confirmed written.
+      const owedWrite = unconsumed.map((u) => pairKey(u.unit, u.id))
+      // A writer that returns the OLD bare-string shape yields `pairKey(undefined, undefined)`, which matches
+      // nothing -- so it warns about every row rather than silently confirming one. Fail loud, not fail silent.
+      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map((w) => pairKey(w?.unit, w?.id)))
+      const unconfirmedWrite = owedWrite.filter((k) => !confirmedWrite.has(k))
       if (unconfirmedWrite.length) {
-        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((id) => `\`${id}\``).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((k) => { const p = pairParts(k); return `\`${p.unit}\`/\`${p.id}\`` }).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
       }
       markCarryPersisted()
     }

@@ -436,7 +436,6 @@ function summary(run) {
 //             hole — including a batch of ONE — because `parallel()` never rejects
 //             and the core is written against that contract.
 
-
 // `execute(item)` must resolve `{ outcome, value?, error? }` — never throw. An
 // adapter that lets an exception escape would abort the whole run on a failure
 // the core is written to survive, so the driver normalises here rather than
@@ -1716,7 +1715,6 @@ function verifierSchemaTable(fetchKeys, unitKeys, schemas) {
   return `PAGE KEY → FREEDOM SCHEMA, FETCH THIS ROUND (the queue's record; a key is a ROLE, never a schema name, so this table is the only way to know what to fetch):\n${lines}${keepLine}${unknownLine}`
 }
 
-
 // THE PREFLIGHT FAN-OUT WIDTH, as arithmetic. `MAX_PREFLIGHT` caps the number of agents, so the BATCH size is the
 // items divided by that cap — an item is never dropped and never handed to two agents. Pure and here (rather than
 // inline in the phase) so the packing is unit-tested instead of read.
@@ -2786,7 +2784,14 @@ const PERSIST_SCHEMA = {
     // ENG-95503 / PR #128 review -- the ids actually persisted for `unconsumedResolutions`. Reported for the same
     // reason `evidenceWritten` is: this list is the ONLY record of a well-formed `applied: false`, and a write
     // nobody confirmed is exactly how it went missing across a resume.
-    unconsumedWritten: { type: 'array', items: { type: 'string' } },
+    // PR #128 review (round 16) -- `{unit, id}` PAIRS, not bare ids. The pair is the identity of an unconsumed
+    // answer everywhere else in this channel (`pairKey`, `hasUnconsumedPair`, `resolutionsReopened`), and for a
+    // reason: `resolutionOwner` routes a `list-*` answer to the list unit when one is published and to `main`
+    // when none is, so ONE id can sit in the carry under TWO units across rounds. Reported as bare ids, a writer
+    // confirming one unit's row silenced the warning for the other unit's row as well -- the silent loss this
+    // channel exists to close, in the one check that was id-only.
+    unconsumedWritten: { type: 'array', items: { type: 'object', required: ['unit', 'id'],
+      properties: { unit: { type: 'string' }, id: { type: 'string' } } } },
     notes: { type: 'string' },
   },
 }
@@ -2828,7 +2833,6 @@ const PACKAGE_RECORD_SCHEMA = {
 // literal that becomes an agent's PROMPT, so indenting the source would indent the prompt text — a silent change
 // to the contract every phase is handed. `run-workflow-parity.mjs` compares the prompt text of the shipped script
 // against the hand-written original byte for byte, which is how that was caught the first time.
-
 
 const REQUIRED_INPUTS = ['manifest', 'environment', 'outDir', 'planFile']
 
@@ -3205,8 +3209,6 @@ return { unitNoOf, readablePart, unitFileStem, specFile, worklogFile, sharedWork
 // in `checkpointAfter` so a human can open that page on the stand and exercise it · `guided` stops after every
 // unit. A stop is always a PAGE BOUNDARY and always returns `stopped: 'paused-at-checkpoint'` — never `complete`.
 
-
-
 // The CLI validates an input before it writes a run file, and it calls `assertInput(input)` with ONE argument for
 // every workflow. This run's required set includes the ENGINE, which is RESOLVED rather than passed — so the
 // one-argument form resolves it first, from the caller's own file location.
@@ -3504,7 +3506,7 @@ let unconsumed = []
       if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
         log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
       }
-      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = the \`id\` of every row you wrote. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
+      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
       // PR #128 review (N2) — THE ANSWER-CHANNEL REPAIR GRANTS RIDE THE CARRY TOO. The grant markers used to be derived
       // from `unconsumedResolutions` on resume, but a transient build death (`!res`) files an unconsumed row WITHOUT
       // spending the grant, so the derivation over-marked those units and denied them their one repair round. Persisted
@@ -4205,11 +4207,18 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       // purpose is surviving a resume. Reported ids are compared against what was handed over; a shortfall does
       // not withhold the carry (the write DID happen, and re-sending it next round is harmless and idempotent),
       // but it is named, because an operator reading a green close is otherwise told nothing.
-      const owedWrite = unconsumed.map((u) => idKey(u.id))
-      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map(idKey))
-      const unconfirmedWrite = owedWrite.filter((id) => !confirmedWrite.has(id))
+      // PAIR-KEYED (PR #128 review, round 16). `(unit, id)` is the identity of an unconsumed answer everywhere
+      // else in this channel, and it has to be here too: `resolutionOwner` hands a `list-*` answer to the list
+      // unit while one is published and to `main` while none is, so the SAME id can sit in the carry under TWO
+      // units -- `hasUnconsumedPair` deliberately keeps both. Keyed on the id alone, a writer confirming one of
+      // those rows cleared the warning for the other one too, which had never been confirmed written.
+      const owedWrite = unconsumed.map((u) => pairKey(u.unit, u.id))
+      // A writer that returns the OLD bare-string shape yields `pairKey(undefined, undefined)`, which matches
+      // nothing -- so it warns about every row rather than silently confirming one. Fail loud, not fail silent.
+      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map((w) => pairKey(w?.unit, w?.id)))
+      const unconfirmedWrite = owedWrite.filter((k) => !confirmedWrite.has(k))
       if (unconfirmedWrite.length) {
-        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((id) => `\`${id}\``).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((k) => { const p = pairParts(k); return `\`${p.unit}\`/\`${p.id}\`` }).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
       }
       markCarryPersisted()
     }
@@ -5773,7 +5782,6 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
 // to an `agent()` call and an outcome back to the protocol's three states — and
 // that is deliberately all it does, so a second host cannot end up with a
 // different rule for what "the phase died" means.
-
 
 // The Claude Workflow contract, stated as capabilities:
 //  - sub-agents and independent roles: `agent()` spawns a fresh context, so a

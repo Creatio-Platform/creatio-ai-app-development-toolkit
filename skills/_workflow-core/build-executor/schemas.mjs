@@ -687,7 +687,14 @@ export const PERSIST_SCHEMA = {
     // ENG-95503 / PR #128 review -- the ids actually persisted for `unconsumedResolutions`. Reported for the same
     // reason `evidenceWritten` is: this list is the ONLY record of a well-formed `applied: false`, and a write
     // nobody confirmed is exactly how it went missing across a resume.
-    unconsumedWritten: { type: 'array', items: { type: 'string' } },
+    // PR #128 review (round 16) -- `{unit, id}` PAIRS, not bare ids. The pair is the identity of an unconsumed
+    // answer everywhere else in this channel (`pairKey`, `hasUnconsumedPair`, `resolutionsReopened`), and for a
+    // reason: `resolutionOwner` routes a `list-*` answer to the list unit when one is published and to `main`
+    // when none is, so ONE id can sit in the carry under TWO units across rounds. Reported as bare ids, a writer
+    // confirming one unit's row silenced the warning for the other unit's row as well -- the silent loss this
+    // channel exists to close, in the one check that was id-only.
+    unconsumedWritten: { type: 'array', items: { type: 'object', required: ['unit', 'id'],
+      properties: { unit: { type: 'string' }, id: { type: 'string' } } } },
     notes: { type: 'string' },
   },
 }

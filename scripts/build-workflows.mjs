@@ -89,7 +89,12 @@ function isReExport(line) {
 }
 
 function inlineOne(rel) {
-  const src = readFileSync(path.join(CORE, rel), 'utf8')
+  // LF AT READ, not at return (PR #128 review). Every transform below is LF-shaped -- notably the blank-run
+  // collapse in this function's own `return`, whose three-or-more-newline regex cannot match a CRLF blank run.
+  // Normalising the assembled text at the END fixes the line endings but CANNOT undo a collapse that never
+  // fired, so the artifact still depended on the checkout -- in whitespace instead of in every line. Normalise
+  // the bytes as they arrive and every transform sees the same input on every machine.
+  const src = readFileSync(path.join(CORE, rel), 'utf8').replace(/\r\n/g, '\n')
   const out = []
   let skipping = false
   for (const line of src.split('\n')) {
@@ -118,7 +123,8 @@ function topLevelNames(text) {
 }
 
 function build(target) {
-  const template = readFileSync(path.join(CORE, target.template), 'utf8')
+  // Same reason as `inlineOne`: the template is concatenated with the inlined block and scanned for sentinels.
+  const template = readFileSync(path.join(CORE, target.template), 'utf8').replace(/\r\n/g, '\n')
   if (!template.includes(PLACEHOLDER)) throw new Error(`${target.template}: no ${PLACEHOLDER} placeholder`)
   if (!template.includes(BEGIN) || !template.includes(END)) throw new Error(`${target.template}: the pure-helper sentinels are missing — the offline suite slices the shipped file on them`)
 
@@ -149,7 +155,9 @@ function build(target) {
   // carries no CR — but the core modules are ordinary `.mjs`, so on a machine with `core.autocrlf=true` they check
   // out CRLF and every line of this assembly inherits it. The generated text then differs from the shipped file on
   // EVERY line: `--check` fails for a Windows contributor who changed nothing, and a real regeneration lands as a
-  // whole-file diff that hides the actual change. Normalising here makes the artifact byte-identical on any checkout.
+  // whole-file diff that hides the actual change. The normalisation that MAKES the artifact checkout-independent
+  // is now at READ (see `inlineOne`); this one is belt-and-braces for anything a template could reintroduce, and
+  // is kept deliberately rather than removed.
   return text.replace(/\r\n/g, '\n')
 }
 

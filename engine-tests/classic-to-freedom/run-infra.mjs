@@ -2832,11 +2832,32 @@ check("PR #128 review (round 9, J2): the record site writes the LITERAL, not a r
 
 // Minor 1 — `unconsumedWritten` is DEMANDED, so it is READ.
 check("PR #128 (approving round, Minor 1): the persister's `unconsumedWritten` is compared against the rows handed over — `written: true` says the agent wrote the FILE, not that it wrote THIS key, so a multi-part merge that dropped `unconsumedResolutions` used to advance the carry over rows that never landed",
-  /const owedWrite = unconsumed\.map\(\(u\) => idKey\(u\.id\)\)/.test(wfSrc)
-    && /const confirmedWrite = new Set\(\(persisted\.unconsumedWritten \|\| \[\]\)\.map\(idKey\)\)/.test(wfSrc)
+  /const owedWrite = unconsumed\.map\(\(u\) => pairKey\(u\.unit, u\.id\)\)/.test(wfSrc)
+    && /const confirmedWrite = new Set\(\(persisted\.unconsumedWritten \|\| \[\]\)\.map\(\(w\) => pairKey\(w\?\.unit, w\?\.id\)\)\)/.test(wfSrc)
     && /did NOT report writing \$\{unconfirmedWrite\.length\} unconsumed-answer row\(s\)/.test(wfSrc)
     // and the carry is still marked: the write DID happen, re-sending is idempotent, so this reports rather than blocks
-    && /unconfirmedWrite\.length\) \{[\s\S]{0,400}?\}\s*\n\s*markCarryPersisted\(\)/.test(wfSrc));
+    && /unconfirmedWrite\.length\) \{[\s\S]{0,500}?\}\s*\n\s*markCarryPersisted\(\)/.test(wfSrc));
+/* PR #128 review (round 16, Major) — AND THE CONFIRMATION IS PAIR-KEYED. `owedWrite` compared on `idKey(u.id)`
+   alone while every other identity in this channel is the `(unit, id)` pair. The collision is REACHABLE, not
+   theoretical: `resolutionOwner` routes a `list-*` answer to the LIST unit while one is published and to `main`
+   while none is, so one id lands in the carry under two different units across rounds — and `hasUnconsumedPair`
+   deliberately keeps both rows. Keyed on the id, a writer confirming ONE of them cleared the warning for the
+   OTHER, which was never confirmed written: the silent loss this whole channel exists to close, reintroduced in
+   the one check that was id-only. Executed over the real helpers, not regexed, and the NUL composite never
+   reaches the operator — the round-7 G1 Blocker. */
+check("PR #128 review (round 16): two units carrying the SAME unconsumed id are confirmed INDEPENDENTLY — a writer that reports only one of them leaves the other named in the warning, and the rendered warning names `unit`/`id`, never the NUL-delimited composite",
+  () => { const ID = "main#confirm:list-columns:(3 columns)";
+    const carry = [{ unit: "list", id: ID }, { unit: "main", id: ID }];
+    const owed = carry.map((u) => wf.pairKey(u.unit, u.id));
+    // the writer confirms the LIST unit's row only
+    const confirmed = new Set([{ unit: "list", id: ID }].map((w) => wf.pairKey(w?.unit, w?.id)));
+    const unconfirmed = owed.filter((k) => !confirmed.has(k));
+    const rendered = unconfirmed.map((k) => { const p = wf.pairParts(k); return `${p.unit}/${p.id}`; });
+    // id-only keying collapses the two rows to one and confirms both — the defect, asserted as the contrast
+    const idOnly = carry.map((u) => wf.idKey(u.id)).filter((k) => !new Set([wf.idKey(ID)]).has(k));
+    return unconfirmed.length === 1 && rendered.length === 1 && rendered[0] === `main/${ID}`
+      && !rendered.some((r) => r.includes("\u0000")) && idOnly.length === 0; },
+  () => JSON.stringify({ pairKeyed: 1, idKeyed: 0 }));
 
 // Minor 2 — a dispatch that never ran files no contract-breach row against a builder that never answered.
 check("PR #128 (approving round, Minor 2): the `blockedItems` write is gated on `dispatched` — on the `!res` path `resolutionAccountingMiss(routed, null)` always yields a miss, so this filed a contract breach against a builder that never ran, and `blockedItems` is what the operator reads",

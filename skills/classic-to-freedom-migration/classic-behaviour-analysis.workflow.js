@@ -390,7 +390,6 @@ function summary(run) {
 //             hole — including a batch of ONE — because `parallel()` never rejects
 //             and the core is written against that contract.
 
-
 // `execute(item)` must resolve `{ outcome, value?, error? }` — never throw. An
 // adapter that lets an exception escape would abort the whole run on a failure
 // the core is written to survive, so the driver normalises here rather than
@@ -1084,7 +1083,6 @@ PRODUCE:
 // everything" is not evidence, and that is exactly how a real run left the child
 // pages at 0-of-8 described while the plan showed nothing wrong.
 
-
 const WORKFLOW = 'creatio-classic-behaviour-analysis'
 
 // What a host must be able to do before the run starts. `parallelism` is
@@ -1433,7 +1431,6 @@ function* run(rawInput, io = {}) {
 // to an `agent()` call and an outcome back to the protocol's three states — and
 // that is deliberately all it does, so a second host cannot end up with a
 // different rule for what "the phase died" means.
-
 
 // The Claude Workflow contract, stated as capabilities:
 //  - sub-agents and independent roles: `agent()` spawns a fresh context, so a
