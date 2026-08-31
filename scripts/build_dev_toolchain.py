@@ -12,16 +12,20 @@ Three stages:
     appsettings.json (branch git-override or signed release bundle, chosen at step [0/7]) and runs clio's
     own sync. Best-effort.
   STAGE B (step 7): the CAADT plugin INSTRUCTIONS. Re-points the plugin at THIS repo via a generated local
-    dev marketplace (a TEMP root + a directory junction/symlink to the repo) and reinstalls it.
+    dev marketplace (a per-run PRIVATE temp root + a directory junction/symlink to the repo) and reinstalls it.
 
-Security note: every external command runs via subprocess with a LIST of args (never a shell string), so
-untrusted values (branch names, URLs) cannot be re-parsed by a shell -- the injection class that a batch
-port has to defend against by hand does not exist here. Untrusted values are still validated against a
-strict allow-list (alphanumeric first char, so nothing can look like a `-`/`--` git option) and every git
-call that takes a positional ref/url uses a `--` end-of-options marker, as defense in depth.
+Security notes:
+  * Every external command runs via subprocess with a LIST of args (never a shell string), so untrusted
+    values (branch names, URLs) cannot be re-parsed by a shell -- the injection class a batch/shell port
+    must defend against by hand does not exist here. Untrusted values are still validated against a strict
+    allow-list (alphanumeric first char, so nothing can look like a `-`/`--` git option) and every git call
+    that takes a positional ref/url uses a `--` end-of-options marker, as defense in depth.
+  * All run-time temp artifacts (the NuGet config and the marketplace dir) live under a PRIVATE per-run
+    directory from tempfile.mkdtemp() -- never a fixed name in a shared /tmp -- so a local attacker cannot
+    pre-plant a symlink at a predictable path and have us write through it.
 
-After this finishes you MUST restart the clio MCP server and the Claude Code session (they hold the OLD
-binary/instructions in memory).
+Requires Python 3.7+. After this finishes you MUST restart the clio MCP server and the Claude Code session
+(they hold the OLD binary/instructions in memory).
 """
 
 import argparse
@@ -29,10 +33,11 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 IS_WIN = os.name == "nt"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -146,6 +151,22 @@ def build_marketplace(mp_name, plugin_name, leaf):
     }
 
 
+def nuget_config_xml(pack_out):
+    """The generated local-feed NuGet config. The feed path is XML-attribute-escaped (a CLIO_SRC with
+    & < > or a quote must not be able to malform the config)."""
+    feed = quoteattr(str(pack_out))  # returns the value WITH surrounding quotes
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        "<configuration><packageSources><clear />"
+        f"<add key=\"clio-local\" value={feed} />"
+        '<add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources>'
+        '<packageSourceMapping>'
+        '<packageSource key="clio-local"><package pattern="clio" /></packageSource>'
+        '<packageSource key="nuget.org"><package pattern="*" /></packageSource>'
+        "</packageSourceMapping></configuration>\n"
+    )
+
+
 def clio_home():
     """clio's data dir: $CLIO_HOME override, else the platform LocalApplicationData/creatio/clio."""
     override = os.environ.get("CLIO_HOME")
@@ -158,15 +179,43 @@ def clio_home():
     return Path.home() / ".local" / "share" / "creatio" / "clio"
 
 
+def lock_is_held(path):
+    """True if another process currently holds `path` (matching how clio opens its FileShare.None lock).
+
+    Windows: clio opens the marker with FileShare.None, so any open by us fails while it is held -> held.
+    POSIX:   .NET emulates the share lock as an advisory flock, so we test with a non-blocking exclusive
+             flock (a plain open would succeed even while the server holds it, which is exactly the bug the
+             batch->python port could have introduced). Fail-closed (treat as held) on any error.
+    """
+    try:
+        if IS_WIN:
+            fd = os.open(str(path), os.O_RDWR)
+            os.close(fd)
+            return False
+        import fcntl
+        fd = os.open(str(path), os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        except OSError:
+            return True
+        finally:
+            os.close(fd)
+    except OSError:
+        return True
+
+
 def is_reparse_or_symlink(path):
-    """True if `path` is a symlink (POSIX) or a reparse point/junction (Windows). Fail-closed on error."""
+    """True if `path` is a symlink (POSIX) or a reparse point/junction (Windows). Used for defensive checks."""
     path = Path(path)
     if os.path.islink(path):
         return True
     if IS_WIN:
         try:
+            import stat as _stat
             attrs = os.lstat(path).st_file_attributes
-            return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            return bool(attrs & _stat.FILE_ATTRIBUTE_REPARSE_POINT)
         except (OSError, AttributeError):
             return True
     return False
@@ -178,13 +227,12 @@ def fail(msg, code=1):
     sys.exit(code)
 
 
-def run(cmd, *, check=False, capture=False, cwd=None, quiet=False):
+def run(cmd, *, cwd=None, capture=False, quiet=False):
     """Run a command as a LIST (shell=False). Returns CompletedProcess."""
     if not quiet:
         print("  $ " + " ".join(str(c) for c in cmd))
     return subprocess.run(
         [str(c) for c in cmd],
-        check=check,
         cwd=str(cwd) if cwd else None,
         text=True,
         capture_output=capture,
@@ -209,7 +257,6 @@ def remove_dir_link(link):
         return
     try:
         if IS_WIN:
-            # rmdir (no /S) removes only the link for a junction/dir symlink.
             run(["cmd", "/c", "rmdir", str(link)], capture=True, quiet=True)
         elif os.path.islink(link):
             link.unlink()
@@ -296,7 +343,7 @@ def _pick_branch_interactive(kn_url):
     return pick  # a name; validated by the caller
 
 
-def stage_a_build(cfg):
+def stage_a_build(cfg, run_tmp):
     """[1/7]-[5b/7] build+pack+reinstall the clio global tool; disable autoupdate. Returns (version, autoupdate_off)."""
     clio_src = Path(cfg["CLIO_SRC"])
     config = cfg["CONFIG"]
@@ -304,11 +351,13 @@ def stage_a_build(cfg):
 
     print("\n=== [1/7] Stopping running clio processes (incl. the MCP server) ===")
     if IS_WIN:
-        run(["taskkill", "/F", "/IM", "clio.exe", "/T"], capture=True, quiet=True)
+        stopped = run(["taskkill", "/F", "/IM", "clio.exe", "/T"], capture=True, quiet=True).returncode == 0
     else:
-        run(["pkill", "-x", "clio"], capture=True, quiet=True)
-        run(["pkill", "-f", "clio mcp-server"], capture=True, quiet=True)
-    print("Stopped running clio process(es) if any.")
+        # pkill -x matches the exact process name `clio` -- that is the global-tool apphost, which is also
+        # what `clio mcp-server` runs as. NOT `pkill -f clio`, which would kill any command line mentioning
+        # clio (an editor, a tail, a wrapper script).
+        stopped = run(["pkill", "-x", "clio"], capture=True, quiet=True).returncode == 0
+    print("Stopped running clio process(es)." if stopped else "No running clio process found.")
 
     print("\n=== [2/7] Resolving version from latest git tag ===")
     version = FALLBACK_VERSION
@@ -340,9 +389,9 @@ def stage_a_build(cfg):
 
     print("\n=== [4/7] Reinstalling clio global tool ===")
     # uninstall+install (not `tool update`): when the tag is unchanged, update sees the same version and
-    # does nothing. --configfile maps the `clio` package to the local artifacts feed (the machine config may
-    # use package-source mapping, which forbids --add-source).
-    nuget_config = _write_nuget_config(pack_out)
+    # does nothing. --configfile maps the `clio` package to the local artifacts feed.
+    nuget_config = run_tmp / "clio-rebuild.nuget.config"
+    nuget_config.write_text(nuget_config_xml(pack_out), encoding="utf-8")
     run(["dotnet", "tool", "uninstall", "-g", "clio"], capture=True, quiet=True)
     if run(["dotnet", "tool", "install", "-g", "clio", "--version", version,
             "--configfile", str(nuget_config)]).returncode:
@@ -358,23 +407,6 @@ def stage_a_build(cfg):
         print("  [warn] 'clio autoupdate --disable' FAILED -- the next clio launch may OVERWRITE this local "
               "build with the released nuget version. Re-run, or disable it manually.")
     return version, autoupdate_off
-
-
-def _write_nuget_config(pack_out):
-    import tempfile
-    path = Path(tempfile.gettempdir()) / "clio-rebuild.nuget.config"
-    path.write_text(
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        "<configuration><packageSources><clear />"
-        f'<add key="clio-local" value="{pack_out}" />'
-        '<add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources>'
-        '<packageSourceMapping>'
-        '<packageSource key="clio-local"><package pattern="clio" /></packageSource>'
-        '<packageSource key="nuget.org"><package pattern="*" /></packageSource>'
-        "</packageSourceMapping></configuration>\n",
-        encoding="utf-8",
-    )
-    return path
 
 
 def stage_c_knowledge(cfg, mode, branch):
@@ -404,7 +436,7 @@ def stage_c_knowledge(cfg, mode, branch):
             appsettings.write_text(json.dumps(data, indent=2), encoding="utf-8")
             if mode == "release":
                 print(f"  [kn] creatio-curated -> github-release {cfg['KN_REL_OWNER']}/{cfg['KN_REL_REPO']} "
-                      f"asset {cfg['KN_REL_ASSET']} (latest); allow-unsequenced=false")
+                      f"asset {cfg['KN_REL_ASSET']} (latest); allow-unsequenced reset to false")
             else:
                 kind = "tag" if re.match(r"\d+\.\d+", branch or "") else "branch"
                 print(f"  [kn] creatio-curated -> {kind} {branch}; allow-unsequenced=true")
@@ -451,9 +483,12 @@ def _refresh_knowledge_git_cache(home):
                       "refs; synced knowledge may be stale")
 
 
-def stage_b_plugin(cfg, plugin_name):
-    """[7/7] Generate the local dev marketplace + reinstall the plugin. Returns True on success."""
-    import tempfile
+def stage_b_plugin(cfg, plugin_name, run_tmp):
+    """[7/7] Generate the local dev marketplace + reinstall the plugin. Returns True on success.
+
+    Never calls fail(): recoverable errors return False so the caller still runs the [cleanup] step and the
+    completion banner (matching the .bat's single :done exit funnel).
+    """
     print("\n=== [7/7] Refreshing CAADT plugin instructions (Claude Code) ===")
     if which("claude") is None:
         print("claude CLI not found on PATH - SKIPPING plugin-instruction refresh.")
@@ -466,37 +501,35 @@ def stage_b_plugin(cfg, plugin_name):
 
     marketplace_name = cfg["MARKETPLACE_NAME"]
     plugin_source = f"{plugin_name}@{marketplace_name}"
-    gen_mp_dir = Path(tempfile.gettempdir()) / "clio-rebuild-marketplace"
     leaf = REPO_ROOT.name
-    mp_root = gen_mp_dir
+    # A PRIVATE per-run dir under run_tmp (from mkdtemp, mode 0700 on POSIX) -- not a fixed name in shared
+    # /tmp -- so nothing can be pre-planted at a predictable path for us to write through.
+    marketplace_dir = Path(run_tmp) / "marketplace"
+    marketplace_dir.mkdir(parents=True, exist_ok=True)
+    mp_root = marketplace_dir
+    link_path = marketplace_dir / leaf
+    linked = make_dir_link(link_path, REPO_ROOT)
     fallback_json = None
-
-    # Safety guard for the fixed TEMP path: refuse only a junction/symlink redirect; adopt a plain dir.
-    if gen_mp_dir.exists():
-        if is_reparse_or_symlink(gen_mp_dir):
-            fail(f"MARKETPLACE TEMP DIR IS A JUNCTION/SYMLINK, not a normal directory:\n  {gen_mp_dir}\n"
-                 "Refusing to write through a redirected path (possible squatting on a shared TEMP). "
-                 "Remove it and re-run.")
-    else:
-        gen_mp_dir.mkdir(parents=True, exist_ok=True)
-    (gen_mp_dir / ".build-dev-toolchain-owned").write_text(
-        "generated by build_dev_toolchain.py -- safe to delete when not rebuilding\n", encoding="utf-8")
-    (gen_mp_dir / ".claude-plugin").mkdir(parents=True, exist_ok=True)
-
-    if not make_dir_link(gen_mp_dir / leaf, REPO_ROOT):
-        # No junction/symlink available -> use the repo's PARENT as the marketplace root (descending ./<leaf>).
+    if not linked:
+        # No junction/symlink available -> use the repo's PARENT (user-owned, not shared /tmp) as the root,
+        # with the descending ./<leaf> resolving to the repo itself. Its marketplace.json is cleaned below.
         mp_root = REPO_ROOT.parent
         fallback_json = mp_root / ".claude-plugin" / "marketplace.json"
         print("  [mp] directory link unavailable -- using the repo's parent as the marketplace root:")
         print(f"       {mp_root} (its .claude-plugin/marketplace.json is removed after install).")
 
     print(f"- generating local dev marketplace (root: {mp_root}; plugin source: ./{leaf} -> {REPO_ROOT})")
-    mp_dir = mp_root / ".claude-plugin"
-    mp_dir.mkdir(parents=True, exist_ok=True)
-    (mp_dir / "marketplace.json").write_text(
-        json.dumps(build_marketplace(marketplace_name, plugin_name, leaf), indent=2), encoding="utf-8")
-
     ok = True
+    try:
+        mp_dir = mp_root / ".claude-plugin"
+        mp_dir.mkdir(parents=True, exist_ok=True)
+        (mp_dir / "marketplace.json").write_text(
+            json.dumps(build_marketplace(marketplace_name, plugin_name, leaf), indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"\nMARKETPLACE GENERATION FAILED: {exc}")
+        _cleanup_stage_b(link_path if linked else None, fallback_json)
+        return False
+
     try:
         print("- uninstalling existing plugin (ignored if absent)")
         run(["claude", "plugin", "uninstall", plugin_source], capture=True, quiet=True)
@@ -514,18 +547,28 @@ def stage_b_plugin(cfg, plugin_name):
         if ok:
             print("- deduplicating clio MCP server")
             # Remove a user-scope 'clio' duplicate so Claude Code doesn't spawn two contending mcp-servers.
-            run(["claude", "mcp", "remove", "clio", "-s", "user"], capture=True, quiet=True)
+            r = run(["claude", "mcp", "remove", "clio", "-s", "user"], capture=True, quiet=True)
+            print("  removed user-scope 'clio' duplicate (plugin's clio remains)." if r.returncode == 0
+                  else "  no user-scope 'clio' duplicate (ok).")
     finally:
-        if fallback_json and fallback_json.exists():
-            try:
-                fallback_json.unlink()
-                parent = fallback_json.parent
-                if parent.name == ".claude-plugin" and not any(parent.iterdir()):
-                    parent.rmdir()
-                print(f"  - removed fallback marketplace artifact outside TEMP: {fallback_json}")
-            except OSError:
-                pass
+        _cleanup_stage_b(link_path if linked else None, fallback_json)
     return ok
+
+
+def _cleanup_stage_b(link_path, fallback_json):
+    # Remove the leaf junction/symlink first so the later rmtree of the private run dir can never follow it
+    # into the repo; then drop the out-of-TEMP fallback artifact if one was written.
+    if link_path is not None:
+        remove_dir_link(link_path)
+    if fallback_json and Path(fallback_json).exists():
+        try:
+            Path(fallback_json).unlink()
+            parent = Path(fallback_json).parent
+            if parent.name == ".claude-plugin" and not any(parent.iterdir()):
+                parent.rmdir()
+            print(f"  - removed fallback marketplace artifact outside TEMP: {fallback_json}")
+        except OSError:
+            pass
 
 
 def cleanup_locks():
@@ -535,11 +578,13 @@ def cleanup_locks():
         print("  - no .locks directory (nothing to clean)")
         return
     removed = 0
-    for lock in locks.glob("*.lock"):
+    for lock in sorted(locks.glob("*.lock")):
+        # Never disturb a marker a live clio server still holds (Windows: share-violation on open;
+        # POSIX: a conflicting advisory flock).
+        if lock_is_held(lock):
+            print(f"  - kept in-use lock: {lock.name}")
+            continue
         try:
-            # Best-effort: on Windows a lock still held by a live server fails to open/remove and is KEPT.
-            with open(lock, "r+"):
-                pass
             lock.unlink()
             removed += 1
             print(f"  - removed stale lock: {lock.name}")
@@ -559,6 +604,9 @@ def resolve_plugin_name():
 
 # ------------------------------------------------------------------ main -------------------------------
 def main(argv=None):
+    if sys.version_info < (3, 7):
+        sys.exit("build_dev_toolchain requires Python 3.7+ (found %d.%d)." % sys.version_info[:2])
+
     parser = argparse.ArgumentParser(description="Cross-platform local dev rebuild for the Creatio AI toolchain.")
     parser.add_argument("ref", nargs="?", default=None,
                         help="'release' for the signed bundle, or a clio-knowledge branch/tag name.")
@@ -587,10 +635,17 @@ def main(argv=None):
     print("\n=== [0/7] Selecting knowledge source (mode + ref) ===")
     mode, branch = select_knowledge_source(args, cfg)
 
-    version, autoupdate_off = stage_a_build(cfg)
-    stage_c_knowledge(cfg, mode, branch)
-    stage_b_ok = stage_b_plugin(cfg, plugin_name)
-    cleanup_locks()
+    # One PRIVATE per-run temp root for the NuGet config + the marketplace dir. Removed at the end so
+    # nothing is left in TEMP and no fixed shared path exists to squat.
+    run_tmp = Path(tempfile.mkdtemp(prefix="clio-rebuild-"))
+    stage_b_ok = True
+    try:
+        version, autoupdate_off = stage_a_build(cfg, run_tmp)
+        stage_c_knowledge(cfg, mode, branch)
+        stage_b_ok = stage_b_plugin(cfg, plugin_name, run_tmp)
+        cleanup_locks()
+    finally:
+        shutil.rmtree(run_tmp, ignore_errors=True)
 
     print("\n" + "=" * 75)
     if not stage_b_ok:
@@ -607,8 +662,10 @@ def main(argv=None):
               "disabled -- the next clio launch may OVERWRITE this local build (clio autoupdate --disable).")
     print("  STAGE C: Clio knowledge base synced from "
           + ("latest signed RELEASE" if mode == "release" else f"branch {branch}") + " (if reachable).")
-    print("  STAGE B: CAADT plugin re-pointed at the local checkout and reinstalled.")
+    print("  STAGE B: CAADT plugin re-pointed at the local checkout and reinstalled;")
+    print("           user-scope 'clio' MCP duplicate removed (one server = no lock contention).")
     print("  NEXT - FULLY restart Claude Code (quit and reopen) so ONE fresh clio server loads the new binary.")
+    print("         Confirm afterwards that exactly ONE clio process is running.")
     print("=" * 75)
 
 

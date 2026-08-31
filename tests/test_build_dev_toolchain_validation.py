@@ -8,9 +8,14 @@ functions directly with the SAME regex engine the driver runs at runtime, so the
 divergence to worry about.
 """
 
+import argparse
 import importlib.util
+import os
+import re
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER_PATH = ROOT / "scripts" / "build_dev_toolchain.py"
@@ -155,30 +160,104 @@ class OtherLogicTests(unittest.TestCase):
         self.assertTrue(cfg["KN_URL"].endswith("clio-knowledge.git"))
 
     def test_clio_home_respects_override(self):
-        import os
-        old = os.environ.get("CLIO_HOME")
-        os.environ["CLIO_HOME"] = os.path.join("tmp", "clh")
-        try:
+        with mock.patch.dict(os.environ, {"CLIO_HOME": os.path.join("tmp", "clh")}):
             self.assertEqual(bdt.clio_home(), Path(os.path.join("tmp", "clh")))
-        finally:
-            if old is None:
-                os.environ.pop("CLIO_HOME", None)
-            else:
-                os.environ["CLIO_HOME"] = old
+
+    def test_nuget_config_escapes_the_feed_path(self):
+        # A CLIO_SRC (hence pack_out) with XML metacharacters must not break out of the attribute.
+        xml = bdt.nuget_config_xml('C:\\a & b <"x">')
+        self.assertNotIn('value="C:\\a & b', xml, "the raw & / < / \" must be escaped, not written verbatim")
+        self.assertIn("&amp;", xml)
+        self.assertIn("&lt;", xml)
+
+
+class SelectKnowledgeSourceTests(unittest.TestCase):
+    def _cfg(self):
+        return bdt.apply_defaults({"CLIO_SRC": "x"})
+
+    def _select(self, ref, env=None):
+        args = argparse.Namespace(ref=ref)
+        with mock.patch.dict(os.environ, env or {}, clear=False):
+            # ensure the two env keys are absent unless the test sets them
+            for k in ("KN_MODE", "KN_BRANCH"):
+                if (env or {}).get(k) is None:
+                    os.environ.pop(k, None)
+            with mock.patch.object(bdt.sys.stdin, "isatty", return_value=False):
+                return bdt.select_knowledge_source(args, self._cfg())
+
+    def test_release_argument(self):
+        self.assertEqual(self._select("release"), ("release", ""))
+
+    def test_branch_name_argument(self):
+        self.assertEqual(self._select("feature/eng-1"), ("branch", "feature/eng-1"))
+
+    def test_env_mode_release_wins_when_no_arg(self):
+        self.assertEqual(self._select(None, {"KN_MODE": "release"}), ("release", ""))
+
+    def test_no_input_defaults_to_release(self):
+        self.assertEqual(self._select(None), ("release", ""))
+
+    def test_injection_branch_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self._select('x"&calc&"')
+
+
+class FilesystemHelperTests(unittest.TestCase):
+    def test_make_and_remove_dir_link_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = root / "target"
+            target.mkdir()
+            (target / "marker.txt").write_text("hi", encoding="utf-8")
+            link = root / "link"
+            self.assertTrue(bdt.make_dir_link(link, target), "should create a junction/symlink")
+            self.assertTrue((link / "marker.txt").exists(), "content is reachable through the link")
+            bdt.remove_dir_link(link)
+            self.assertFalse(os.path.lexists(link), "the link is gone")
+            self.assertTrue((target / "marker.txt").exists(), "the target's content is untouched")
+
+    def test_lock_is_held_false_for_free_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            lock = Path(d) / "x.lock"
+            lock.write_text("", encoding="utf-8")
+            self.assertFalse(bdt.lock_is_held(lock))
+
+    def test_cleanup_locks_removes_free_markers(self):
+        with tempfile.TemporaryDirectory() as d:
+            locks = Path(d) / "knowledge" / "sources" / ".locks"
+            locks.mkdir(parents=True)
+            (locks / "a.lock").write_text("", encoding="utf-8")
+            (locks / "b.lock").write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CLIO_HOME": d}):
+                bdt.cleanup_locks()
+            self.assertFalse((locks / "a.lock").exists())
+            self.assertFalse((locks / "b.lock").exists())
+
+    def test_cleanup_locks_no_directory_is_harmless(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"CLIO_HOME": d}):
+                bdt.cleanup_locks()  # must not raise
 
 
 class LauncherTests(unittest.TestCase):
-    def test_launchers_exist_and_delegate_to_driver(self):
-        bat = (ROOT / "scripts" / "build-dev-toolchain.bat").read_text(encoding="utf-8")
-        sh = (ROOT / "scripts" / "build-dev-toolchain.sh").read_text(encoding="utf-8")
-        self.assertIn("build_dev_toolchain.py", bat, "the .bat launcher must delegate to the Python driver")
-        self.assertIn("build_dev_toolchain.py", sh, "the .sh launcher must delegate to the Python driver")
-        self.assertTrue(sh.startswith("#!"), "the .sh launcher must have a shebang")
+    def setUp(self):
+        self.bat = (ROOT / "scripts" / "build-dev-toolchain.bat").read_text(encoding="utf-8")
+        self.sh = (ROOT / "scripts" / "build-dev-toolchain.sh").read_text(encoding="utf-8")
+
+    def test_launchers_delegate_to_driver(self):
+        self.assertIn("build_dev_toolchain.py", self.bat, "the .bat launcher must delegate to the driver")
+        self.assertIn("build_dev_toolchain.py", self.sh, "the .sh launcher must delegate to the driver")
+        self.assertTrue(self.sh.startswith("#!"), "the .sh launcher must have a shebang")
+
+    def test_launchers_use_the_repo_python_resolvers(self):
+        # Delegating to the tested resolvers avoids the 0-byte Windows Store stub and a Python-2 `python`.
+        self.assertIn("find_python.ps1", self.bat, "the .bat launcher must use the tested Windows resolver")
+        self.assertIn("find_python.sh", self.sh, "the .sh launcher must use the tested POSIX resolver")
 
     def test_driver_never_uses_a_shell(self):
-        # subprocess with shell=True would reopen the injection class the list-args design closes.
+        # subprocess with shell=True (any spacing) would reopen the injection class the list-args design closes.
         driver = DRIVER_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("shell=True", driver)
+        self.assertIsNone(re.search(r"shell\s*=\s*True", driver), "the driver must never pass shell=True")
 
     def test_git_ls_remote_uses_end_of_options_marker(self):
         driver = DRIVER_PATH.read_text(encoding="utf-8")
