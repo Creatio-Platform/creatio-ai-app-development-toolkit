@@ -15,6 +15,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+def md_escape(cell) -> str:
+    """One cell made safe for a Markdown table row.
+
+    A row is assembled by joining cells with ``|``, so an unescaped ``|`` inside
+    a cell opens a new column: every figure after it shifts one header to the
+    left and the table silently misreports. Labels are the exposed side -- a
+    stage label carries a model-authored agent ``description`` and a workflow
+    name straight from the run file -- so escape here, in the renderer that owns
+    the format, rather than in each producer of a label.
+
+    Public because two Markdown tables in ``cost_counter`` are assembled by
+    f-string rather than through ``Table``. They must reach the same rule, or
+    "the renderer owns the format" is true of three emitters out of five.
+    """
+    return str(cell).replace("|", r"\|")
+
+
 def _fmt(value, kind: str) -> str:
     if kind == "text":
         return "" if value is None else str(value)
@@ -151,7 +168,7 @@ class Table:
         # Never bold an empty cell -- "****" would render as literal asterisks
         # (e.g. the text column's blank TOTAL cell).
         def wrap(s):
-            return f"**{s}**" if bold and s else s
+            return f"**{md_escape(s)}**" if bold and s else md_escape(s)
 
         cells = [wrap(label)]
         for col in self.columns:

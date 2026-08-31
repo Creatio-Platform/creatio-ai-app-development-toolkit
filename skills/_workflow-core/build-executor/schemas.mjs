@@ -221,6 +221,14 @@ export const RECONCILE_SCHEMA = {
           type: { type: 'string' },
           resolved: { type: 'boolean' },
           note: { type: 'string' },
+          // ENG-95683 — the OPTIONAL typed gate the plan resolved for this type: `kind` ('composite'), the gating
+          // package `id`, and the optional gating `feature`. When a `resolved: false` type carries a well-formed
+          // gated composite, the plan-invalid stop branches BY KIND — 'install `id` (+enable `feature`) and re-run
+          // the BUILD, no re-plan' — instead of the generic re-plan text. Absent/malformed ⇒ the generic clause
+          // stands, so a run (or a plan) that predates these fields behaves exactly as it did before.
+          kind: { type: 'string' },
+          id: { type: 'string' },
+          feature: { type: 'string' },
         },
       },
     },

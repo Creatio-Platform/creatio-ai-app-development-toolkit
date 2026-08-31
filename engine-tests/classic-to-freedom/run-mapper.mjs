@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -9325,6 +9325,209 @@ try {
     gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]).length === 0
     && gateConflicts([ck({ kind: "composite", id: "A" }), ck({ kind: "composite", id: "B" })]).length === 1,
     () => gateConflicts([ck({ kind: "composite", id: "A", feature: "F" }), ck({ feature: "F", id: "A", kind: "composite" })]));
+
+  // ---- ENG-95683 (item 2, R1): the compositeOnly ADVISORY reaches needsDecision with GENERIC guidance ------
+  // `validateRun` already computed a `composite-only` advisory for a type the platform assembles as part of a
+  // composite; `reportRegistryFindings` used to discard it. It now pushes a `registry-composite-only` needsDecision
+  // item. The type must be PRESENT in the resolved index AND flagged `compositeOnly` for the advisory to fire — so
+  // the stand export carries `crt.CommunicationOptions` with `compositeOnly:true` (and `crt.Input` for the Name
+  // field, which resolves normally). This drives validateRun → reportRegistryFindings end-to-end (non-vacuous):
+  // dropping the advisory loop in `reportRegistryFindings` fails HERE.
+  const compOnlyDetail = `{operation:"insert",name:"Comm",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.DETAIL}}`;
+  const compOnlyDetails = `details:{Comm:{schemaName:"Schema9Detail",entitySchemaName:"ContactCommunication",detailColumn:"Contact",masterColumn:"Id"}},`;
+  const compOnlyRun = gmRun(compOnlyDetail, compOnlyDetails,
+    { componentRegistry: { resolvedTargetVersion: "8.3.9",
+      components: [{ componentType: "crt.Input", inputs: {}, outputs: {} },
+        { componentType: "crt.CommunicationOptions", compositeOnly: true, inputs: {}, outputs: {} }] } });
+  const coWarn = compOnlyRun.changeSet.needsDecision.find((d) => d.kind === "registry-composite-only" && d.item === "crt.CommunicationOptions");
+  check("ENG-95683 (item 2/R1): a compositeOnly type the run emits reaches changeSet.needsDecision as `registry-composite-only` with GENERIC guidance (reach it via its composite host/recipe) and NO install/enable instruction",
+    !!coWarn && /COMPOSITE-ONLY/.test(coWarn.reason) && /composite host\/recipe/.test(coWarn.reason)
+    && /cannot be inserted directly/.test(coWarn.reason)
+    && !/\binstall\b/i.test(coWarn.reason) && !/\benable\b/i.test(coWarn.reason) && !/re-run the BUILD/.test(coWarn.reason),
+    () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+  check("ENG-95683 (item 2/R1, negative control): a compositeOnly item carries NO structured gate, and a NON-compositeOnly present type (crt.Input) yields NO `registry-composite-only` item",
+    coWarn && coWarn.gate === undefined
+    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === "crt.Input")
+    // ...and a compositeOnly type that resolves is NOT ALSO reported as a missing `registry-target` (it is present).
+    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions"),
+    () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // ENG-95683 (item 2/R1, negative control — the `enginePositioned` SKIP branch itself): a compositeOnly type the
+  // ENGINE positioned (a container/field it placed in `viewConfigDiff` / `tableElements` — and the MAJORITY of
+  // registry types are compositeOnly) must NOT reach needsDecision; only a compositeOnly type the build agent must
+  // place STANDALONE does. Without this control the skip clause `|| enginePositioned.has(a.componentType)` is
+  // untested: the R1 case above emits `crt.CommunicationOptions` as a standalone detail (never engine-positioned),
+  // so deleting the clause keeps every assertion green while the worklist floods with engine-picked types. Here a
+  // COMPLETE radio group emits `crt.IconRadioButton` into `viewConfigDiff` (values.type) — the engine positioned it —
+  // and marking it compositeOnly makes it a composite-only advisory candidate the skip must drop; the SAME run still
+  // emits the standalone `crt.CommunicationOptions` detail, which must still surface. So deleting the skip fails on
+  // IconRadioButton, and inverting it (skip the standalone, keep the positioned) fails on CommunicationOptions.
+  const engPosRun = gmRun([
+    `{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"},caption:{bindTo:"Resources.Strings.IsPrimaryCaption"}}}`,
+    `{operation:"insert",name:"OptYes",parentName:"IsPrimary",propertyName:"items",values:{value:true,caption:{bindTo:"Resources.Strings.YesCaption"}}}`,
+    `{operation:"insert",name:"OptNo",parentName:"IsPrimary",propertyName:"items",values:{value:false,caption:{bindTo:"Resources.Strings.NoCaption"}}}`,
+    compOnlyDetail,
+  ].join(","), compOnlyDetails,
+    { entityColumns: { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" } },
+      resources: { IsPrimaryCaption: "Is primary", YesCaption: "Yes", NoCaption: "No" },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [
+        { componentType: "crt.Input", inputs: {}, outputs: {} },
+        { componentType: "crt.IconRadioButton", compositeOnly: true, inputs: {}, outputs: {} },
+        { componentType: "crt.CommunicationOptions", compositeOnly: true, inputs: {}, outputs: {} }] } });
+  const engPosCompOnly = (item) => engPosRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === item);
+  check("ENG-95683 (item 2/R1, negative control): an ENGINE-POSITIONED compositeOnly type (crt.IconRadioButton, placed in viewConfigDiff) is dropped by the enginePositioned skip, while a STANDALONE compositeOnly type (crt.CommunicationOptions) in the same run still surfaces — deleting the skip clause fails here, inverting it fails on the standalone one",
+    engPosRun.changeSet.viewConfigDiff.some((o) => o.values?.type === "crt.IconRadioButton") // the type WAS engine-positioned (non-vacuous)
+    && !engPosCompOnly("crt.IconRadioButton")                                                 // ...so the skip drops it
+    && engPosCompOnly("crt.CommunicationOptions"),                                            // ...but the standalone one is untouched
+    () => ({ view: engPosRun.changeSet.viewConfigDiff.map((o) => ({ name: o.name, type: o.values?.type })),
+      registry: engPosRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")) }));
+
+  // ENG-95683 (item 2/R1, negative control — the `tableElements` SOURCE of enginePositioned, in ISOLATION): the skip
+  // set is built from TWO sources — `viewConfigDiff[].values.type` (the radio-group test above) AND
+  // `tableElements[].componentType`. A real run ALWAYS emits a table element into `viewConfigDiff.values.type` too
+  // (mapper resolveProps sets `values.type = componentType`), so the tableElements branch cannot be isolated through
+  // runMigration — the viewConfigDiff branch would cover it regardless. Driving the exported `reportRegistryFindings`
+  // with a hand-built changeSet is the only way: `crt.Positioned` sits ONLY in `tableElements` (absent from
+  // viewConfigDiff), a standalone `crt.Standalone` sits in `profileCards`, both compositeOnly. The tableElements one
+  // must be skipped, the standalone one must surface — so deleting the `tableElements` line in reportRegistryFindings
+  // makes `crt.Positioned` surface and fails HERE, a regression the viewConfigDiff-sourced test above cannot catch.
+  const tblGateCs = { needsDecision: [], viewConfigDiff: [], tableElements: [{ componentType: "crt.Positioned" }], profileCards: [{ type: "crt.Standalone", entity: "E" }] };
+  const tblGateManifest = { componentRegistry: { resolvedTargetVersion: "8.3.9", components: [
+    { componentType: "crt.Positioned", compositeOnly: true, inputs: {}, outputs: {} },
+    { componentType: "crt.Standalone", compositeOnly: true, inputs: {}, outputs: {} }] } };
+  reportRegistryFindings(tblGateCs, tblGateManifest, FIX);
+  const tblGateHas = (item) => tblGateCs.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === item);
+  check("ENG-95683 (item 2/R1, negative control): a compositeOnly type engine-positioned via `tableElements` ONLY (absent from viewConfigDiff) is skipped by enginePositioned, while a standalone (profileCards) one still surfaces — isolates the tableElements branch, which the viewConfigDiff-sourced test cannot",
+    !tblGateHas("crt.Positioned") && tblGateHas("crt.Standalone"),
+    () => tblGateCs.needsDecision.filter((d) => d.kind.startsWith("registry-")));
+
+  // ---- ENG-95683 (item 1, R2): the durable resolved-gate set + its plan.md provenance mirror ---------------
+  // A run whose emitted type is a gated composite the stand LACKS carries the resolved gate on `result.resolvedGates`
+  // ([{componentType,kind,id,feature?,source}]) — the exact set the `--resolved-gates` artifact writes — and mirrors
+  // one provenance line into the plan. The stand export lists only `crt.Input`, so `crt.CommunicationOptions` gates.
+  const gatedRun = gmRun(compOnlyDetail, compOnlyDetails,
+    { componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] } });
+  check("ENG-95683 (item 1/R2): result.resolvedGates carries EXACTLY the resolved gate for the run's gated type — {componentType,kind,id,feature,source}, sourced from the stand export",
+    Array.isArray(gatedRun.resolvedGates) && gatedRun.resolvedGates.length === 1
+    && gatedRun.resolvedGates[0].componentType === "crt.CommunicationOptions"
+    && gatedRun.resolvedGates[0].kind === GATE_KIND.COMPOSITE
+    && gatedRun.resolvedGates[0].id === "CrtCustomer360App"
+    && gatedRun.resolvedGates[0].feature === "CommonCommunicationsBehavior"
+    && gatedRun.resolvedGates[0].source === "stand-export",
+    () => gatedRun.resolvedGates);
+  check("ENG-95683 (item 1/R2): plan.md carries the provenance MIRROR line naming the resolved gate (component type, package, feature) and pointing at the --resolved-gates artifact",
+    /\*\*Resolved component gates:\*\*/.test(gatedRun.plan)
+    && /crt\.CommunicationOptions/.test(gatedRun.plan) && /CrtCustomer360App/.test(gatedRun.plan)
+    && /CommonCommunicationsBehavior/.test(gatedRun.plan) && /--resolved-gates/.test(gatedRun.plan),
+    () => gatedRun.plan.split("\n").filter((l) => /Resolved component gates/.test(l)));
+  // Negative control: a run that gates NO type has an EMPTY resolvedGates set and NO mirror line — the empty-artifact
+  // case the `--resolved-gates` output must still write verbatim as `[]`.
+  const ungatedRun = gmRun("");
+  check("ENG-95683 (item 1/R2, negative control): a run with no gated type has resolvedGates === [] and NO provenance mirror line in the plan",
+    Array.isArray(ungatedRun.resolvedGates) && ungatedRun.resolvedGates.length === 0
+    && !/Resolved component gates:/.test(ungatedRun.plan),
+    () => ungatedRun.resolvedGates);
+  // ENG-95683 (item 1/R2, the REALISTIC vendored path): the R2 tests above force a stand-export so the gated type
+  // MISSES the registry; a real run carries NO `manifest.componentRegistry` and resolves against the VENDORED index,
+  // where the canonical gated composites are PRESENT (no miss). resolvedGates must STILL carry the gate — it is a
+  // property of the type, not of the registry the run resolved against — else the artifact and the plan mirror ship
+  // empty by default (the false negative two reviewers caught). `source` is `vendored-union` here, not `stand-export`.
+  // Gathering only from the findings loop (the pre-fix behavior) makes this EMPTY and fails here.
+  const vendoredGatedRun = gmRun(compOnlyDetail, compOnlyDetails); // NO componentRegistry → vendored index
+  check("ENG-95683 (item 1/R2): on the DEFAULT vendored path (no manifest.componentRegistry), resolvedGates STILL carries the run's gated composite — {componentType,kind,id,feature,source:'vendored-union'} — and the plan mirror renders",
+    Array.isArray(vendoredGatedRun.resolvedGates) && vendoredGatedRun.resolvedGates.length === 1
+    && vendoredGatedRun.resolvedGates[0].componentType === "crt.CommunicationOptions"
+    && vendoredGatedRun.resolvedGates[0].id === "CrtCustomer360App"
+    && vendoredGatedRun.resolvedGates[0].feature === "CommonCommunicationsBehavior"
+    && vendoredGatedRun.resolvedGates[0].source === "vendored-union"
+    && /\*\*Resolved component gates:\*\*/.test(vendoredGatedRun.plan)
+    && /crt\.CommunicationOptions/.test(vendoredGatedRun.plan) && /CrtCustomer360App/.test(vendoredGatedRun.plan),
+    () => ({ resolvedGates: vendoredGatedRun.resolvedGates, mirror: /Resolved component gates/.test(vendoredGatedRun.plan) }));
+
+  // ENG-95683 (item 1/R2): the plan.md gate MIRROR with MULTIPLE resolved gates — the `; ` join, the order, and the
+  // per-gate OPTIONAL `feature` segment (present on one, absent on the other). The single-gate run above never
+  // exercises `resolvedGates.map(...).join("; ")`. renderPlan is deterministic and the mirror reads only
+  // `result.resolvedGates`, so a minimal hand-built result drives it directly (the golden runners build several).
+  const twoGatePlan = renderPlan({
+    entity: "X", changeSet: { viewConfigDiff: [], needsDecision: [] },
+    resolvedGates: [
+      { componentType: "crt.CommunicationOptions", kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior", source: "stand-export" },
+      { componentType: "crt.SecondGate", kind: GATE_KIND.COMPOSITE, id: "CrtSecondApp", source: "vendored-pinned" },
+    ],
+  }, {});
+  const gateLine = twoGatePlan.split("\n").find((l) => /\*\*Resolved component gates:\*\*/.test(l)) || "";
+  check("ENG-95683 (item 1/R2): the plan gate mirror renders TWO resolved gates joined by `; `, in order, with the optional `feature` segment present for the first and ABSENT for the second",
+    /`CrtCustomer360App` \+ feature `CommonCommunicationsBehavior` \(stand-export\)/.test(gateLine)
+    && /`CrtSecondApp` \(vendored-pinned\)/.test(gateLine)
+    && /CrtCustomer360App`.*; `crt\.SecondGate`/.test(gateLine)   // `; ` join, first before second
+    && !/CrtSecondApp` \+ feature/.test(gateLine),                 // the second gate carries no feature segment
+    () => gateLine);
+
+  // ---- ENG-95683 (item 1, R2): the `--resolved-gates <file>` CLI output, end-to-end -----------------------
+  // The write happens on the `--plan`/`--units` path (a PLAN/RUN-time fact, not a `--verify` verdict), is registered
+  // in VALUE_FLAGS (so its path is not read as the manifest), and writes `[]` verbatim when nothing gates. Driven
+  // through the real CLI so a regression in the flag wiring — not just the pure result field above — is caught.
+  const rgPath = path.join(os.tmpdir(), `c2f_resolved_gates_${process.pid}.json`);
+  const rgEmptyPath = path.join(os.tmpdir(), `c2f_resolved_gates_empty_${process.pid}.json`);
+  const rgStdinPath = path.join(os.tmpdir(), `c2f_resolved_gates_stdin_${process.pid}.json`);
+  try {
+    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true }); fs.rmSync(rgStdinPath, { force: true });
+    const gatedManifest = JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] },
+      schemas: [{ pkg: "P", body: gmBody(compOnlyDetails, [nameOp, compOnlyDetail].join(",")) }] });
+    const rgRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--resolved-gates", rgPath], { input: gatedManifest, encoding: "utf8" });
+    const rgWritten = fs.existsSync(rgPath) ? JSON.parse(fs.readFileSync(rgPath, "utf8")) : null;
+    check("ENG-95683 (item 1/R2): `migrate.mjs --plan --resolved-gates <file>` WRITES the resolved gate set as JSON — exactly the run's gates, and a stderr confirmation",
+      Array.isArray(rgWritten) && rgWritten.length === 1 && rgWritten[0].componentType === "crt.CommunicationOptions"
+      && rgWritten[0].id === "CrtCustomer360App" && rgWritten[0].source === "stand-export"
+      && /wrote 1 resolved component gate/.test(rgRun.stderr || ""),
+      () => ({ status: rgRun.status, written: rgWritten, stderr: (rgRun.stderr || "").slice(0, 200) }));
+    // Empty-artifact control: a manifest that gates nothing still writes the file, as `[]`.
+    const plainManifest = JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+      schemas: [{ pkg: "P", body: gmBody("", nameOp) }] });
+    spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--units", "--resolved-gates", rgEmptyPath], { input: plainManifest, encoding: "utf8" });
+    const rgEmpty = fs.existsSync(rgEmptyPath) ? JSON.parse(fs.readFileSync(rgEmptyPath, "utf8")) : null;
+    check("ENG-95683 (item 1/R2): the empty-artifact case — a run that gates no type writes `[]` verbatim (present, not absent), on the --units path too",
+      Array.isArray(rgEmpty) && rgEmpty.length === 0,
+      () => rgEmpty);
+    // VALUE_FLAGS positional-manifest EXCLUSION, exercised: with the manifest on STDIN and NO explicit `-`,
+    // `--plan --resolved-gates <file>` must still read stdin and write the artifact. `--resolved-gates` is in
+    // VALUE_FLAGS precisely so its value is skipped by the positional-manifest search; drop it from VALUE_FLAGS and
+    // the run reads <file> as the manifest instead (it does not exist yet → ENOENT → exit 1, and NO artifact is
+    // written). Every OTHER CLI case above passes an explicit `-`, so the positional search matches `-` first and
+    // this exclusion is never tested — the mode-guard / valueFlagArg wiring is, but not the VALUE_FLAGS membership.
+    // The discriminator is the ARTIFACT (+ its stderr confirmation), not the exit code: this manifest gates a type,
+    // so `--plan` exits 2 (incomplete-plan artifact) exactly like the `rgRun` case above — the write happens anyway,
+    // before the mode output. Under the regression there is no write at all, so the artifact check is what fails.
+    fs.rmSync(rgStdinPath, { force: true });
+    const rgStdin = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "--plan", "--resolved-gates", rgStdinPath], { input: gatedManifest, encoding: "utf8" });
+    const rgStdinWritten = fs.existsSync(rgStdinPath) ? JSON.parse(fs.readFileSync(rgStdinPath, "utf8")) : null;
+    check("ENG-95683 (item 1/R2): with the manifest on STDIN and no explicit `-`, `--resolved-gates <file>` is excluded from the positional-manifest search (VALUE_FLAGS) — the run reads stdin and writes the artifact, not reads <file> as the manifest",
+      Array.isArray(rgStdinWritten) && rgStdinWritten.length === 1
+      && rgStdinWritten[0].componentType === "crt.CommunicationOptions" && rgStdinWritten[0].id === "CrtCustomer360App"
+      && /wrote 1 resolved component gate/.test(rgStdin.stderr || ""),
+      () => ({ status: rgStdin.status, written: rgStdinWritten, stderr: (rgStdin.stderr || "").slice(0, 200) }));
+  } finally {
+    fs.rmSync(rgPath, { force: true }); fs.rmSync(rgEmptyPath, { force: true }); fs.rmSync(rgStdinPath, { force: true });
+  }
+  // `--resolved-gates` is registered in VALUE_FLAGS (its path is not read as the manifest) and is rejected outside
+  // the --plan/--units path — the mode guard, exit 1 with an actionable message.
+  const rgBadMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec", "--resolved-gates", path.join(os.tmpdir(), `c2f_rg_never_${process.pid}.json`)],
+    { input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: gmBody("", nameOp) }] }), encoding: "utf8" });
+  check("ENG-95683 (item 1/R2): `--resolved-gates` outside --plan/--units fails loudly (exit 1) — the flag is registered and mode-guarded, not silently ignored",
+    rgBadMode.status === 1 && /--resolved-gates/.test(rgBadMode.stderr || "") && /applies to .--plan. and .--units./.test(rgBadMode.stderr || ""),
+    () => (rgBadMode.stderr || "").slice(0, 200));
+  // The WRITE-FAILURE path: `--resolved-gates` pointed at a file inside a NON-EXISTENT directory → writeFileSync
+  // ENOENT → the wrapped `fail("cannot write --resolved-gates ...")`, exit 1. Only the happy write and the mode-guard
+  // were covered; a realistic typo'd / absent target directory had none, and a silent swallow here would drop the
+  // artifact a verification step is about to read.
+  const rgNoDir = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--resolved-gates", path.join(os.tmpdir(), `c2f_rg_nodir_${process.pid}`, "x.json")],
+    { input: JSON.stringify({ entity: "X", noParentTemplate: true, entityColumns: { Name: { type: "ShortText" } },
+      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [{ componentType: "crt.Input", inputs: {}, outputs: {} }] },
+      schemas: [{ pkg: "P", body: gmBody(compOnlyDetails, [nameOp, compOnlyDetail].join(",")) }] }), encoding: "utf8" });
+  check("ENG-95683 (item 1/R2): `--resolved-gates` pointed at an unwritable path (a file in a non-existent directory) fails LOUDLY (exit 1, `cannot write --resolved-gates`) — the write error is surfaced, never swallowed",
+    rgNoDir.status === 1 && /cannot write --resolved-gates/.test(rgNoDir.stderr || ""),
+    () => ({ status: rgNoDir.status, stderr: (rgNoDir.stderr || "").slice(0, 200) }));
 
   // ---- ENG-95543: the first-wave kinds are BUILT, not reported ---------------------------------------------
   // A COMPLETE radio group: the nested `value.bindTo` plus the option sub-items, which is the pair the ticket

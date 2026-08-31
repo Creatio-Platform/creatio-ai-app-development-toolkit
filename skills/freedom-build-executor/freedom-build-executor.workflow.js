@@ -1187,12 +1187,75 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
 // would die on a `next` no re-plan can act on. When the plan published no `componentTypes` (a plan predating the
 // field, or a transient Reconcile that dropped it), the intersection is SKIPPED and the resolution is trusted as
 // given — the same "absence is not evidence, behave exactly as before" rule the `resolved` filter already applies.
+// ENG-95683 — the gate KIND that selects the install/enable-and-re-BUILD branch. A plain string literal, NOT an
+// import: this module's pure-decision block is INLINED verbatim into `freedom-build-executor.workflow.js`, which the
+// Claude Workflow host evaluates as a function body with NO module system, so an `import` here would not survive that
+// inlining. It therefore MIRRORS the engine's `GATE_KIND.COMPOSITE` in
+// `skills/classic-to-freedom-migration/engine/mapping-table.mjs` — the two must stay equal, and `run-infra.mjs` pins
+// that equality for BOTH copies (this module's and the inlined workflow.js one) against the engine's exported value.
+const GATE_COMPOSITE = 'composite'
+// ENG-95683 review — the SHAPE a gate's `id`/`feature` must have. Both are a Creatio package code / feature code,
+// which is an IDENTIFIER, and both arrive AGENT-SUPPLIED: the Reconcile step reports `componentResolution` as
+// free-form JSON and `schemas.mjs` types these two only as `string`, so nothing upstream bounds their content.
+// `componentReplanClause` renders them verbatim into the stop's operator-facing `next`, so an unbounded value is
+// how a hallucinated or crafted string (backticks, newlines, instruction-like prose) reaches the text an operator
+// reads and acts on. Bounding them to an identifier is the check that fits what they ARE — no legitimate package
+// or feature code is excluded, and nothing that is not one gets rendered. The length cap is belt-and-braces: a
+// pathological but technically-identifier value cannot flood the stop.
+const GATE_NAME_SHAPE = /^[A-Za-z][A-Za-z0-9_]{0,127}$/
+const isGateName = (s) => typeof s === 'string' && GATE_NAME_SHAPE.test(s.trim())
+// `note` is the OTHER agent-relayed field this stop renders, and unlike `id`/`feature` it is deliberately PROSE —
+// the stand's own reason, relayed from `get-component-info`. An identifier shape would be the wrong check (it would
+// reject every legitimate note) and Markdown escaping would be the wrong tool (this text lands in a plain-text
+// `next`, not in `plan.md` — that is why `designspec.mjs`'s `esc()` is right THERE and not here). What it can be
+// bounded by is LENGTH: that is the one way a relayed note can degrade the stop, by burying the fix instruction
+// under a wall of text. Truncated with an ellipsis so the operator can see the note was cut rather than ended.
+const NOTE_CAP = 300
+// Review (RC-1 round 5) — FLATTEN before capping. The length cap alone stops a note from burying the fix, but a
+// SHORT note could still carry newlines, and a newline in this text is not cosmetic: the stop's `next` is read as
+// lines, so an agent-supplied `\n` lets relayed prose forge what looks like a separate instruction line rather than
+// the embedded quotation it actually is. `id`/`feature` cannot do this (GATE_NAME_SHAPE admits no whitespace);
+// `note` is exempt from that shape because it is deliberately prose, so it needs this instead. Collapsing every
+// whitespace RUN — not just newlines — also covers tabs and the CR half of a CRLF, and keeps the note one line.
+const capNote = (s) => {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return flat.length <= NOTE_CAP ? flat : flat.slice(0, NOTE_CAP - 1).trimEnd() + '…'
+}
+// ENG-95683 — the ONE predicate for "carries a well-formed gated composite" (kind 'composite' + an `id` of gate-name
+// shape), shared by the carry-through in `componentTypeMismatches` and by `gatedComposite` (which
+// `componentReplanClause` branches on) so the two classifications cannot drift to different rules — the same
+// single-home discipline the GATE_COMPOSITE mirror itself follows. It only CLASSIFIES; `componentTypeMismatches`
+// still owns the normalization (`id.trim()`). Because it tests the TRIMMED `id` it reads a raw resolution entry and
+// an already-normalized mismatch identically (a trimmed valid id passes either way).
+// FAIL-CLOSED, and deliberately so: an `id` that is not a gate name means this is not a gate this run can act on, so
+// the mismatch stays UNTYPED and the generic re-plan clause stands. Printing "install `<junk>`" would send an
+// operator to do something impossible; the pre-ENG-95683 re-plan wording is the honest fallback.
+// `feature` is NOT part of this predicate — it is optional, and a malformed one must not demote an otherwise valid
+// gate to a re-plan (the plan would still be correct). `componentTypeMismatches` validates it separately and simply
+// DROPS it when it is not a gate name, so the operator still gets the install instruction and never sees junk.
+// What this does NOT do: confirm the id is the RIGHT package for this component type. That needs the engine's own
+// `gateForComponentType` table, which cannot be reached from here — this module is inlined verbatim into
+// `freedom-build-executor.workflow.js`, whose host has no module system, and `build-workflows.mjs` inlines only
+// `_workflow-core/` modules (an `import` of the engine's `mapping-table.mjs` would be STRIPPED and the symbol would
+// be undefined at run time). Cross-checking against the engine table is ENG-95555.
+const isWellFormedGate = (c) => !!(c?.kind === GATE_COMPOSITE && isGateName(c.id))
 function componentTypeMismatches(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
     .filter((c) => c && typeof c.type === 'string' && c.resolved === false)
     .filter((c) => published.size === 0 || published.has(c.type))
-    .map((c) => ({ type: c.type, note: (typeof c.note === 'string' && c.note.trim()) ? c.note : 'does not resolve on the target stand' }))
+    // ENG-95683 — carry the OPTIONAL typed gate through onto the mismatch so `componentReplanClause` can branch BY
+    // KIND. Only a well-formed gated composite (kind 'composite' + an `id` of gate-name shape) is carried; anything
+    // else leaves the mismatch untyped and the generic re-plan clause stands (a plan predating the fields is
+    // unchanged). `feature` rides along ONLY when it is a gate name too — a malformed one is dropped rather than
+    // demoting the gate, so this is the ONE place a rendered `feature` can come from and it is always validated.
+    .map((c) => ({
+      type: c.type,
+      note: (typeof c.note === 'string' && c.note.trim()) ? capNote(c.note) : 'does not resolve on the target stand',
+      ...(isWellFormedGate(c)
+        ? { kind: GATE_COMPOSITE, id: c.id.trim(), ...(isGateName(c.feature) ? { feature: c.feature.trim() } : {}) }
+        : {}),
+    }))
 }
 // The operator-facing renderings of the unresolved types, shared by every stop and log that reports them so the
 // wording (and its fix instruction) has ONE home — and built with plain concatenation so no call site carries a
@@ -1208,13 +1271,40 @@ const componentMismatchList = (mismatches) => (mismatches || []).map((c) => '`' 
 // `plan-invalid-against-stand` stop (`planInvalidNext`) and the combined package+component stop below, so the two
 // cannot drift. `planInvalidNext` adds only the trailing clause that differs between a pre-build stop ('Nothing was
 // built.') and a mid-run one ('Anything already built this run is on disk.').
-const componentReplanClause = (mismatches) =>
-  componentMismatchList(mismatches) + '. This is a PLAN assertion untrue of the stand — fix the '
-  + 'mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), '
-  + 're-run `--plan --out`, re-approve, then re-run this build.'
-const planInvalidNext = (mismatches, tail) =>
-  'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
-  + 'These do not: ' + componentReplanClause(mismatches) + ' ' + tail
+// ENG-95683 — the clause branches BY KIND, per mismatch. A gated COMPOSITE (kind 'composite' + `id`, carried through
+// by `componentTypeMismatches` from the plan's typed gate) is NOT a re-plan: the plan is correct and the fix is on the
+// STAND — install the package, enable the feature if the gate names one, and re-run the BUILD. Every other cause (a
+// fabricated `crt.*`, or a component the plan named that this stand simply lacks) keeps the original re-plan text.
+// Mixed sets get both clauses. An UNGATED set reproduces the pre-ENG-95683 wording verbatim, so the pre-build/mid-run
+// tail tests that pin that text still hold.
+const gatedComposite = isWellFormedGate // a mismatch is "gated" iff it carries a well-formed gate — one home, no drift
+const componentReplanClause = (mismatches) => {
+  const list = mismatches || []
+  const ungated = list.filter((c) => !gatedComposite(c))
+  const gated = list.filter(gatedComposite)
+  const clauses = []
+  if (ungated.length) clauses.push(
+    componentMismatchList(ungated) + '. This is a PLAN assertion untrue of the stand — fix the '
+    + 'mapping/plan (a fabricated type, or a composite/component whose package or feature is not installed here), '
+    + 're-run `--plan --out`, re-approve, then re-run this build.')
+  for (const g of gated) clauses.push(
+    '`' + g.type + '` (' + g.note + ') is a gated COMPOSITE — install the `' + g.id + '` package'
+    + (g.feature ? ' and enable the `' + g.feature + '` feature' : '')
+    + ' on the stand, then re-run the BUILD; the plan is correct, so no re-plan is needed.')
+  return clauses.join(' ')
+}
+const planInvalidNext = (mismatches, tail) => {
+  const list = mismatches || []
+  // ENG-95683 — when every unresolved type is a gated COMPOSITE (the plan is correct; the stand needs a package
+  // installed), the "These do not: / This is a PLAN assertion" preamble is wrong. Skip it so the operator only
+  // reads the install/BUILD instruction, not a contradiction. Mirrors the same branch in
+  // `freedom-build-executor.workflow.js` — the two copies of this block must stay behaviourally identical, and the
+  // Codex / generic-CLI adapters reach THIS module's copy through `core.mjs`, so the fix has to live here too.
+  if (list.length > 0 && list.every(gatedComposite))
+    return componentReplanClause(list) + ' ' + tail
+  return 'each named component type must resolve on the target stand (clio `get-component-info component-type=<type>`). '
+    + 'These do not: ' + componentReplanClause(list) + ' ' + tail
+}
 
 // --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
 // A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
@@ -2318,6 +2408,14 @@ const RECONCILE_SCHEMA = {
           type: { type: 'string' },
           resolved: { type: 'boolean' },
           note: { type: 'string' },
+          // ENG-95683 — the OPTIONAL typed gate the plan resolved for this type: `kind` ('composite'), the gating
+          // package `id`, and the optional gating `feature`. When a `resolved: false` type carries a well-formed
+          // gated composite, the plan-invalid stop branches BY KIND — 'install `id` (+enable `feature`) and re-run
+          // the BUILD, no re-plan' — instead of the generic re-plan text. Absent/malformed ⇒ the generic clause
+          // stands, so a run (or a plan) that predates these fields behaves exactly as it did before.
+          kind: { type: 'string' },
+          id: { type: 'string' },
+          feature: { type: 'string' },
         },
       },
     },
@@ -3550,7 +3648,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\`, with the entry quoted verbatim and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty string is a REAL answer and is not the same as \`null\`**: return \`""\` when this stand's prefix is empty (a common and correct configuration), and \`null\` ONLY when you could not read it at all. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` — the root-level \`--units.resolutionsUnmatched\`, verbatim: those are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks, and this run is the only thing that can tell the operator so.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty string is a REAL answer and is not the same as \`null\`**: return \`""\` when this stand's prefix is empty (a common and correct configuration), and \`null\` ONLY when you could not read it at all. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` — the root-level \`--units.resolutionsUnmatched\`, verbatim: those are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks, and this run is the only thing that can tell the operator so.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that. **\`'exists'\` does not say WHOSE it is.** A package this migration created itself reads exactly like a stranger's from the stand, and the two need opposite handling under \`sectionHost: new-app\`; the only thing that tells them apart is the \`standWrites.packageCreated\` record in the queue file, which step 5 has you report as \`packageCreatedByRun\`. Report the state you actually read here, and let that record answer the ownership question.
 

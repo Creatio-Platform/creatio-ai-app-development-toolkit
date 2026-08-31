@@ -153,7 +153,13 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
         baseline = self.workflow[baseline_start:baseline_end]
         confirm_idx = baseline.index("yield* confirmPackageStop(stopOnPackage,")
         write_idx = baseline.index(write_back)
-        stop_check_idx = baseline.index("if (stopOnPackage) {")
+        # The stop branch is a GUARD CLAUSE (`if (!stopOnPackage) return null`), not the `if (stopOnPackage) {`
+        # block this test was written against: pulling `hardStopOnPackage` out of `placementAndComponentStop`
+        # for Sonar cognitive complexity inverted it. The INVARIANT is unchanged and is what this pins — the
+        # write-back must sit after the confirmation and before the branch that can leave this closure — so the
+        # marker is updated rather than the assertion. Asserted as a substring so the `return null` tail cannot
+        # drift into matching something else.
+        stop_check_idx = baseline.index("if (!stopOnPackage) return null")
         self.assertLess(confirm_idx, write_idx,
             "the write-back must happen AFTER ownership is confirmed, not before")
         self.assertLess(write_idx, stop_check_idx,

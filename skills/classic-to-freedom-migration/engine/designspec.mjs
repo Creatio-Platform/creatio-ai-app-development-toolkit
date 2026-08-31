@@ -1612,9 +1612,25 @@ export function renderPlan(result, opts = {}) {
   // publishes the same string as `planVersion`. Rendered only when the engine actually computed one, so a
   // hand-built `result` (the golden runners construct several) does not get a `Plan version: undefined` line.
   const planVersion = typeof result.planVersion === "string" && result.planVersion.trim() ? esc(result.planVersion.trim()) : "";
+  // ENG-95683 (item 1) — the PROVENANCE MIRROR of the resolved component gate set. The full machine-readable copy is
+  // the `--resolved-gates` artifact; this one compact line puts the same fact in the operator-facing plan so a reader
+  // sees WHICH gated composites this run resolved (and against which registry) without opening the JSON. Rendered
+  // only when the run gates a type — a run with no gated types has nothing to mirror (its artifact is `[]`).
+  const resolvedGates = Array.isArray(result.resolvedGates) ? result.resolvedGates : [];
+  // One gate's rendered fragment, built with intermediate variables instead of a nested template literal (Sonar
+  // S4624): the optional `+ feature` segment is computed on its own line, so adding a future gate field stays a
+  // one-line change here rather than a deeper nesting at the call site.
+  const gateFragment = (g) => {
+    const feature = g.feature ? ` + feature \`${esc(g.feature)}\`` : "";
+    return `\`${esc(g.componentType)}\` → \`${esc(g.id)}\`${feature} (${esc(g.source)})`;
+  };
+  const gateMirror = resolvedGates.length
+    ? [`**Resolved component gates:** ${resolvedGates.map(gateFragment).join("; ")} — machine-readable copy in the \`--resolved-gates\` artifact.`, ""]
+    : [];
   P.push(
     "### Overview",
     ...(planVersion ? [`**Plan version:** \`${planVersion}\` — record THIS string in the \`decisions.md\` approval entry; the build compares it and refuses to run on a mismatch.`, ""] : []),
+    ...gateMirror,
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
     `**Environment:** ${fill(pm.environment, "<FILL: environment name>")} ·`,
     `**Package:** ${fill(pm.package, "<FILL: owning package(s) + lock state → target package>")}`,
