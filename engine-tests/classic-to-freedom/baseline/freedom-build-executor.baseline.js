@@ -1182,9 +1182,11 @@ const isUnitOpen = (unit, verify, reachState, packageState) => {
 // present, or the input itself is absent — arithmetic over the input's OWN fields, never an invented verdict.
 // PR review — the `missing === 0` fallback is LOSSY and is no longer the first one tried: `unverified` is also what
 // a partial or unread build resolves to, so a `0/N expected fields` page has `missing: 0` while being as short as a
-// page can be. When the payload carries its rows, they are read instead: each row's `owner` is the engine's own
-// classification, so the fallback answers the same question the primary field does. `missing`/`complete` stay as
-// last resorts for a legacy payload that carries neither the field nor its rows.
+// page can be. When the payload carries `openRows` — the verdict's OWN, uncapped list — they are read instead.
+// ENG-95930 review (m-dymytrova) — `stillShortRows` is read ONE WAY ONLY: it is `maxItems: 3` and returned only when
+// the unit is short, so a builder-owned row that survived the cap still PROVES not-complete, while the absence of one
+// across a 3-row sample proves nothing. Reading absence as `true` derived build-complete off a sample and skipped
+// the fast in-context park — which is why this scenario used to run three rounds under a name that says one.
 // One open row this builder owns — the predicate `buildComplete` means. A row with no `owner` is treated as the
 // builder's: the engine tags only the four verifier/judge-filed rows, and defaulting the other way would let an
 // untagged shortfall pass as somebody else's problem.
@@ -1193,8 +1195,8 @@ const isBuilderOwnedRow = (r) =>
 function derivedBuildComplete(x) {
   if (!x) return undefined
   if (typeof x.buildComplete === 'boolean') return x.buildComplete
-  const rows = Array.isArray(x.openRows) ? x.openRows : x.stillShortRows
-  if (Array.isArray(rows)) return !rows.some(isBuilderOwnedRow)
+  if (Array.isArray(x.openRows)) return !x.openRows.some(isBuilderOwnedRow)
+  if (Array.isArray(x.stillShortRows) && x.stillShortRows.some(isBuilderOwnedRow)) return false
   if (typeof x.missing === 'number') return x.missing === 0
   if (typeof x.complete === 'boolean') return x.complete
   return undefined
