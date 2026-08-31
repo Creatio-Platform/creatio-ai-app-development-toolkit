@@ -368,7 +368,12 @@ class VersionNoteTest(_CompareExportTestCase):
                 # no counter_version key: pre-dates this field.
             }
         }
-        saved = tempfile.mkstemp(prefix="cc-old-summary-", suffix=".json")[1]
+        # `mkstemp` returns (fd, path) and the fd is OPEN. Discarding it with `[1]` leaks the handle, and on
+        # Windows an open handle makes the `os.remove` cleanup fail with `PermissionError: [WinError 32]` — the
+        # file is deleteable only once nothing holds it. POSIX unlinks an open file happily, which is why this
+        # only ever failed on the Windows leg. Close it before handing the path to anything else.
+        fd, saved = tempfile.mkstemp(prefix="cc-old-summary-", suffix=".json")
+        os.close(fd)
         self.addCleanup(os.remove, saved)
         with open(saved, "w", encoding="utf-8") as f:
             json.dump(old_summary, f)
@@ -381,7 +386,9 @@ class VersionNoteTest(_CompareExportTestCase):
         self.assertIn("unversioned", doc["version_note"])
 
     def test_compare_rejects_a_json_file_missing_the_summary_key(self):
-        not_a_summary = tempfile.mkstemp(prefix="cc-bad-json-", suffix=".json")[1]
+        # Same `mkstemp` fd leak as above — close the descriptor or the Windows cleanup raises WinError 32.
+        fd, not_a_summary = tempfile.mkstemp(prefix="cc-bad-json-", suffix=".json")
+        os.close(fd)
         self.addCleanup(os.remove, not_a_summary)
         with open(not_a_summary, "w", encoding="utf-8") as f:
             json.dump({"tables": {}}, f)
