@@ -1,4 +1,5 @@
-# build-dev-toolchain.config -- local machine paths for build-dev-toolchain.bat
+# build-dev-toolchain.config -- local machine paths for the build-dev-toolchain launchers
+# (build-dev-toolchain.bat on Windows, build-dev-toolchain.sh on macOS/Linux; both run build_dev_toolchain.py).
 # Format: KEY=VALUE, one per line. No spaces around '='. Lines starting with '#' are comments.
 #
 # SETUP: copy this file to "build-dev-toolchain.config" (same folder) and edit the values for YOUR
