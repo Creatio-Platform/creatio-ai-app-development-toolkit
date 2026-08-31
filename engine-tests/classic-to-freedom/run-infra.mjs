@@ -2417,6 +2417,31 @@ check("ENG-95683: the core module helpers.mjs `GATE_COMPOSITE` literal is presen
   /const GATE_COMPOSITE = ['"]composite['"]/.test(helpersSrc) && GATE_KIND.COMPOSITE === "composite",
   () => ({ inHelpers: /const GATE_COMPOSITE = ['"]composite['"]/.test(helpersSrc), engineValue: GATE_KIND.COMPOSITE }));
 
+// Review (round 5) — `reportRegistryFindings` is exported from `migrate.mjs` for ONE reason: the `tableElements`
+// source of `enginePositioned` cannot be isolated through `runMigration` (the mapper always also writes
+// `viewConfigDiff.values.type`), so the isolated regression test has to call it directly. The comment above it says
+// "Do not call it from production code" — but a comment enforces nothing, and a later contributor could start
+// importing it from another engine module with no signal that it breaks the intended boundary. This is that signal:
+// the symbol may appear in its OWN defining file and under `engine-tests/`, and nowhere else beneath `skills/`.
+const SKILLS_ROOT = fileURLToPath(new URL("../../skills", import.meta.url));
+const TEST_ONLY_EXPORT = "reportRegistryFindings";
+const DEFINING_FILE = path.join("classic-to-freedom-migration", "engine", "migrate.mjs");
+function everyScriptUnder(dir) {
+  const found = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...everyScriptUnder(abs));
+    else if (entry.name.endsWith(".mjs") || entry.name.endsWith(".js")) found.push(abs);
+  }
+  return found;
+}
+const offendingCallers = everyScriptUnder(SKILLS_ROOT)
+  .filter((f) => !f.endsWith(DEFINING_FILE) && readFileSync(f, "utf8").includes(TEST_ONLY_EXPORT))
+  .map((f) => path.relative(SKILLS_ROOT, f));
+check("ENG-95683 (review): the TEST-ONLY export `reportRegistryFindings` is referenced by NO production module under skills/ — the boundary its comment declares is enforced, not merely stated",
+  offendingCallers.length === 0,
+  () => ({ offendingCallers }));
+
 // The carry-through: only a WELL-FORMED gated composite (kind 'composite' + a non-blank string id) is typed onto the
 // mismatch; a missing id, a wrong kind, or a blank id leaves the mismatch untyped (the generic clause then stands).
 const typedMis = wf.componentTypeMismatches([{ type: "crt.CommunicationOptions", resolved: false, note: "package CrtCustomer360App not installed", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }]);

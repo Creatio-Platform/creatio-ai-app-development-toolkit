@@ -1545,26 +1545,66 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
 // `GATE_KIND.COMPOSITE` in `skills/classic-to-freedom-migration/engine/mapping-table.mjs` — the two must stay equal,
 // and `run-infra.mjs` pins that equality by reading the engine's exported value and asserting this literal matches.
 const GATE_COMPOSITE = 'composite'
-// ENG-95683 — the ONE predicate for "carries a well-formed gated composite" (kind 'composite' + a non-blank string
-// `id`), shared by the carry-through in `componentTypeMismatches` and by `gatedComposite` (which
+// ENG-95683 review — the SHAPE a gate's `id`/`feature` must have. Both are a Creatio package code / feature code,
+// which is an IDENTIFIER, and both arrive AGENT-SUPPLIED: the Reconcile step reports `componentResolution` as
+// free-form JSON and `schemas.mjs` types these two only as `string`, so nothing upstream bounds their content.
+// `componentReplanClause` renders them verbatim into the stop's operator-facing `next`, so an unbounded value is
+// how a hallucinated or crafted string (backticks, newlines, instruction-like prose) reaches the text an operator
+// reads and acts on. Bounding them to an identifier is the check that fits what they ARE — no legitimate package
+// or feature code is excluded, and nothing that is not one gets rendered. The length cap is belt-and-braces: a
+// pathological but technically-identifier value cannot flood the stop.
+const GATE_NAME_SHAPE = /^[A-Za-z][A-Za-z0-9_]{0,127}$/
+const isGateName = (s) => typeof s === 'string' && GATE_NAME_SHAPE.test(s.trim())
+// `note` is the OTHER agent-relayed field this stop renders, and unlike `id`/`feature` it is deliberately PROSE —
+// the stand's own reason, relayed from `get-component-info`. An identifier shape would be the wrong check (it would
+// reject every legitimate note) and Markdown escaping would be the wrong tool (this text lands in a plain-text
+// `next`, not in `plan.md` — that is why `designspec.mjs`'s `esc()` is right THERE and not here). What it can be
+// bounded by is LENGTH: that is the one way a relayed note can degrade the stop, by burying the fix instruction
+// under a wall of text. Truncated with an ellipsis so the operator can see the note was cut rather than ended.
+const NOTE_CAP = 300
+// Review (RC-1 round 5) — FLATTEN before capping. The length cap alone stops a note from burying the fix, but a
+// SHORT note could still carry newlines, and a newline in this text is not cosmetic: the stop's `next` is read as
+// lines, so an agent-supplied `\n` lets relayed prose forge what looks like a separate instruction line rather than
+// the embedded quotation it actually is. `id`/`feature` cannot do this (GATE_NAME_SHAPE admits no whitespace);
+// `note` is exempt from that shape because it is deliberately prose, so it needs this instead. Collapsing every
+// whitespace RUN — not just newlines — also covers tabs and the CR half of a CRLF, and keeps the note one line.
+const capNote = (s) => {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return flat.length <= NOTE_CAP ? flat : flat.slice(0, NOTE_CAP - 1).trimEnd() + '…'
+}
+// ENG-95683 — the ONE predicate for "carries a well-formed gated composite" (kind 'composite' + an `id` of gate-name
+// shape), shared by the carry-through in `componentTypeMismatches` and by `gatedComposite` (which
 // `componentReplanClause` branches on) so the two classifications cannot drift to different rules — the same
 // single-home discipline the GATE_COMPOSITE mirror itself follows. It only CLASSIFIES; `componentTypeMismatches`
-// still owns the normalization (`id.trim()`). Because it tests `c.id.trim()` truthiness it reads a raw resolution
-// entry and an already-normalized mismatch identically (a trimmed non-blank id passes either way).
-const isWellFormedGate = (c) => !!(c?.kind === GATE_COMPOSITE && typeof c.id === 'string' && c.id.trim())
+// still owns the normalization (`id.trim()`). Because it tests the TRIMMED `id` it reads a raw resolution entry and
+// an already-normalized mismatch identically (a trimmed valid id passes either way).
+// FAIL-CLOSED, and deliberately so: an `id` that is not a gate name means this is not a gate this run can act on, so
+// the mismatch stays UNTYPED and the generic re-plan clause stands. Printing "install `<junk>`" would send an
+// operator to do something impossible; the pre-ENG-95683 re-plan wording is the honest fallback.
+// `feature` is NOT part of this predicate — it is optional, and a malformed one must not demote an otherwise valid
+// gate to a re-plan (the plan would still be correct). `componentTypeMismatches` validates it separately and simply
+// DROPS it when it is not a gate name, so the operator still gets the install instruction and never sees junk.
+// What this does NOT do: confirm the id is the RIGHT package for this component type. That needs the engine's own
+// `gateForComponentType` table, which cannot be reached from here — this module is inlined verbatim into
+// `freedom-build-executor.workflow.js`, whose host has no module system, and `build-workflows.mjs` inlines only
+// `_workflow-core/` modules (an `import` of the engine's `mapping-table.mjs` would be STRIPPED and the symbol would
+// be undefined at run time). Cross-checking against the engine table is ENG-95555.
+const isWellFormedGate = (c) => !!(c?.kind === GATE_COMPOSITE && isGateName(c.id))
 function componentTypeMismatches(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
     .filter((c) => c && typeof c.type === 'string' && c.resolved === false)
     .filter((c) => published.size === 0 || published.has(c.type))
     // ENG-95683 — carry the OPTIONAL typed gate through onto the mismatch so `componentReplanClause` can branch BY
-    // KIND. Only a well-formed gated composite (kind 'composite' + a non-blank string `id`) is carried; anything else
-    // leaves the mismatch untyped and the generic re-plan clause stands (a plan predating the fields is unchanged).
+    // KIND. Only a well-formed gated composite (kind 'composite' + an `id` of gate-name shape) is carried; anything
+    // else leaves the mismatch untyped and the generic re-plan clause stands (a plan predating the fields is
+    // unchanged). `feature` rides along ONLY when it is a gate name too — a malformed one is dropped rather than
+    // demoting the gate, so this is the ONE place a rendered `feature` can come from and it is always validated.
     .map((c) => ({
       type: c.type,
-      note: (typeof c.note === 'string' && c.note.trim()) ? c.note : 'does not resolve on the target stand',
+      note: (typeof c.note === 'string' && c.note.trim()) ? capNote(c.note) : 'does not resolve on the target stand',
       ...(isWellFormedGate(c)
-        ? { kind: GATE_COMPOSITE, id: c.id.trim(), ...(typeof c.feature === 'string' && c.feature.trim() ? { feature: c.feature.trim() } : {}) }
+        ? { kind: GATE_COMPOSITE, id: c.id.trim(), ...(isGateName(c.feature) ? { feature: c.feature.trim() } : {}) }
         : {}),
     }))
 }

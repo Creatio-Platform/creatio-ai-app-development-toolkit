@@ -12,6 +12,19 @@
 # rather than merely noisy, and hides real drift inside the noise (that is exactly how the blank-line drift this
 # PR removes survived). `run-workflow-parity.mjs` fails the same way: it slices the shipped script and evaluates
 # it, and CRLF breaks the slice with `SyntaxError: Unexpected token 'export'`.
-# Every blob is ALREADY stored LF, so this changes only what lands in a working tree — no file content moves.
+# Every blob under these two rules is ALREADY stored LF, so for them this changes only what lands in a working
+# tree. There is ONE exception, and it is exactly the case where the rule would be unsafe — see `fixtures` below.
 *.mjs text eol=lf
 *.js text eol=lf
+
+# Review (m-dymytrova) — the captured Classic schema fixtures are EXEMPT. This is data integrity, not style.
+# Seven of them (contract/ContractInInvoice, ContractInOrder, CoreContracts, DocumentInContract, SalesContracts,
+# WorkCompliance, WorkOverride) are stored with DOUBLE-CR line endings (CR CR LF) — genuinely what the stand
+# emitted. Git classifies them `i/-text`, because the lone CRs defeat its text detection, so until the `*.js` rule
+# above they had never been reached by any attribute. Declaring them `text` OVERRIDES that detection and makes Git
+# want to halve every CR CR LF to CR LF: 2401 lines across the 7 files, which a plain `git add -A` is enough to
+# stage. These fixtures are the input `run.mjs` feeds straight to `parseSchema` across 122 checks, and because the
+# engine normalizes line endings before parsing, that rewrite leaves the goldens GREEN — the corpus would quietly
+# stop being the bytes the stand produced, with no failing test to notice it. `-text` opts them out of every EOL
+# conversion, which is also how they behaved before the rules above existed.
+engine-tests/classic-to-freedom/fixtures/** -text

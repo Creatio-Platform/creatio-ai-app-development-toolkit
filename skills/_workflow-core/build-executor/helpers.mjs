@@ -571,7 +571,16 @@ const isGateName = (s) => typeof s === 'string' && GATE_NAME_SHAPE.test(s.trim()
 // bounded by is LENGTH: that is the one way a relayed note can degrade the stop, by burying the fix instruction
 // under a wall of text. Truncated with an ellipsis so the operator can see the note was cut rather than ended.
 const NOTE_CAP = 300
-const capNote = (s) => (s.length <= NOTE_CAP ? s : s.slice(0, NOTE_CAP - 1).trimEnd() + '…')
+// Review (RC-1 round 5) — FLATTEN before capping. The length cap alone stops a note from burying the fix, but a
+// SHORT note could still carry newlines, and a newline in this text is not cosmetic: the stop's `next` is read as
+// lines, so an agent-supplied `\n` lets relayed prose forge what looks like a separate instruction line rather than
+// the embedded quotation it actually is. `id`/`feature` cannot do this (GATE_NAME_SHAPE admits no whitespace);
+// `note` is exempt from that shape because it is deliberately prose, so it needs this instead. Collapsing every
+// whitespace RUN — not just newlines — also covers tabs and the CR half of a CRLF, and keeps the note one line.
+const capNote = (s) => {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return flat.length <= NOTE_CAP ? flat : flat.slice(0, NOTE_CAP - 1).trimEnd() + '…'
+}
 // ENG-95683 — the ONE predicate for "carries a well-formed gated composite" (kind 'composite' + an `id` of gate-name
 // shape), shared by the carry-through in `componentTypeMismatches` and by `gatedComposite` (which
 // `componentReplanClause` branches on) so the two classifications cannot drift to different rules — the same
