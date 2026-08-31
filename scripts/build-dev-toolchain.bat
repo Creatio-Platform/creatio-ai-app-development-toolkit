@@ -252,7 +252,9 @@ if /I "%KN_MODE%"=="release" (
 )
 REM `creatio-curated` is a BUILT-IN source that cannot be removed/re-added, so we reconfigure it by
 REM editing appsettings.json directly, then run clio's own verified sync (server killed in step 1, so no
-REM lock contention). The edit rewrites the source into ONE of two shapes based on the mode from [0/7]:
+REM lock contention). This is a DELIBERATE, time-boxed workaround for a missing clio CLI -- tracked upstream
+REM as Advance-Technologies-Foundation/clio#1289 (a clio-owned `set-knowledge-source` command); drop this
+REM appsettings surgery once that lands. The edit rewrites the source into ONE of two shapes based on the mode from [0/7]:
 REM   branch  -> type=git, location=<KN_URL>, branch|tag=<ref>  (ref auto-classified: N.N* => tag),
 REM              plus feature flag 'knowledge-allow-unsequenced'=true -- the raw bundle-source.json on a
 REM              branch has no "sequence", so only a flag-aware clio can derive it and install cleanly.
@@ -274,7 +276,8 @@ REM Fail LOUDLY if the appsettings rewrite itself errored (locked/malformed file
 REM rebuilt Stage A binary changed) rather than syncing against a stale/unknown config and letting the
 REM non-fatal install-knowledge outcome below mask it. NOTE (cross-repo): this edit assumes clio's
 REM appsettings knowledge-source contract; a schema/version guard against Stage A's local build belongs in
-REM the clio repo (flagged). Best-effort still: a rewrite failure skips only the sync, not the rebuild.
+REM the clio repo (tracked: Advance-Technologies-Foundation/clio#1289). Best-effort still: a rewrite failure
+REM skips only the sync, not the rebuild.
 if errorlevel 1 (
   echo   [error] could not update the knowledge-source config in appsettings.json -- SKIPPING knowledge sync.
   echo           ^(The clio binary rebuilt in Stage A may have changed the appsettings schema this edit assumes.^)
