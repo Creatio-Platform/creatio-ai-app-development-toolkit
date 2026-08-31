@@ -280,6 +280,46 @@ class ConsumptionContractDocTests(unittest.TestCase):
         self.assertIn("must exist BEFORE the executor is launched", content)
         self.assertIn("`resolutionsRead`", content)
 
+    def test_round_17_contract_changes_are_documented(self):
+        """The four behaviour changes of round 17 must be in the prose a driving agent reads.
+
+        Each assertion pins a sentence THIS round added, so mutating that sentence turns one red — the
+        failure mode the `assertIn("persisted", ...)` pin was found to be missing (it was already satisfied
+        by text predating this channel).
+        """
+        doc = read_text(EXECUTOR_FILES_DOC)
+
+        # Major 3 — the verifier obligation is required, not merely declared.
+        self.assertIn("`required` on any verify dispatch that was handed claims", doc)
+        # Major 5 — a positive read outranks either source.
+        self.assertIn("releases the row **whichever source recorded it**", doc)
+        # Major 4 — the reasoned-unknown escape is rule-shaped only, and the kinds are named.
+        self.assertIn("releases only a **verifier-sourced** row on a **rule-shaped**", doc)
+        for kind in ("`lookup-value`", "`rule`", "`visibility-rule`"):
+            self.assertIn(kind, doc)
+        # Major 5 (second half) — a refutation wins regardless of arrival order.
+        self.assertIn("a refutation wins whichever order they arrive", doc.replace("**", ""))
+        # Major 7 — the zero-work resume names the held answer.
+        self.assertIn("including on the zero-work", doc.replace("**", ""))
+        # Major 6 — the reopen grant is bounded by the round budget.
+        self.assertIn("A reopen grant is bounded by the ROUND BUDGET", doc.replace("**", ""))
+
+    def test_round_17_pins_are_not_satisfied_by_pre_existing_text(self):
+        """Anti-vacuity for the pins above: each phrase must occur EXACTLY ONCE.
+
+        A pin satisfied by a second, unrelated occurrence cannot fail when the sentence it is named for is
+        rewritten — the RC-14 defect this module's own comments describe, and the one that slipped through
+        in `5be891c`. Counting occurrences is what makes these pins load-bearing rather than decorative.
+        """
+        doc = read_text(EXECUTOR_FILES_DOC).replace("**", "")
+        for phrase in ("required` on any verify dispatch that was handed claims",
+                       "releases the row whichever source recorded it",
+                       "releases only a verifier-sourced row on a rule-shaped",
+                       "a refutation wins whichever order they arrive",
+                       "including on the zero-work",
+                       "A reopen grant is bounded by the ROUND BUDGET"):
+            self.assertEqual(doc.count(phrase), 1, f"expected exactly one occurrence of {phrase!r}")
+
 
 if __name__ == "__main__":
     unittest.main()

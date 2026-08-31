@@ -19,7 +19,10 @@ The file must exist BEFORE the executor is launched. `--units` reads it at the h
 An answer that a build agent WAS handed is tracked to a build action or to a stated refusal. The builder returns
 `resolutionsApplied` (`{ id, applied, how?, why? }`, one per answer it was given, `required` on those dispatches);
 the read-only verifier returns `resolutionChecks` saying whether the page it fetched actually shows each answer's
-effect; and anything left over is returned in `unconsumedResolutions` and **blocks `complete`**. None of this writes
+effect, **`required` on any verify dispatch that was handed claims** (declared-but-optional was not enough: an absent
+row reads as unconfirmed rather than as a refutation, so an untrue `applied: true` closed the unit and the run reported
+`complete: true` over an answer that produced nothing); and anything left over is returned in `unconsumedResolutions`
+and **blocks `complete`**. None of this writes
 `built.evidence` or closes a row — the direction is one way, toward stricter.
 
 `resolutionChecks[].shows` is `"yes"` / `"no"` / `"unknown"`, and only `"no"` refutes the builder. `"unknown"` means
@@ -28,9 +31,21 @@ not a defect. That distinction is load-bearing for any answer about BUSINESS RUL
 `BusinessRule_*` schemas invisible to `viewConfig`: the verifier reads `pages[<key>].businessRules` or calls
 `read-page-business-rules` rather than reporting a page-body zero as a refutation.
 One place a FRESH `"unknown"` is NOT like an absent row: when this round's verifier re-reads a page whose answer an
-earlier round recorded unconsumed on a `"no"`, a later `"yes"` OR `"unknown"` for that pair RELEASES the record — a
-non-refuting read of the same page is the earlier refutation withdrawn. An ABSENT read (the verifier never looked)
-releases nothing. Without this, a rule-shaped answer whose rebuilt effect the page body can never positively show
+earlier round recorded unconsumed on a `"no"`, a later non-refuting read for that pair can RELEASE the record. The two
+strengths are not interchangeable:
+
+- A `"yes"` releases the row **whichever source recorded it** — a positive independent read of the page outranks both
+  an earlier `"no"` and the builder's own `applied: false`. Before this, a builder that honestly declined an answer
+  because the page ALREADY satisfied it filed a row no later `"yes"` could clear, so the unit went green with
+  `complete` false for ever and only a hand-edit of the queue file recovered it.
+- A reasoned `"unknown"` (one that says WHY in `found`) releases only a **verifier-sourced** row on a **rule-shaped**
+  kind — `lookup-value`, `rule`, `visibility-rule` — the class whose effect `viewConfig` structurally cannot show.
+  For any other kind it releases nothing: a LAYOUT-shaped answer, whose effect the page body CAN show, must not be
+  retired by a shrug after being positively refuted.
+
+An ABSENT read (the verifier never looked) releases nothing, and a bare `"unknown"` with no `found` releases nothing.
+Two rows for the same pair in one result are collapsed to one, and **a refutation wins whichever order they arrive
+in** — `[yes, no]` files the contradiction and does not release it. Without this, a rule-shaped answer whose rebuilt effect the page body can never positively show
 would block `complete` for ever, because once its unit is green it is never re-verified and the confirming `"yes"`
 can never arrive.
 
@@ -172,12 +187,19 @@ Rules that make it trustworthy:
   the effect. Copy the rows verbatim; the run re-checks each one against the questions the plan still asks, so a
   withdrawn answer or an id a re-plan moved drops out on its own. A `verifier`-sourced row has exactly **ONE
   release window**, and it is the repair round the contradiction itself buys: the unit re-opens, it is rebuilt, and
-  THAT round's verifier read releases the row on `"yes"` or `"unknown"`. There is no second window — the grant is
+  THAT round's verifier read releases the row on `"yes"`, or on a reasoned `"unknown"` when the kind is rule-shaped. There is no second window — the grant is
   spent, the unit goes green, and a green unit is never re-verified — so a row whose repair round came back `"no"`
   again, or came back with no check row for it at all, is **held until the operator acts**: fix the build, or
   withdraw the answer so the question stops being owed. That terminus is deliberate and it is why the run's closing
-  `next` names the answer and its `why` rather than only reporting NOT COMPLETE; do not read the `"unknown"` release
+  `next` names the answer and its `why` rather than only reporting NOT COMPLETE — **including on the zero-work
+  resume**, the exit a held answer actually takes once its grant is spent (green gate, nothing parked, nothing open),
+  which used to advertise the verify table as a completion report; do not read the `"unknown"` release
   rule as a promise that a later read will eventually arrive on its own, because for a green unit it will not.
+- **A reopen grant is bounded by the ROUND BUDGET.** A unit the engine gate calls green cannot be parked, and a
+  reopen key forces it open, so a grant that was never released left the run dispatching full Build/Verify/Judge
+  rounds on a green unit for ever whenever a build agent returned `null` deterministically. Once a unit has spent its
+  round budget its reopen grant stops forcing it open; anything still unaccounted for is REPORTED as an unconsumed
+  answer rather than retried, which is the same fail-closed direction the rest of this channel takes.
 - **`resolutionsReopened` and `resolutionsPending` are at the ROOT, they are REQUIRED, and both are written on
   EVERY close — including when they are `[]`.** They are the answer-channel repair grants, and they are process
   bookkeeping rather than operator content: do NOT judge, filter or tidy them. `resolutionsReopened` is a list of

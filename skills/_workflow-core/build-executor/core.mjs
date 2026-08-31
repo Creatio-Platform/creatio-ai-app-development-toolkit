@@ -45,7 +45,8 @@ import {
   // suite caught exactly that: `reconcileUnconsumed is not defined` on a green baseline the artifact ran fine.
   buildSchemaWithResolutions, capCarryText, completionLine, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
   pairKey, pairParts, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
-  resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs, unconsumedNextClause,
+  resolutionClaimCount, resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs, unconsumedLogLine, unconsumedNextClause,
+  verifierSchemaWithChecks,
   unconsumedResolutions,
   UNCONSUMED_CARRY_WARN, UNCONSUMED_FROM_DISPATCH,
 } from './helpers.mjs'
@@ -911,7 +912,34 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // same reason: the engine gates on deliverables and has no row for "the answer you were handed produced nothing".
   // Two sets, one union — kept separate at the source so `findings` stays exactly what it is (the operator re-opening
   // a unit the gate called complete) rather than becoming the answer channel this ticket exists to replace.
-  const reopenKeys = () => new Set([...findingsPending, ...resolutionsPending])
+  // A REOPEN GRANT IS BOUNDED BY THE ROUND BUDGET (PR #128 review, round 17, Major 6).
+  // The two openness notions disagreed on purpose — `openNow()` admits a unit a reopen key holds open, while
+  // `parkableKeys` filters on `isUnitOpen`, which for a page the gate calls green is `false`. So a gate-green unit
+  // held open ONLY by a reopen key was admitted to every round and was a park candidate in none of them, and
+  // `driveRounds` is `while (true)` with no global cap. Since the answer channel's grant is released at DISPATCH
+  // (correctly — a builder that died must not be charged for its repair round), a build agent returning `null`
+  // DETERMINISTICALLY left the key set for ever: one full Build + Verify + Judge + Reconcile round per iteration,
+  // on a unit the gate already calls complete, until the host's own limits stopped it.
+  // Released rather than parked: parking would take the findings channel's ONE extra dispatch away from a unit that
+  // is already at the budget, which is a different feature's contract. Releasing the key ends the loop and leaves
+  // the answer in `unconsumed`, so it is still reported to the operator — the fail-closed direction this channel
+  // takes everywhere else. `chargeBuildAttempt` runs on the `!res` path too, so the count that bounds this always
+  // advances and termination does not depend on the builder cooperating.
+  const exhaustedReopen = new Set()
+  const reopenKeys = () => {
+    const out = new Set()
+    for (const k of [...findingsPending, ...resolutionsPending]) {
+      if (roundsRun(state.roundOf, localRounds, k) >= MAX_ROUNDS) {
+        if (!exhaustedReopen.has(k)) {
+          exhaustedReopen.add(k)
+          log(`\`${k}\` has spent its ${MAX_ROUNDS}-round budget — its reopen grant no longer forces the unit open. Anything still unaccounted for is reported rather than retried.`)
+        }
+        continue
+      }
+      out.add(k)
+    }
+    return out
+  }
   // PR #128 review (round 6) -- the union is built ONCE PER CALL, not once per schedule element. It is still rebuilt
   // on EVERY `openNow()` because both Sets mutate between calls (a grant is spent, a contradiction files one), so it
   // cannot be hoisted out of the function -- only out of the filter callback.
@@ -1098,14 +1126,28 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   // they live beside it: a green gate with nothing open and a stand where everything is closed-or-parked are
   // different facts, and the operator has to be told which one they got.
   function zeroWorkReason() {
-    return state.verify?.complete === true
+    // PR #128 review (round 17) — THE HELD ANSWER IS NAMED IN THE REASON. Without the suffix this path reported
+    // "nothing to build" on a folder that is NOT finished: the gate is green, the page is genuinely built, and an
+    // answer the operator gave still produced nothing. `complete` was already correct here; the operator-facing
+    // sentence was the half that said the opposite of what the run had decided.
+    const held = unconsumed.length
+      ? ` — but ${unconsumed.length} operator answer(s) reached a build agent and produced NO build action, so this run is NOT complete`
+      : ''
+    return (state.verify?.complete === true
       ? 'the engine gate is already green on this stand and no unit is open — nothing to build'
-      : 'every published unit is either already closed on this stand or parked — nothing left this run can build'
+      : 'every published unit is either already closed on this stand or parked — nothing left this run can build') + held
   }
   function zeroWorkNext() {
-    return parked.length
+    // PR #128 review (round 17) — `unconsumedNextClause` IS APPENDED HERE TOO. It was on the terminal close only, so
+    // the one shape this scenario can take once the grant is spent — queue holds the row, `resolutionsPending` empty,
+    // `openNow()` empty, gate green — told the orchestrating agent to "present the completion report" while the run
+    // was holding an answer that went nowhere. `references/02-queue-and-built-files.md` promises the opposite.
+    const base = parked.length
       ? `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
-      : `present ${VERIFY_TABLE} verbatim as the completion report`
+      : unconsumed.length
+        ? `present ${VERIFY_TABLE} verbatim — it is green, and this run is still NOT COMPLETE for the reason below`
+        : `present ${VERIFY_TABLE} verbatim as the completion report`
+    return `${base}${unconsumedNextClause(unconsumed)}`
   }
 
   const noUnitsStop = noUnitsPublishedStop(schedule)
@@ -1126,11 +1168,17 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
     if (!openNow().length) {
       const why = zeroWorkReason()
       log(why)
+      // PR #128 review (round 17) — the same log the terminal close emits, through the one shared render. This path
+      // used to say nothing about a held answer at all.
+      if (unconsumed.length) log(unconsumedLogLine(unconsumed))
       // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
       yield* persistPending('nothing left to build')
       return runReturn({
-        // `unconsumed` is empty on this path by construction (nothing was dispatched), and the term is written out
-        // anyway via the shared `runComplete` so this site cannot drift from the run's other `complete` decision.
+        // `unconsumed` here is the RECONCILED SEED from the queue file and may well be NON-EMPTY — a resumed folder
+        // with a green gate and a surviving unconsumed answer reaches exactly this return, which is the whole reason
+        // the term is present. (The old comment claimed it was "empty by construction because nothing was dispatched";
+        // the seeding at `reconcileUnconsumed(state.unconsumedResolutions || [], …)` runs long before this point, and
+        // that claim is what let the `next` on this path go on advertising a completion report.)
         complete: runComplete(state.verify?.complete, parked, unconsumed),
         skipped: true,
         reason: why,
@@ -1948,7 +1996,10 @@ ${orphanBlock()}Then report \`discrepancies\`: where a builder CLAIMED a compone
 
 Do not build, repair or re-bind anything. If a page is wrong, the next round's build agent fixes it; you report.`,
       {
-        schema: VERIFIER_SCHEMA, phase: 'Verify', label: `verify:round-${round}`, role: 'verifier',
+        // ROUND 17 — `resolutionChecks` is REQUIRED on a round that handed out answers (Major 3). Computed from the
+        // SAME claims array the prompt renders from, so the obligation cannot drift from the question.
+        schema: verifierSchemaWithChecks(VERIFIER_SCHEMA, resolutionClaimCount(claims)),
+        phase: 'Verify', label: `verify:round-${round}`, role: 'verifier',
         inputFiles: [ctx.BUILT_FILE],
         // A DIFFERENT context from the one that built these pages — a builder filing its own evidence is grading its
         // own work. A host that cannot isolate the two is STOPPED rather than allowed to merge them.
@@ -2578,7 +2629,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // dropped in silence, and a run that reported itself finished while holding one would be that silence.
   const complete = runComplete(state.verify?.complete, parked, unconsumed)
   if (unconsumed.length) {
-    log(`UNCONSUMED OPERATOR ANSWERS: ${unconsumed.map((u) => `\`${u.unit}\`/\`${u.id}\``).join(', ')} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`)
+    log(unconsumedLogLine(unconsumed))
   }
 
   // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it. ONE close-out

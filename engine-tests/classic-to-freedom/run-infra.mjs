@@ -165,10 +165,11 @@ const H_BUILD_PROMPT = ["resolutionsForUnit", "guidelinesCloseMiss", "owesGuidel
 // pair algebra lives here too — it is the identity of an unconsumed answer, and every rule about it is executable.
 const H_ANSWERS_CHANNEL = ["resolutionAccountingMiss", "unconsumedResolutions",
   "pairKey", "pairParts", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds",
-  "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
+  "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause", "unconsumedLogLine",
   "capCarryText", "hasUnconsumedPair",
   "grantPairsToPersist", "seedGrantPairs",
-  "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions"];
+  "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
+  "checkRowsByPair", "isRuleShapedKind", "verifierSchemaWithChecks", "resolutionClaimCount"];
 // The in-context gate: what a unit says about itself, and whether it may continue rather than park.
 const H_SELF_CHECK = ["selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
@@ -1376,7 +1377,12 @@ check("findings: a reopened unit gets ONE repair attempt — the constant key se
     // reported defect unscheduled and this check green), and the per-invocation consumption must still happen.
     && /isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, keys, packageState\)\)/.test(wfSrc)
     && /const openNow = \(\) => \{\s*const keys = reopenKeys\(\)/.test(wfSrc)
-    && /const reopenKeys = \(\) => new Set\(\[\.\.\.findingsPending, \.\.\.resolutionsPending\]\)/.test(wfSrc)
+    // ROUND 17 (Major 6): `reopenKeys` is no longer a one-liner — it now DROPS a grant whose unit has spent the
+    // round budget, because a gate-green unit held open only by a reopen key was admitted to every round and
+    // was a park candidate in none, and `driveRounds` has no global cap. The union over BOTH channels is still
+    // pinned (a rename dropping `findingsPending` would leave a reported defect unscheduled), and so is the bound.
+    && /for \(const k of \[\.\.\.findingsPending, \.\.\.resolutionsPending\]\) \{/.test(wfSrc)
+    && /if \(roundsRun\(state\.roundOf, localRounds, k\) >= MAX_ROUNDS\) \{/.test(wfSrc)
     && /findingsPending\.delete\(unit\.key\)/.test(wfSrc));
 check("findings: a key naming no published unit REFUSES the run — nothing schedules it, so the run would close green with the reported defect untouched",
   /stopped: 'unknown-finding-key'/.test(wfSrc) && /unknownCheckpointKeys\(\[\.\.\.FINDING_KEYS\]/.test(wfSrc));
@@ -1624,6 +1630,62 @@ check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper —
 // i.e. degrading behaviour two review rounds settled in order to stay under a number -- the wrong trade to
 // make silently. The guard still does its job: it is a stated ceiling that a drift has to be raised past on
 // purpose, and this is that purpose, recorded.
+/* THE HOST'S REAL CEILING, ENCODED (PR #128 review, round 17, Major 8).
+   `RECONCILE_SCHEMA_BUDGET` below is a DRIFT budget, and reading its green as "this schema is fine" is wrong: the
+   host's structured-output classifier rejects a serialized agent schema over 4096 bytes outright, before the model
+   runs, with `blocked by safety classifier: output schema too large to classify safely`. ENG-95930 measured that
+   and is OPEN; its fix commit is not on this branch. `RECONCILE_SCHEMA` is over it and has been for several
+   tickets, so this suite cannot simply assert the cap for everything without going red on a known, ticketed debt.
+   What it CAN do — and what was missing — is:
+     1. name the real ceiling instead of leaving it in a ticket,
+     2. hold EVERY OTHER agent schema under it, so the next field lands where it is cheap to move, and
+     3. pin the over-cap schema's excess, so the debt is a number in this file rather than a surprise at run time.
+   The exemption is deliberately a LIST OF ONE. Adding to it should be as annoying as raising the budget. */
+const HOST_SCHEMA_CAP = 4096;
+const OVER_CAP_BY_TICKET = { RECONCILE_SCHEMA: "ENG-95930" };
+let schemaSizes = {};
+{
+  let tmpAll;
+  try {
+    tmpAll = mkdtempSync(path.join(os.tmpdir(), "wf-schemas-all-"));
+    const modPath = path.join(tmpAll, "schemas.mjs");
+    // ONE contiguous region: `VERIFY_RESULT` through the end of `PERSIST_SCHEMA` carries every agent schema AND the
+    // intermediate declarations they are built from (`PREFLIGHT_ITEM`, `BUILD_PROPERTIES`, the four `BUILD_SCHEMA_*`),
+    // so nothing has to be stubbed. The design literals are injected exactly as the sibling slice above does it.
+    const from = wfSrc.indexOf("const VERIFY_RESULT");
+    const to = wfSrc.indexOf("const PACKAGE_RECORD_SCHEMA");
+    const lits = [`const CARRY_TEXT_CAP = ${JSON.stringify(CARRY_TEXT_CAP)};`,
+      ...SHOWS_NAMES.map((n) => `const ${n} = ${JSON.stringify(SHOWS[n])};`)].join("\n");
+    const names = ["RECONCILE_SCHEMA", "VERIFIER_SCHEMA", "JUDGE_SCHEMA", "PERSIST_SCHEMA",
+      "PREFLIGHT_SCHEMA", "REFS_SCHEMA", "BUILD_SCHEMAS"];
+    writeFileSync(modPath, `${lits}\n${wfSrc.slice(from, to)}\nexport { ${names.join(", ")} };\n`);
+    const m = await import(pathToFileURL(modPath).href);
+    const bytes = (o) => JSON.stringify(o).length;
+    for (const n of names) {
+      if (n === "BUILD_SCHEMAS") for (const k of Object.keys(m.BUILD_SCHEMAS)) schemaSizes[`BUILD_SCHEMAS.${k}`] = bytes(m.BUILD_SCHEMAS[k]);
+      else schemaSizes[n] = bytes(m[n]);
+    }
+    check("PR #128 review (round 17, Major 8): every agent output schema in the shipped artifact is MEASURABLE — a slice that silently failed to load would make the cap checks below vacuous",
+      Object.keys(schemaSizes).length === names.length - 1 + Object.keys(m.BUILD_SCHEMAS).length
+        && Object.values(schemaSizes).every((n) => n > 0),
+      () => JSON.stringify(schemaSizes));
+    const overCap = Object.entries(schemaSizes).filter(([n, b]) => b > HOST_SCHEMA_CAP && !OVER_CAP_BY_TICKET[n]);
+    check(`PR #128 review (round 17, Major 8): every agent schema EXCEPT the one ticketed exemption stays under the host's real ${HOST_SCHEMA_CAP}-byte classifier cap — over it the agent is rejected BEFORE the model runs, so this is a run-stopper and not a slow degradation`,
+      overCap.length === 0,
+      () => `over cap: ${JSON.stringify(overCap)} (exempt: ${JSON.stringify(OVER_CAP_BY_TICKET)})`);
+    check(`PR #128 review (round 17, Major 8): the ONE over-cap schema is the ticketed one, and its EXCESS is pinned here — the debt is a number in this suite instead of a surprise at dispatch time, and it cannot grow without this line moving`,
+      schemaSizes.RECONCILE_SCHEMA > HOST_SCHEMA_CAP && schemaSizes.RECONCILE_SCHEMA <= 6250
+        && Object.keys(OVER_CAP_BY_TICKET).length === 1,
+      () => `RECONCILE_SCHEMA is ${schemaSizes.RECONCILE_SCHEMA} bytes, ${schemaSizes.RECONCILE_SCHEMA - HOST_SCHEMA_CAP} over the ${HOST_SCHEMA_CAP} host cap (${OVER_CAP_BY_TICKET.RECONCILE_SCHEMA})`);
+    check(`PR #128 review (round 17, Major 3+8): widening VERIFIER_SCHEMA with the per-round \`resolutionChecks\` obligation keeps it well under the cap — the obligation is one string appended to \`required\`, so it cannot be the thing that pushes a second schema over`,
+      schemaSizes.VERIFIER_SCHEMA + "resolutionChecks".length + 4 < HOST_SCHEMA_CAP,
+      () => `VERIFIER_SCHEMA is ${schemaSizes.VERIFIER_SCHEMA} bytes`);
+  } catch (e) {
+    check("PR #128 review (round 17, Major 8): the all-schema slice loads as a standalone module", false, e.message);
+  } finally {
+    if (tmpAll) rmSync(tmpAll, { recursive: true, force: true });
+  }
+}
 const RECONCILE_SCHEMA_BUDGET = 6250;
 let reconcileSchemaBytes = -1;
 let tmpSchema;
@@ -2250,7 +2312,7 @@ const rcItems = [
     resolution: { answer: "InProgress = 1093…", decidedBy: "operator", date: "2026-08-24" } },
 ];
 const rcOwed = () => wf.owedResolutionPairs(rcItems, ["main"]);
-const rcEntry = (id, source) => ({ unit: "main", id, kind: "x", item: "y", answer: "z", why: "w", source });
+const rcEntry = (id, source, kind = "x") => ({ unit: "main", id, kind, item: "y", answer: "z", why: "w", source });
 
 check("PR #128 review: `pairKey` separates unit from id with a byte that CANNOT occur in either — the two halves are matched as a pair, and a separator a key could contain would let one pair impersonate another",
   () => wf.pairKey("main", "a") !== wf.pairKey("mai", "na") && wf.pairKey("main", "a").includes("\u0000"),
@@ -2328,9 +2390,9 @@ check("PR #128 review: a VERIFIER-sourced entry is cleared by a verifier that CO
       && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), new Set(), rcPub()).length === 1; },
   () => "a released verifier pair clears its entry and an unreleased one does not");
 check("PR #128 review (finding 2): a FRESH `unknown` read this round RELEASES a verifier-sourced entry, and an ABSENT read does not — a rule-shaped answer's effect can only ever score `unknown` after its rebuild (it lives in `BusinessRule_*`, invisible to `viewConfig`), so requiring `yes` blocks `complete` for ever once the unit went green and stopped being re-verified",
-  () => { const byUnknown = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(),
+  () => { const byUnknown = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(),
       wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "rules live in BusinessRule_* schemas" }]), rcPub());
-    const byAbsent = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(),
+    const byAbsent = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(),
       wf.releasedResolutionPairs([]), rcPub());
     return byUnknown.length === 0 && byAbsent.length === 1; },
   () => "a fresh unknown releases the stale verifier row; an absent read does not");
@@ -2338,6 +2400,56 @@ check("PR #128 review (finding 2): a fresh `unknown` releases ONLY a verifier-so
   () => wf.reconcileUnconsumed([rcEntry(RC_B, "dispatch")], rcOwed(),
       wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }]), rcPub()).length === 1,
   () => "unknown does not release a dispatch-sourced row");
+check("PR #128 review (round 17, Major 3): `resolutionChecks` is REQUIRED of the verifier on a round that handed out answers, and NOT on one that did not — the field was declared-but-optional while the gate reads an absent row as `not a refutation`, so an untrue `applied: true` closed the unit and `complete: true` was reported over an answer that produced nothing",
+  () => { const base = { type: "object", required: ["pagesWritten", "builtFile"], properties: { x: {} } };
+    const widened = wf.verifierSchemaWithChecks(base, 2);
+    const untouched = wf.verifierSchemaWithChecks(base, 0);
+    return widened.required.includes("resolutionChecks")
+      && widened.required.includes("pagesWritten") && widened.required.includes("builtFile")
+      && untouched === base
+      && !base.required.includes("resolutionChecks"); },
+  () => JSON.stringify(wf.verifierSchemaWithChecks({ type: "object", required: ["a"] }, 1)));
+check("PR #128 review (round 17, Major 3): the obligation is counted off the SAME claims array the prompt renders from — a separately-derived flag would let the verifier be asked for rows it was never shown, or shown rows it was never asked for",
+  () => wf.resolutionClaimCount([{ unit: "main", resolutionClaims: [{ id: "a" }, { id: "b" }] }, { unit: "list", resolutionClaims: [{ id: "c" }] }]) === 3
+    && wf.resolutionClaimCount([{ unit: "main", resolutionClaims: [] }, { unit: "list" }]) === 0
+    && wf.resolutionClaimCount([]) === 0 && wf.resolutionClaimCount(undefined) === 0,
+  () => "claim count sums across units and is 0 when nothing was handed out");
+check("PR #128 review (round 17, Major 3): the claims line NAMES the return — the field, the row shape, and that `unit` is the UNIT KEY off this bullet rather than the page key; `pairKey(claim.unit, row.id)` matches nothing when they differ, which is exactly what a `list-*` answer does",
+  () => { const line = wf.resolutionClaimsLine([{ id: "main#confirm:entity-filter:Dept", kind: "entity-filter", applied: true, how: "h", answer: "a" }], String, "list");
+    return /resolutionChecks/.test(line) && /\{ unit, id, shows, found \}/.test(line)
+      && /"list"/.test(line) && /BYTE FOR BYTE/.test(line)
+      && /UNCONFIRMED/.test(line)
+      && wf.resolutionClaimsLine([], String, "list") === ""; },
+  () => wf.resolutionClaimsLine([{ id: "i", applied: false }], String, "list").slice(0, 300));
+check("PR #128 review (round 17, Major 3): the VERIFY DISPATCH actually applies it — the widened schema is wired at the call site, not merely available as a helper",
+  /schema: verifierSchemaWithChecks\(VERIFIER_SCHEMA, resolutionClaimCount\(claims\)\),/.test(wfSrc));
+check("PR #128 review (round 17): a positive independent read (`yes`) releases a DISPATCH-sourced row too — a builder that declines an answer because the page already satisfies it filed a row no later `yes` could clear, so the unit went green with `complete` false for ever and only a hand-edit of the queue file recovered it",
+  () => { const rel = wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_YES }]);
+    return wf.reconcileUnconsumed([rcEntry(RC_B, "dispatch")], rcOwed(), rel, rcPub()).length === 0
+      && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), rel, rcPub()).length === 0; },
+  () => "a yes releases either source");
+check("PR #128 review (round 17): the reasoned-`unknown` escape is RULE-SHAPED ONLY — a LAYOUT-shaped answer, whose effect the page body CAN show, is NOT retired by `unknown` plus prose after being refuted with `no`; that was the shrug that retired a proven refutation",
+  () => { const rel = wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "could not determine from the fetched view" }]);
+    const layout = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "list-columns")], rcOwed(), rel, rcPub());
+    const ruleShaped = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(), rel, rcPub());
+    return layout.length === 1 && ruleShaped.length === 0
+      && wf.isRuleShapedKind("lookup-value") && !wf.isRuleShapedKind("list-columns"); },
+  () => "unknown releases a rule-shaped kind only");
+check("PR #128 review (round 17): a bare `unknown` with NO `found` releases nothing even on a rule-shaped kind — the discriminator the approving round added has a failure mode of its own now",
+  () => wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(),
+      wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }]), rcPub()).length === 1
+    && wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }]).size === 0,
+  () => "a bare unknown releases nothing");
+check("PR #128 review (round 17): TWO verifier rows for ONE pair — a REFUTATION WINS whichever order they arrive in, so `[yes, no]` files the contradiction AND does not release it; that ordering used to file the row and erase it in the same round",
+  () => { const claims = [{ unit: "main", resolutionClaims: [{ id: RC_B, kind: "lookup-value", applied: true, how: "set it", answer: "a" }] }];
+    const order1 = [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_YES }, { unit: "main", id: RC_B, shows: SHOWS.SHOWS_NO, found: "not on the page" }];
+    const order2 = [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_NO, found: "not on the page" }, { unit: "main", id: RC_B, shows: SHOWS.SHOWS_YES }];
+    const filed = (rows) => wf.resolutionContradictions(claims, rows).length === 1;
+    const released = (rows) => wf.releasedResolutionPairs(rows).size === 0;
+    return filed(order1) && filed(order2) && released(order1) && released(order2)
+      && wf.checkRowsByPair(order1).get(wf.pairKey("main", RC_B)).shows === SHOWS.SHOWS_NO
+      && wf.checkRowsByPair(order2).get(wf.pairKey("main", RC_B)).shows === SHOWS.SHOWS_NO; },
+  () => "a refutation wins in both orders");
 check("PR #128 review: `reconcileUnconsumed` tolerates the empty and absent shapes — a first round has nothing to reconcile and must not throw on the run's own startup path",
   () => wf.reconcileUnconsumed([], rcOwed(), new Set(), rcPub()).length === 0
     && wf.reconcileUnconsumed(undefined, rcOwed(), new Set(), rcPub()).length === 0
@@ -2778,8 +2890,12 @@ check("PR #128 review (round 7, G6): the one-round terminus is pinned on the SHI
     && /if \(!resolutionsReopened\.has\(pairKey\(c\.unit, c\.id\)\)\) \{ resolutionsReopened\.add\(pairKey\(c\.unit, c\.id\)\); resolutionsPending\.add\(idKey\(c\.unit\)\) \}/.test(wfSrc)
     // the release set is the ONLY thing that clears a verifier row, so the terminus depends on it staying yes-or-unknown
     // The release set is `yes` OR a REASONED `unknown` (approving round, Minor 3) — a bare shrug releases nothing.
-    && /const reasonedUnknown = c\.shows === SHOWS_UNKNOWN && nonBlank\(c\.found\)/.test(wfSrc)
-    && /if \(c\.shows === SHOWS_YES \|\| reasonedUnknown\) \{/.test(wfSrc));
+    // Round 17: the STRENGTH is now recorded per pair rather than collapsed into membership, because the
+    // reconcile treats the two differently (a `yes` outranks any source; a reasoned `unknown` is the
+    // rule-shaped escape only). Both halves pinned, so collapsing them back into one rule reddens this.
+    && /if \(c\.shows === SHOWS_YES\) out\.set\(pairKey\(c\.unit, c\.id\), SHOWS_YES\)[\s\S]{0,40}else if \(reasonedUnknown\) out\.set\(pairKey\(c\.unit, c\.id\), SHOWS_UNKNOWN\)/.test(wfSrc)
+    && /if \(strength === SHOWS_YES\) return false/.test(wfSrc)
+    && /if \(strength === SHOWS_UNKNOWN && u\.source === UNCONSUMED_FROM_VERIFIER[\s\S]{0,40}&& isRuleShapedKind\(u\.kind\)\) return false/.test(wfSrc));
 // Round-8 (H1) — the unconsumed carry REPORTS its size instead of being trimmed. The review asked for a ceiling;
 // a silent one is unavailable here because this text is the persist instruction, so a rendered subset becomes a
 // persisted subset. Making the growth visible is the part that can be done without losing rows.

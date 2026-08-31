@@ -1113,6 +1113,59 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
     check("build-executor cli: the return names the artifacts an operator has to read, on every exit",
       done.result.verifyTable === "/mig/verify.md" && done.result.queueFile === "/mig/build-queue.json" && done.result.mode === "auto");
 
+    /* AC5 AT THE RUN LEVEL, EXECUTED (PR #128 review, round 17, Major 9).
+       Every consumption DECISION was executed by the offline helper suite, but the RUN-level guarantee — a
+       persisted unconsumed answer plus a green gate must NOT report `complete`, must hand the row back, and must
+       name it in `next` — was asserted only by source regexes over the shipped artifact. That is the exact defect
+       the PR body records as having survived into the branch ("AC5 held for exactly one session"): found by review,
+       not by a test. It needed nothing new from the harness — `submit` + `next` already drives the seed path and
+       the zero-work exit through `runComplete`. This is that run, and it is also the only check that fails when
+       the zero-work `next` stops appending `unconsumedNextClause`. */
+    {
+      const heldRun = path.join(tmp, "held.json");
+      cli("start", heldRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      JSON.parse(cli("next", heldRun).stdout);
+      const HELD_ID = "main#confirm:entity-filter:Department";
+      const held = {
+        ...green,
+        // The question is PUBLISHED and ANSWERED, so the pair is genuinely OWED — the row survives on the owed
+        // path rather than on `reconcileUnconsumed`'s fail-closed branch for an unpublished id.
+        preflightItems: [{ id: HELD_ID, pageKey: "main", kind: "entity-filter", item: "Department",
+          resolution: { answer: "filter Department by active records", decidedBy: "op", date: "2026-08-24" } }],
+        // The queue file carried this from an earlier session: the builder was handed the answer and declined it
+        // cleanly (`applied: false` + a real `why`), which files no `blocked` row and no `discrepancies` row.
+        unconsumedResolutions: [{ unit: "main", id: HELD_ID, source: "dispatch", kind: "entity-filter",
+          item: "Department", answer: "filter Department by active records",
+          why: "the lookup has no Active column on this stand" }],
+        // The grant was already spent on that earlier session, so nothing re-opens the unit: `resolutionsPending`
+        // is empty and `openNow()` is empty. This is the ONLY shape the scenario can take once the grant is gone.
+        resolutionsReopened: [{ unit: "main", id: HELD_ID }], resolutionsPending: [],
+      };
+      const hFile = path.join(tmp, "held-reconcile.json"); writeFileSync(hFile, JSON.stringify(held));
+      const hSub = cli("submit", heldRun, "reconcile.baseline", hFile);
+      check("build-executor cli (AC5): a Reconcile carrying a persisted unconsumed answer is accepted — the row is data the schema requires, not an error",
+        hSub.status === 0, () => hSub.stderr);
+      const hOut = cli("next", heldRun);
+      check("build-executor cli (AC5): `next` answered at all on the held-answer path",
+        Boolean(hOut.stdout.trim()), () => `status=${hOut.status} stderr=${String(hOut.stderr).slice(0, 800)}`);
+      const hDone = JSON.parse(hOut.stdout);
+      check("build-executor cli (AC5): a GREEN gate with a held answer does NOT report `complete` — the gate has no row for an answer that produced nothing, and before this was persisted the same folder reported `complete: true` on the next session",
+        hDone.status === "done" && hDone.result.complete === false && hDone.result.skipped === true && hDone.result.rounds === 0,
+        () => JSON.stringify(hDone.result).slice(0, 500));
+      check("build-executor cli (AC5): the run HANDS THE ROW BACK — an operator cannot act on a `complete: false` that names nothing",
+        Array.isArray(hDone.result.unconsumedResolutions) && hDone.result.unconsumedResolutions.length === 1
+          && hDone.result.unconsumedResolutions[0].id === HELD_ID
+          && /Active column/.test(hDone.result.unconsumedResolutions[0].why || ""),
+        () => JSON.stringify(hDone.result.unconsumedResolutions));
+      check("build-executor cli (AC5): the ZERO-WORK `next` names the held answer instead of advertising a completion report — this exit is the resume path a held answer actually takes, and it used to say `present the verify table as the completion report`",
+        /produced NO build action/.test(hDone.result.next) && /Department/.test(hDone.result.next)
+          && !/as the completion report/.test(hDone.result.next),
+        () => String(hDone.result.next).slice(0, 400));
+      check("build-executor cli (AC5): the REASON says the gate is green AND the run is not finished — the two facts an operator reconciles by hand otherwise",
+        /NOT complete/.test(hDone.result.reason) && /green/.test(hDone.result.reason),
+        () => String(hDone.result.reason));
+    }
+
     // A work-item id is not a filename. `build.child:Documents.r1` carries a colon, which Windows refuses — and
     // this suite runs on windows-latest.
     {

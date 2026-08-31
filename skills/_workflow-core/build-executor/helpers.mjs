@@ -1103,7 +1103,7 @@ export function claimsBlock(claims, fence) {
     const wbl = workplaceBindingsLine(c.workplaceBindings, wrap)
     // Three suffixes, three independent facts about this unit: the record the verifier files, the count it checks,
     // and (ENG-95503) the operator answers it must check the page against. Each renders '' when it does not apply.
-    const rcl = resolutionClaimsLine(c.resolutionClaims, wrap)
+    const rcl = resolutionClaimsLine(c.resolutionClaims, wrap, c.unit)
     return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${claimed}${guidelinesSuffix(gl)}${guidelinesSuffix(wbl)}${guidelinesSuffix(rcl)}`
   }
   return `WHAT THE BUILD AGENTS CLAIMED THIS ROUND — a CLAIM, never evidence. Your job includes checking it against what \`get-page\` actually returns:\n${claims.map(line).join('\n')}\n\nA claimed component the page does not carry, and a component on the page nobody claimed, are BOTH \`discrepancies\`.\n\n- \`"yes"\` — you looked at the right surface and it carries what the answer asked for (the columns in the \`DataTable\`, the filter on the lookup, the component named).
@@ -1302,7 +1302,7 @@ export function resolutionClaimRows(routed, res) {
 // files nothing for these — an answer is an input, and there is no evidence record to write for one.
 // Both halves are DATA: the question is stand-derived, and the answer, though the operator's own, reaches this agent
 // as text to check against a page rather than as an instruction to act on.
-export function resolutionClaimsLine(rows, fence) {
+export function resolutionClaimsLine(rows, fence, unitKey) {
   if (!(rows || []).length) return ''
   const wrap = typeof fence === 'function' ? fence : String
   const line = (r) => {
@@ -1327,7 +1327,13 @@ export function resolutionClaimsLine(rows, fence) {
     // `wrap`) keeps the parenthetical readable — `("entity-filter")`, not `(<<DATA … DATA>>)`.
     return `  · ${JSON.stringify(r.id)} (${JSON.stringify(r.kind || 'confirm')}) — answer: ${wrap(String(r.answer ?? '').slice(0, CARRY_TEXT_CAP))} — the builder ${said}`
   }
-  return `OPERATOR ANSWERS THIS UNIT WAS BUILT FROM — check each against the page you just fetched:\n${rows.map(line).join('\n')}`
+  // ROUND 17 — THE RETURN IS NAMED, NOT LEFT TO BE INFERRED FROM THE SCHEMA. The legend below this block explained
+  // what `"yes"`/`"no"`/`"unknown"` MEAN without ever naming the field they go in, the row shape, or the fact that
+  // one row per line is owed. `unit` in particular had no statement at all: it is the UNIT KEY off this bullet, not
+  // the page key and not the Freedom schema name, and `pairKey(claim.unit, row.id)` matches nothing when they
+  // differ — which is exactly what a `list-*` answer does, since `resolutionOwner` routes it to `list` or to `main`
+  // while the id's own `pageKey` half may say the other one.
+  return `OPERATOR ANSWERS THIS UNIT WAS BUILT FROM — check each against the page you just fetched:\n${rows.map(line).join('\n')}\n  RETURN ONE \`resolutionChecks\` ROW FOR EACH LINE ABOVE: \`{ unit, id, shows, found }\`. \`unit\` is \`${JSON.stringify(unitKey)}\` — the unit key on this bullet, NOT the page key and NOT the Freedom schema name. \`id\` is copied from the line BYTE FOR BYTE. \`shows\` is one of \`"yes"\` / \`"no"\` / \`"unknown"\` as defined below, and \`found\` says what you actually saw. A line you return no row for is read as UNCONFIRMED — it is not a refutation, and it does not close anything.`
 }
 
 // ENG-95503 — WHERE THE BUILDER'S "I APPLIED IT" AND THE VERIFIER'S READ OF THE PAGE DISAGREE. One direction only,
@@ -1336,10 +1342,8 @@ export function resolutionClaimsLine(rows, fence) {
 // treating it as a contradiction too would double-report one answer. An answer with no check row is left alone here:
 // absence is not a contradiction, and the accounting pass has already recorded it.
 export function resolutionContradictions(claims, checks) {
-  const shown = new Map()
-  for (const c of checks || []) {
-    if (c && typeof c.unit === 'string' && typeof c.id === 'string') shown.set(pairKey(c.unit, c.id), c)
-  }
+  // ONE NORMALISED MAP, shared with `releasedResolutionPairs` (round 17) so the two cannot disagree about a pair.
+  const shown = checkRowsByPair(checks)
   const out = []
   for (const claim of claims || []) {
     for (const row of claim?.resolutionClaims || []) {
@@ -1431,10 +1435,40 @@ export function owedResolutionPairs(items, unitKeys) {
 // can never arrive. An ABSENT row is NOT a release: a `resolutionChecks` row exists only for a unit the verifier was
 // asked about — i.e. one that was open and REBUILT this round — so this can never clear a row off a page nobody re-read,
 // and the historical `resolution-not-applied` discrepancy the `no` filed stays in `discrepancies` regardless.
-export function releasedResolutionPairs(checks) {
-  const out = new Set()
+// ONE VERIFIER ROW PER `(unit, id)`, AND A REFUTATION ALWAYS WINS (PR #128 review, round 17).
+// `resolutionContradictions` kept the LAST row per pair (`Map.set`) while `releasedResolutionPairs` unioned ANY
+// non-refuting row, so a verifier that returned two rows for one pair in the order `[yes, no]` filed the
+// contradiction AND released it in the same round — the just-added verifier row erased by the reconcile that
+// follows it, a silent drop caused by nothing worse than a malformed answer, on a channel that fails closed
+// everywhere else. Both consumers now read the same normalised map, so they cannot disagree about a pair again.
+// Among non-refuting rows the LAST still wins, which is the pre-existing behaviour; `no` is the only override.
+export function checkRowsByPair(checks) {
+  const out = new Map()
   for (const c of checks || []) {
     if (!c || typeof c.unit !== 'string' || typeof c.id !== 'string') continue
+    const k = pairKey(c.unit, c.id)
+    if (out.get(k)?.shows === SHOWS_NO) continue
+    out.set(k, c)
+  }
+  return out
+}
+// THE KINDS WHOSE EFFECT THE PAGE BODY STRUCTURALLY CANNOT SHOW (PR #128 review, round 17). Each of these persists
+// as (or through) its own `BusinessRule_*` schema, which is invisible to `viewConfig`, so a body walk returns a
+// STRUCTURAL ZERO for a page whose rules are all correct — the one class where demanding a `yes` would block
+// `complete` for ever. DELIBERATELY NARROW: a kind belongs here only with evidence that its effect cannot be read
+// off the page, and the cost of leaving one out is that the operator must settle it by hand (the terminus the queue
+// doc already documents), while the cost of wrongly including one is a refuted answer retired by a shrug. That
+// asymmetry is why this is an allow-list and why an unrecognised kind fails closed.
+const RULE_SHAPED_KINDS = new Set(['lookup-value', 'rule', 'visibility-rule'])
+// Exposed as a PREDICATE rather than the Set: the offline slice suite exports the block's helpers as functions, and a
+// bare Set is data the reconcile would then have to be trusted to read the same way twice.
+export const isRuleShapedKind = (kind) => RULE_SHAPED_KINDS.has(String(kind))
+// WHICH PAIRS THIS ROUND'S VERIFIER RELEASED, and on what strength. A Map rather than a Set because the STRENGTH
+// decides what may be released: `reconcileUnconsumed` treats a positive read as outranking any source, and a
+// reasoned `unknown` as the narrow rule-shaped escape only.
+export function releasedResolutionPairs(checks) {
+  const out = new Map()
+  for (const c of checkRowsByPair(checks).values()) {
     // A REASONED `unknown` ONLY (PR #128 review, approving round, Minor 3). Releasing on any `unknown` was too
     // wide: the rationale for including it covers ONE class -- an answer whose effect the page body structurally
     // cannot show, where requiring a `yes` blocks `complete` for ever -- but the predicate discriminated on
@@ -1445,10 +1479,13 @@ export function releasedResolutionPairs(checks) {
     // ("`unknown` -- you could not determine the effect, with `found` saying WHY"): a verifier that names the
     // surface limitation has looked and reported; one that returns a bare `unknown` has not, and an unreasoned
     // shrug now releases nothing. `yes` needs no such test -- it is a positive confirmation.
+    // ROUND 17 -- `found` alone was still not the class the escape was argued for. It admitted ANY kind, so a
+    // LAYOUT-shaped answer, whose effect the page body CAN show, was retired in round N+1 by `unknown` plus any
+    // prose after being positively refuted with `no` in round N. The strength is recorded here and the kind is
+    // matched against `RULE_SHAPED_KINDS` at the reconcile, where the row -- and therefore its `kind` -- is in hand.
     const reasonedUnknown = c.shows === SHOWS_UNKNOWN && nonBlank(c.found)
-    if (c.shows === SHOWS_YES || reasonedUnknown) {
-      out.add(pairKey(c.unit, c.id))
-    }
+    if (c.shows === SHOWS_YES) out.set(pairKey(c.unit, c.id), SHOWS_YES)
+    else if (reasonedUnknown) out.set(pairKey(c.unit, c.id), SHOWS_UNKNOWN)
   }
   return out
 }
@@ -1496,11 +1533,28 @@ export function reconcileUnconsumed(entries, owed, released, publishedIds) {
         how: capCarryText(u.how), found: capCarryText(u.found) }
     : u))
   const present = publishedIds instanceof Set ? publishedIds : new Set(publishedIds || [])
+  // `released` is a Map pair -> strength from `releasedResolutionPairs`. A bare Set is accepted and read as "these
+  // pairs were positively confirmed", which is what every caller that passed one meant; anything else is empty, so
+  // an unrecognised shape releases NOTHING rather than releasing everything.
+  const rel = released instanceof Map ? released
+    : new Map([...(released instanceof Set ? released : [])].map((k) => [k, SHOWS_YES]))
   return list.filter((u) => {
     if (!present.has(idKey(u.id))) return true
     const pair = pairKey(u.unit, u.id)
     if (!owed.has(pair)) return false
-    return !(u.source === UNCONSUMED_FROM_VERIFIER && released.has(pair))
+    const strength = rel.get(pair)
+    // A POSITIVE INDEPENDENT READ RELEASES ANY SOURCE (round 17). It used to release only a verifier-sourced row, so
+    // the trust inversion ran backwards: the run believed the verifier's `no` over the builder's `applied: true`, but
+    // not its `yes` over the builder's `applied: false`. A builder that honestly declines an answer because the page
+    // ALREADY satisfies it — the only outcome `resolutionsApplied` offers for "nothing to change" — filed a
+    // dispatch-sourced row that no later `yes` could clear, so the unit went green with `complete` false FOR EVER and
+    // the only remedy was hand-editing the queue file.
+    if (strength === SHOWS_YES) return false
+    // The reasoned-`unknown` escape stays NARROW: verifier-sourced (it exists to withdraw that verifier's own earlier
+    // `no`) and rule-shaped only (the class whose effect `viewConfig` structurally cannot show).
+    if (strength === SHOWS_UNKNOWN && u.source === UNCONSUMED_FROM_VERIFIER
+      && isRuleShapedKind(u.kind)) return false
+    return true
   })
 }
 
@@ -1538,6 +1592,16 @@ Build the answer, or return \`applied: false\` with a \`why\` that is a REASON r
 // units and the proposals -- and in the EXACT case this ticket is about (green gate, nothing parked, one answer gone
 // nowhere) all three of those are empty or silent, so the report said the run was not complete and showed nothing
 // explaining why. The closing log names them; `next` is what a caller reads.
+// THE OPERATOR-FACING LOG LINE for held answers, as ONE render (PR #128 review, round 17). It was inline at the
+// terminal close only, so the ZERO-WORK exit — the resume path a held answer actually takes once its repair grant is
+// spent — logged nothing and its `next` named nothing. Two call sites needed the same sentence, so it is a helper
+// rather than a second copy, and the ids are fenced here for the reason `unconsumedNextClause` fences them: they come
+// off the persisted, agent-transcribed `unconsumedResolutions`, and a backtick plus a newline closes the code span.
+export function unconsumedLogLine(entries) {
+  if (!(entries || []).length) return ''
+  const ids = (entries || []).map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
+  return `UNCONSUMED OPERATOR ANSWERS: ${ids} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`
+}
 export function unconsumedNextClause(entries) {
   if (!(entries || []).length) return ''
   // PR #128 review (round 7) -- `u.unit` IS FENCED TOO. It was the only half of this pair left raw while `u.id`
@@ -1575,3 +1639,21 @@ export function buildSchemaWithResolutions(base, owedCount) {
   if (!owedCount) return base
   return { ...base, required: [...base.required, 'resolutionsApplied'] }
 }
+// THE VERIFIER'S HALF OF THE SAME OBLIGATION (PR #128 review, round 17, Major 3).
+// `resolutionChecks` was DECLARED but never `required` and never asked for in prose, and the gate reads an absent row
+// as "unconfirmed, NOT a refutation" — by design. Those two together meant an untrue `applied: true` closed the unit:
+// the builder claims it built the filter, the verifier volunteers no row, `resolutionContradictions` sees nothing, no
+// unconsumed row is filed, and `runComplete` reports `complete: true`. That is this ticket's founding incident
+// (a fully specified `entity-filter` answer, `built.json` with zero occurrences of `lookupListConfig`) still passing.
+// Same shape as the builder side: the obligation is added ONLY on a round that actually handed out answers, so a
+// verify dispatch with no claims is not asked for a field it cannot fill, and an omission on a round that DID hand
+// them out is a schema failure the tool layer retries rather than a silence discovered a phase later.
+export function verifierSchemaWithChecks(base, claimedCount) {
+  if (!claimedCount) return base
+  return { ...base, required: [...base.required, 'resolutionChecks'] }
+}
+// HOW MANY ANSWER CLAIMS THIS ROUND'S VERIFIER IS BEING HANDED. One number, derived from the same claims array the
+// prompt renders from, so the obligation and the question cannot drift apart — the reason the builder side computes
+// its own count at dispatch rather than trusting a flag.
+export const resolutionClaimCount = (claims) =>
+  (claims || []).reduce((n, c) => n + ((c?.resolutionClaims || []).length), 0)
