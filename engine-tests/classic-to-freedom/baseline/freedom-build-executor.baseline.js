@@ -436,9 +436,11 @@ const RECONCILE_SCHEMA = {
     // ENG-95503 (mirrored) — `preflightItems` is REQUIRED with the same rationale: the reconciles filter
     // `unconsumed` against the owed set, and an OMITTED list yields an empty owed set that silently ERASES
     // every unconsumed answer. `resolutionsReopened`/`resolutionsPending` are REQUIRED so a dropped
-    // repair-grant set cannot silently re-grant a spent round.
+    // repair-grant set cannot silently re-grant a spent round. `unconsumedResolutions` is REQUIRED (round 17) because
+    // its carry block is the one written EVEN WHEN EMPTY: an omitted key seeds `[]` and the next close persists that
+    // `[]` OVER the stored rows, erasing the record whose whole purpose is surviving a resume.
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
-    'preflightItems', 'resolutionsReopened', 'resolutionsPending'],
+    'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2

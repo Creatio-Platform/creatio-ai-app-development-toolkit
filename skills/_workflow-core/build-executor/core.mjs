@@ -37,14 +37,14 @@ import {
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planInvalidNextAll,
-  preflightToRun, repairBlock, requeueDecisions, resolutionAttribution, resolutionsBlockText, resolutionsForUnit, resolutionsPromptText,
+  preflightToRun, repairBlock, requeueDecisions, resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
   // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
   // import, while the inlined Claude artifact shares one scope and would not have noticed a missing name. The core
   // suite caught exactly that: `reconcileUnconsumed is not defined` on a green baseline the artifact ran fine.
   buildSchemaWithResolutions, capCarryText, completionLine, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
-  pairKey, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
+  pairKey, pairParts, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
   resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs, unconsumedNextClause,
   unconsumedResolutions,
   UNCONSUMED_CARRY_WARN, UNCONSUMED_FROM_DISPATCH,

@@ -914,10 +914,11 @@ check("ENG-95471 review fix: none of the files that carried the retired `guideli
 // `{0,2600}` and dropped the trailing `\]`, so it stopped asserting that those three fields END the required
 // array and started matching however many fields followed — the "pin with no failure mode" shape its own sibling
 // two hunks below was written to avoid. The window is back down to what the array actually spans, the closing
-// anchor is restored, and the three fields this PR appended are named, so dropping OR reordering any of the six
-// named fields turns this red.
-check("ENG-95471 review fix (+ PR #128 round 6): the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two — and the required array ENDS with the three keys this channel added, so a dropped or reordered field cannot slip past the window",
-  /required: \['approval'[\s\S]{0,1700}'evidenceIds', 'evidenceFiled', 'evidenceRejected',[\s\S]{0,600}'preflightItems', 'resolutionsReopened', 'resolutionsPending'\]/.test(wfSrc));
+// anchor is restored, and the four fields this PR appended are named, so dropping OR reordering any of the seven
+// named fields turns this red. Round 17 added `unconsumedResolutions` as the fourth — it is LAST because its carry
+// block is the one written even when empty, so an omission erases the stored rows rather than merely skipping them.
+check("ENG-95471 review fix (+ PR #128 round 6, round 17): the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two — and the required array ENDS with the four keys this channel added, so a dropped or reordered field cannot slip past the window",
+  /required: \['approval'[\s\S]{0,2000}'evidenceIds', 'evidenceFiled', 'evidenceRejected',[\s\S]{0,200}'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'\]/.test(wfSrc));
 check("ENG-95471 review fix: an ABSENT `evidenceFiled` yields the UNKNOWN set, not an empty one — the two must not collapse, or the overwrite guard silently stops firing",
   /const earnedFrom = \(filed, rejected\) => \(Array\.isArray\(filed\)[\s\S]{0,140}: null\)/.test(wfSrc));
 // The BUILDER-FACING wording, pinned on the shipped constant. `ran: false` is an honest answer whose row is a hard
@@ -2502,7 +2503,7 @@ check("PR #128 review (N2): the carry block instructs the writer to persist BOTH
     && /- \\`resolutionsReopened\\` and \\`resolutionsPending\\` — the two answer-channel repair-grant arrays the file holds/.test(wfSrc));
 check("PR #128 review (N2): `RECONCILE_SCHEMA` both CARRIES the two grant arrays and REQUIRES them — a field the schema drops cannot round-trip, and one it does not require can be silently omitted straight back into the over-grant",
   /resolutionsReopened: \{ type: 'array', items: \{ type: 'object', required: \['unit', 'id'\],\s*\n\s*properties: \{ unit: \{ type: 'string' \}, id: \{ type: 'string' \} \} \} \},\s*\n\s*resolutionsPending: \{ type: 'array', items: \{ type: 'string' \} \}/.test(wfSrc)
-    && /'preflightItems', 'resolutionsReopened', 'resolutionsPending'\]/.test(wfSrc));
+    && /'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'\]/.test(wfSrc));
 check("PR #128 review (N2): the hydration seeds BOTH sets straight from the persisted state, and the lossy derive-from-`unconsumed` loop is GONE — the `!res` path proved that derivation over-marked a never-granted unit",
   /for \(const k of seedGrantPairs\(state\.resolutionsReopened\)\) resolutionsReopened\.add\(k\)\s*\n\s*for \(const k of state\.resolutionsPending \|\| \[\]\) resolutionsPending\.add\(idKey\(k\)\)/.test(wfSrc)
     && !/for \(const u of unconsumed\) resolutionsReopened\.add\(u\.unit\)/.test(wfSrc));
@@ -4115,7 +4116,7 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
-  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',\s*\n\s*'preflightItems', 'resolutionsReopened', 'resolutionsPending'\]/.test(wfSrc));
+  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',\s*\n\s*'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'\]/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
   // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
   // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.

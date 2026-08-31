@@ -110,8 +110,11 @@ export const RECONCILE_SCHEMA = {
     // which then reports `complete: true` over a lost answer. A required field turns the omission into a schema failure
     // the tool layer retries instead. `resolutionsReopened` and `resolutionsPending` are REQUIRED (N2) so a dropped
     // repair-grant set cannot silently re-grant a spent round.
+    // `unconsumedResolutions` is REQUIRED (round 17) — the one field whose omission is DESTRUCTIVE, not merely lossy,
+    // because its carry block is the one written EVEN WHEN EMPTY: an omitted key seeds `[]` and the next close persists
+    // that `[]` OVER the stored rows. It had to be required the moment its write became unconditional.
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
-    'preflightItems', 'resolutionsReopened', 'resolutionsPending'],
+    'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2

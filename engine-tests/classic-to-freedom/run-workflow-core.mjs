@@ -622,6 +622,39 @@ const genSrc = readFileSync(GENERATED, "utf8");
   check("generator: the shipped `.workflow.js` is IN SYNC with the core — an edit to either alone must fail here, not ship as a silent divergence",
     res.status === 0, () => `${res.stdout}${res.stderr}`);
 }
+/* PR #128 (round 17) — EVERY SIBLING EXPORT A MODULE CALLS MUST BE IN ITS IMPORT LIST.
+   This is the one defect class the generated artifact CANNOT show and the slice suite cannot see: the inlined
+   artifact shares a single scope, so a name missing from `core.mjs`'s import list resolves there and throws only on
+   the MODULE path (Codex, the CLI). It has now shipped twice — `reconcileUnconsumed` (caught by this suite on a green
+   baseline the artifact ran fine) and `pairParts`, which reached review inside the round-close warning that fires
+   exactly when a persist writer under-reports `unconsumedWritten`, i.e. on the run that most needed to close.
+   Structural rather than per-name: it reads every `build-executor/*.mjs`, and for each sibling export the module
+   CALLS (`name(` — the narrowest evidence it is executed) but does not import and does not declare locally, it fails.
+   Block comments and whole-line `//` comments are stripped first, so prose naming a helper is never a call site. */
+{
+  const decomment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const BEX = path.join(CORE, "build-executor");
+  const unresolved = [];
+  for (const file of readdirSync(BEX).filter((f) => f.endsWith(".mjs"))) {
+    const raw = readFileSync(path.join(BEX, file), "utf8");
+    const src = decomment(raw);
+    for (const m of raw.matchAll(/import \{([^{}]*?)\} from '(\.\/[\w./-]+\.mjs)'/g)) {
+      const imported = new Set(m[1].split("\n").filter((l) => !l.trim().startsWith("//"))
+        .join(" ").split(",").map((s) => s.trim()).filter(Boolean));
+      let sibSrc;
+      try { sibSrc = readFileSync(path.resolve(BEX, m[2]), "utf8"); } catch { continue; }
+      for (const e of sibSrc.matchAll(/^export (?:const|function\*?|let|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+        const name = e[1];
+        if (imported.has(name)) continue;
+        if (new RegExp("(?:const|let|var|function\\*?|class)\\s+" + name + "(?![\\w$])").test(src)) continue;
+        if (new RegExp("(?<![\\w$.])" + name + "\\s*\\(").test(src)) unresolved.push(`${file}: ${name} (exported by ${m[2]})`);
+      }
+    }
+  }
+  check("module path (PR #128 round 17): every sibling export a `build-executor` module CALLS is in its import list — the inlined artifact shares one scope and hides this, so it throws only on the Codex/CLI path",
+    unresolved.length === 0, () => unresolved.join(" | "));
+}
 check("generated: no `import` or `export` survives except `meta` — the host evaluates this as a function body, so either would be a SyntaxError at run time",
   genSrc.split("\n").filter((l) => /^\s*(import|export)\s/.test(l)).join(" | ") === "export const meta = {",
   () => genSrc.split("\n").filter((l) => /^\s*(import|export)\s/.test(l)).slice(0, 5).join(" | "));
