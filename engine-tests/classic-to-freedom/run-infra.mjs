@@ -139,31 +139,50 @@ const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
 const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
-const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
-  // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
-  // app/package identity it promises is producible on this stand at all.
-  "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
-  "resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
+// THE TEST-ONLY VIEW OF THE SHIPPED PURE-DECISION BLOCK, GROUPED BY CONCERN (PR #128 review, run-infra.mjs:156).
+// It used to be one flat array whose growth was only legible as per-round comments, so each round it read as "a few
+// more names" rather than as a surface. Named groups make the growth VISIBLE and reviewable: a new name has to be
+// filed under a concern, and a group that keeps growing is the signal that the concern wants a real module boundary.
+//
+// This is a grouping, NOT the fix. The fix is a genuine internal-module boundary for `_workflow-core`, at which
+// point the suite imports the modules and this list stops existing. The reason it is still here is structural: the
+// shipped run script is not importable (a Workflow script is a function body with no `import`), so the exported
+// block IS the seam through which a pure helper can be EXECUTED rather than regexed. Every name below is here to be
+// run, not to be pinned by name — and where a seam could be executed instead of regexed, this PR has moved that way
+// (round 13 replaced a source-regex wiring check with a real `composeBuildPrompt` composition).
+const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
+  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings"];
+// The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
+const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
+  "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
+// What a build agent is HANDED: its schema, its prompt, and the guidelines record it owes.
+const H_BUILD_PROMPT = ["resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
   "resolutionsBlockText", "resolutionsPromptText", "resolutionAttribution", "answeredNoteFor", "composeBuildPrompt", "unitNo", "inContextParkWhy",
-  // ENG-95503 — the CONSUMPTION half of the answers channel: what the builder owes, what it did not build, and
-  // where its claim disagrees with the verifier's read of the page.
-  "buildSchemaWithResolutions", "resolutionAccountingMiss", "unconsumedResolutions",
-  // PR #128 review — the reconcile layer: what is still owed, what the verifier confirmed, and what survives both.
-  "pairKey", "pairParts", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds", "runComplete", "completionLine",
+  "buildSchemaWithResolutions"];
+// ENG-95503 — THE ANSWERS CHANNEL. Its own group precisely because it is what kept growing: what the builder owes,
+// what it did not build, where its claim disagrees with the verifier, and what survives a resume. The `(unit, id)`
+// pair algebra lives here too — it is the identity of an unconsumed answer, and every rule about it is executable.
+const H_ANSWERS_CHANNEL = ["resolutionAccountingMiss", "unconsumedResolutions",
+  "pairKey", "pairParts", "owedResolutionPairs", "releasedResolutionPairs", "reconcileUnconsumed", "publishedResolutionIds",
   "idKey", "rowsById", "unconsumedRepairText", "unconsumedNextClause",
-  // PR #128 review (round 5) — the record-time text cap the carry depends on, and the one `(unit, id)` dedup rule.
   "capCarryText", "hasUnconsumedPair",
-  // PR #128 review (round 9) — the grant-set persistence round-trip, as two pure halves that a test can RUN.
   "grantPairsToPersist", "seedGrantPairs",
-  "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
-  "readableUnitPart", "nonPageUnitStem", "unitStem",
-  "selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
-  "continuationAllowed", "continuationBudgetBlock", "repairBlock",
-  // The verifier's per-round read-back scope, and the judge-queue re-file guard.
-  "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan"];
+  "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions"];
+// The in-context gate: what a unit says about itself, and whether it may continue rather than park.
+const H_SELF_CHECK = ["selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
+  "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
+// The verifier's per-round read-back scope, and the judge-queue re-file guard.
+const H_VERIFY_SCOPE = ["verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan"];
+// How the run reports itself: unit naming and the close line.
+const H_REPORTING = ["runComplete", "completionLine", "readableUnitPart", "nonPageUnitStem", "unitStem"];
+const HELPER_GROUPS = { H_SCHEDULING, H_PRECONDITIONS, H_BUILD_PROMPT, H_ANSWERS_CHANNEL, H_SELF_CHECK, H_VERIFY_SCOPE, H_REPORTING };
+const HELPERS = Object.values(HELPER_GROUPS).flat();
+// A name filed under two concerns is a grouping that has stopped describing the code, and it would also emit a
+// duplicate into the generated `export {...}` — a syntax error in the slice, which is a confusing way to learn it.
+check("PR #128 review (round 16): the grouped helper surface has no name in two groups — the grouping is a real partition, not a second flat list with headings",
+  new Set(HELPERS).size === HELPERS.length,
+  () => HELPERS.filter((n, i) => HELPERS.indexOf(n) !== i));
 // Non-function members of the same block. Exported so a prompt fragment — and the round budget's own DESIGN VALUE —
 // is asserted against the SHIPPED text rather than a copy of it in this file. `DEFAULT_MAX_ROUNDS` is exported for
 // exactly that reason: the park assertions below build their `localRounds` fixtures from it, and hard-coding a 3 here
