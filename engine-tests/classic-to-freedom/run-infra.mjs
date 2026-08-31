@@ -12,7 +12,7 @@ import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, GATE_KIND } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
@@ -2679,6 +2679,112 @@ check("ENG-95468: workflow EXECUTES the mid-run IDENTITY gate — a Reconcile th
     && midRunIdentityStop.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
     && /UsrApplicantApp/.test(midRunIdentityStop.next || ""),
   () => (midRunIdentityStop.threw ? `threw: ${midRunIdentityStop.threw}` : `stopped=${midRunIdentityStop.stopped} identity=${JSON.stringify(midRunIdentityStop.appIdentityMismatch)}`));
+
+// --- ENG-95683: the plan-invalid component stop branches BY KIND -------------------------------------------
+// Until now the component clause gave ONE re-plan instruction for every unresolved type. A gated COMPOSITE (a real
+// component whose package/feature is un-installed on the stand) is recoverable WITHOUT a re-plan: install the package,
+// enable the feature, re-run the BUILD — the plan is correct. The `componentResolution` item may now carry the typed
+// gate `{ kind:'composite', id, feature? }`, `componentTypeMismatches` carries it through, and `componentReplanClause`
+// branches on it. Every other cause keeps the re-plan text, so the pre-build/mid-run tail tests above still hold.
+
+// The builder is a Workflow-tool script that cannot import the engine, so its `GATE_COMPOSITE` literal MIRRORS the
+// engine's `GATE_KIND.COMPOSITE`. Pin both sides so the two files cannot drift to different strings.
+// The regex matches both single and double quotes so a quote-style refactor does not silently break the guard.
+check("ENG-95683: the builder's `GATE_COMPOSITE = 'composite'` literal is present and EQUALS the engine's GATE_KIND.COMPOSITE (mirrored across two files that cannot import each other)",
+  /const GATE_COMPOSITE = ['"]composite['"]/.test(wfSrc) && GATE_KIND.COMPOSITE === "composite",
+  () => ({ inSource: /const GATE_COMPOSITE = ['"]composite['"]/.test(wfSrc), engineValue: GATE_KIND.COMPOSITE }));
+// The SAME literal lives in the CORE MODULE `_workflow-core/build-executor/helpers.mjs` — the source whose pure block
+// is inlined into the workflow above, and which the Codex / generic-CLI adapters import DIRECTLY through `core.mjs`.
+// The inlining forbids an `import` there too, so it keeps the literal — pin THIS copy against the engine's value as
+// well (only the workflow.js copy was pinned before), or a rename of GATE_KIND.COMPOSITE silently breaks gate
+// matching on the core path while the workflow.js guard stays green.
+const helpersSrc = readFileSync(fileURLToPath(new URL("../../skills/_workflow-core/build-executor/helpers.mjs", import.meta.url)), "utf8");
+check("ENG-95683: the core module helpers.mjs `GATE_COMPOSITE` literal is present and EQUALS the engine's GATE_KIND.COMPOSITE (the second mirror, imported by core.mjs — pins both copies transitively equal)",
+  /const GATE_COMPOSITE = ['"]composite['"]/.test(helpersSrc) && GATE_KIND.COMPOSITE === "composite",
+  () => ({ inHelpers: /const GATE_COMPOSITE = ['"]composite['"]/.test(helpersSrc), engineValue: GATE_KIND.COMPOSITE }));
+
+// Review (round 5) — `reportRegistryFindings` is exported from `migrate.mjs` for ONE reason: the `tableElements`
+// source of `enginePositioned` cannot be isolated through `runMigration` (the mapper always also writes
+// `viewConfigDiff.values.type`), so the isolated regression test has to call it directly. The comment above it says
+// "Do not call it from production code" — but a comment enforces nothing, and a later contributor could start
+// importing it from another engine module with no signal that it breaks the intended boundary. This is that signal:
+// the symbol may appear in its OWN defining file and under `engine-tests/`, and nowhere else beneath `skills/`.
+const SKILLS_ROOT = fileURLToPath(new URL("../../skills", import.meta.url));
+const TEST_ONLY_EXPORT = "reportRegistryFindings";
+const DEFINING_FILE = path.join("classic-to-freedom-migration", "engine", "migrate.mjs");
+function everyScriptUnder(dir) {
+  const found = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...everyScriptUnder(abs));
+    else if (entry.name.endsWith(".mjs") || entry.name.endsWith(".js")) found.push(abs);
+  }
+  return found;
+}
+const offendingCallers = everyScriptUnder(SKILLS_ROOT)
+  .filter((f) => !f.endsWith(DEFINING_FILE) && readFileSync(f, "utf8").includes(TEST_ONLY_EXPORT))
+  .map((f) => path.relative(SKILLS_ROOT, f));
+check("ENG-95683 (review): the TEST-ONLY export `reportRegistryFindings` is referenced by NO production module under skills/ — the boundary its comment declares is enforced, not merely stated",
+  offendingCallers.length === 0,
+  () => ({ offendingCallers }));
+
+// The carry-through: only a WELL-FORMED gated composite (kind 'composite' + a non-blank string id) is typed onto the
+// mismatch; a missing id, a wrong kind, or a blank id leaves the mismatch untyped (the generic clause then stands).
+const typedMis = wf.componentTypeMismatches([{ type: "crt.CommunicationOptions", resolved: false, note: "package CrtCustomer360App not installed", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }]);
+check("ENG-95683: componentTypeMismatches carries a well-formed gated composite's typed {kind,id,feature} through onto the mismatch",
+  typedMis.length === 1 && typedMis[0].kind === "composite" && typedMis[0].id === "CrtCustomer360App" && typedMis[0].feature === "CommonCommunicationsBehavior",
+  () => typedMis);
+const untypedMis = wf.componentTypeMismatches([
+  { type: "crt.A", resolved: false, kind: "composite" },              // no id → untyped
+  { type: "crt.B", resolved: false, kind: "component", id: "P" },     // wrong kind → untyped
+  { type: "crt.C", resolved: false, kind: "composite", id: "   " },   // blank id → untyped
+]);
+check("ENG-95683: a malformed gate (no id, wrong kind, blank id) is NOT carried — the mismatch stays untyped so the generic re-plan clause stands (a plan predating the fields is unchanged)",
+  untypedMis.length === 3 && untypedMis.every((c) => c.kind === undefined && c.id === undefined && c.feature === undefined),
+  () => untypedMis);
+
+// The by-kind branch END-TO-END through the pre-build stop: a gated composite yields install/enable + re-run the
+// BUILD and explicitly NOT a re-plan (no `--plan --out`), with the PRE-BUILD tail.
+const gatedComposite = await runToBaseline(baselineState([{ type: "crt.CommunicationOptions", resolved: false, note: "package not installed on this stand", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }])).catch((e) => ({ threw: e.message }));
+check("ENG-95683 (R3): a gated-composite resolved:false type yields the install/enable + re-run the BUILD branch (NO re-plan) in the pre-build stop `next`",
+  !gatedComposite.threw && gatedComposite.stopped === "plan-invalid-against-stand"
+    && /install the `CrtCustomer360App` package/.test(gatedComposite.next || "")
+    && /enable the `CommonCommunicationsBehavior` feature/.test(gatedComposite.next || "")
+    && /re-run the BUILD/.test(gatedComposite.next || "") && /no re-plan is needed/.test(gatedComposite.next || "")
+    && !/re-run .--plan --out., re-approve/.test(gatedComposite.next || "") && /Nothing was built\./.test(gatedComposite.next || "")
+    // ENG-95683 fix: when ALL mismatches are gated, planInvalidNext must NOT emit the plan-failure preamble ("These
+    // do not: / each named component type must resolve") — doing so contradicts "the plan is correct, no re-plan".
+    && !/These do not:/.test(gatedComposite.next || "") && !/each named component type/.test(gatedComposite.next || ""),
+  () => (gatedComposite.threw ? `threw: ${gatedComposite.threw}` : `next=${(gatedComposite.next || "").slice(0, 320)}`));
+// Negative control: an UNGATED unresolved type (a fabricated `crt.*`, no typed gate) keeps the original re-plan text
+// and gets NO install/BUILD instruction — the branch must not fire for a plan that a re-plan is the only fix for.
+const ungatedStop = await runToBaseline(baselineState([{ type: "crt.NotAComponent", resolved: false, note: "not a component type on this stand" }])).catch((e) => ({ threw: e.message }));
+check("ENG-95683 (R3, negative control): an ungated unresolved type keeps the 're-run `--plan --out`, re-approve' text and gets NO install/BUILD branch",
+  !ungatedStop.threw && ungatedStop.stopped === "plan-invalid-against-stand"
+    && /re-run .--plan --out., re-approve/.test(ungatedStop.next || "")
+    && !/re-run the BUILD/.test(ungatedStop.next || "") && !/install the/.test(ungatedStop.next || ""),
+  () => (ungatedStop.threw ? `threw: ${ungatedStop.threw}` : `next=${(ungatedStop.next || "").slice(0, 320)}`));
+// Mixed set: a gated composite AND a fabricated type in one stop produce BOTH clauses — the install/BUILD branch for
+// the recoverable one and the re-plan branch for the one no install can fix — so one stop names every axis of the fix.
+const mixedStop = await runToBaseline(baselineState([
+  { type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" },
+  { type: "crt.NotAComponent", resolved: false, note: "fabricated" },
+])).catch((e) => ({ threw: e.message }));
+check("ENG-95683 (R3): a mixed stop (one gated composite + one fabricated type) carries BOTH the install/BUILD branch and the re-plan branch in one `next`",
+  !mixedStop.threw && mixedStop.stopped === "plan-invalid-against-stand"
+    && /install the `CrtCustomer360App` package/.test(mixedStop.next || "") && /re-run the BUILD/.test(mixedStop.next || "")
+    && /re-run .--plan --out., re-approve/.test(mixedStop.next || ""),
+  () => (mixedStop.threw ? `threw: ${mixedStop.threw}` : `next=${(mixedStop.next || "").slice(0, 400)}`));
+// The MID-RUN stop inherits the same branch via `planInvalidNextAll` → `planInvalidNext` → `componentReplanClause`,
+// differing only in the tail: a gated composite reported mid-run gets install/BUILD with the MID-RUN tail.
+const midRunGated = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95683 (R3): the MID-RUN stop reflects the by-kind branch too — a gated composite gets install/enable + re-run the BUILD with the MID-RUN tail (units may already be on disk)",
+  !midRunGated.threw && midRunGated.stopped === "plan-invalid-against-stand"
+    && /install the `CrtCustomer360App` package/.test(midRunGated.next || "") && /re-run the BUILD/.test(midRunGated.next || "")
+    && /Anything already built this run is on disk\./.test(midRunGated.next || "") && !/Nothing was built/.test(midRunGated.next || ""),
+  () => (midRunGated.threw ? `threw: ${midRunGated.threw}` : `next=${(midRunGated.next || "").slice(0, 320)}`));
 
 // --- THE BUILD CONTINUATION as an EXECUTION path (ENG-95474 review). Everything about the round-vs-continuation
 // split was asserted only by regexes over the source, which stay green if the accounting is inverted, if the ceiling

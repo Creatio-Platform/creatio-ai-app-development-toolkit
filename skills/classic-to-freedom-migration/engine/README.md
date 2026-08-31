@@ -19,6 +19,7 @@ node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done contr
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --verify-json v.json # …plus the MACHINE-READABLE verdict (JSON)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
+node migrate.mjs <manifest.json> --plan --resolved-gates rg.json # …and WRITE this run's resolved component-gate set (JSON)
 node migrate.mjs <manifest.json> --units --page main    # ONE page's slice of the build queue (also --spec / --checklist)
 node migrate.mjs <manifest.json> --units --slices s/    # …and one `queue-<n>.json` per published key, into `s/`
 node migrate.mjs <manifest.json> --verify --built b.json --slices s/ # one `built-<n>.json` per published key
@@ -34,6 +35,12 @@ is exit 1, never the whole artifact. `--slices <dir>` (with `--units` or `--veri
 FILE per published key, so a caller with one agent per page hands each its own row instead of the whole file. Both
 are additive — stdout and `--out` are unchanged — and `--slices` writes on exit 2 too, which is when a build agent
 needs its row.
+
+`--resolved-gates <file>` (with `--plan` or `--units`) writes THAT run's resolved component-gate set — the durable,
+machine-readable copy of every gated composite the run emits, as `[{ componentType, kind, id, feature?, source }]`
+(`source` is the registry provenance). `--plan` also mirrors the same fact as one compact provenance line in the
+plan's Overview; the JSON is the full record. A run that gates no type writes `[]`. Like `--out`, the path must be a
+real file path, not another flag.
 
 **`--verify --page <key>` alone is a pure READ** (this page's row of the built file, exit 0, gates nothing). **Adding
 `--verify-json <file>` turns it into the IN-CONTEXT SINGLE-UNIT GATE** (ENG-95469): it runs the SAME detector the

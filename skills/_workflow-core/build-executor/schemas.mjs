@@ -113,13 +113,18 @@ export const RECONCILE_SCHEMA = {
     // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
     // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
     // run that predates this field behaves exactly as it did before.
-    // DEFERRED (ENG-95468 Scope, tracked as a follow-up — see the PR body): resolution is NOT yet checked BY KIND
-    // (`component` / `composite` / `compositeOnly`) and the mapper's `FEATURE_CATALOG` does not yet carry a typed
-    // `{ kind, id }` intent. Until it does, the stop cannot branch its guidance by cause (a type that is not a
-    // component type at all vs a real component whose package/feature is un-installed), and the correct-target
-    // half of the message depends on the free-text `note` the agent put here — its quality is agent-dependent by
-    // design for now, not an engine-published fact.
-    // One `{ type, resolved, note }` per entry, `type`/`resolved` required.
+    // ENG-95683 DELIVERED the by-kind branch this comment used to defer: a `resolved: false` type carrying a
+    // well-formed gated composite (`kind: 'composite'` + an `id` of gate-name shape) makes the stop say 'install
+    // `id` (+enable `feature`) and re-run the BUILD' instead of the generic re-plan text. What is STILL open is
+    // narrower: nothing here confirms the `id` is the RIGHT package for the type — that needs the engine's
+    // `gateForComponentType` table, unreachable from a module inlined into the workflow script (see `helpers.mjs`
+    // `gatedComposite`). Absent or malformed ⇒ the generic clause stands, so an older plan behaves as it did.
+    // One `{ type, resolved, note }` per entry, `type`/`resolved` required, plus ENG-95683's OPTIONAL typed gate on a
+    // gated composite: `kind` ('composite'), the gating package `id`, and the gating `feature` when there is one.
+    // Those three are NOT re-declared as `properties` here and that is deliberate (ENG-95930, mode A): the expanded
+    // per-property form serializes over the host's 4096-byte classifier cap, which is what refused the schema before
+    // the model ever ran. `additionalProperties: { maxLength: 400 }` carries them — a string cap does not constrain
+    // the boolean `resolved` — and `RECONCILE_SHAPE.componentResolution` below enforces the insides on arrival.
     componentResolution: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
     // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
     // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
@@ -243,8 +248,11 @@ export const RECONCILE_SHAPE = {
     types: { package: 'string', appUnitComplete: 'boolean', planVersion: 'string-or-null', sectionPage: 'string-or-null' } },
   orphanedPagesOnFile: { kind: 'array', required: ['schema'],
     types: { schema: 'string', orphanedBy: 'string-or-null', at: 'string-or-null' } },
+  // ENG-95683 — `kind`/`id`/`feature` are the OPTIONAL typed gate on a `resolved: false` composite; the by-kind
+  // stop (`helpers.mjs` `GATE_COMPOSITE`) reads them. Declared here rather than in `RECONCILE_SCHEMA` for the mode-A
+  // reason given above; absent/malformed still falls back to the generic re-plan clause.
   componentResolution: { kind: 'array', required: ['type', 'resolved'],
-    types: { type: 'string', resolved: 'boolean', note: 'string' } },
+    types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
   reachability: { kind: 'array', required: ['key', 'appliesWhen'],

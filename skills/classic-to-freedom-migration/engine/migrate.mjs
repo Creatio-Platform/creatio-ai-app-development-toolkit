@@ -73,8 +73,8 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
-import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
-import { GATE_KIND } from "./mapping-table.mjs";
+import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
+import { GATE_KIND, gateForComponentType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, isTabOp, subPageNodes, buildResolutionIndex,
@@ -1994,10 +1994,70 @@ export function registrySettleGuidance(finding) {
   return "this is not a package-install away — fix the mapping or the plan and re-run `--plan --out` before building.";
 }
 
+// ENG-95683 (item 1) — the RESOLVED gate set this run emits: EVERY gated type the run puts on the page, resolved
+// through the mapping table (`gateForComponentType`), NOT only the subset that also MISSED the resolved registry.
+// A gate is a property of the TYPE (its required package/feature), independent of whether the registry the run
+// happened to resolve against lists the type — so on the DEFAULT vendored path (where the canonical gated composites
+// are present, hence produce no registry-target MISS) the `--resolved-gates` artifact and the plan.md mirror still
+// carry them. Gathering only from the findings loop made both empty on that default path — the false negative
+// ENG-95683 reviewers caught. `source` is the registry provenance (a REG_SOURCE_NOTE key), `kind`/`id`/`feature`
+// the typed gate; `runTypes` already dedupes, so each gated type appears once. Extracted from reportRegistryFindings
+// (Sonar S3776) so the gate collection and the parent's registry-finding loop are each independently readable.
+function collectResolvedGates(changeSet, source) {
+  const gates = [];
+  for (const [ctype] of runTypes(changeSet)) {
+    const gate = gateForComponentType(ctype);
+    // ENG-95683 (review) — push ONLY a well-formed gate: a non-blank `kind` and a non-blank string `id`. This is the
+    // producer-side guarantee both consumers rely on — the plan.md provenance line (`gateFragment` in designspec.mjs)
+    // and the `--resolved-gates` JSON artifact — so neither has to guard the shape itself and neither can render a
+    // literal `undefined`/blank backtick pair from an incomplete entry. `gateShapeIssues` already fails the CI table
+    // check on a malformed row, so in practice every row-carried gate is complete; this makes that one home, not two.
+    if (gate && gate.kind && typeof gate.id === "string" && gate.id.trim())
+      gates.push({ componentType: ctype, kind: gate.kind, id: gate.id.trim(),
+        ...(gate.feature ? { feature: gate.feature } : {}), source });
+  }
+  return gates;
+}
+// ENG-95683 (item 2) — the compositeOnly ADVISORY, computed by `validateRun` and (until this feature) discarded. A
+// compositeOnly type deliberately carries NO gate: the platform assembles it as part of a composite and it has no
+// Designer toolbar entry, so it cannot be inserted directly. Surface each as a `registry-composite-only`
+// needsDecision item with GENERIC guidance — reach it through its composite host/recipe — NOT install/enable text:
+// on the failing run the package WAS installed and the feature enabled, so an install/enable instruction would
+// have been wrong. (Absent a gate, `registrySettleGuidance` is not called here.)
+//
+// SCOPE — only a compositeOnly type the BUILD AGENT must place STANDALONE (a standard-feature / profile-card
+// deliverable). A compositeOnly type the ENGINE already positioned in the view (`viewConfigDiff` / `tableElements`
+// — every container and field, e.g. `crt.TabContainer` / `crt.HeaderContainer`, most of which are compositeOnly)
+// needs no "reach it via its host" advice: the engine placed it, the agent never drags it from a toolbar. Surfacing
+// those would flood the worklist (the majority of registry types are compositeOnly) and blame the operator for a
+// type the engine chose — the same rule the registry-target check already honours. Extracted from
+// reportRegistryFindings (Sonar S3776) alongside `collectResolvedGates`.
+function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
+  const enginePositioned = new Set();
+  for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
+  for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
+  for (const a of regRun.advisories || []) {
+    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType)) continue;
+    changeSet.needsDecision.push({ kind: "registry-composite-only", item: a.componentType,
+      reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${sourceNote}.` });
+  }
+}
 // REGISTRY CHECK, at RUN time, lifted out of `runMigration` (Sonar CC 15): it is a self-contained pass that
 // reads the manifest and appends to `changeSet.needsDecision`, and inside the driver its guards also carried
 // that function's nesting weight.
-function reportRegistryFindings(changeSet, manifest, baseDir) {
+//
+// TEST-ONLY EXPORT — no production caller outside this module. `runMigration` is the public surface; this is
+// exported (like `buildCoverage` / `registrySettleGuidance`, the same convention) so a test can drive it against a
+// hand-built changeSet. ENG-95683 review: the decision to KEEP it was taken explicitly rather than left implicit.
+// The reason it cannot be replaced by an end-to-end fixture is a property of the mapper, not a gap in the tests:
+// `resolveProps` ALWAYS also writes `values.type` for a table element, so in any changeSet a real run can produce,
+// the `viewConfigDiff` source of `enginePositioned` already covers every type the `tableElements` source would —
+// a "realistic fixture that naturally emits a table element" therefore cannot isolate the `tableElements` branch,
+// because the other branch would satisfy the assertion first. Deleting that line would leave the e2e test green.
+// The branch's OUTCOME is covered end-to-end regardless (`run-mapper.mjs` asserts the `registry-composite-only`
+// items `runMigration` does and does not push); this export exists solely so the tableElements SOURCE has a
+// non-vacuous regression test of its own. Do not call it from production code.
+export function reportRegistryFindings(changeSet, manifest, baseDir) {
   // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
   // against the registry it could resolve — the stand's own export when the manifest carries one, else the
   // vendored index. Same severity rule as the CI check, so a finding cannot mean two things.
@@ -2044,6 +2104,8 @@ function reportRegistryFindings(changeSet, manifest, baseDir) {
     changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
       reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
   }
+  buildCompositeOnlyDecisions(changeSet, regRun, REG_SOURCE_NOTE[reg.source]);
+  return collectResolvedGates(changeSet, reg.source);
 }
 
 export function runMigration(manifest, opts = {}) {
@@ -2158,7 +2220,7 @@ export function runMigration(manifest, opts = {}) {
   if (driftAdvisory.newMembers.length)
     changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
       reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
-  reportRegistryFindings(changeSet, manifest, baseDir);
+  const resolvedGates = reportRegistryFindings(changeSet, manifest, baseDir);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
@@ -2325,6 +2387,10 @@ export function runMigration(manifest, opts = {}) {
       referencedModules: eff.referencedModules, // UI-rendering deps outside the page-schema migration unit
     },
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
+    // ENG-95683 (item 1) — the resolved component gate set [{componentType,kind,id,feature?,source}] for THIS run,
+    // the durable fact the `--resolved-gates <file>` output writes and `renderPlan` mirrors as a provenance line.
+    // Empty (`[]`) when the run gates no type — the negative-control case the artifact must still write verbatim.
+    resolvedGates,
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
     listChangeSet,   // the LIST page's own ChangeSet: positioned grid columns / quick filters / command-bar actions
@@ -2430,7 +2496,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--verify-summary", "--page", "--resolutions", "--slices"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--verify-summary", "--page", "--resolutions", "--slices", "--resolved-gates"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2639,6 +2705,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("`--slices <dir>` applies to `--units` and `--verify` — it writes one per-page slice file per published key. Add one of them, or drop `--slices`.");
   if (verifyJsonFile && !verifyMode)
     fail("`--verify-json <file>` only applies to `--verify` — it writes THAT run's machine-readable verdict. Add `--verify --built <file>`, or drop `--verify-json`.");
+  // `--resolved-gates <file>` (ENG-95683 item 1) — WRITE the resolved component gate set this run gathered
+  // ([{componentType,kind,id,feature?,source}]) as a durable machine-readable artifact, so a verification step can
+  // read the run's gates directly instead of re-deriving them from a temp manifest that was already deleted. It is a
+  // PLAN/RUN-time fact (known in `runMigration`), NOT a `--verify` verdict, so it rides the `--plan`/`--units` path
+  // and is rejected elsewhere; the empty set writes verbatim as `[]` (the negative-control run that gates nothing).
+  const resolvedGatesFile = valueFlagArg(argv, "--resolved-gates", "--resolved-gates resolved-gates.json", fail);
+  if (resolvedGatesFile && !(planMode || unitsMode))
+    fail("`--resolved-gates <file>` applies to `--plan` and `--units` — it writes THAT run's resolved component gate set. Add one of them, or drop `--resolved-gates`.");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
@@ -2658,6 +2732,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
+  // `--resolved-gates <file>` (ENG-95683 item 1) — the durable machine-readable copy of THIS run's resolved gate set,
+  // written before the mode output below (its own artifact, not part of stdout). Always the full set the run gathered,
+  // `[]` included, so a reader can tell "no gated types" from "the flag was never passed".
+  if (resolvedGatesFile) {
+    try { fs.writeFileSync(resolvedGatesFile, JSON.stringify(result.resolvedGates || [], null, 2) + "\n"); }
+    catch (e) { fail(`cannot write --resolved-gates '${resolvedGatesFile}': ${e.message}`); }
+    process.stderr.write(`migrate.mjs: wrote ${(result.resolvedGates || []).length} resolved component gate(s) to ${resolvedGatesFile} — the run's machine-readable gate set [{componentType,kind,id,feature?,source}]; verify against THIS file, not a temp manifest.\n`);
+  }
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null;
   if (planMode) output = result.plan + "\n";

@@ -1,4 +1,5 @@
-"""JSONL transcript parsing: usage, tool-use/result iteration, role detection.
+"""JSONL transcript parsing: usage, tool-use/result iteration, role and
+timestamp detection.
 
 Pure functions over a single Claude Code transcript line (a decoded JSON
 object). Everything here is deterministic and side-effect free so it can be
@@ -6,6 +7,7 @@ unit-tested against tiny synthetic fixtures.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 from typing import Iterator, Optional
@@ -57,6 +59,31 @@ def cache_creation_ttl(usage: dict) -> tuple[int, int]:
             breakdown.get("ephemeral_1h_input_tokens", 0) or 0,
         )
     return (0, 0)
+
+
+def first_timestamp_ms(path: str) -> Optional[float]:
+    """Epoch-milliseconds of the first parseable ``timestamp`` in a transcript.
+
+    Transcript records stamp ISO-8601 UTC (``2026-08-26T16:49:23.789Z``) while a
+    workflow run file carries epoch-ms ``startTime``. Converting here is what
+    lets a workflow stage and a bare-agent stage -- which has no run file, so no
+    ``startTime`` -- be ordered on one axis, so the report still reads in the
+    order the run happened. None when no record carries a usable timestamp.
+    """
+    for obj in iter_jsonl(path):
+        stamp = obj.get("timestamp")
+        if not isinstance(stamp, str) or not stamp:
+            continue
+        try:
+            # fromisoformat() rejects a trailing 'Z' before Python 3.11; the
+            # explicit offset keeps the parse version-independent.
+            parsed = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed.timestamp() * 1000
+    return None
 
 
 def message_text(obj: dict) -> str:

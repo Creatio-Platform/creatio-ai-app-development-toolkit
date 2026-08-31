@@ -295,6 +295,17 @@ function buildScenarios() {
     { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "not a component type" }] })] }) },
     { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "install CrtCustomer360App" }] })] }) },
     { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolved: true }] })] }) },
+    // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
+    // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
+    // two copies could differ on gated input and every parity check still passed. These three drive the
+    // gated-composite branch through BOTH scripts, so the baseline is now pinned against the shipped block by
+    // BEHAVIOUR, not just by the `GATE_COMPOSITE` literal `run-infra.mjs` greps for.
+    // Each one MUST override `componentTypes` as well: `RECONCILE` defaults it to `["crt.ComboBox"]`, and
+    // `componentTypeMismatches` drops any resolution the plan did not publish — so a scenario that overrides only
+    // `componentResolution` never reaches the gate branch at all and passes vacuously against either predicate.
+    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
+    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
+    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolved: false, note: "fabricated" }] })] }) },
     { name: "a checkpoint key that names no unit — hard stop 4", args: { ...ARGS, mode: "checkpoints", checkpointAfter: ["nope"] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "a finding that names no unit — refused", args: { ...ARGS, findings: [{ unit: "ghost", problem: "wrong" }] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "nothing published — no-units-published", args: ARGS, answer: host({ reconciles: [RECONCILE({ unitKeys: [], buildOrder: [], reachability: [] })] }) },
