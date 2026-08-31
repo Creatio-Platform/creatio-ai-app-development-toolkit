@@ -1542,11 +1542,14 @@ const bexSizes = schemaSizes(wf, SCHEMA_EXPORTS);
 check(`ENG-95930: every response schema this suite covers loaded out of the shipped slice — a schema that is not really there measures 0 bytes and would pass the cap check by being absent`,
   bexSizes.length === SCHEMA_EXPORTS.length && SCHEMA_EXPORTS.length >= 11,
   () => `loaded ${bexSizes.length} of ${SCHEMA_EXPORTS.length} (derived: ${SCHEMA_EXPORTS.join(", ")})`);
-// The derivation itself: a regex that stopped matching would silently shrink the cap check to nothing, and the
-// count is the one thing a reader can check by eye against the schemas module.
+// The derivation itself: a regex that stopped matching would silently shrink the cap check to nothing. It is
+// asserted by MEMBERSHIP, not by count: ENG-95683's `GATE_NAME_SHAPE` is a RegExp validating an identifier, not a
+// shape table, and it shares the `*_SHAPE` naming this regex keys on. Pinning the length to 1 would turn any future
+// constant that happens to end in `_SHAPE` into a failure here rather than in the thing it actually describes; what
+// must hold is that the shape TABLE is found and that every derived name really resolves in the shipped slice.
 check("ENG-95930: the schema list is DERIVED from the shipped slice, and the shape table with it — an export nobody listed is still measured",
   SCHEMA_EXPORTS.includes("RECONCILE_SCHEMA") && SCHEMA_EXPORTS.includes("BUILD_SCHEMA_PAGE_NO_GUIDELINES")
-    && SHAPE_EXPORTS.length === 1 && SHAPE_EXPORTS[0] === "RECONCILE_SHAPE",
+    && SHAPE_EXPORTS.includes("RECONCILE_SHAPE") && SHAPE_EXPORTS.every((n) => wf[n] !== undefined),
   () => `schemas: ${SCHEMA_EXPORTS.join(", ")} | shapes: ${SHAPE_EXPORTS.join(", ")}`);
 check(`ENG-95930: every agent schema shipped in freedom-build-executor serializes to at most ${SCHEMA_CLASSIFIER_CAP} bytes — the host refuses a larger one before the model runs, so a schema over this line is a phase that cannot start in an \`auto\`-permission session`,
   bexSizes.every((s) => s.bytes <= SCHEMA_CLASSIFIER_CAP),
