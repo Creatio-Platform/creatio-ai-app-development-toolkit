@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import cost_counter as counter
 import metrics
+import report as report_mod
 
 
 def _line(obj):
@@ -432,6 +433,157 @@ class CounterVersionEverywhereTest(unittest.TestCase):
             rc = counter.run(self.root, "check", None, metrics.CostConfig(), "md")
         self.assertEqual(rc, 0)
         self.assertIn(f"_counter version: {counter.COUNTER_VERSION}_", buf.getvalue())
+
+
+class BareOnlyExportCliTest(unittest.TestCase):
+    """An export whose session spawned only bare subagents -- no root
+    transcript.jsonl and no workflows/ directory anywhere.
+
+    export.discover() has found these since the bare-subagent fix, but the CLI's
+    two "is there anything here?" guards still asked about the main transcript
+    and workflows alone, so run() and --compare rejected an export whose cost
+    discovery had just counted. These drive run()/main()/compare(), not
+    discover(), because that gap lived entirely above discover().
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="cc-bare-only-")
+        self.store = counter.path_store.PathStore(os.path.dirname(self.root))
+        subagents = os.path.join(self.root, "sess-1", "subagents")
+        os.makedirs(subagents)
+        os.makedirs(os.path.join(self.root, "sess-1", "tool-results"))
+        with open(os.path.join(subagents, "agent-bbb.jsonl"), "w", encoding="utf-8") as f:
+            f.writelines([
+                _line({"message": {"role": "user",
+                                   "content": "Analyse the Classic page."}}),
+                _line({"type": "assistant", "timestamp": "2026-08-26T10:00:00.000Z",
+                       "message": {"id": "m1", "role": "assistant",
+                                   "usage": _usage(inp=10, cw=100, cr=1000, out=5,
+                                                   m5=80, h1=20)}}),
+            ])
+        with open(os.path.join(subagents, "agent-bbb.meta.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"spawnDepth": 1, "description": "Classic UI analysis",
+                       "agentType": "general-purpose"}, f)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _run(self, section, fmt="text"):
+        buf, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            rc = counter.run(self.root, section, None, metrics.CostConfig(), fmt=fmt)
+        return rc, buf.getvalue(), err.getvalue()
+
+    def test_run_accepts_it_and_reports_the_spend(self):
+        rc, out, err = self._run("all")
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("no transcripts found", err)
+        # the bare agent's own stage row, and its cost in the totals
+        self.assertIn("Classic UI analysis", out)
+        self.assertIn("general-purpose", out)
+
+    def test_main_accepts_it_too(self):
+        self.assertEqual(counter.main([self.root, "stage"], store=self.store), 0)
+
+    def test_compare_can_use_it_as_a_side(self):
+        # --compare goes through _load_summary, which carried its own copy of
+        # the same guard: the export must not be rejected there either.
+        rc, out = None, None
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = counter.compare(self.root, self.root, metrics.CostConfig(), "json")
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        # both sides are this same bare-only export, so each side must have
+        # reached Report and counted the one bare agent
+        doc = json.loads(out)
+        self.assertEqual(doc["baseline"]["agents"], 1)
+        self.assertEqual(doc["candidate"]["agents"], 1)
+
+    def test_the_footer_does_not_pass_an_empty_cross_check_table(self):
+        # A bare-only session has no reconcile rows at all. all([]) is True and
+        # sum over no rows is 0, so both guards fell through to a clean pass
+        # over a table that verified nothing.
+        _, out, _ = self._run("check")
+        self.assertIn("no workflows to reconcile", out)
+        self.assertNotIn("all workflows reconcile", out)
+
+    def test_the_empty_table_footer_is_the_same_in_markdown(self):
+        # --format md is the output pasted into a Jira comment.
+        _, out, _ = self._run("check", fmt="md")
+        self.assertIn("_no workflows to reconcile_", out)
+        self.assertNotIn("all workflows reconcile", out)
+
+    def test_the_json_payload_carries_no_reconcile_rows(self):
+        _, out, _ = self._run("all", fmt="json")
+        self.assertEqual(json.loads(out)["reconcile"], [])
+
+    def test_the_summary_payload_counts_the_bare_agent(self):
+        _, out, _ = self._run("summary", fmt="json")
+        self.assertEqual(json.loads(out)["summary"]["agents"], 1)
+
+    def test_a_genuinely_empty_export_is_still_rejected(self):
+        # Widening the guard must not make it accept a directory with nothing
+        # in it -- that exit code is the tool's "wrong directory" signal.
+        empty = tempfile.mkdtemp(prefix="cc-empty-")
+        self.addCleanup(shutil.rmtree, empty, True)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = counter.run(empty, "all", None, metrics.CostConfig())
+        self.assertEqual(rc, 2)
+        self.assertIn("no transcripts found", buf.getvalue())
+
+
+class CounterVersionPinTest(unittest.TestCase):
+    """The counting-rule version itself, pinned to a literal.
+
+    Every other version assertion in this suite compares against the symbol
+    (`f"counter version: {counter.COUNTER_VERSION}"`), so reverting the constant
+    left the whole suite green while --compare silently diffed across a
+    counting-rule change instead of refusing it.
+    """
+
+    def test_counter_version_is_the_literal_three(self):
+        # Bump this deliberately, in the same commit as the rule change that
+        # earns it. A red line here is the point, not an inconvenience.
+        self.assertEqual(report_mod.COUNTER_VERSION, 3)
+
+    def test_cost_counter_re_exports_the_same_value(self):
+        self.assertEqual(counter.COUNTER_VERSION, report_mod.COUNTER_VERSION)
+
+
+class CompareAcrossVersionsTest(_CompareExportTestCase):
+    """AC5 end to end: a summary saved by the previous counting rule is refused,
+    not diffed. The unversioned case is covered above; this is the explicit
+    `counter_version: 2` one, the shape a real pre-fix summary actually has."""
+
+    def test_a_saved_version_2_summary_is_refused_against_a_live_export(self):
+        old_summary = {
+            "summary": {
+                "counter_version": 2,
+                "weighted_total": 1000, "weighted_per_page": 1000,
+                "page_count": 1, "page_count_defaulted": False,
+                "built_pages": ["PageA"], "input": 1, "cache_write": 1,
+                "cache_read": 1, "output": 1, "tool_calls": 1, "agents": 1,
+                "turns": 1, "effective_w": 1.25,
+            }
+        }
+        saved = os.path.join(tempfile.mkdtemp(prefix="cc-v2-summary-"), "summary.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(saved), True)
+        with open(saved, "w", encoding="utf-8") as f:
+            json.dump(old_summary, f)
+
+        live = self._export(500, 50, "PageA")
+        rc, out = self._out(counter.compare, saved, live, metrics.CostConfig(), "json")
+        self.assertEqual(rc, 0)
+        doc = json.loads(out)
+        self.assertIn("REFUSED", doc["verdict"])
+        # both versions named, so the reader knows which rule each side used
+        self.assertIn("2", doc["version_note"])
+        self.assertIn(str(report_mod.COUNTER_VERSION), doc["version_note"])
+        # and the ratio was never computed over the mismatched pair
+        self.assertNotIn("cheaper", doc["verdict"])
 
 
 if __name__ == "__main__":

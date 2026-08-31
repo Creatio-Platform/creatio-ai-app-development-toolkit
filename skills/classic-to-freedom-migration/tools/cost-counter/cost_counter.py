@@ -30,6 +30,7 @@ import attempts as attempts_mod
 import export as export_mod
 import metrics
 from report import COUNTER_VERSION, Report
+from tables import md_escape
 
 # The shared path-resolution boundary lives with the rest of the repository's
 # Python runtime, not in this tool: `mcp_client.py` and `installer/install.py`
@@ -95,6 +96,24 @@ def _mark(ok: bool, comparable: bool = True) -> str:
     return "ok" if comparable else "n/a"
 
 
+def _count(value) -> str:
+    """A meta count for display: a dash when the run file did not supply one,
+    so the cell reads as an absent figure rather than leaking Python's None."""
+    return "-" if value is None else str(value)
+
+
+def _is_empty(session) -> bool:
+    """True when an export holds no transcript the counter could read.
+
+    Every kind of transcript has to be named here, bare subagents included: a
+    session that spawned only bare subagents has no root ``transcript.jsonl``
+    and no ``workflows`` directory, so a guard that asks about those two alone
+    rejects an export whose cost discovery just found -- the same silent loss
+    the counter exists to remove, one layer up.
+    """
+    return not (session.main_transcript or session.workflows or session.bare_agents)
+
+
 def _reconcile_verdict(rows: list) -> str:
     """Footer line for the cross-check table.
 
@@ -102,12 +121,44 @@ def _reconcile_verdict(rows: list) -> str:
     ``n/a`` verified nothing, so the footer counts it rather than claiming every
     workflow reconciled. A real MISMATCH outranks both.
     """
+    if not rows:
+        # all([]) is True and sum(...) over no rows is 0, so without this guard
+        # an empty table falls through both checks and prints a pass. Nothing
+        # was compared, which is exactly the overclaim the *_comparable rule
+        # exists to remove -- and the shape is reachable: a session that spawned
+        # only bare subagents has no workflows, so it has no reconcile rows.
+        return "no workflows to reconcile"
     if not all(row.agents_ok and row.tool_calls_ok for row in rows):
         return "DISCREPANCIES ABOVE"
-    skipped = sum(1 for row in rows if not row.tool_calls_comparable)
+    # Either cell can be the suppressed one: an interrupted run suppresses the
+    # tool-call check alone, while a workflow with no run file at all has
+    # nothing to check on either axis. Counting only the tool-call side let a
+    # never-verified workflow pass as "all workflows reconcile".
+    skipped = sum(1 for row in rows
+                  if not (row.agents_comparable and row.tool_calls_comparable))
     if skipped:
         return f"all comparable checks reconcile ({skipped} n/a)"
     return "all workflows reconcile"
+
+
+def _reconcile_cells(row) -> tuple[str, str]:
+    """The (agents, toolCalls) cells for one cross-check row.
+
+    n/a, not ok, wherever nothing was actually compared: an interrupted run's
+    tool-call counts are on different bases, and a workflow with no run file has
+    no meta count on either axis. "ok" would overclaim, and a dash rather than a
+    count says the figure is absent, not zero.
+
+    Both renderers call this. They used to hold a verbatim copy each, so an edit
+    that reached only one left the other printing ``None/2 ok`` over a
+    never-verified workflow -- with the suite green, because only the text copy
+    was covered.
+    """
+    agents = (f"{_count(row.agents_meta)}/{row.agents_seen} "
+              f"{_mark(row.agents_ok, row.agents_comparable)}")
+    tool_calls = (f"{_count(row.tool_calls_meta)}/{row.tool_calls_seen} "
+                  f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
+    return agents, tool_calls
 
 
 def _print_check(report: Report) -> None:
@@ -115,11 +166,7 @@ def _print_check(report: Report) -> None:
     print(f"    {'workflow':34} {'agents(meta/seen)':>20} {'toolCalls(meta/seen)':>24}")
     rows = report.reconcile()
     for row in rows:
-        # n/a, not ok: on an interrupted run nothing verifies the tool-call
-        # counts against each other, and "ok" would overclaim.
-        agents = f"{row.agents_meta}/{row.agents_seen} {_mark(row.agents_ok)}"
-        toolcalls = (f"{row.tool_calls_meta}/{row.tool_calls_seen} "
-                     f"{_mark(row.tool_calls_ok, row.tool_calls_comparable)}")
+        agents, toolcalls = _reconcile_cells(row)
         print(f"    {row.workflow:34} {agents:>20} {toolcalls:>24}")
         if row.note:
             print(f"    {'':34} {row.note}")
@@ -143,8 +190,14 @@ def _print_attempts(report: Report) -> None:
         if attribution.total_tokens is not None:
             print(f"    {'':34} run file totalTokens: {attribution.total_tokens:,}"
                   " (surviving attempt's live agents, per the harness)")
+    # Name the bare agents in the same breath as the denominator they are part
+    # of: they carry spend on the surviving side but belong to no attempt, so
+    # they have no row in the per-workflow table above this line.
+    bare = summary.get("bare_agents", 0)
+    bare_note = f" (surviving includes {bare} bare subagent(s))" if bare else ""
     print(f"    leftover weighted cost: {summary['leftover_weighted']:,.0f}"
-          f" of {summary['leftover_weighted'] + summary['surviving_weighted']:,.0f} total")
+          f" of {summary['leftover_weighted'] + summary['surviving_weighted']:,.0f}"
+          f" total{bare_note}")
     nothing = summary["produced_nothing_agents"]
     if nothing is None:
         print("    produced-nothing agents: unknown (no readable journal)")
@@ -235,13 +288,15 @@ def _reconcile_payload(report: Report) -> list:
             "run_id": r.run_id,
             "agents_meta": r.agents_meta,
             "agents_seen": r.agents_seen,
-            "agents_ok": r.agents_ok,
+            # null, not true, when the comparison was suppressed: reading either
+            # *_ok key alone must never show a pass over a check that did not
+            # run, and the matching *_comparable: false rides along to say why.
+            # Both keys keep a plain bool on a workflow that really was checked,
+            # so an ordinary export's payload is unchanged.
+            "agents_ok": r.agents_ok if r.agents_comparable else None,
+            **({} if r.agents_comparable else {"agents_comparable": False}),
             "tool_calls_meta": r.tool_calls_meta,
             "tool_calls_seen": r.tool_calls_seen,
-            # null, not true, when the comparison was suppressed: reading this
-            # key alone must never show a pass over a check that did not run.
-            # `tool_calls_comparable: false` rides along to say why. Neither
-            # appears unless the run was interrupted.
             "tool_calls_ok": r.tool_calls_ok if r.tool_calls_comparable else None,
             **({} if r.tool_calls_comparable else {"tool_calls_comparable": False}),
             **({"note": r.note} if r.note else {}),
@@ -331,11 +386,12 @@ def _reconcile_markdown(report: Report) -> str:
     ]
     rows = report.reconcile()
     for r in rows:
-        agents = f"{r.agents_meta}/{r.agents_seen} {_mark(r.agents_ok)}"
-        calls = (f"{r.tool_calls_meta}/{r.tool_calls_seen} "
-                 f"{_mark(r.tool_calls_ok, r.tool_calls_comparable)}")
+        agents, calls = _reconcile_cells(r)
         note = f" - {r.note}" if r.note else ""
-        lines.append(f"| {r.workflow} | {agents} | {calls}{note} |")
+        # assembled by f-string, not through Table, so the escape that
+        # Table._md_row applies has to be applied here by hand
+        lines.append(
+            f"| {md_escape(r.workflow)} | {agents} | {calls}{md_escape(note)} |")
     lines.append("")
     lines.append(f"_{_reconcile_verdict(rows)}_")
     if report.interrupted:
@@ -360,7 +416,7 @@ def _attempts_markdown(report: Report) -> str:
         total_tokens = ("—" if attribution.total_tokens is None
                         else f"{attribution.total_tokens:,}")
         lines.append(
-            f"| {label} | {attribution.how} | {counts[attempts_mod.LIVE]} |"
+            f"| {md_escape(label)} | {md_escape(attribution.how)} | {counts[attempts_mod.LIVE]} |"
             f" {counts[attempts_mod.REPLAYED]} | {counts[attempts_mod.LEFTOVER]} |"
             f" {total_tokens} |"
         )
@@ -559,7 +615,7 @@ def _load_summary(path_or_dir: str, name: str, cfg: metrics.CostConfig) -> dict:
                 f"cost_counter.py <export> summary --format json"
             ) from None
     session = export_mod.discover(path_or_dir)
-    if not session.main_transcript and not session.workflows:
+    if _is_empty(session):
         raise ValueError(
             f"no transcripts found in the {name} export -- is it a session export?"
         )
@@ -652,13 +708,13 @@ def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
         _print_ttl(report)
 
     if section in ("all", "stage"):
-        print(_section("by stage (main discovery+plan, then each workflow)"))
+        print(_section("by stage (main discovery+plan, then workflows / bare agents in run order)"))
         print(report.by_stage_table().render())
     if section in ("all", "tool"):
         print(_section("by tool (calls + tool_result bytes into context)"))
         print(report.by_tool_table().render())
     if section in ("all", "role"):
-        print(_section("by agent role (subagents, keyed off each opening prompt)"))
+        print(_section("by agent role (subagents, keyed off each opening prompt / agentType)"))
         print(report.by_role_table().render())
     if section in ("all", "agent"):
         print(_section("per agent (turns, startup context, cache, output)"))
@@ -684,7 +740,7 @@ def _run_text(report: Report, section: str, cfg: metrics.CostConfig) -> None:
 def run(export_dir: str, section: str, pages_override, cfg: metrics.CostConfig,
         fmt: str = "text") -> int:
     session = export_mod.discover(export_dir)
-    if not session.main_transcript and not session.workflows:
+    if _is_empty(session):
         print(f"no transcripts found under {export_dir!r} -- is this a session export?",
               file=sys.stderr)
         return 2

@@ -26,11 +26,11 @@ killed transcript with its successor's result.
 """
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import export
 import parsing
 
 # How the surviving run's record accounts for a transcript.
@@ -99,16 +99,13 @@ def read_run_record(path: Optional[str]) -> RunRecord:
     """Parse one run file. Never raises; unreadable input yields ``readable=False``.
 
     This is the single reader for ``workflows/<wf>.json``, so the
-    degrade-on-malformed-JSON behaviour cannot drift between its callers.
+    degrade-on-malformed-JSON behaviour cannot drift between its callers. The
+    read itself is ``export.read_json_object`` -- shared with the bare agent's
+    meta sidecar, so the two cannot disagree about what "unusable" means; only
+    the fallback value differs.
     """
-    if not path or not os.path.isfile(path):
-        return RunRecord()
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            data = json.load(handle)
-    except Exception:
-        return RunRecord()
-    if not isinstance(data, dict):
+    data = export.read_json_object(path)
+    if data is None:
         return RunRecord()
 
     replayed, live = _progress_agents(data.get("workflowProgress"))
