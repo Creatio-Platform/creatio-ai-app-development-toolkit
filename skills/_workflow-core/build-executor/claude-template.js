@@ -56,7 +56,9 @@ export const meta = {
 // That is the point. `--verify --verify-json <file>` PUBLISHES that verdict as
 // JSON — `{ complete, missing, unverified, builderOpen, planGaps, pages: { "<key>":
 // { complete, buildComplete, builderOpen, missing, unverified, openRows } } }` — and
-// `RECONCILE_SHAPE` below mirrors that file field for field (the host schema
+// `RECONCILE_SHAPE.verify` below mirrors the COUNTS-ONLY `--verify-summary` cut of it
+// (ENG-95930): same per-page fields, no `openRows`, and no TOP-LEVEL `builderOpen` —
+// that one is `--verify-json`'s alone. The rest of the table is field for field (the host schema
 // declares the properties; their insides live in that table). The reconcile agent copies the file; it does not read the
 // Markdown table and it does not re-derive a number. Before that file existed the
 // only per-page counts were in a table an agent had to transcribe, which put a

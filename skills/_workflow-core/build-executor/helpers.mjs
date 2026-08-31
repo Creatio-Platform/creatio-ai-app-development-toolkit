@@ -178,9 +178,16 @@ export const parkableKeys = (roundOf, localRounds, units, verify, reachState, pa
 // present, or the input itself is absent — arithmetic over the input's OWN fields, never an invented verdict.
 // PR review — the `missing === 0` fallback is LOSSY and is no longer the first one tried: `unverified` is also what
 // a partial or unread build resolves to, so a `0/N expected fields` page has `missing: 0` while being as short as a
-// page can be. When the payload carries its rows, they are read instead: each row's `owner` is the engine's own
-// classification, so the fallback answers the same question the primary field does. `missing`/`complete` stay as
-// last resorts for a legacy payload that carries neither the field nor its rows.
+// page can be. When the payload carries `openRows` — the verdict's OWN, uncapped list — they are read instead: each
+// row's `owner` is the engine's classification, so that fallback answers the same question the primary field does.
+// ENG-95930 review (m-dymytrova) — `stillShortRows` is read ONE WAY ONLY, and the asymmetry is the whole point. It
+// is now `maxItems: 3` and returned ONLY when the unit is still short, so it is a SAMPLE, not the row set. A
+// builder-owned row that SURVIVED the cap still proves the unit is not build-complete — truncation only ever hides
+// rows, and a hidden row cannot make a page more complete — so `false` is sound and stays pinned. The ABSENCE of one
+// across three rows out of N proves nothing, and reading it as `true` is what was wrong: a report omitting the
+// optional `buildComplete` and returning three `owner: "verifier"` rows derived build-complete off a sample, skipped
+// the fast in-context park, and reached the verifier-side cross-check as a MISMATCH where INCONCLUSIVE is the truth.
+// So: a builder-owned row short-circuits to `false`; anything else falls through to `missing`/`complete`/`undefined`.
 // One open row this builder owns — the predicate `buildComplete` means. A row with no `owner` is treated as the
 // builder's: the engine tags only the four verifier/judge-filed rows, and defaulting the other way would let an
 // untagged shortfall pass as somebody else's problem.
@@ -189,8 +196,8 @@ const isBuilderOwnedRow = (r) =>
 export function derivedBuildComplete(x) {
   if (!x) return undefined
   if (typeof x.buildComplete === 'boolean') return x.buildComplete
-  const rows = Array.isArray(x.openRows) ? x.openRows : x.stillShortRows
-  if (Array.isArray(rows)) return !rows.some(isBuilderOwnedRow)
+  if (Array.isArray(x.openRows)) return !x.openRows.some(isBuilderOwnedRow)
+  if (Array.isArray(x.stillShortRows) && x.stillShortRows.some(isBuilderOwnedRow)) return false
   if (typeof x.missing === 'number') return x.missing === 0
   if (typeof x.complete === 'boolean') return x.complete
   return undefined
@@ -1248,12 +1255,6 @@ function shapeValueErrors(where, value, spec, out) {
   shapeObjectErrors(where, value, spec, out)
 }
 
-// WHAT IS WRONG WITH THIS ANSWER'S NESTED SHAPES, as a list of named fields — empty means it is usable.
-// ABSENCE OF A TOP-LEVEL PROPERTY IS NOT THIS FUNCTION'S BUSINESS: `RECONCILE_SCHEMA.required` carries that and the
-// host enforces it, and several of these properties are legitimately optional (`packageCreatedByRun` on a folder
-// written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
-// is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
-// instead of every index of a 200-row array.
 // THE SIZE CEILING THIS ANSWER MUST STAY UNDER, well below the host's ~20 KB tool-input limit. It is a DETECTION
 // layer, and it is honest about what it can do: mode B kills an answer by TRUNCATING it at the transport, before
 // any of this code runs, so an answer that overflowed never reaches here. What this catches is the run that is
@@ -1274,12 +1275,24 @@ export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12,
     return [`the answer is not an object (got ${describeValue(state)})`]
   }
   const out = []
-  // SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
+  // UTF-8 BYTES, not `String.length`. The ceiling below is stated in bytes and compared against a byte transport
+// limit, but `.length` counts UTF-16 code units: a Cyrillic page title, or the `·`/`—`/`✅` this codebase uses
+// freely, is 2-3 bytes on the wire and one unit here. Measuring the wrong one lets a 16,000-unit answer weigh ~30 KB
+// and sail past a check whose whole purpose is to stay under ~20 KB. Not `TextEncoder`/`Buffer`: neither is an
+// ECMAScript built-in, and this module is inlined verbatim into a workflow script whose sandbox promises only those.
+const utf8Bytes = (s) => {
+  if (typeof s !== 'string') return 0
+  let n = 0
+  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4 }
+  return n
+}
+
+// SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
   // agent guessing which field to cut, and an uninformed retry re-sends the same oversized answer.
-  const size = JSON.stringify(state)?.length ?? 0
+  const size = utf8Bytes(JSON.stringify(state))
   if (size > maxBytes) {
     const worst = Object.keys(state)
-      .map((k) => [k, JSON.stringify(state[k])?.length ?? 0])
+      .map((k) => [k, utf8Bytes(JSON.stringify(state[k]))])
       .sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([k, n]) => `${k} (${n} B)`).join(', ')
     out.push(`the answer serializes to ${size} bytes, over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)

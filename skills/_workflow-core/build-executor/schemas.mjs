@@ -207,7 +207,7 @@ export const RECONCILE_SCHEMA = {
     staleQueueKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
     newKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
-    // builderOpen, planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
+    // planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
     // `openRows`. The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
     // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
     // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
@@ -279,7 +279,9 @@ export const RECONCILE_SHAPE = {
   // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
   // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
   verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', builderOpen: 'integer', planGaps: 'string[]' },
+    // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
+    // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', planGaps: 'string[]' },
     map: { pages: { required: ['complete', 'buildComplete'],
       types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
 }

@@ -3660,7 +3660,7 @@ export function verifyDigest(result, v) {
 export function verifySummary(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
-    pages[k] = { complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen };
+    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, unverified: p?.unverified, builderOpen: p?.builderOpen };
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
 }
