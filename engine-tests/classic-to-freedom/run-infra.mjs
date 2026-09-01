@@ -162,7 +162,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
 // The comparator is EXPLICIT, and it reproduces exactly what a bare `.sort()` already did to these
 // strings — UTF-16 code-unit order. Spelling it out is not a behaviour change; it is what keeps the
 // order deterministic instead of leaving it to the engine's default (SonarCloud javascript:S2871).
-const byCodeUnit = (a, b) => { if (a < b) return -1; return a > b ? 1 : 0; };
+const byCodeUnit = (a, b) => { if (a < b) { return -1; } return a > b ? 1 : 0; };
 const declaredConsts = (text, re) => [...new Set([...text.matchAll(re)].map((m) => m[1]))].sort(byCodeUnit);
 const SCHEMA_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-9_]*_SCHEMA(?:_[A-Z0-9_]+)?)\s*=/gm);
 const SHAPE_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-9_]*_SHAPE)\s*=/gm);
@@ -1784,7 +1784,7 @@ const typeMisses = TYPE_PROBES.filter(([, payload, field]) => {
   return !faults.some((f) => f.includes(field));
 }).map(([token]) => token);
 check("ENG-95930: the shape check REJECTS a wrong-typed value for every token in its vocabulary — string, boolean, integer, string-or-null and string[] each have a violating probe, so no token is enforced only in theory",
-  typeMisses.length === 0, () => `tokens with no working rejection: ${typeMisses.join(", ")}`);
+  typeMisses.length === 0, () => `tokens with no working rejection: ${typeMisses.map(String).join(", ")}`);
 // The fail-fast branches the diff added: a null where an object belongs, a non-array where an array belongs, and a
 // scalar where the page map belongs. Nothing in the shipped run calls these, so only a probe covers them.
 check("ENG-95930: the shape check fails fast on a value of the wrong SHAPE — `null` for a plain object, a non-array for an array, a scalar for the page map, and a non-object answer",
@@ -2576,7 +2576,9 @@ const faultPrompts = [];
 const faultThenOk = await runWith({}, async (prompt) => {
   faultThenOkCalls += 1;
   faultPrompts.push(typeof prompt === "string" ? prompt : "");
-  return faultThenOkCalls === 1 ? shapeShort : (faultThenOkCalls === 2 ? shapeOk : null);
+  if (faultThenOkCalls === 1) return shapeShort;
+  if (faultThenOkCalls === 2) return shapeOk;
+  return null;
 }).catch((e) => ({ threw: e.message }));
 check("ENG-95930 EXECUTES the shape fault: an answer short of `buildComplete` is NOT accepted — the attempt is spent, the second answer is taken, and the run proceeds instead of computing on a hole",
   !faultThenOk.threw && faultThenOk.stopped !== "reconcile-failed" && faultThenOkCalls === 2,
@@ -2696,6 +2698,24 @@ const midRunPasses = await runToPostPreflight(midRunBaseline, midRunBaseline, { 
 check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches the dry-run boundary (`dryRun:true`), so an always-firing mid-run gate would surface here",
   !midRunPasses.threw && midRunPasses.stopped !== "plan-invalid-against-stand" && midRunPasses.dryRun === true,
   () => (midRunPasses.threw ? `threw: ${midRunPasses.threw}` : `stopped=${midRunPasses.stopped} dryRun=${midRunPasses.dryRun}`));
+// THE DRY-RUN PREVIEW'S OUTPUT CONTRACT (ENG-95930, mode B): per unit a COUNT (`openRowCount` = missing +
+// unverified off the counts-only verdict), the rows themselves left on disk behind the top-level `verifyTable`
+// pointer, and NO per-unit row prose. This shape replaced an array of up to 8 deliverable strings, and nothing else
+// in the suite drives `dryRunReport`, so a regression — a wrong count, a dropped field, the old row-string shape
+// creeping back — would ship silently without this.
+const dryVerify = { complete: false, missing: 2, unverified: 1, builderOpen: 0, planGaps: [],
+  pages: { main: { complete: false, buildComplete: false, missing: 2, unverified: 1 } } };
+const dryRunPreview = await runToPostPreflight({ ...midRunBaseline, verify: dryVerify }, { ...midRunBaseline, verify: dryVerify }, { dryRun: true })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95930: `dryRunReport` carries the COUNTS contract — `openRowCount` is missing+unverified from the verdict (and `null` when the unit has no verdict entry), `verifyTable` points at the rows on disk, and the unit entry carries no row prose",
+  !dryRunPreview.threw && dryRunPreview.dryRun === true
+    && dryRunPreview.verifyTable === "out/verify.md"
+    && Array.isArray(dryRunPreview.wouldBuild) && dryRunPreview.wouldBuild.length === 1
+    && dryRunPreview.wouldBuild[0].key === "main" && dryRunPreview.wouldBuild[0].openRowCount === 3
+    && Object.keys(dryRunPreview.wouldBuild[0]).sort().join(",") === "key,kind,openRowCount,schema".split(",").sort().join(",")
+    && midRunPasses.wouldBuild?.[0]?.openRowCount === null && midRunPasses.verifyTable === "out/verify.md",
+  () => (dryRunPreview.threw ? `threw: ${dryRunPreview.threw}`
+    : JSON.stringify({ table: dryRunPreview.verifyTable, wouldBuild: dryRunPreview.wouldBuild, noVerdictCount: midRunPasses.wouldBuild?.[0]?.openRowCount })));
 // ENG-95468 — the template axis is a mid-run guarantee for the same reasons: a resumed run's baseline may predate
 // `templateResolution`, and a template schema can leave the stand during a long run. The post-preflight Reconcile is
 // the first to report it, and the next unit must not be dispatched on it.
@@ -2938,6 +2958,15 @@ check("ENG-95474 review: `maxContinuations: 0` refuses every continuation — th
     && noContinuations.continuationBlocks.length === 0,
   () => (noContinuations.threw ? `threw: ${noContinuations.threw}`
     : { builds: noContinuations.builds, parkRounds: parkOf(noContinuations)?.rounds, blocks: noContinuations.continuationBlocks.length }));
+// THE PARK RECORD'S OUTPUT CONTRACT (ENG-95930, mode B): the counts-only verify carries no rows, so `shortRows`
+// stays `[]` for shape stability and the reason POINTS at the on-disk table instead of embedding row prose. Pinned
+// on an executed park because nothing else asserts either field — a future edit could silently reintroduce
+// row-rendering into the park path.
+check("ENG-95930: an executed park carries the COUNTS-ONLY contract — `shortRows` is the empty array and `parkedWhy` points at the verify table on disk, never at embedded rows",
+  Array.isArray(parkOf(noContinuations)?.shortRows) && parkOf(noContinuations).shortRows.length === 0
+    && /still short after 3 round\(s\)/.test(parkOf(noContinuations)?.parkedWhy || "")
+    && /the rows are in out\/verify\.md/.test(parkOf(noContinuations)?.parkedWhy || ""),
+  () => JSON.stringify({ shortRows: parkOf(noContinuations)?.shortRows, parkedWhy: parkOf(noContinuations)?.parkedWhy }));
 // --- SIBLING NON-DEFERRAL, EXECUTED with TWO units (review round 2). The single-unit scenarios above cannot catch a
 // regression that reintroduces `r.deferred.push(...)` for other units on a continuation: with one unit there is no
 // sibling to defer. Two independent page units, only `main` continuing, and the assertion is that `list` got its BUILD

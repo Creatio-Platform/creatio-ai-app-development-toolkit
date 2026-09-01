@@ -1819,14 +1819,16 @@ const shapeTypeOk = (v, t) => {
   return false
 }
 
-function shapeObjectErrors(where, obj, spec, out) {
-  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
-    out.push(`${where}: expected an object, got ${describeValue(obj)}`)
-    return
-  }
+// The four axes a spec can constrain, one walker each: `shapeObjectErrors` used to interleave them in one body,
+// which put the sole runtime enforcement of the nested contract over Sonar's cognitive-complexity ceiling (rule
+// S3776). Fault order is preserved exactly — required, then types, then nested, then map — because the retry prompt
+// renders faults in the order they were pushed.
+function shapeRequiredErrors(where, obj, spec, out) {
   for (const k of spec.required || []) {
     if (obj[k] === undefined) out.push(`${where}.${k}: required, and it is absent`)
   }
+}
+function shapeTypedErrors(where, obj, spec, out) {
   for (const [k, t] of Object.entries(spec.types || {})) {
     if (!SHAPE_TYPES.has(t)) {
       out.push(`${where}.${k}: unknown type token '${t}' — a defect in the shape table, not in the answer`)
@@ -1834,9 +1836,13 @@ function shapeObjectErrors(where, obj, spec, out) {
     }
     if (obj[k] !== undefined && !shapeTypeOk(obj[k], t)) out.push(`${where}.${k}: expected ${t}, got ${describeValue(obj[k])}`)
   }
+}
+function shapeNestedErrors(where, obj, spec, out) {
   for (const [k, sub] of Object.entries(spec.nested || {})) {
     if (obj[k] !== undefined) shapeValueErrors(`${where}.${k}`, obj[k], sub, out)
   }
+}
+function shapeMapErrors(where, obj, spec, out) {
   for (const [k, sub] of Object.entries(spec.map || {})) {
     const m = obj[k]
     if (m === undefined) continue
@@ -1846,6 +1852,16 @@ function shapeObjectErrors(where, obj, spec, out) {
     }
     for (const [mk, mv] of Object.entries(m)) shapeObjectErrors(`${where}.${k}["${mk}"]`, mv, sub, out)
   }
+}
+function shapeObjectErrors(where, obj, spec, out) {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    out.push(`${where}: expected an object, got ${describeValue(obj)}`)
+    return
+  }
+  shapeRequiredErrors(where, obj, spec, out)
+  shapeTypedErrors(where, obj, spec, out)
+  shapeNestedErrors(where, obj, spec, out)
+  shapeMapErrors(where, obj, spec, out)
 }
 
 function shapeValueErrors(where, value, spec, out) {
@@ -1890,10 +1906,16 @@ function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxByt
 // freely, is 2-3 bytes on the wire and one unit here. Measuring the wrong one lets a 16,000-unit answer weigh ~30 KB
 // and sail past a check whose whole purpose is to stay under ~20 KB. Not `TextEncoder`/`Buffer`: neither is an
 // ECMAScript built-in, and this module is inlined verbatim into a workflow script whose sandbox promises only those.
+const utf8ByteWidth = (c) => {
+  if (c < 0x80) return 1
+  if (c < 0x800) return 2
+  if (c < 0x10000) return 3
+  return 4
+}
 const utf8Bytes = (s) => {
   if (typeof s !== 'string') return 0
   let n = 0
-  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4 }
+  for (const ch of s) n += utf8ByteWidth(ch.codePointAt(0))
   return n
 }
 
@@ -3371,81 +3393,86 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
     lastShapeFaults = []
     lastHostRejection = ''
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
-      // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
-      // round's own `dispatchUnit` loop, which is sequential for the same reason).
-      // A RETRY AFTER A SHAPE FAULT CARRIES THE FAULT. `note` is work-item metadata and never reaches the model, so
-      // an uninformed retry re-sends byte-identical input and a deterministically dropped field is dropped again for
-      // the whole budget. The fault list is appended to the PROMPT instead, which is the one channel the agent reads.
-      const attemptId = attempt === 1 ? id : `${id}.retry-${attempt - 1}`
-      const attemptLabel = attempt === 1 ? label : `${label}:retry-${attempt - 1}`
-      const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
-      const prompt = lastShapeFaults.length
-        ? `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${lastShapeFaults.map((f) => `- ${f}`).join('\n')}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
-        : base
-      let answer
-      try {
-        answer = yield* dispatch(attemptId, prompt, {
-          schema: RECONCILE_SCHEMA, phase: 'Reconcile', requires: RECONCILE_REQUIRES, note,
-          label: attemptLabel,
-        })
-      } catch (e) {
-        // THE THIRD FAILURE THE BUDGET COVERS. A rejected single-item step reaches the core as a throw, so only a
-        // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
-        // honest `reconcile-failed` stop below never runs.
-        lastShapeFaults = []
-        lastHostRejection = String((e && e.message) || e)
-        if (attempt < RECONCILE_ATTEMPTS) {
-          log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`)
-        } else {
-          log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
-        }
-        continue
-      }
-      // THE SHAPE CHECK THE HOST DOES NOT DO. `RECONCILE_SCHEMA` declares these properties without their insides,
-      // so the fields are verified here. A schema-valid answer missing `verify.pages[*].buildComplete`, or carrying
-      // a string where the arithmetic reads a boolean, spends an attempt and is named in the log — never merged
-      // into the state, where it would reach the park/close arithmetic as `undefined` and settle a page on a fact
-      // nobody established.
-      if (answer) {
-        const faults = reconcileShapeErrors(answer)
-        if (!faults.length) {
-          // The EMPTY prefix travels as `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }` — a bare `""`
-          // value is the token observed dropped from large submissions of this answer — and is decoded back to `''`
-          // here, in the one place every accepted answer passes, so every consumer keeps the string contract.
-          if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
-          return answer
-        }
-        lastShapeFaults = faults
-        lastHostRejection = ''
-        // THE LOG MUST NOT PROMISE A RETRY THE LOOP WILL NOT RUN. On the LAST attempt `continue` exits the loop and
-        // `reconcileAgent` returns null, so a line ending in "retrying" would tell the operator a re-dispatch is
-        // coming when the call is actually being abandoned — the same misdiagnosis class this ticket exists to close.
-        // Guarded exactly like the no-answer branch below, with a distinct giving-up line on the final attempt.
-        if (attempt < RECONCILE_ATTEMPTS) {
-          log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`)
-        } else {
-          // "on this attempt", NOT "on all N": an earlier attempt may have returned NOTHING (the host refused it),
-          // and `lastShapeFaults` is reset on that path, so claiming every attempt answered would tell the operator
-          // the host is fine when it may have blocked half the budget.
-          log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} and is STILL short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
-        }
-        continue
-      }
+      // Sequential by definition: attempt 2 exists only because attempt 1 failed (same shape as the round's own
+      // `dispatchUnit` loop, which is sequential for the same reason).
+      const answer = yield* reconcileAttempt(roundNo, id, label, note, attempt)
+      if (answer) return answer
+    }
+    return null
+  }
+  // ONE ATTEMPT: build the (fault-informed) prompt, dispatch, classify what came back. Split from the loop so each
+  // decision axis reads on its own and the pair stays under Sonar's cognitive-complexity ceiling (rule S3776); a
+  // usable answer is returned, every failure updates the module state and returns null so the loop spends the next
+  // attempt on it.
+  function* reconcileAttempt(roundNo, id, label, note, attempt) {
+    const willRetry = attempt < RECONCILE_ATTEMPTS
+    const attemptId = attempt === 1 ? id : `${id}.retry-${attempt - 1}`
+    const attemptLabel = attempt === 1 ? label : `${label}:retry-${attempt - 1}`
+    // A RETRY AFTER A SHAPE FAULT CARRIES THE FAULT. `note` is work-item metadata and never reaches the model, so
+    // an uninformed retry re-sends byte-identical input and a deterministically dropped field is dropped again for
+    // the whole budget. The fault list is appended to the PROMPT instead, which is the one channel the agent reads.
+    const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
+    const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
+    const prompt = lastShapeFaults.length
+      ? `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
+      : base
+    let answer
+    try {
+      answer = yield* dispatch(attemptId, prompt, {
+        schema: RECONCILE_SCHEMA, phase: 'Reconcile', requires: RECONCILE_REQUIRES, note,
+        label: attemptLabel,
+      })
+    } catch (e) {
+      // THE THIRD FAILURE THE BUDGET COVERS. A rejected single-item step reaches the core as a throw, so only a
+      // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
+      // honest `reconcile-failed` stop below never runs.
+      lastShapeFaults = []
+      lastHostRejection = String((e && e.message) || e)
+      logReconcileAttemptFailure(willRetry,
+        `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`,
+        `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
+      return null
+    }
+    if (!answer) {
       // THE FAULT LIST IS THIS ATTEMPT'S, NOT THE RUN'S. A host that refuses attempt 2 after attempt 1 answered
       // short must report the REFUSAL: keeping the earlier faults told the operator the agent "answered on all
       // attempts, the host is not blocking anything" while the host blocked the rest, which is the misdiagnosis
       // this whole ticket corrects.
       lastShapeFaults = []
       lastHostRejection = ''
-      if (attempt < RECONCILE_ATTEMPTS) {
-        log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`)
-      } else {
-        // The exhaustion of THIS path used to log nothing at all, so the last thing an operator saw was a retry
-        // notice for an attempt that had already been spent. Both exhaustion paths now say they are giving up.
-        log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built; read the host's own reason before re-running, since the schema-size refusal is deterministic`)
-      }
+      logReconcileAttemptFailure(willRetry,
+        `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`,
+        `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built; read the host's own reason before re-running, since the schema-size refusal is deterministic`)
+      return null
     }
+    // THE SHAPE CHECK THE HOST DOES NOT DO. `RECONCILE_SCHEMA` declares these properties without their insides,
+    // so the fields are verified here. A schema-valid answer missing `verify.pages[*].buildComplete`, or carrying
+    // a string where the arithmetic reads a boolean, spends an attempt and is named in the log — never merged
+    // into the state, where it would reach the park/close arithmetic as `undefined` and settle a page on a fact
+    // nobody established.
+    const faults = reconcileShapeErrors(answer)
+    if (!faults.length) {
+      // The EMPTY prefix travels as `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }` — a bare `""`
+      // value is the token observed dropped from large submissions of this answer — and is decoded back to `''`
+      // here, in the one place every accepted answer passes, so every consumer keeps the string contract.
+      if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
+      return answer
+    }
+    lastShapeFaults = faults
+    lastHostRejection = ''
+    // "on this attempt", NOT "on all N": an earlier attempt may have returned NOTHING (the host refused it), and
+    // `lastShapeFaults` is reset on that path, so claiming every attempt answered would tell the operator the host
+    // is fine when it may have blocked half the budget.
+    logReconcileAttemptFailure(willRetry,
+      `Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`,
+      `Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} and is STILL short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
     return null
+  }
+  // THE LOG MUST NOT PROMISE A RETRY THE LOOP WILL NOT RUN: a line ending in "retrying" on the final attempt would
+  // tell the operator a re-dispatch is coming when the call is being abandoned — the misdiagnosis class this ticket
+  // exists to close. One chooser for all three failure kinds, so none can drift from the rule.
+  function logReconcileAttemptFailure(willRetry, retryLine, giveUpLine) {
+    log(willRetry ? retryLine : giveUpLine)
   }
   // The wording for the Reconcile failures, and it names the recovery the Applicant run got wrong: re-run THIS
   // route. A rejection at the first agent is not evidence the route is unavailable, and a route switch mid-folder is
@@ -4856,7 +4883,10 @@ Return every verdict you wrote.`,
       } else {
         // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
         // have closed. Said out loud rather than retried — the round loop reconciles at its own tail either way.
-        log(`the post-preflight Reconcile ${lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : `returned nothing${lastShapeFaults.length ? ` — every attempt answered but was short of the shape this script computes on (${lastShapeFaults.join(' · ')})` : ''}`} — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built`)
+        let refreshFailure = 'returned nothing'
+        if (lastHostRejection) refreshFailure = `was REJECTED by the host (${lastHostRejection})`
+        else if (lastShapeFaults.length) refreshFailure = `returned nothing — every attempt answered but was short of the shape this script computes on (${lastShapeFaults.join(' · ')})`
+        log(`the post-preflight Reconcile ${refreshFailure} — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built`)
       }
     }
     return null
@@ -5204,7 +5234,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       if (!next) {
         // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
         // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.
-        log(`reconcile after round ${round} ${lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'} — stopping; the verdict is this round's, the queue state is not refreshed`)
+        const roundTailFailure = lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'
+        log(`reconcile after round ${round} ${roundTailFailure} — stopping; the verdict is this round's, the queue state is not refreshed`)
         yield* persistPending('stopping on a failed reconcile')
         return runReturn({
           stopped: 'reconcile-failed',

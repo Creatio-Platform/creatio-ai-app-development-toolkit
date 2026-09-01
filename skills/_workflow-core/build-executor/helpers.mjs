@@ -1209,14 +1209,16 @@ const shapeTypeOk = (v, t) => {
   return false
 }
 
-function shapeObjectErrors(where, obj, spec, out) {
-  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
-    out.push(`${where}: expected an object, got ${describeValue(obj)}`)
-    return
-  }
+// The four axes a spec can constrain, one walker each: `shapeObjectErrors` used to interleave them in one body,
+// which put the sole runtime enforcement of the nested contract over Sonar's cognitive-complexity ceiling (rule
+// S3776). Fault order is preserved exactly — required, then types, then nested, then map — because the retry prompt
+// renders faults in the order they were pushed.
+function shapeRequiredErrors(where, obj, spec, out) {
   for (const k of spec.required || []) {
     if (obj[k] === undefined) out.push(`${where}.${k}: required, and it is absent`)
   }
+}
+function shapeTypedErrors(where, obj, spec, out) {
   for (const [k, t] of Object.entries(spec.types || {})) {
     if (!SHAPE_TYPES.has(t)) {
       out.push(`${where}.${k}: unknown type token '${t}' — a defect in the shape table, not in the answer`)
@@ -1224,9 +1226,13 @@ function shapeObjectErrors(where, obj, spec, out) {
     }
     if (obj[k] !== undefined && !shapeTypeOk(obj[k], t)) out.push(`${where}.${k}: expected ${t}, got ${describeValue(obj[k])}`)
   }
+}
+function shapeNestedErrors(where, obj, spec, out) {
   for (const [k, sub] of Object.entries(spec.nested || {})) {
     if (obj[k] !== undefined) shapeValueErrors(`${where}.${k}`, obj[k], sub, out)
   }
+}
+function shapeMapErrors(where, obj, spec, out) {
   for (const [k, sub] of Object.entries(spec.map || {})) {
     const m = obj[k]
     if (m === undefined) continue
@@ -1236,6 +1242,16 @@ function shapeObjectErrors(where, obj, spec, out) {
     }
     for (const [mk, mv] of Object.entries(m)) shapeObjectErrors(`${where}.${k}["${mk}"]`, mv, sub, out)
   }
+}
+function shapeObjectErrors(where, obj, spec, out) {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    out.push(`${where}: expected an object, got ${describeValue(obj)}`)
+    return
+  }
+  shapeRequiredErrors(where, obj, spec, out)
+  shapeTypedErrors(where, obj, spec, out)
+  shapeNestedErrors(where, obj, spec, out)
+  shapeMapErrors(where, obj, spec, out)
 }
 
 function shapeValueErrors(where, value, spec, out) {
@@ -1280,10 +1296,16 @@ export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12,
 // freely, is 2-3 bytes on the wire and one unit here. Measuring the wrong one lets a 16,000-unit answer weigh ~30 KB
 // and sail past a check whose whole purpose is to stay under ~20 KB. Not `TextEncoder`/`Buffer`: neither is an
 // ECMAScript built-in, and this module is inlined verbatim into a workflow script whose sandbox promises only those.
+const utf8ByteWidth = (c) => {
+  if (c < 0x80) return 1
+  if (c < 0x800) return 2
+  if (c < 0x10000) return 3
+  return 4
+}
 const utf8Bytes = (s) => {
   if (typeof s !== 'string') return 0
   let n = 0
-  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4 }
+  for (const ch of s) n += utf8ByteWidth(ch.codePointAt(0))
   return n
 }
 
