@@ -3427,7 +3427,7 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
       // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
       // honest `reconcile-failed` stop below never runs.
       lastShapeFaults = []
-      lastHostRejection = String((e && e.message) || e)
+      lastHostRejection = String(e?.message || e)
       logReconcileAttemptFailure(willRetry,
         `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`,
         `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)

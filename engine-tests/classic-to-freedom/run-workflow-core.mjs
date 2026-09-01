@@ -1166,7 +1166,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
   check("build-executor: every attempt is LOGGED as a host rejection, and the last one says it is giving up rather than promising a retry that will not run",
     logs.filter((m) => /REJECTED by the host/.test(m)).length === 3
       && logs.filter((m) => /retrying the SAME call/.test(m)).length === 2
-      && /giving up, nothing was built/.test(logs[logs.length - 1]),
+      && /giving up, nothing was built/.test(logs.at(-1)),
     () => JSON.stringify(logs.slice(-4), null, 1));
   check("build-executor: each retry's prompt names its OWN capture file — a fresh context restarts the in-prompt counter, so a shared name would have every attempt overwrite the exact bytes the previous failure left behind",
     prompts.length === 3

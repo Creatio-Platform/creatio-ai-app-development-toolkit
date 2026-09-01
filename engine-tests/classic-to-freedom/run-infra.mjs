@@ -1678,8 +1678,8 @@ const goodDigest = {
   packageCreatedByRun: null,
 };
 check("ENG-95930: the shape check ACCEPTS the digest the engine actually publishes — a checker that refused a valid answer would burn all three Reconcile attempts on every run and stop the build with nothing wrong",
-  wf.reconcileShapeErrors && wf.reconcileShapeErrors(goodDigest).length === 0,
-  () => wf.reconcileShapeErrors && wf.reconcileShapeErrors(goodDigest));
+  wf.reconcileShapeErrors?.(goodDigest).length === 0,
+  () => wf.reconcileShapeErrors?.(goodDigest));
 // ENG-95930 (review round 3) — THE WORST-CASE SIZE TEST. `maxItems` bounds the count and
 // `additionalProperties.maxLength` bounds one string, but not their product: a SCHEMA-VALID answer (400 items,
 // 400-char strings) is about half a megabyte against a ~20 KB tool-input limit. That combination must be caught,
@@ -1695,8 +1695,7 @@ check("ENG-95930 (review): an answer that is SCHEMA-VALID under `maxItems`/`maxL
   (() => {
     if (!wf.reconcileShapeErrors) return false;
     const faults = wf.reconcileShapeErrors(schemaValidButHuge);
-    return faults.length > 0
-      && faults.some((f) => /serializes to \d+ bytes/.test(f) && /preflightItems/.test(f));
+    return faults.some((f) => /serializes to \d+ bytes/.test(f) && /preflightItems/.test(f));
   })(),
   () => `${JSON.stringify(schemaValidButHuge).length} B -> ${JSON.stringify(wf.reconcileShapeErrors ? wf.reconcileShapeErrors(schemaValidButHuge).slice(0, 1) : [])}`);
 check("ENG-95930 (review): the size ceiling does NOT fire on a normal answer — a check that faulted a healthy digest would burn every Reconcile attempt on every run",
@@ -1726,21 +1725,20 @@ check("ENG-95930 (review) guard preserved — empty `SchemaNamePrefix`: the prom
 // copy it rather than omit the field. A checker that read `null` as a fault would make every un-answered plan
 // unbuildable — the opposite of what the old schema's `['object','null']` union did.
 check("ENG-95930: the shape check keeps `preflightItems[].resolution: null` legal while still requiring `answer` inside a resolution that IS present — the old schema declared an `['object','null']` union, and an unanswered ⚠ Confirm item is the normal case, not a malformed answer",
-  wf.reconcileShapeErrors
-    && wf.reconcileShapeErrors({ preflightItems: [{ id: "a", pageKey: "b", resolution: null }] }).length === 0
+  wf.reconcileShapeErrors?.({ preflightItems: [{ id: "a", pageKey: "b", resolution: null }] }).length === 0
     && wf.reconcileShapeErrors({ preflightItems: [{ id: "a", pageKey: "b", resolution: { decidedBy: "me" } }] }).length === 1,
-  () => wf.reconcileShapeErrors && wf.reconcileShapeErrors({ preflightItems: [{ id: "a", pageKey: "b", resolution: { decidedBy: "me" } }] }));
+  () => wf.reconcileShapeErrors?.({ preflightItems: [{ id: "a", pageKey: "b", resolution: { decidedBy: "me" } }] }));
 // A top-level property that is ABSENT is `RECONCILE_SCHEMA.required`'s business, not the checker's — half of these
 // properties are legitimately optional, and a checker that demanded them all would reject every honest partial answer.
 check("ENG-95930: the shape check does NOT invent requirements for absent top-level properties — `required` still lives in the schema, and `packageCreatedByRun`/`sectionHost` are legitimately absent on older folders and plans",
-  wf.reconcileShapeErrors && wf.reconcileShapeErrors({}).length === 0,
-  () => wf.reconcileShapeErrors && wf.reconcileShapeErrors({}));
+  wf.reconcileShapeErrors?.({}).length === 0,
+  () => wf.reconcileShapeErrors?.({}));
 // The prompt is the OTHER half of the trade: the schema no longer lists these fields, so a field the prose does not
 // name is a field the agent drops — and the shape check then refuses every attempt. DERIVED, not a hand-picked
 // sample: every name the shipped shape table binds at any depth is set-tested against the TOKENISED prompt body, so
 // adding a field to the table without naming it in the prompt fails here instead of in front of an operator.
 const promptBody = wfSrc.slice(wfSrc.indexOf("function reconcilePrompt(round, fileStem)"), wfSrc.indexOf("  phase('Reconcile')"));
-const promptTokens = new Set(promptBody.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []);
+const promptTokens = new Set(promptBody.match(/[A-Za-z_]\w*/g) || []);
 const shapeNames = wf.shapeFieldNames ? [...wf.shapeFieldNames(wf.RECONCILE_SHAPE)] : [];
 const unnamedInPrompt = shapeNames.filter((n) => !promptTokens.has(n));
 check("ENG-95930: EVERY field name the shipped `RECONCILE_SHAPE` binds — property, `required` key and typed key, at every nesting level — is named in the Reconcile prompt, tokenised (a substring match would pass on `id` inside `evidenceIds`)",
@@ -1761,14 +1759,13 @@ check("ENG-95930: every LOOSENED property (a bare object / array of objects, whi
 // The table can only enforce what its own vocabulary covers: a mistyped token (`'bool'`) accepts every value, so it
 // is a disabled check that no answer-shaped probe would reveal.
 check("ENG-95930: every `kind` / `types` token in the shipped shape table is inside the closed vocabulary — a typo there silently disables that field's check",
-  wf.shapeVocabularyErrors && wf.shapeVocabularyErrors(wf.RECONCILE_SHAPE).length === 0,
-  () => wf.shapeVocabularyErrors && wf.shapeVocabularyErrors(wf.RECONCILE_SHAPE));
+  wf.shapeVocabularyErrors?.(wf.RECONCILE_SHAPE).length === 0,
+  () => wf.shapeVocabularyErrors?.(wf.RECONCILE_SHAPE));
 check("ENG-95930: an unknown token FAULTS instead of accepting everything — both axes, so a table typo cannot fail open",
-  wf.shapeVocabularyErrors
-    && wf.shapeVocabularyErrors({ x: { kind: "arr", types: { a: "bool" } } }).length === 2
+  wf.shapeVocabularyErrors?.({ x: { kind: "arr", types: { a: "bool" } } }).length === 2
     && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: {} } },
       { verify: { kind: "object", required: [], types: { complete: "boolean-ish" } } }).length === 1,
-  () => wf.shapeVocabularyErrors && wf.shapeVocabularyErrors({ x: { kind: "arr", types: { a: "bool" } } }));
+  () => wf.shapeVocabularyErrors?.({ x: { kind: "arr", types: { a: "bool" } } }));
 // One violating value per token in the vocabulary. The change advertises this enforcement in shipped text ("carrying
 // a string where the arithmetic reads a boolean"), and `verify.missing`/`unverified` feed the park/close arithmetic
 // directly — so each token gets a probe rather than the set being trusted because it is short.
@@ -1780,7 +1777,7 @@ const TYPE_PROBES = [
   ["string[]", { reachability: [{ key: "k", appliesWhen: true, pages: ["a", 2] }] }, "pages"],
 ];
 const typeMisses = TYPE_PROBES.filter(([, payload, field]) => {
-  const faults = wf.reconcileShapeErrors ? wf.reconcileShapeErrors(payload) : [];
+  const faults = wf.reconcileShapeErrors?.(payload) ?? [];
   return !faults.some((f) => f.includes(field));
 }).map(([token]) => token);
 check("ENG-95930: the shape check REJECTS a wrong-typed value for every token in its vocabulary — string, boolean, integer, string-or-null and string[] each have a violating probe, so no token is enforced only in theory",
@@ -2712,7 +2709,7 @@ check("ENG-95930: `dryRunReport` carries the COUNTS contract — `openRowCount` 
     && dryRunPreview.verifyTable === "out/verify.md"
     && Array.isArray(dryRunPreview.wouldBuild) && dryRunPreview.wouldBuild.length === 1
     && dryRunPreview.wouldBuild[0].key === "main" && dryRunPreview.wouldBuild[0].openRowCount === 3
-    && Object.keys(dryRunPreview.wouldBuild[0]).sort().join(",") === "key,kind,openRowCount,schema".split(",").sort().join(",")
+    && Object.keys(dryRunPreview.wouldBuild[0]).sort(byCodeUnit).join(",") === "key,kind,openRowCount,schema".split(",").sort(byCodeUnit).join(",")
     && midRunPasses.wouldBuild?.[0]?.openRowCount === null && midRunPasses.verifyTable === "out/verify.md",
   () => (dryRunPreview.threw ? `threw: ${dryRunPreview.threw}`
     : JSON.stringify({ table: dryRunPreview.verifyTable, wouldBuild: dryRunPreview.wouldBuild, noVerdictCount: midRunPasses.wouldBuild?.[0]?.openRowCount })));
