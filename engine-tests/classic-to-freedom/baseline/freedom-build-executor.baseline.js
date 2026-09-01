@@ -2436,7 +2436,7 @@ async function reconcileAgent(roundNo, label) {
         label: attemptLabel,
       })
     } catch (e) {
-      lastHostRejection = String((e && e.message) || e)
+      lastHostRejection = String(e?.message || e)
       if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`)
       else log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
       continue
