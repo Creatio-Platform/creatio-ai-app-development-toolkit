@@ -21,7 +21,12 @@ set "RESOLVER=%HERE%..\runtime\scripts\find_python.ps1"
 set "PYCMD="
 py -3 --version >nul 2>&1 && set "PYCMD=py|-3"
 if not defined PYCMD if exist "%RESOLVER%" (
-  for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%RESOLVER%' *^> $null; if ($env:PYTHON_CMD) { $env:PYTHON_CMD }"`) do set "PYCMD=%%P"
+  echo Resolving Python 3 via find_python.ps1 ^(may install Python via winget and prompt for confirmation^)...
+  REM Pass the resolver PATH via an env var, never interpolated into the -Command text: an apostrophe in
+  REM the checkout path would otherwise terminate the string and be re-parsed as PowerShell. $env:VAR
+  REM expansion is not re-parsed as script. Its own output is suppressed so the for/f captures only PYTHON_CMD.
+  set "PY_RESOLVER_PATH=%RESOLVER%"
+  for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& $env:PY_RESOLVER_PATH *^> $null; if ($env:PYTHON_CMD) { $env:PYTHON_CMD }"`) do set "PYCMD=%%P"
 )
 if not defined PYCMD (
   echo. & echo Python 3 is required but was not found on PATH ^(the Microsoft Store stub does not count^).
