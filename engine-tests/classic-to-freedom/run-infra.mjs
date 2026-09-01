@@ -386,6 +386,16 @@ check("ENG-95901 (review): an UNTAGGED open row counts as the BUILDER's — the 
 check("ENG-95901 (review): `stillShortRows` is read the same way as `openRows` — the self-report shape must not drift from the verdict shape",
   () => wf.derivedBuildComplete({ complete: false, missing: 0,
     stillShortRows: [{ deliverable: "Fields", status: "⚠ verify", evidence: "0/2", outcome: "unverified", owner: "builder" }] }) === false);
+// The one-way read's OTHER half: `stillShortRows` is a `maxItems: 3` SAMPLE, so the absence of a builder-owned row
+// in it proves nothing — verifier-only rows must FALL THROUGH to `missing`/`complete`/`undefined`, never return an
+// unconditional `true` the way a full `openRows` read may.
+check("ENG-95930 (review round 7): verifier-only `stillShortRows` decide NOTHING — the verdict falls through to `missing` (2 → false, 0 → true), and with no fallback at all stays `undefined` instead of reading the 3-row sample as proof of completeness",
+  () => {
+    const verifierRow = { deliverable: "Evidence", status: "⚠ verify", evidence: "no record", outcome: "unverified", owner: "verifier" };
+    return wf.derivedBuildComplete({ missing: 2, stillShortRows: [verifierRow] }) === false
+      && wf.derivedBuildComplete({ missing: 0, stillShortRows: [verifierRow] }) === true
+      && wf.derivedBuildComplete({ stillShortRows: [verifierRow] }) === undefined;
+  });
 // The operator-facing texts must say the same thing (`migrate.mjs` was deliberately narrowed to strip the figure
 // from the scoped diagnostic; the workflow's own log line kept it until this review round).
 check("ENG-95901 (review): the in-context 'still short' log line carries NO count — a figure next to a repair instruction reads as part of what must be repaired, and `migrate.mjs`'s scoped diagnostic already drops it",
@@ -1733,6 +1743,16 @@ check("ENG-95930: the shape check keeps `preflightItems[].resolution: null` lega
 check("ENG-95930: the shape check does NOT invent requirements for absent top-level properties — `required` still lives in the schema, and `packageCreatedByRun`/`sectionHost` are legitimately absent on older folders and plans",
   wf.reconcileShapeErrors?.({}).length === 0,
   () => wf.reconcileShapeErrors?.({}));
+// The empty-prefix PAIR's consistency, which no per-field table row can express: a `true` flag beside a non-empty
+// prefix is a contradiction and must spend an attempt (the informed retry names it), while the three honest forms —
+// the pair itself, the bare unreadable `null`, and the pre-pair `""` — all pass untouched.
+check("ENG-95930 (review round 7): `schemaNamePrefixEmpty: true` beside a NON-EMPTY `schemaNamePrefix` is a FAULT, while the pair form, the unreadable `null`, the legacy `\"\"` and a plain prefix all pass",
+  wf.reconcileShapeErrors?.({ schemaNamePrefixEmpty: true, schemaNamePrefix: "Usr" }).length === 1
+    && wf.reconcileShapeErrors({ schemaNamePrefixEmpty: true, schemaNamePrefix: null }).length === 0
+    && wf.reconcileShapeErrors({ schemaNamePrefix: null }).length === 0
+    && wf.reconcileShapeErrors({ schemaNamePrefix: "" }).length === 0
+    && wf.reconcileShapeErrors({ schemaNamePrefix: "Usr" }).length === 0,
+  () => wf.reconcileShapeErrors?.({ schemaNamePrefixEmpty: true, schemaNamePrefix: "Usr" }));
 // The prompt is the OTHER half of the trade: the schema no longer lists these fields, so a field the prose does not
 // name is a field the agent drops — and the shape check then refuses every attempt. DERIVED, not a hand-picked
 // sample: every name the shipped shape table binds at any depth is set-tested against the TOKENISED prompt body, so
@@ -2958,10 +2978,9 @@ check("ENG-95474 review: `maxContinuations: 0` refuses every continuation — th
 // stays `[]` for shape stability and the reason POINTS at the on-disk table instead of embedding row prose. Pinned
 // on an executed park because nothing else asserts either field — a future edit could silently reintroduce
 // row-rendering into the park path.
-check("ENG-95930: an executed park carries the COUNTS-ONLY contract — `shortRows` is the empty array and `parkedWhy` points at the verify table on disk, never at embedded rows",
+check("ENG-95930: an executed park carries the COUNTS-ONLY contract — `shortRows` is the empty array and `parkedWhy` is the exact operator-facing wording: counts plus the on-disk table pointer, never embedded rows",
   Array.isArray(parkOf(noContinuations)?.shortRows) && parkOf(noContinuations).shortRows.length === 0
-    && /still short after 3 round\(s\)/.test(parkOf(noContinuations)?.parkedWhy || "")
-    && /the rows are in out\/verify\.md/.test(parkOf(noContinuations)?.parkedWhy || ""),
+    && /^still short after 3 round\(s\) — 0 MISSING \+ 0 unconfirmed row\(s\) on this unit; the rows are in out\/verify\.md$/.test(parkOf(noContinuations)?.parkedWhy || ""),
   () => JSON.stringify({ shortRows: parkOf(noContinuations)?.shortRows, parkedWhy: parkOf(noContinuations)?.parkedWhy }));
 // --- SIBLING NON-DEFERRAL, EXECUTED with TWO units (review round 2). The single-unit scenarios above cannot catch a
 // regression that reintroduces `r.deferred.push(...)` for other units on a continuation: with one unit there is no

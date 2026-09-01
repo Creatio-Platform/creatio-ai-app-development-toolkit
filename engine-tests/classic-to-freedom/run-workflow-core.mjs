@@ -1134,6 +1134,10 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
     check("build-executor encoder: an answer that is not valid JSON is REFUSED with a non-zero exit — the agent may never submit what the helper rejected",
       () => { const bad = path.join(tmp, "bad.json"); writeFileSync(bad, "{\"truncated\": ");
         return spawnSync(process.execPath, [helper, bad, path.join(tmp, "bad.ascii.json")], { encoding: "utf8" }).status !== 0; });
+    check("build-executor encoder: the SOURCE carries no backslash, backtick or `${` — it is interpolated through a template literal and rendered into a prompt, and each layer would reinterpret one; pinned statically so a violating edit fails HERE, not as an unrelated round-trip failure",
+      !bex.ANSWER_ENCODER_SOURCE.includes("\\") && !bex.ANSWER_ENCODER_SOURCE.includes("`")
+        && !bex.ANSWER_ENCODER_SOURCE.includes("$" + "{"),
+      () => bex.ANSWER_ENCODER_SOURCE);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

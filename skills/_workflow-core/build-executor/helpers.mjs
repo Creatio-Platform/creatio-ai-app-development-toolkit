@@ -1311,6 +1311,14 @@ const utf8Bytes = (s) => {
 
 // SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
   // agent guessing which field to cut, and an uninformed retry re-sends the same oversized answer.
+  // THE EMPTY-PREFIX PAIR MUST AGREE — its wire form is `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`,
+  // and a `true` flag beside a NON-EMPTY prefix is a contradiction no per-field table row can express. Silently
+  // trusting either half would decode a fact nobody established, so the pair is FAULTED here and the informed
+  // retry names it. `schemaNamePrefix: null` alone stays legal (the contract's "could not read it" answer), and so
+  // does a bare `""` (the pre-pair form).
+  if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
+    out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
+  }
   const size = utf8Bytes(JSON.stringify(state))
   if (size > maxBytes) {
     const worst = Object.keys(state)
