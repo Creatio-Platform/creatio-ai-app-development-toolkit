@@ -365,6 +365,18 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 1, "a Stage B failure exits 1")
             self.assertEqual(order, ["A", "C", "B", "cleanup"], "cleanup must run even when Stage B fails")
 
+    def test_stop_clio_uses_exact_name_matching(self):
+        # Exact-name matching (pkill -x / taskkill /IM) is deliberate: a substring/-f match would kill any
+        # process merely mentioning "clio" (editor, log tail, wrapper). Pin the literal argv on both OSes.
+        for is_win, expected in ((True, ["taskkill", "/F", "/IM", "clio.exe", "/T"]),
+                                 (False, ["pkill", "-x", "clio"])):
+            recorded = []
+            with mock.patch.object(bdt, "IS_WIN", is_win), \
+                    mock.patch.object(bdt, "run", side_effect=lambda cmd, **kw: recorded.append(cmd) or
+                                      subprocess.CompletedProcess(cmd, 0, "", "")):
+                bdt._stop_clio_processes()
+            self.assertEqual(recorded, [expected], f"IS_WIN={is_win}: must use exact-name matching, not -f")
+
     def test_install_plugin_call_order_and_success(self):
         calls = []
         with mock.patch.object(bdt, "run", side_effect=lambda cmd, **kw: calls.append(cmd) or
