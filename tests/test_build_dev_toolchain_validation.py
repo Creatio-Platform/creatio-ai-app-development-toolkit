@@ -1,277 +1,552 @@
-"""Regression coverage for the untrusted-input validation gate in
-scripts/build-dev-toolchain.bat.
+"""Unit coverage for the cross-platform build-dev-toolchain driver (scripts/build_dev_toolchain.py).
 
-This gate has already needed multiple fix rounds to close real injection
-vectors (string-interpolated PowerShell ``-Command`` breakout, ``echo
-%VAR%|findstr`` re-parsing cmd metacharacters in a child shell, and a
-leading-hyphen ``git`` argument-injection gap). Every untrusted value now flows
-through ONE shared gate -- the ``:vtoken`` subroutine, invoked as
-``call :vtoken <NAME> "<regex>"`` -- and these tests pin that behaviour so a
-future edit that weakens a regex, drops a variable from the gate, or
-reintroduces an unsafe interpolation/pipe pattern fails CI.
-
-The tests are host-agnostic: they read the actual regexes out of the script and
-evaluate them with Python's ``re`` (PowerShell ``-match`` on an anchored
-``^...$`` pattern is equivalent to a Python ``re.search`` for the single-line
-values this gate handles), plus structural assertions on the script text. No
-cmd.exe / PowerShell / dotnet / clio / claude execution is required, so this
-runs on any CI platform.
+The driver runs every external command via subprocess with a LIST of args (never a shell string, and never
+`cmd /c` / `sh -c`), so the command-injection class a batch/shell port must defend against does not exist
+here. These tests import the driver and exercise its real functions -- allow-lists, config resolution,
+platform helpers, the appsettings rewrite, and the no-shell/arg-forwarding guarantees -- with the same
+regex engine the driver runs at runtime.
 """
 
-import json
+import importlib.util
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "build-dev-toolchain.bat"
+DRIVER_PATH = ROOT / "scripts" / "build_dev_toolchain.py"
 
-# Windows PowerShell (the .NET regex engine the script actually runs). When present, a subset of the
-# tests re-run the allow-list checks and the Stage C appsettings rewrite through the REAL engine, so a
-# Python-re-vs-.NET-regex divergence (or a behavioural regression in the rewrite) is caught on CI.
-PWSH = shutil.which("powershell") or shutil.which("pwsh")
+_spec = importlib.util.spec_from_file_location("build_dev_toolchain", DRIVER_PATH)
+bdt = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(bdt)
 
-# Payloads that MUST be rejected by every allow-list. Covers the classes that
-# have bitten this script: quote/backtick/$ PowerShell breakout, cmd operators
-# (& | < >), command substitution / statement separators, and a leading hyphen
-# (git argument injection on a positional argument).
 MALICIOUS = [
-    "a'; Start-Process calc; '",
-    "a`ncalc",
-    "a$(whoami)",
-    "a;calc",
-    "a&calc",
-    "a|b",
-    "a>b",
-    "a<b",
-    'a"b',
-    "`whoami`",
-    "-upload-pack",
-    "--upload-pack=/tmp/x",
-    "-x",
-    "",  # empty is not a valid value either
+    "a'; Start-Process calc; '", "a`ncalc", "a$(whoami)", "a;calc", "a&calc", "a|b", "a>b", "a<b",
+    'a"b', "`whoami`", "-upload-pack", "--upload-pack=/tmp/x", "-x", "",
 ]
-
-# Legitimate values per gated variable (used to prove the allow-list isn't
-# over-tight). Keyed by the env var name passed to :vtoken.
 VALID = {
-    "KN_URL": [
-        "https://github.com/Advance-Technologies-Foundation/clio-knowledge.git",
-        "git@github.com:org/repo.git",
-    ],
+    "KN_URL": ["https://github.com/Advance-Technologies-Foundation/clio-knowledge.git", "git@github.com:o/r.git"],
     "KN_REL_OWNER": ["Advance-Technologies-Foundation"],
     "KN_REL_REPO": ["clio-knowledge"],
     "KN_REL_ASSET": ["clio-knowledge-bundle.zip"],
     "KN_REL_API": ["https://api.github.com/"],
     "KN_BRANCH": ["master", "feature/eng-93152_fab-1.2", "1.13.20", "release-2.0"],
+    "CONFIG": ["Release", "Debug"],
+    "MARKETPLACE_NAME": ["creatio"],
 }
 
 
-def _read_script():
-    return SCRIPT.read_text(encoding="utf-8", errors="replace")
+class AllowListTests(unittest.TestCase):
+    def test_all_untrusted_vars_have_an_allowlist(self):
+        for name in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "KN_BRANCH",
+                     "CONFIG", "MARKETPLACE_NAME"):
+            self.assertIn(name, bdt.ALLOWLISTS)
 
-
-def _strip_comments(text):
-    # Drop batch comment lines (REM ... / :: ...) so structural "must NOT appear"
-    # assertions match executable code only, not explanatory prose that quotes
-    # the very anti-patterns being forbidden.
-    out = []
-    for line in text.splitlines():
-        s = line.lstrip()
-        if s[:4].upper() == "REM " or s.upper() == "REM" or s.startswith("::"):
-            continue
-        out.append(line)
-    return "\n".join(out)
-
-
-def _matches(dotnet_pattern, value):
-    # PowerShell -match on an anchored ^...$ pattern == Python re.search for the
-    # single-line values this gate handles.
-    return re.search(dotnet_pattern, value) is not None
-
-
-def _ps_match(pattern, value):
-    # Evaluate the gate exactly as the script does: the pattern (a script constant) is inlined into the
-    # -Command, but the untrusted VALUE is passed via $env and never interpolated. Returns True on match.
-    env = dict(os.environ)
-    env["VTOK_VAL"] = value
-    r = subprocess.run(
-        [PWSH, "-NoProfile", "-Command", f"if($env:VTOK_VAL -match '{pattern}'){{exit 0}}else{{exit 1}}"],
-        env=env,
-        capture_output=True,
-    )
-    return r.returncode == 0
-
-
-def _extract_appsettings_command(text):
-    # Pull the Stage C appsettings rewrite out of the .bat and undo cmd's %%->% reduction so it can run
-    # directly under -Command.
-    line = next(l for l in text.splitlines() if "appsettings.json update failed" in l)
-    pre = 'powershell -NoProfile -Command "'
-    assert line.startswith(pre), "appsettings command must start with the powershell -Command prefix"
-    assert line.endswith('"'), "appsettings command must end with the closing quote"
-    return line[len(pre):-1].replace("%%", "%")
-
-
-def _run_appsettings(cmd, home, mode, *, branch="", url="https://github.com/x/clio-knowledge.git"):
-    env = dict(os.environ)
-    env.update(
-        CLIO_HOME=home,
-        KN_MODE=mode,
-        KN_BRANCH=branch,
-        KN_URL=url,
-        KN_REL_OWNER="Advance-Technologies-Foundation",
-        KN_REL_REPO="clio-knowledge",
-        KN_REL_ASSET="clio-knowledge-bundle.zip",
-        KN_REL_API="https://api.github.com/",
-    )
-    subprocess.run([PWSH, "-NoProfile", "-Command", cmd], env=env, capture_output=True, check=True)
-    return json.loads((Path(home) / "appsettings.json").read_text(encoding="utf-8"))
-
-
-class BuildDevToolchainValidationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.text = _read_script()
-        cls.code = _strip_comments(cls.text)
-        # Every untrusted value is gated by `call :vtoken <NAME> "<regex>"`.
-        cls.gates = dict(re.findall(r'call :vtoken (\w+)\s+"([^"]*)"', cls.code))
-        assert cls.gates, "no `call :vtoken NAME \"regex\"` gates found in the script"
-        # KN_PICK is classified (index vs name), not abort-validated, so it has
-        # its own -match and is extracted separately.
-        m = re.search(r"KN_PICK -match '([^']*)'", cls.code)
-        assert m, "could not locate the KN_PICK classifier regex"
-        cls.pick_pat = m.group(1)
-
-    # -- every gated variable is covered (KN_URL, KN_REL_*, KN_BRANCH) ---------
-    def test_all_untrusted_config_vars_are_gated(self):
-        for expected in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "KN_BRANCH"):
-            self.assertIn(expected, self.gates, f"{expected} must be validated via :vtoken")
-
-    def test_every_gate_rejects_malicious(self):
-        for name, pat in self.gates.items():
+    def test_every_allowlist_rejects_malicious(self):
+        for name in bdt.ALLOWLISTS:
             for payload in MALICIOUS:
-                self.assertFalse(_matches(pat, payload), f"{name} gate must reject: {payload!r}")
+                self.assertFalse(bdt.token_ok(name, payload), f"{name} must reject {payload!r}")
 
-    def test_every_gate_accepts_its_valid_values(self):
-        for name, pat in self.gates.items():
-            for good in VALID.get(name, []):
-                self.assertTrue(_matches(pat, good), f"{name} gate must accept: {good!r}")
+    def test_every_allowlist_accepts_valid(self):
+        for name, values in VALID.items():
+            for good in values:
+                self.assertTrue(bdt.token_ok(name, good), f"{name} must accept {good!r}")
 
-    def test_every_gate_requires_alphanumeric_first_char(self):
-        for name, pat in self.gates.items():
-            self.assertTrue(
-                pat.startswith("^[A-Za-z0-9]"),
-                f"{name} gate must anchor an alphanumeric first char (blocks leading -/--), got: {pat}",
-            )
-            for lead in ("-x", "--upload-pack", "-"):
-                self.assertFalse(_matches(pat, lead), f"{name} must reject {lead!r}")
+    def test_leading_hyphen_always_rejected(self):
+        for name in bdt.ALLOWLISTS:
+            for lead in ("-x", "--upload-pack", "-", ".."):
+                self.assertFalse(bdt.token_ok(name, lead), f"{name} must reject {lead!r}")
 
-    # -- KN_PICK index classifier ---------------------------------------------
-    def test_pick_classifier_rejects_non_numeric_and_injection(self):
-        for payload in MALICIOUS + ["1a", "-1", "0"]:
-            self.assertFalse(_matches(self.pick_pat, payload), f"KN_PICK must not match: {payload!r}")
-        for good in ["1", "2", "17"]:
-            self.assertTrue(_matches(self.pick_pat, good), good)
-
-    # -- structural guarantees in the script itself ---------------------------
-    def test_validation_is_centralized_in_one_helper(self):
-        self.assertIn(":vtoken", self.code, "a shared :vtoken gate must exist")
-        # No ad-hoc per-variable -notmatch/-match allow-list should remain
-        # outside the shared helper (KN_PICK's classifier is the only -match).
-        stray = re.findall(r"KN_(?:URL|BRANCH|REL_\w+) -(?:not)?match", self.code)
-        self.assertEqual(stray, [], f"untrusted vars must be gated only via :vtoken, found stray: {stray}")
-
-    def test_git_ls_remote_uses_end_of_options_separator(self):
-        self.assertRegex(
-            self.code,
-            r"git ls-remote --heads -- \"%KN_URL%\"",
-            "git ls-remote must pass KN_URL after a `--` end-of-options marker",
-        )
-
-    def test_no_single_quote_interpolation_of_untrusted_values(self):
-        for var in ("KN_BRANCH", "KN_URL", "KN_MODE", "KN_REL_OWNER", "KN_REL_API"):
-            self.assertNotIn(
-                f"'%{var}%'",
-                self.code,
-                f"{var} must not be single-quote interpolated into a PowerShell command",
-            )
-            self.assertIn(f"$env:{var}", self.code, f"{var} should be read via $env:")
-
-    def test_pick_is_classified_without_echo_pipe_findstr(self):
-        self.assertIn("$env:KN_PICK -match", self.code)
-        self.assertNotRegex(
-            self.code,
-            r"echo %KN_PICK%\s*\|\s*findstr",
-            "KN_PICK must not be piped through echo|findstr (child-shell re-parse)",
-        )
-
-    def test_release_mode_resets_allow_unsequenced_flag(self):
-        # Branch mode enables the flag; release mode must reset it to false so a
-        # later switch back to release does not leave the signed-bundle trust
-        # model durably weakened.
-        self.assertRegex(
-            self.code,
-            r"knowledge-allow-unsequenced'\s*=\s*\$true",
-            "branch mode should set knowledge-allow-unsequenced = $true",
-        )
-        self.assertRegex(
-            self.code,
-            r"knowledge-allow-unsequenced'\s*=\s*\$false",
-            "release mode must reset knowledge-allow-unsequenced = $false",
-        )
-
-    # -- REAL-engine checks (Windows PowerShell): parity + behaviour ----------
-    @unittest.skipUnless(PWSH, "PowerShell required to exercise the real .NET regex engine")
-    def test_real_powershell_match_agrees_with_python(self):
-        # Guards against Python-re vs .NET-regex divergence for the exact patterns/payloads the script runs.
-        for name, pat in self.gates.items():
-            for payload in MALICIOUS:
-                self.assertFalse(_ps_match(pat, payload), f"[real PS] {name} must reject {payload!r}")
-            for good in VALID.get(name, []):
-                self.assertTrue(_ps_match(pat, good), f"[real PS] {name} must accept {good!r}")
-        for payload in MALICIOUS:
-            self.assertFalse(_ps_match(self.pick_pat, payload), f"[real PS] KN_PICK must reject {payload!r}")
+    def test_pick_index_classifier(self):
         for good in ("1", "2", "17"):
-            self.assertTrue(_ps_match(self.pick_pat, good), f"[real PS] KN_PICK must accept {good!r}")
+            self.assertTrue(bdt.is_index(good), good)
+        for bad in MALICIOUS + ["1a", "-1", "0", "name"]:
+            self.assertFalse(bdt.is_index(bad), f"index classifier must reject {bad!r}")
 
-    @unittest.skipUnless(PWSH, "PowerShell required to execute the Stage C appsettings rewrite")
-    def test_appsettings_rewrite_release_and_branch(self):
-        # Runs the ACTUAL Stage C rewrite (extracted from the .bat) against a fixture, both modes.
-        cmd = _extract_appsettings_command(self.text)
-        seed = {
-            "knowledge": {"sources": {"creatio-curated": {"type": "git", "location": "u", "branch": "old"}}},
-            "features": {"knowledge-allow-unsequenced": True},
-        }
-        with tempfile.TemporaryDirectory() as home:
-            (Path(home) / "appsettings.json").write_text(json.dumps(seed), encoding="utf-8")
-            # release mode: source becomes github-release AND the flag is reset to false
-            rel = _run_appsettings(cmd, home, "release")
-            src = rel["knowledge"]["sources"]["creatio-curated"]
-            self.assertEqual(src["type"], "github-release")
-            self.assertEqual(src["repository-owner"], "Advance-Technologies-Foundation")
-            self.assertNotIn("branch", src, "release must clear the git branch field")
-            self.assertFalse(rel["features"]["knowledge-allow-unsequenced"], "release must reset the flag to false")
-            # branch mode: source becomes git branch AND the flag is set true
-            br = _run_appsettings(cmd, home, "branch", branch="feature/eng-1")
-            src = br["knowledge"]["sources"]["creatio-curated"]
-            self.assertEqual(src["type"], "git")
-            self.assertEqual(src["branch"], "feature/eng-1")
-            self.assertNotIn("asset-name", src, "branch must clear the release asset field")
-            self.assertTrue(br["features"]["knowledge-allow-unsequenced"], "branch must set the flag true")
 
-    def test_untrusted_values_are_validated_before_first_use(self):
-        url_check = self.code.index("call :vtoken KN_URL")
-        ls_remote = self.code.index("git ls-remote --heads --")
-        self.assertLess(url_check, ls_remote, "KN_URL must be gated before ls-remote")
+class ConfigTests(unittest.TestCase):
+    def test_load_config_parses_ignores_comments_and_bom(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "c"
+            p.write_text("\ufeff# comment\n\nCLIO_SRC=C:\\a=b\n  KEY = val \nCONFIG=Debug\n", encoding="utf-8")
+            cfg = bdt.load_config(p)
+        self.assertEqual(cfg["CLIO_SRC"], "C:\\a=b")
+        self.assertEqual(cfg["KEY"], "val")
+        self.assertEqual(cfg["CONFIG"], "Debug")
 
-        branch_check = self.code.index("call :vtoken KN_BRANCH")
-        appsettings = self.code.index("appsettings.json update failed")
-        self.assertLess(branch_check, appsettings, "KN_BRANCH must be gated before the appsettings edit")
+    def test_setting_precedence_config_beats_env_beats_default(self):
+        with mock.patch.dict(os.environ, {"CONFIG": "FromEnv"}):
+            self.assertEqual(bdt.setting({"CONFIG": "FromCfg"}, "CONFIG", "Def"), "FromCfg")
+            self.assertEqual(bdt.setting({}, "CONFIG", "Def"), "FromEnv")
+            self.assertEqual(bdt.setting({"CONFIG": ""}, "CONFIG", "Def"), "FromEnv")  # empty falls through
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CONFIG", None)
+            self.assertEqual(bdt.setting({}, "CONFIG", "Def"), "Def")
+
+    def test_resolve_config_empty_value_falls_back_to_default(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            for k in ("CONFIG", "MARKETPLACE_NAME", "KN_MODE"):
+                os.environ.pop(k, None)
+            out = bdt.resolve_config({"CLIO_SRC": "x", "CONFIG": ""})
+        self.assertEqual(out["CONFIG"], "Release", "an empty CONFIG must not stick (would widen an rmtree)")
+        self.assertEqual(out["MARKETPLACE_NAME"], "creatio")
+
+    def test_resolve_config_honours_env_when_config_absent(self):
+        with mock.patch.dict(os.environ, {"KN_MODE": "branch"}):
+            out = bdt.resolve_config({"CLIO_SRC": "x"})
+        self.assertEqual(out["KN_MODE"], "branch")
+
+
+class ClioHomeTests(unittest.TestCase):
+    def test_override_argument_wins(self):
+        self.assertEqual(bdt.clio_home(os.path.join("o", "ride")), Path(os.path.join("o", "ride")))
+
+    def test_whitespace_override_is_ignored(self):
+        with mock.patch.object(bdt, "IS_WIN", False), mock.patch.dict(os.environ, {"HOME": "/home/x"}):
+            self.assertEqual(bdt.clio_home("   "), Path("/home/x") / "creatio" / "clio")
+
+    def test_posix_default_is_home_creatio_clio(self):
+        with mock.patch.object(bdt, "IS_WIN", False), mock.patch.dict(os.environ, {"HOME": "/home/x"}):
+            os.environ.pop("CLIO_HOME", None)
+            self.assertEqual(bdt.clio_home(), Path("/home/x") / "creatio" / "clio")
+
+    def test_windows_default_is_localappdata_creatio_clio(self):
+        with mock.patch.object(bdt, "IS_WIN", True), \
+                mock.patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\x\AppData\Local"}):
+            os.environ.pop("CLIO_HOME", None)
+            self.assertEqual(bdt.clio_home(), Path(r"C:\Users\x\AppData\Local") / "creatio" / "clio")
+
+
+class AppsettingsRewriteTests(unittest.TestCase):
+    def _seed(self, source):
+        return {"knowledge": {"sources": {"creatio-curated": dict(source)}},
+                "features": {"knowledge-allow-unsequenced": True}}
+
+    def _rewrite(self, data, mode, ref=""):
+        return bdt.rewrite_appsettings(
+            data, mode, git_url="https://github.com/x/clio-knowledge.git", ref=ref,
+            rel_owner="Advance-Technologies-Foundation", rel_repo="clio-knowledge",
+            rel_asset="clio-knowledge-bundle.zip", rel_api="https://api.github.com/")
+
+    def test_release_sets_github_release_and_resets_flag(self):
+        data, changed = self._rewrite(self._seed({"type": "git", "branch": "dev"}), "release")
+        self.assertTrue(changed)
+        src = data["knowledge"]["sources"]["creatio-curated"]
+        self.assertEqual(src["type"], "github-release")
+        self.assertNotIn("branch", src)
+        self.assertFalse(data["features"]["knowledge-allow-unsequenced"])
+
+    def test_branch_sets_git_and_flag_true(self):
+        data = self._seed({"type": "github-release", "asset-name": "x"})
+        data.pop("features")
+        data, changed = self._rewrite(data, "branch", ref="feature/eng-1")
+        src = data["knowledge"]["sources"]["creatio-curated"]
+        self.assertEqual(src["type"], "git")
+        self.assertEqual(src["branch"], "feature/eng-1")
+        self.assertNotIn("asset-name", src)
+        self.assertTrue(data["features"]["knowledge-allow-unsequenced"])
+
+    def test_version_like_ref_is_a_tag(self):
+        data, _ = self._rewrite(self._seed({"type": "git"}), "branch", ref="1.13.20")
+        self.assertEqual(data["knowledge"]["sources"]["creatio-curated"].get("tag"), "1.13.20")
+
+    def test_missing_source_reports_unchanged(self):
+        data, changed = self._rewrite({"knowledge": {"sources": {}}}, "release")
+        self.assertFalse(changed)
+
+    def test_defensive_against_null_and_non_dict_shapes(self):
+        # These are valid JSON but the wrong shape (a clio schema change / a hand edit). Must NOT raise.
+        for shape in ({"knowledge": None}, {"knowledge": {"sources": None}}, [], "str", 5):
+            data, changed = self._rewrite(shape, "release")
+            self.assertFalse(changed)
+
+
+class SelectKnowledgeSourceTests(unittest.TestCase):
+    def _cfg(self, **extra):
+        base = bdt.resolve_config({"CLIO_SRC": "x"})
+        base.update(extra)
+        return base
+
+    def _select(self, arg_ref, cfg=None):
+        with mock.patch.object(bdt.sys.stdin, "isatty", return_value=False):
+            return bdt.select_knowledge_source(cfg or self._cfg(), arg_ref)
+
+    def test_release_argument(self):
+        self.assertEqual(self._select("release"), ("release", ""))
+
+    def test_branch_name_argument(self):
+        self.assertEqual(self._select("feature/eng-1"), ("branch", "feature/eng-1"))
+
+    def test_kn_mode_is_case_insensitive_and_from_config(self):
+        # 'Branch' (mixed case, from config) must select branch, not silently fall back to release.
+        self.assertEqual(self._select(None, self._cfg(KN_MODE="Branch", KN_BRANCH="feature/x")),
+                         ("branch", "feature/x"))
+
+    def test_no_input_defaults_to_release(self):
+        self.assertEqual(self._select(None), ("release", ""))
+
+    def test_explicit_branch_arg_beats_a_stale_config_release_mode(self):
+        # A persisted KN_MODE=release must NOT silently discard an explicit CLI branch/tag argument.
+        self.assertEqual(self._select("feature/x", self._cfg(KN_MODE="release")), ("branch", "feature/x"))
+
+    def test_injection_branch_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self._select('x"&calc&"')
+
+
+class FilesystemHelperTests(unittest.TestCase):
+    def test_make_and_remove_dir_link_roundtrip_without_a_shell(self):
+        # make/remove_dir_link must not spawn any subprocess (no cmd /c). Patch subprocess.run to blow up.
+        with mock.patch.object(bdt.subprocess, "run", side_effect=AssertionError("no subprocess allowed")):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = root / "target"
+                target.mkdir()
+                (target / "marker.txt").write_text("hi", encoding="utf-8")
+                link = root / "link"
+                if not bdt.make_dir_link(link, target):
+                    self.skipTest("no symlink/junction privilege on this host")
+                self.assertTrue((link / "marker.txt").exists())
+                bdt.remove_dir_link(link)
+                self.assertFalse(os.path.lexists(link))
+                self.assertTrue((target / "marker.txt").exists(), "target content untouched")
+
+    def test_lock_is_held_false_for_free_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            lock = Path(d) / "x.lock"
+            lock.write_text("", encoding="utf-8")
+            self.assertFalse(bdt.lock_is_held(lock))
+
+    def test_cleanup_locks_removes_free_markers(self):
+        with tempfile.TemporaryDirectory() as d:
+            locks = Path(d) / "knowledge" / "sources" / ".locks"
+            locks.mkdir(parents=True)
+            (locks / "a.lock").write_text("", encoding="utf-8")
+            bdt.cleanup_locks(Path(d))
+            self.assertFalse((locks / "a.lock").exists())
+
+    def test_cleanup_locks_no_directory_is_harmless(self):
+        with tempfile.TemporaryDirectory() as d:
+            bdt.cleanup_locks(Path(d))  # must not raise
+
+
+class NoShellTests(unittest.TestCase):
+    def test_run_passes_a_list_and_never_a_shell(self):
+        recorded = {}
+
+        def fake_run(cmd, **kwargs):
+            recorded["cmd"] = cmd
+            recorded["kwargs"] = kwargs
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(bdt.subprocess, "run", side_effect=fake_run):
+            bdt.run(["git", "ls-remote", "--heads", "--", "https://x/y.git"], quiet=True)
+        self.assertIsInstance(recorded["cmd"], list, "run() must pass a list, not a shell string")
+        self.assertFalse(recorded["kwargs"].get("shell", False), "run() must never pass shell=True")
+
+    def test_missing_executable_degrades_to_127(self):
+        with mock.patch.object(bdt.subprocess, "run", side_effect=FileNotFoundError("nope")):
+            cp = bdt.run(["definitely-not-a-real-binary"], quiet=True)
+        self.assertEqual(cp.returncode, 127, "a missing executable must degrade to rc 127, not a traceback")
+
+    def test_driver_source_spawns_no_shell(self):
+        src = DRIVER_PATH.read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"shell\s*=\s*True", src), "no shell=True")
+        self.assertNotIn("os.system", src)
+        self.assertNotIn('"cmd"', src, "no `cmd /c` re-entry")
+        self.assertNotIn("'/c'", src)
+
+    def test_git_ls_remote_uses_end_of_options_marker(self):
+        src = DRIVER_PATH.read_text(encoding="utf-8")
+        self.assertIn('"ls-remote", "--heads", "--"', src)
+
+
+class LauncherTests(unittest.TestCase):
+    def setUp(self):
+        self.bat = (ROOT / "scripts" / "build-dev-toolchain.bat").read_text(encoding="utf-8")
+        self.sh = (ROOT / "scripts" / "build-dev-toolchain.sh").read_text(encoding="utf-8")
+
+    def test_launchers_delegate_to_driver(self):
+        self.assertIn("build_dev_toolchain.py", self.bat)
+        self.assertIn("build_dev_toolchain.py", self.sh)
+        self.assertTrue(self.sh.startswith("#!"))
+
+    def test_launchers_reference_the_repo_python_resolvers(self):
+        self.assertIn("find_python.ps1", self.bat)
+        self.assertIn("find_python.sh", self.sh)
+
+    def test_launchers_forward_their_arguments(self):
+        self.assertIn("%*", self.bat, "the .bat launcher must forward its arguments")
+        self.assertIn('"$@"', self.sh, "the .sh launcher must forward its arguments")
+
+    def test_sh_launcher_execs_the_driver_with_args(self):
+        self.assertRegex(self.sh, r'exec\s+"\$PYTHON_CMD"\s+"\$DRIVER"\s+"\$@"')
+
+    def test_sh_launcher_is_executable_in_git(self):
+        # The POSIX exec bit is stored in git's index (100755), not necessarily on a Windows working copy,
+        # so assert the committed mode -- that is what a macOS/Linux checkout gets.
+        import shutil as _sh
+        if not _sh.which("git"):
+            self.skipTest("git not available")
+        out = subprocess.run(["git", "ls-files", "-s", "scripts/build-dev-toolchain.sh"],
+                             cwd=str(ROOT), text=True, capture_output=True)
+        if out.returncode != 0 or not out.stdout.strip():
+            self.skipTest("launcher not tracked yet")
+        mode = out.stdout.split()[0]
+        self.assertEqual(mode, "100755", "the .sh launcher must be committed with the executable bit")
+
+    def test_sh_probes_before_sourcing_the_resolver(self):
+        # The side-effect-free local probe must come BEFORE `source ...find_python.sh` (which can install
+        # packages / prompt for sudo).
+        self.assertLess(self.sh.index("command -v"), self.sh.index("source"),
+                        "the local probe must run before the resolver is sourced")
+
+
+class OrchestrationTests(unittest.TestCase):
+    def test_prepare_marketplace_refuses_and_preserves_existing_fallback(self):
+        # When the link can't be made and a hand-maintained parent marketplace.json exists, _prepare_marketplace
+        # must refuse and leave that file untouched (regression: an earlier version overwrote + deleted it).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            repo = root / "repo"
+            repo.mkdir()
+            parent_plugin = root / bdt.CLAUDE_PLUGIN_DIR
+            parent_plugin.mkdir()
+            existing = parent_plugin / "marketplace.json"
+            existing.write_text("KEEP-ME", encoding="utf-8")
+            run_tmp = root / "run"
+            run_tmp.mkdir()
+            with mock.patch.object(bdt, "REPO_ROOT", repo), \
+                    mock.patch.object(bdt, "make_dir_link", return_value=False):
+                result = bdt._prepare_marketplace("creatio", "plugin", run_tmp)
+            self.assertEqual(result, "failed")
+            self.assertEqual(existing.read_text(encoding="utf-8"), "KEEP-ME", "existing file must be untouched")
+
+    def test_build_and_pack_runs_dotnet_with_cwd_clio_src(self):
+        calls = []
+
+        def rec(cmd, **kw):
+            calls.append((cmd, kw))
+            if cmd[:2] == ["dotnet", "pack"]:  # create the nupkg so the existence check passes
+                out = Path(kw["cwd"]) / "artifacts" / "local-tool"
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "clio.9.9.9.9.nupkg").write_text("", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as d:
+            clio_src = Path(d)
+            with mock.patch.object(bdt, "run", side_effect=rec):
+                bdt._build_and_pack(clio_src, "Release", "9.9.9.9")
+        dotnet = [(c, kw) for (c, kw) in calls if c and c[0] == "dotnet"]
+        self.assertTrue(dotnet, "dotnet build/pack must run")
+        for c, kw in dotnet:
+            self.assertEqual(kw.get("cwd"), clio_src, f"{c[:2]} must run with cwd=clio_src")
+
+    def test_main_order_and_cleanup_runs_when_stage_b_fails(self):
+        order = []
+        with tempfile.TemporaryDirectory() as d:
+            clio_src = Path(d) / "clio"
+            clio_src.mkdir()
+            cfg = Path(d) / "build-dev-toolchain.config"
+            cfg.write_text(f"CLIO_SRC={clio_src}\n", encoding="utf-8")
+            with mock.patch.object(bdt, "CONFIG_FILE", cfg), \
+                    mock.patch.object(bdt, "resolve_plugin_name", return_value="p"), \
+                    mock.patch.object(bdt, "clio_home", return_value=Path(d) / "home"), \
+                    mock.patch.object(bdt, "stage_a_build", side_effect=lambda *a: (order.append("A") or ("1.0", True))), \
+                    mock.patch.object(bdt, "stage_c_knowledge", side_effect=lambda *a: order.append("C")), \
+                    mock.patch.object(bdt, "stage_b_plugin", side_effect=lambda *a: (order.append("B") or "failed")), \
+                    mock.patch.object(bdt, "cleanup_locks", side_effect=lambda *a: order.append("cleanup")), \
+                    mock.patch.object(bdt.sys.stdin, "isatty", return_value=False):
+                with self.assertRaises(SystemExit) as ctx:
+                    bdt.main([])
+            self.assertEqual(ctx.exception.code, 1, "a Stage B failure exits 1")
+            self.assertEqual(order, ["A", "C", "B", "cleanup"], "cleanup must run even when Stage B fails")
+
+    def test_stop_clio_uses_exact_name_matching(self):
+        # Exact-name matching (pkill -x / taskkill /IM) is deliberate: a substring/-f match would kill any
+        # process merely mentioning "clio" (editor, log tail, wrapper). Pin the literal argv on both OSes.
+        for is_win, expected in ((True, ["taskkill", "/F", "/IM", "clio.exe", "/T"]),
+                                 (False, ["pkill", "-x", "clio"])):
+            recorded = []
+            with mock.patch.object(bdt, "IS_WIN", is_win), \
+                    mock.patch.object(bdt, "run", side_effect=lambda cmd, **kw: recorded.append(cmd) or
+                                      subprocess.CompletedProcess(cmd, 0, "", "")):
+                bdt._stop_clio_processes()
+            self.assertEqual(recorded, [expected], f"IS_WIN={is_win}: must use exact-name matching, not -f")
+
+    def test_install_plugin_call_order_and_success(self):
+        calls = []
+        with mock.patch.object(bdt, "run", side_effect=lambda cmd, **kw: calls.append(cmd) or
+                               subprocess.CompletedProcess(cmd, 0, "", "")):
+            self.assertEqual(bdt._install_plugin("plug@mkt", "mkt", "/root"), "done")
+        self.assertEqual([c[:3] for c in calls], [
+            ["claude", "plugin", "uninstall"],
+            ["claude", "plugin", "marketplace"],  # remove
+            ["claude", "plugin", "marketplace"],  # add
+            ["claude", "plugin", "install"],
+            ["claude", "mcp", "remove"],
+        ], "the 5 claude calls must run in this exact order")
+
+    def test_install_plugin_marketplace_add_failure_short_circuits(self):
+        seen = []
+
+        def rec(cmd, **kw):
+            seen.append(cmd)
+            rc = 1 if cmd[:4] == ["claude", "plugin", "marketplace", "add"] else 0
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+
+        with mock.patch.object(bdt, "run", side_effect=rec):
+            self.assertEqual(bdt._install_plugin("plug@mkt", "mkt", "/root"), "failed")
+        self.assertFalse(any(c[:3] == ["claude", "plugin", "install"] for c in seen),
+                         "plugin install must not run after marketplace add fails")
+
+    def test_install_plugin_install_failure_returns_failed(self):
+        def rec(cmd, **kw):
+            rc = 1 if cmd[:3] == ["claude", "plugin", "install"] else 0
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+
+        with mock.patch.object(bdt, "run", side_effect=rec):
+            self.assertEqual(bdt._install_plugin("p@m", "m", "/r"), "failed")
+
+    def test_install_plugin_tolerates_noise_from_uninstall_remove_mcp(self):
+        def rec(cmd, **kw):
+            noisy = (cmd[:3] == ["claude", "plugin", "uninstall"]
+                     or cmd[:4] == ["claude", "plugin", "marketplace", "remove"]
+                     or cmd[:3] == ["claude", "mcp", "remove"])
+            return subprocess.CompletedProcess(cmd, 1 if noisy else 0, "", "")
+
+        with mock.patch.object(bdt, "run", side_effect=rec):
+            self.assertEqual(bdt._install_plugin("p@m", "m", "/r"), "done",
+                             "non-zero uninstall/remove/mcp-remove must be tolerated")
+
+    def test_cleanup_stage_b_removes_link_and_fallback_preserving_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = root / "repo"
+            target.mkdir()
+            (target / "keep.txt").write_text("x", encoding="utf-8")
+            link = root / "link"
+            if not bdt.make_dir_link(link, target):
+                self.skipTest("no symlink/junction privilege on this host")
+            parent = root / bdt.CLAUDE_PLUGIN_DIR
+            parent.mkdir()
+            fb = parent / "marketplace.json"
+            fb.write_text("{}", encoding="utf-8")
+            bdt._cleanup_stage_b(link, fb)
+            self.assertFalse(os.path.lexists(link), "the link is removed")
+            self.assertTrue((target / "keep.txt").exists(), "the target content is untouched")
+            self.assertFalse(fb.exists(), "the fallback json is removed")
+            self.assertFalse(parent.exists(), "the now-empty .claude-plugin dir is removed")
+
+    def test_cleanup_stage_b_keeps_a_nonempty_parent(self):
+        with tempfile.TemporaryDirectory() as d:
+            parent = Path(d) / bdt.CLAUDE_PLUGIN_DIR
+            parent.mkdir()
+            fb = parent / "marketplace.json"
+            fb.write_text("{}", encoding="utf-8")
+            (parent / "other.txt").write_text("keep", encoding="utf-8")
+            bdt._cleanup_stage_b(None, fb)
+            self.assertFalse(fb.exists(), "the fallback json is removed")
+            self.assertTrue(parent.exists(), ".claude-plugin is kept because it still holds another file")
+
+
+@unittest.skipUnless(bdt.IS_WIN, "Windows FILE_SHARE_NONE locking")
+class WindowsLockTests(unittest.TestCase):
+    def test_lock_is_held_true_under_share_none(self):
+        import ctypes
+        from ctypes import wintypes
+        with tempfile.TemporaryDirectory() as d:
+            lock = Path(d) / "x.lock"
+            lock.write_text("", encoding="utf-8")
+            k32 = ctypes.windll.kernel32
+            k32.CreateFileW.restype = wintypes.HANDLE
+            k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            invalid = ctypes.c_void_p(-1).value
+            # share mode 0 == FileShare.None, exactly how clio opens the marker.
+            handle = k32.CreateFileW(str(lock), 0x80000000, 0, None, 3, 0, None)
+            if not handle or handle == invalid:
+                self.skipTest("could not open a FILE_SHARE_NONE handle")
+            try:
+                self.assertTrue(bdt.lock_is_held(lock), "held while another handle denies sharing")
+            finally:
+                k32.CloseHandle(handle)
+            self.assertFalse(bdt.lock_is_held(lock), "free after the holder closes")
+
+
+@unittest.skipIf(bdt.IS_WIN, "POSIX flock semantics")
+class PosixLockTests(unittest.TestCase):
+    def test_lock_is_held_true_while_flocked(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            lock = Path(d) / "x.lock"
+            lock.write_text("", encoding="utf-8")
+            fd = os.open(str(lock), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertTrue(bdt.lock_is_held(lock), "held while another fd holds an exclusive flock")
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+            self.assertFalse(bdt.lock_is_held(lock), "free after release")
+
+    def test_cleanup_locks_keeps_a_held_marker(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            locks = Path(d) / "knowledge" / "sources" / ".locks"
+            locks.mkdir(parents=True)
+            held = locks / "held.lock"
+            held.write_text("", encoding="utf-8")
+            free = locks / "free.lock"
+            free.write_text("", encoding="utf-8")
+            fd = os.open(str(held), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                bdt.cleanup_locks(Path(d))
+                self.assertTrue(held.exists(), "a held marker must be kept")
+                self.assertFalse(free.exists(), "a free marker must be swept")
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+
+class LauncherExecutionTests(unittest.TestCase):
+    """Execute the launchers as real child processes against a stub driver -- proves the hand-off, argument
+    forwarding, and exit-code propagation actually work (a source-text assertion cannot)."""
+
+    _STUB = ('import sys\n'
+             'sys.stdout.write("ARGV:" + "|".join(sys.argv[1:]))\n'
+             'sys.exit(42 if "boom" in sys.argv else 0)\n')
+
+    def _stage(self, d, name):
+        import shutil as _sh
+        d = Path(d)
+        _sh.copy2(ROOT / "scripts" / name, d / name)
+        (d / "build_dev_toolchain.py").write_text(self._STUB, encoding="utf-8")
+        return d / name
+
+    @unittest.skipUnless(bdt.IS_WIN, "cmd.exe required for the .bat launcher")
+    def test_bat_forwards_args_and_exit_code(self):
+        with tempfile.TemporaryDirectory() as d:
+            bat = self._stage(d, "build-dev-toolchain.bat")
+            r = subprocess.run(["cmd", "/c", str(bat), "boom"], text=True, capture_output=True)
+            self.assertIn("ARGV:boom", r.stdout)
+            self.assertEqual(r.returncode, 42, "the .bat must propagate the driver's exit code")
+
+    @unittest.skipIf(bdt.IS_WIN, "POSIX launcher")
+    def test_sh_forwards_args_and_exit_code(self):
+        import shutil as _sh
+        bash = _sh.which("bash")
+        if not bash:
+            self.skipTest("bash required")
+        with tempfile.TemporaryDirectory() as d:
+            sh = self._stage(d, "build-dev-toolchain.sh")
+            r = subprocess.run([bash, str(sh), "boom"], text=True, capture_output=True)
+            self.assertIn("ARGV:boom", r.stdout)
+            self.assertEqual(r.returncode, 42, "the .sh must propagate the driver's exit code")
 
 
 if __name__ == "__main__":
