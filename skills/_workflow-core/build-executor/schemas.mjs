@@ -143,6 +143,11 @@ export const RECONCILE_SCHEMA = {
     // writes. THE EMPTY STRING IS A REAL VALUE and is NOT the same as absence — a stand with no prefix is exactly
     // the case the third Applicant run hit (package == app code) — so `''` gates and `null`/absent does not.
     schemaNamePrefix: { type: ['string', 'null'] },
+    // The EMPTY prefix's wire form: `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`. A bare `""` value is
+    // the token observed dropped from large submissions of this answer (which then fail to parse at the host), so
+    // the empty answer travels as this boolean and `reconcileAgent` decodes the pair back to `''` on acceptance —
+    // every consumer still reads the string contract above. `""` itself remains legal for compatibility.
+    schemaNamePrefixEmpty: { type: 'boolean' },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -255,8 +260,11 @@ export const RECONCILE_SHAPE = {
     types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
+  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key
+  // (`appliesWhen: false`) carries `what: null, miss: null`, the prompt orders a verbatim copy, and a string-only
+  // rule rejected that copy on the FIRST attempt of every Reconcile. Applicable rows always carry real strings.
   reachability: { kind: 'array', required: ['key', 'appliesWhen'],
-    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string', miss: 'string' } },
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null' } },
   // `resolution: null` is a LEGAL answer and is checked as such — the engine publishes it on every unanswered item.
   preflightItems: { kind: 'array', required: ['id', 'pageKey'],
     types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },

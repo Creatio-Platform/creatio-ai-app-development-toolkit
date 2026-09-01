@@ -1047,6 +1047,11 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       () => JSON.stringify(next1.items[0]).slice(0, 300));
     check("build-executor cli: the prompt carries the run's OWN engine command lines, shell-quoted — a Codex agent runs them verbatim",
       next1.items[0].prompt.includes("'/plug/skills/classic-to-freedom-migration/engine/migrate.mjs' '/mig/manifest.json' --units"));
+    check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL — a per-dispatch answer file (named by the dispatch label, so no retry or later call-site overwrites it) and the exact encoder source the offline suite executes",
+      next1.items[0].prompt.includes("/mig/reconcile-answer-baseline-1.json")
+        && next1.items[0].prompt.includes("/mig/encode-answer.mjs")
+        && next1.items[0].prompt.includes(bex.ANSWER_ENCODER_SOURCE),
+      () => next1.items[0].prompt.slice(-600));
     // A green baseline closes the run with no stand write at all.
     const green = {
       approval: { found: true, version: "plan-abc", quote: "approved" }, planVersion: "plan-abc",
@@ -1098,6 +1103,77 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+{
+  // THE ANSWER ENCODER, EXECUTED AS SHIPPED. The prompt tells the agent to run this exact source, so the suite runs
+  // it too: on an answer dense with the content the real failure carried — Cyrillic captions, em-dashes, `·`, an
+  // astral emoji (a surrogate pair), a control character already escaped by stringify — the output must be pure
+  // printable ASCII and must decode to the identical answer.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "bex-encode-"));
+  try {
+    const helper = path.join(tmp, "encode-answer.mjs");
+    writeFileSync(helper, bex.ANSWER_ENCODER_SOURCE);
+    const answer = {
+      approval: { quote: "— **APPROVED by Katya** (\"implement\") — round 1" },
+      evidenceIds: ["main#confirm:detail-add-mechanism:Актуальные вакансии · InternalRequest"],
+      notes: "emoji \u{1F600} pair, tab\tand newline\nsurvive stringify",
+      schemaNamePrefix: "",
+    };
+    const raw = path.join(tmp, "reconcile-answer-baseline-1.json");
+    writeFileSync(raw, JSON.stringify(answer));
+    const out = path.join(tmp, "reconcile-answer-baseline-1.ascii.json");
+    const res = spawnSync(process.execPath, [helper, raw, out], { encoding: "utf8" });
+    const ascii = res.status === 0 ? readFileSync(out, "utf8") : "";
+    check("build-executor encoder: the shipped source runs as-is and reports the ASCII-only write",
+      res.status === 0 && /ASCII-only/.test(res.stdout), () => res.stderr || res.stdout);
+    check("build-executor encoder: the encoded answer is PURE printable ASCII — nothing outside space..tilde survives, surrogate halves included",
+      ascii.length > 0 && !/[^ -~]/.test(ascii), () => JSON.stringify(ascii.match(/[^ -~]/g)));
+    check("build-executor encoder: the encoding is LOSSLESS — parsing it back yields the identical answer, so every VERBATIM rule still holds after decoding",
+      ascii.length > 0 && JSON.stringify(JSON.parse(ascii)) === JSON.stringify(answer));
+    check("build-executor encoder: an answer that is not valid JSON is REFUSED with a non-zero exit — the agent may never submit what the helper rejected",
+      () => { const bad = path.join(tmp, "bad.json"); writeFileSync(bad, "{\"truncated\": ");
+        return spawnSync(process.execPath, [helper, bad, path.join(tmp, "bad.ascii.json")], { encoding: "utf8" }).status !== 0; });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+{
+  // A HOST THAT REJECTS RECONCILE. The driver throws a single-item step's rejection into the core, so only a catch
+  // inside the retry loop can spend the budget on it — this is the StructuredOutput retry-cap failure, which used to
+  // abort the whole run as an unhandled error on attempt 1 with the honest `reconcile-failed` stop never reached.
+  const hostErr = "agent({schema}): StructuredOutput retry cap (5) exceeded — 5 failed calls with no valid output";
+  const logs = [];
+  const prompts = [];
+  const run = newRun({ workflow: "bex-rejected-reconcile", host: fullHost });
+  let result = null, crashed = null;
+  try {
+    result = await drive({
+      core: bex.run(bex.normalizeInput(BEX_INPUT), { log: (m) => logs.push(m), phase: () => {} },
+        { selfPath: "/plug/skills/_workflow-core/build-executor/core.mjs" }),
+      run, host: fullHost,
+      execute: async (item) => { prompts.push(item.prompt); return { outcome: OUTCOME.ERROR, error: new Error(hostErr) }; },
+    });
+  } catch (e) { crashed = e; }
+  check("build-executor: a host that REJECTS every Reconcile dispatch is survived — the run returns the honest `reconcile-failed` stop instead of crashing on the raw error",
+    !crashed && result?.stopped === "reconcile-failed", () => crashed ? crashed.message : JSON.stringify(result).slice(0, 300));
+  check("build-executor: the rejection SPENDS the retry budget — three attempts, journalled in dispatch order, every one an ERROR",
+    run.journal.map((e) => `${e.id}:${e.outcome}`).join(" ") === "reconcile.baseline:error reconcile.baseline.retry-1:error reconcile.baseline.retry-2:error",
+    () => run.journal.map((e) => `${e.id}:${e.outcome}`).join(" "));
+  check("build-executor: the stop's `next` carries the HOST'S OWN error verbatim plus the capture-file triage — the operator reads the real reason, not a paraphrase",
+    /StructuredOutput retry cap \(5\) exceeded/.test(result?.next || "") && /reconcile-answer-\*/.test(result?.next || ""),
+    () => result?.next);
+  check("build-executor: every attempt is LOGGED as a host rejection, and the last one says it is giving up rather than promising a retry that will not run",
+    logs.filter((m) => /REJECTED by the host/.test(m)).length === 3
+      && logs.filter((m) => /retrying the SAME call/.test(m)).length === 2
+      && /giving up, nothing was built/.test(logs[logs.length - 1]),
+    () => JSON.stringify(logs.slice(-4), null, 1));
+  check("build-executor: each retry's prompt names its OWN capture file — a fresh context restarts the in-prompt counter, so a shared name would have every attempt overwrite the exact bytes the previous failure left behind",
+    prompts.length === 3
+      && prompts[0].includes("/mig/reconcile-answer-baseline-1.json")
+      && prompts[1].includes("/mig/reconcile-answer-baseline-retry-1-1.json")
+      && prompts[2].includes("/mig/reconcile-answer-baseline-retry-2-1.json"),
+    () => prompts.map((p) => (p.match(/reconcile-answer-[\w-]*\.json/) || ["(no answer file in prompt)"])[0]).join(" | "));
 }
 
 console.log(`\nWORKFLOW-CORE GOLDEN: ${pass} passed, ${fail} failed`);

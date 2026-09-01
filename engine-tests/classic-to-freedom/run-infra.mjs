@@ -1240,10 +1240,11 @@ check("workflow: the Reconcile prompt tells the agent to RESOLVE each component 
 // ENG-95468 — the two new gates have inputs only the Reconcile agent can supply, so a gate wired to a field nobody
 // is asked for is a gate that never fires. Pin the ASK, including the one thing an agent would otherwise normalise
 // away: an empty `SchemaNamePrefix` is an answer, and reporting it as `null` would silently switch the check off.
-check("ENG-95468: the Reconcile prompt asks for BOTH new gate inputs — the read-only template resolution and the stand's `SchemaNamePrefix` — and states that an empty prefix is a real answer, not `null`",
+check("ENG-95468: the Reconcile prompt asks for BOTH new gate inputs — the read-only template resolution and the stand's `SchemaNamePrefix` — and states that an empty prefix is a real answer, carried as the `schemaNamePrefixEmpty` wire form rather than a bare `\"\"`",
   /return \\`templateResolution\\`/.test(wfSrc) && /\\`templateNames\\`/.test(wfSrc)
     && /Return \\`schemaNamePrefix\\`/.test(wfSrc)
-    && /The empty string is a REAL answer and is not the same as \\`null\\`/.test(wfSrc));
+    && /The empty prefix is a REAL answer and is not the same as unreadable/.test(wfSrc)
+    && /\\`schemaNamePrefixEmpty: true\\`/.test(wfSrc));
 check("ENG-95468: the pre-build gate and its mid-run twin are wired to all THREE axes — a stop computed from one of them and returned from another is the failure mode a source pin catches and an execution test cannot name",
   /const templateMismatchesNow = templateMismatches\(state\.templateResolution, state\.templateNames\)/.test(wfSrc)
     && /const appIdentity = appIdentityMismatch\(state\.targetPackage, state\.sectionHost, state\.schemaNamePrefix, state\.applicationCode, appUnitDone\(\)\)/.test(wfSrc)
@@ -1515,12 +1516,12 @@ const reconcileAgentSrc = wfSrc.slice(wfSrc.indexOf("function* reconcileAgent(ro
 check("ENG-95850 (A3): EVERY Reconcile call goes through the retrying helper — a `reconcilePrompt(...)` dispatched anywhere else is a call site the retry does not cover",
   (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length === 3
     && (wfSrc.match(/reconcilePrompt\(/g) || []).length === 2
-    && /function reconcilePrompt\(round\) \{/.test(wfSrc)
-    && reconcileAgentSrc.includes("reconcilePrompt(roundNo)")
+    && /function reconcilePrompt\(round, fileStem\) \{/.test(wfSrc)
+    && reconcileAgentSrc.includes("reconcilePrompt(roundNo, answerFileStem(attemptLabel))")
     && /function\* reconcileAgent\(roundNo, id, label, note\)/.test(wfSrc),
   () => ({ helperCalls: (wfSrc.match(/yield\* reconcileAgent\(/g) || []).length,
     promptSites: (wfSrc.match(/reconcilePrompt\(/g) || []).length,
-    insideHelper: reconcileAgentSrc.includes("reconcilePrompt(roundNo)") }));
+    insideHelper: reconcileAgentSrc.includes("reconcilePrompt(roundNo, answerFileStem(attemptLabel))") }));
 // THE SCHEMA-SIZE BUDGET (ENG-95930). The host BLOCKS an agent whose serialized output schema exceeds this, before
 // the model runs — measured to the byte in the shipped CLI (2.1.212 and 2.1.246 carry the identical guard):
 //
@@ -1633,8 +1634,8 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // EVERY property still declared. The fix for the byte count was to stop describing the INSIDES of the nested
 // objects — not to drop fields — and the core computes on all 41 of them, so a shrink that removed one would be a
 // silent contract change no other test here would notice.
-check("ENG-95930: the loosened Reconcile schema still declares all 41 properties and its 13-entry `required` list — the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 41 && (wf.RECONCILE_SCHEMA?.required || []).length === 13,
+check("ENG-95930: the loosened Reconcile schema still declares all 42 properties (41 + the empty-prefix wire form `schemaNamePrefixEmpty`) and its 13-entry `required` list — the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 42 && (wf.RECONCILE_SCHEMA?.required || []).length === 13,
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
 // The shape table is the schema's other half now, so an empty or truncated one is a silent loss of every check the
@@ -1667,7 +1668,13 @@ const goodDigest = {
       openRows: [{ n: 1, deliverable: "d", status: "s", evidence: "e", outcome: "missing", owner: "builder" }] } } },
   preflightItems: [{ id: "p1", pageKey: "main", resolution: null },
     { id: "p2", pageKey: "main", resolution: { answer: "yes", decidedBy: "me", date: "2026-08-26" } }],
-  reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"] }],
+  // VERBATIM engine shape, both row kinds: an applicable key with real strings, and a non-applicable key exactly
+  // as `--units` publishes it — `what: null, miss: null`. The null pair used to be rejected as "expected string,
+  // got null", which burned the first attempt of EVERY Reconcile on a copy the prompt itself ordered.
+  reachability: [
+    { key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "app-menu section-registration check", miss: "the section is not in the menu" },
+    { key: "typedFormsBuilt", appliesWhen: false, pages: [], what: null, miss: null },
+  ],
   packageCreatedByRun: null,
 };
 check("ENG-95930: the shape check ACCEPTS the digest the engine actually publishes — a checker that refused a valid answer would burn all three Reconcile attempts on every run and stop the build with nothing wrong",
@@ -1701,15 +1708,20 @@ check("ENG-95930 (review): the size ceiling does NOT fire on a normal answer —
 check("ENG-95930 (review) guard preserved — ENG-95901: `RECONCILE_SHAPE.verify` still REQUIRES `buildComplete` per page, the field the loosened schema stopped forcing; losing it would make the park/close arithmetic read `undefined`",
   wf.RECONCILE_SHAPE?.verify?.map?.pages?.required?.includes("buildComplete") === true,
   () => JSON.stringify(wf.RECONCILE_SHAPE?.verify?.map?.pages?.required));
-// The guard is BOTH halves and the test asserts both: the prompt has to say `""` is a real answer, and the schema
-// has to admit it. A `['string','null']` union is what lets `""` and `null` mean different things — narrowing it to
-// `'string'` alone, or dropping the prompt sentence, each silently re-breaks the `new-app` identity gate.
-check("ENG-95930 (review) guard preserved — empty `SchemaNamePrefix`: the Reconcile prompt still states the empty string is a REAL answer distinct from `null`, AND the schema still admits both via a string/null union",
-  /The empty string is a REAL answer and is not the same as/.test(wfSrc)
+// The guard is BOTH halves and the test asserts both: the prompt has to say the empty prefix is a real answer, and
+// the schema has to admit its wire form. The empty answer now travels as `{ schemaNamePrefix: null,
+// schemaNamePrefixEmpty: true }` — a bare `""` is the token observed dropped from large submissions of this answer
+// — decoded back to `''` on acceptance; the `['string','null']` union stays (a non-empty prefix, `""` from an
+// older agent, and the unreadable `null` all remain legal), so dropping either half of the pair, the decode, or
+// the union each silently re-breaks the `new-app` identity gate on an empty-prefix stand.
+check("ENG-95930 (review) guard preserved — empty `SchemaNamePrefix`: the prompt states the empty prefix is REAL and names its wire form, the schema admits the string/null union plus the boolean companion, and the decode restores `''` on acceptance",
+  /The empty prefix is a REAL answer and is not the same as unreadable/.test(wfSrc)
     && Array.isArray(wf.RECONCILE_SCHEMA?.properties?.schemaNamePrefix?.type)
     && wf.RECONCILE_SCHEMA.properties.schemaNamePrefix.type.includes("string")
-    && wf.RECONCILE_SCHEMA.properties.schemaNamePrefix.type.includes("null"),
-  () => `prompt sentence: ${/The empty string is a REAL answer and is not the same as/.test(wfSrc)} | schema type: ${JSON.stringify(wf.RECONCILE_SCHEMA?.properties?.schemaNamePrefix?.type)}`);
+    && wf.RECONCILE_SCHEMA.properties.schemaNamePrefix.type.includes("null")
+    && wf.RECONCILE_SCHEMA.properties.schemaNamePrefixEmpty?.type === "boolean"
+    && /if \(answer\.schemaNamePrefixEmpty === true && answer\.schemaNamePrefix == null\) answer\.schemaNamePrefix = ''/.test(wfSrc),
+  () => `prompt sentence: ${/The empty prefix is a REAL answer/.test(wfSrc)} | schema type: ${JSON.stringify(wf.RECONCILE_SCHEMA?.properties?.schemaNamePrefix?.type)} | companion: ${JSON.stringify(wf.RECONCILE_SCHEMA?.properties?.schemaNamePrefixEmpty)}`);
 // `resolution: null` is the engine's own answer for an unanswered ⚠ Confirm item, and the prompt tells the agent to
 // copy it rather than omit the field. A checker that read `null` as a fault would make every un-answered plan
 // unbuildable — the opposite of what the old schema's `['object','null']` union did.
@@ -1727,7 +1739,7 @@ check("ENG-95930: the shape check does NOT invent requirements for absent top-le
 // name is a field the agent drops — and the shape check then refuses every attempt. DERIVED, not a hand-picked
 // sample: every name the shipped shape table binds at any depth is set-tested against the TOKENISED prompt body, so
 // adding a field to the table without naming it in the prompt fails here instead of in front of an operator.
-const promptBody = wfSrc.slice(wfSrc.indexOf("function reconcilePrompt(round)"), wfSrc.indexOf("  phase('Reconcile')"));
+const promptBody = wfSrc.slice(wfSrc.indexOf("function reconcilePrompt(round, fileStem)"), wfSrc.indexOf("  phase('Reconcile')"));
 const promptTokens = new Set(promptBody.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []);
 const shapeNames = wf.shapeFieldNames ? [...wf.shapeFieldNames(wf.RECONCILE_SHAPE)] : [];
 const unnamedInPrompt = shapeNames.filter((n) => !promptTokens.has(n));
@@ -1797,9 +1809,10 @@ check("ENG-95930: the repeated-rejection triage names the MEASURED cause of the 
 // the state, where a missing field becomes `undefined` in the park/close arithmetic.
 check("ENG-95930: a schema-valid Reconcile answer that fails the shape check spends an attempt and is NEVER merged into the state, and the stop text names the offending fields",
   /const faults = reconcileShapeErrors\(answer\)/.test(wfSrc)
-    && /if \(!faults\.length\) return answer/.test(wfSrc)
+    && /if \(!faults\.length\) \{/.test(wfSrc)
     && /lastShapeFaults = faults/.test(wfSrc)
-    && /const reconcileFailedNext = \(\) => \(lastShapeFaults\.length/.test(wfSrc)
+    && /if \(lastHostRejection\) \{/.test(wfSrc)
+    && /if \(lastShapeFaults\.length\) \{/.test(wfSrc)
     && /next: reconcileFailedNext\(\)/.test(wfSrc));
 
 check("ENG-95474 C3: Verify is the normal post-Build queue-carry writer, with fallback persistence only if Verify cannot confirm that write",
@@ -2420,6 +2433,19 @@ check("ENG-95468 replay (third Applicant run, EXECUTED): a plan promising `UsrAp
     && identityStop.appIdentityMismatch?.requiredCode === "UsrApplicant"
     && /UsrApplicantApp/.test(identityStop.next || "") && /UsrApplicant`/.test(identityStop.next || ""),
   () => (identityStop.threw ? `threw: ${identityStop.threw}` : `stopped=${identityStop.stopped} identity=${JSON.stringify(identityStop.appIdentityMismatch)} next=${(identityStop.next || "").slice(0, 240)}`));
+// THE EMPTY PREFIX'S WIRE FORM, EXECUTED: `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }` must drive the
+// identity gate exactly as `""` does — a decode that is dropped or inverted reads the pair as "prefix unreadable",
+// switches the gate off, and quietly re-opens the path to `create-app` this stop exists to close.
+const identityStopPair = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
+  applicationCode: "UsrApplicantApp", schemaNamePrefix: null, schemaNamePrefixEmpty: true,
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95930: the empty prefix's WIRE FORM gates identically to `\"\"` — the decoded pair still stops `UsrApplicantApp`-vs-`UsrApplicant` before the first write, so no bare empty string has to ride the answer for the gate to run",
+  !identityStopPair.threw && identityStopPair.stopped === "plan-invalid-against-stand"
+    && identityStopPair.appIdentityMismatch?.kind === "app-code-contradicts-target-package"
+    && identityStopPair.appIdentityMismatch?.requiredCode === "UsrApplicant",
+  () => (identityStopPair.threw ? `threw: ${identityStopPair.threw}` : `stopped=${identityStopPair.stopped} identity=${JSON.stringify(identityStopPair.appIdentityMismatch)}`));
 // ONE WAVE, not three: the whole point of checking before the first write is that a re-plan fixes everything the
 // plan got wrong in a single pass. Three axes failing at once must produce ONE stop naming all three.
 const allThree = await runToBaseline({
@@ -2579,9 +2605,9 @@ check("ENG-95930: a short answer FOLLOWED BY host refusals reports the REFUSAL, 
     && !/the host is not blocking anything/.test(shortThenDead.next || ""),
   () => (shortThenDead.threw ? `threw: ${shortThenDead.threw}` : `calls=${mixedCalls} next=${(shortThenDead.next || "").slice(0, 200)}`));
 
-check("the repeated-rejection triage sentence is a single constant interpolated into BOTH Reconcile recovery messages — a wording fix cannot land in only one",
+check("the repeated-rejection triage sentence is a single constant interpolated into EVERY Reconcile recovery message — both no-answer stop texts and both host-rejection branches — so a wording fix cannot land in only one",
   /const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host/.test(wfSrc)
-    && (wfSrc.match(/\$\{REPEATED_REJECTION_TRIAGE\}/g) || []).length === 2);
+    && (wfSrc.match(/\$\{REPEATED_REJECTION_TRIAGE\}/g) || []).length === 4);
 // The attempts are CONSECUTIVE dispatches, not spaced ones: the core is a generator that yields work and never holds
 // a clock, so nothing here may claim a delay it does not perform. This pins the budget's reach honestly — three
 // back-to-back attempts, which a rejection outlasting them still defeats.
@@ -2597,6 +2623,19 @@ const afterBurst = await runWith({}, async () => {
 check("workflow SURVIVES a two-rejection burst: attempts 1 and 2 return nothing, attempt 3 answers, and the run proceeds on that answer with exactly three calls made",
   !afterBurst.threw && afterBurst.stopped !== "reconcile-failed" && afterBurst.stopped === "unknown-checkpoint-key" && burstCalls === 3,
   () => (afterBurst.threw ? `threw: ${afterBurst.threw}` : `stopped=${afterBurst.stopped} calls=${burstCalls}`));
+// A host that REJECTS the dispatch outright — `agent()` THROWING is the shape of the StructuredOutput retry-cap
+// failure, and it reaches the core as a thrown error, not as null. It used to abort the whole run as an unhandled
+// error on attempt 1, with the honest stop below never produced.
+let rejectedCalls = 0;
+const rejectedRun = await runWith({}, async () => {
+  rejectedCalls += 1;
+  throw new Error("agent({schema}): StructuredOutput retry cap (5) exceeded — 5 failed calls with no valid output");
+}).catch((e) => ({ threw: e.message }));
+check("workflow SURVIVES a host that REJECTS every Reconcile dispatch: three attempts are spent and the run returns the honest `reconcile-failed` stop, whose `next` carries the host's own error verbatim plus the capture-file triage",
+  !rejectedRun.threw && rejectedRun.stopped === "reconcile-failed" && rejectedCalls === 3
+    && /StructuredOutput retry cap \(5\) exceeded/.test(rejectedRun.next || "")
+    && /reconcile-answer-\*/.test(rejectedRun.next || ""),
+  () => (rejectedRun.threw ? `threw: ${rejectedRun.threw}` : `calls=${rejectedCalls} stopped=${rejectedRun.stopped} next=${(rejectedRun.next || "").slice(0, 200)}`));
 
 // --- HARD STOP 3.5 MID-RUN in `acceptReconciled` as an EXECUTION path (ENG-95468). The baseline gate is executed
 // above; this drives a LATER Reconcile — the post-preflight one, the FIRST `acceptReconciled` call site — through the
@@ -2878,9 +2917,9 @@ check("ENG-95474 review: the carry advertises BUILD CONTINUATIONS to the phase t
   () => alwaysContinues.continuationBlocks[0] || "(no BUILD CONTINUATIONS carry block reached Verify)");
 // Reconcile is NOT a writer of these counters, so it must not be handed the carry — an unused parameter there reads
 // as if it were one, and its prompt then instructs on blocks that can never appear in it.
-check("ENG-95474 review: `reconcilePrompt` takes no carry — Verify is the queue writer, and Reconcile is told to PRESERVE both counters rather than increment either",
-  /function reconcilePrompt\(round\) \{/.test(wfSrc)
-    && !/reconcilePrompt\(round, carryNow\(\)\)/.test(wfSrc)
+check("ENG-95474 review: `reconcilePrompt` takes no carry (`fileStem` is the capture-file name, not run state) — Verify is the queue writer, and Reconcile is told to PRESERVE both counters rather than increment either",
+  /function reconcilePrompt\(round, fileStem\) \{/.test(wfSrc)
+    && !/reconcilePrompt\([^)]*carryNow\(\)\)/.test(wfSrc)
     && /PRESERVE the \\`rounds\\` and \\`continuations\\` counters each unit already has/.test(wfSrc)
     && /\*\*Do NOT increment either one here\.\*\*/.test(wfSrc)
     && !/unless the ROUND COUNTERS block below is present/.test(wfSrc),
@@ -2994,7 +3033,7 @@ check("ENG-95474 review round 2: `continuationOf` merges with `Math.max`, like t
 // --- the two dead-code findings from review round 2.
 check("ENG-95474 review round 2: `reconcilePrompt` no longer promises a PREFLIGHT EVIDENCE block — it takes no carry and never emits one, so the instruction was dead text",
   !/If the PREFLIGHT EVIDENCE block below is present/.test(wfSrc)
-    && /function reconcilePrompt\(round\)/.test(wfSrc),
+    && /function reconcilePrompt\(round, fileStem\)/.test(wfSrc),
   () => wfSrc.split("\n").filter((l) => /PREFLIGHT EVIDENCE block below/.test(l)).join("\n") || "(clean)");
 // Neither writer schema carries a `queueFile` the script never reads. `runReturn` has its own, unrelated, and read.
 check("ENG-95474 review round 2: no agent schema carries a dead `queueFile` field — nothing read it and no prompt asked for it",

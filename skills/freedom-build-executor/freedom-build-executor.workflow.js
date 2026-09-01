@@ -2096,6 +2096,11 @@ const RECONCILE_SCHEMA = {
     // writes. THE EMPTY STRING IS A REAL VALUE and is NOT the same as absence — a stand with no prefix is exactly
     // the case the third Applicant run hit (package == app code) — so `''` gates and `null`/absent does not.
     schemaNamePrefix: { type: ['string', 'null'] },
+    // The EMPTY prefix's wire form: `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`. A bare `""` value is
+    // the token observed dropped from large submissions of this answer (which then fail to parse at the host), so
+    // the empty answer travels as this boolean and `reconcileAgent` decodes the pair back to `''` on acceptance —
+    // every consumer still reads the string contract above. `""` itself remains legal for compatibility.
+    schemaNamePrefixEmpty: { type: 'boolean' },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -2208,8 +2213,11 @@ const RECONCILE_SHAPE = {
     types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
+  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key
+  // (`appliesWhen: false`) carries `what: null, miss: null`, the prompt orders a verbatim copy, and a string-only
+  // rule rejected that copy on the FIRST attempt of every Reconcile. Applicable rows always carry real strings.
   reachability: { kind: 'array', required: ['key', 'appliesWhen'],
-    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string', miss: 'string' } },
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null' } },
   // `resolution: null` is a LEGAL answer and is checked as such — the engine publishes it on every unanswered item.
   preflightItems: { kind: 'array', required: ['id', 'pageKey'],
     types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },
@@ -2998,6 +3006,22 @@ const RECONCILE_REQUIRES = BASE_REQUIRES
 // The verifier and the judge must be contexts that did not do the work they are ruling on.
 const INDEPENDENT_REQUIRES = [...BASE_REQUIRES, 'independentRoles']
 
+// The Reconcile answer's mechanical encoder, shipped INSIDE the prompt: the agent writes it to the migration folder
+// and runs it, so the \uXXXX escaping is computed, never hand-written — a hand-mistyped hex digit still parses and
+// silently changes a character the script computes on. No backslash, backtick or `${` appears in this source: it is
+// interpolated into a template literal and rendered into a prompt, and each of those layers would re-interpret one
+// (the backslash it does need is built at runtime from char code 92). The regex deliberately has no `u` flag — it
+// must match per UTF-16 code unit so a surrogate pair becomes two escapes, which is what JSON requires.
+// Exported so the offline suite executes the exact text the prompt carries.
+const ANSWER_ENCODER_SOURCE = `import { readFileSync, writeFileSync } from 'node:fs'
+const [rawFile, outFile] = process.argv.slice(2)
+const answer = JSON.parse(readFileSync(rawFile, 'utf8'))
+const u = String.fromCharCode(92) + 'u'
+const ascii = JSON.stringify(answer).replace(/[^ -~]/g, (c) => u + c.charCodeAt(0).toString(16).padStart(4, '0'))
+JSON.parse(ascii)
+writeFileSync(outFile, ascii)
+console.log('OK ' + outFile + ' (' + ascii.length + ' bytes, ASCII-only)')`
+
 // MODULE-SCOPE PURE HELPERS (Sonar S7721): each reads only its own parameters, never the run's closure, so they
 // are hoisted out of `run()` rather than redefined on every call.
 
@@ -3227,7 +3251,12 @@ function* run(rawInput, io = {}, opts = {}) {
   // NO `carry` parameter: Verify is the queue writer and is the phase that receives the carry block. Reconcile
   // PRESERVES the counters and reports them back, so handing it the carry would make it a second writer of the same
   // keys — and an unused parameter here reads as if it still were one.
-  function reconcilePrompt(round) {
+  // One capture file PER DISPATCH. The label already distinguishes the reconcile call-sites (baseline,
+  // after-preflight, each round tail) AND the workflow-level retries — and every retry is a fresh context that
+  // restarts the in-prompt counter at 1, so a round-only name had a later dispatch overwrite the exact bytes an
+  // earlier failure left behind.
+  const answerFileStem = (label) => label.replace(/^reconcile:/, '').replace(/[:.]/g, '-')
+  function reconcilePrompt(round, fileStem) {
     const first = round === 0
     return `You are the RECONCILE phase of a Freedom build run — round ${round + 1}. ${first
       ? 'This is the BASELINE: nothing has been built by this run yet, and part of your job is to find out what the stand already has.'
@@ -3240,7 +3269,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\` as \`{ found, version, date, who, recordedIn, quote }\` — \`recordedIn\` the file you found it in, \`quote\` the entry VERBATIM, and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty string is a REAL answer and is not the same as \`null\`**: return \`""\` when this stand's prefix is empty (a common and correct configuration), and \`null\` ONLY when you could not read it at all. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` (each \`{ id, pageKey, kind, item, requires, resolution }\` — \`pageKey\` is the page the item belongs to and is REQUIRED on every item) and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` AND \`resolutionsConflicts\` — the root-level \`--units.resolutionsUnmatched\` / \`--units.resolutionsConflicts\`, verbatim, each entry \`{ id, kind, item }\` (identifiers only — no \`answer\` text, it is already in the operator's own file). Unmatched are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks; conflicts are questions answered TWICE through the two key forms. This run is the only thing that can tell the operator about either, so return BOTH as \`[]\` when there is nothing to report rather than omitting them.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty prefix is a REAL answer and is not the same as unreadable — but it must NOT travel as a bare empty string** (an empty-string value is the token that has been dropped in transit from this very answer, which then fails to parse): when this stand's prefix is EMPTY (a common and correct configuration), return \`schemaNamePrefix: null\` AND \`schemaNamePrefixEmpty: true\`; when you could not read the setting at all, return \`schemaNamePrefix: null\` and NO \`schemaNamePrefixEmpty\` field. A non-empty prefix goes in \`schemaNamePrefix\` VERBATIM, with no companion field. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` (each \`{ id, pageKey, kind, item, requires, resolution }\` — \`pageKey\` is the page the item belongs to and is REQUIRED on every item) and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` AND \`resolutionsConflicts\` — the root-level \`--units.resolutionsUnmatched\` / \`--units.resolutionsConflicts\`, verbatim, each entry \`{ id, kind, item }\` (identifiers only — no \`answer\` text, it is already in the operator's own file). Unmatched are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks; conflicts are questions answered TWICE through the two key forms. This run is the only thing that can tell the operator about either, so return BOTH as \`[]\` when there is nothing to report rather than omitting them.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that. **\`'exists'\` does not say WHOSE it is.** A package this migration created itself reads exactly like a stranger's from the stand, and the two need opposite handling under \`sectionHost: new-app\`; the only thing that tells them apart is the \`standWrites.packageCreated\` record in the queue file, which step 5 has you report as \`packageCreatedByRun\`. Report the state you actually read here, and let that record answer the ownership question.
 
@@ -3271,7 +3300,15 @@ DO SIX THINGS, in order:
 
 Return the schema. Numbers only — this script does the judging.
 
-THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested objects are declared loosely (a plain object, an array of objects) because the host rejects a schema larger than 4096 serialized bytes — so every nested field named above is verified when your answer arrives. An answer short of one is NOT accepted with a hole in it: you are re-asked, with the offending fields listed, and the run stops if the last attempt is still short. Copy each nested object's fields exactly as this prompt lists them.`
+THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested objects are declared loosely (a plain object, an array of objects) because the host rejects a schema larger than 4096 serialized bytes — so every nested field named above is verified when your answer arrives. An answer short of one is NOT accepted with a hole in it: you are re-asked, with the offending fields listed, and the run stops if the last attempt is still short. Copy each nested object's fields exactly as this prompt lists them.
+
+HOW TO SUBMIT THE ANSWER. The host has rejected this answer — the run's largest, dense with verbatim-copied text — as unparseable JSON when it was improvised in place, so it is composed on disk and submitted from there:
+- Write the COMPLETE answer object — raw characters, no manual escaping — to \`${input.outDir}/reconcile-answer-${fileStem}-1.json\`. The trailing number counts YOUR OWN submissions: recomposing after a rejection writes the NEXT number, and a rejected attempt's files are never overwritten or deleted — they are the only record of the exact bytes the host refused.
+- Write this helper VERBATIM to \`${input.outDir}/encode-answer.mjs\` (skip when it already exists), then run \`node <that helper> <raw file> <raw file with .json replaced by .ascii.json>\`:
+${ANSWER_ENCODER_SOURCE}
+It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected.
+- Read the \`.ascii.json\` file and submit EXACTLY its content as the structured answer, character for character.
+- If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave every file in place either way.`
   }
 
   phase('Reconcile')
@@ -3316,33 +3353,54 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
     dispatched: [...dispatched], continuations, preflightEvidence, standWrites })
 
   // RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later phase depends on
-  // it, so a failure here costs the whole run. The budget covers two failures a second dispatch can clear: a host
-  // that answered nothing, and an answer that came back short of the shape (which the retry is told about).
+  // it, so a failure here costs the whole run. The budget covers three failures a second dispatch can clear: a host
+  // that answered nothing, a host that REJECTED the item (the driver throws a single-item step's rejection into the
+  // core, so it arrives HERE as a thrown error, never as null — the StructuredOutput retry-cap exhaustion is this
+  // path), and an answer that came back short of the shape (which the retry is told about).
   // IT DOES NOT COVER THE SCHEMA-SIZE REFUSAL — that one is deterministic, and no number of attempts changes the
   // bytes. The attempts are consecutive dispatches, not spaced ones: the core yields work and never holds a clock.
   // Bounded and never silent: each attempt is logged, and exhausting them is still the honest `reconcile-failed`
   // stop, not a run that proceeds on a state nobody produced.
   const RECONCILE_ATTEMPTS = 3
-  // `reconcileAgent` returns `null` for two different failures — the host never answered, or it answered and every
-  // answer was short of the shape this script computes on — and the operator's next move differs between them, so
-  // the last fault list is held for the failure text to name.
+  // `reconcileAgent` returns `null` for three different failures — the host never answered, the host rejected the
+  // item, or it answered and every answer was short of the shape this script computes on — and the operator's next
+  // move differs between them, so the last attempt's fault list and rejection are held for the failure text to name.
   let lastShapeFaults = []
+  let lastHostRejection = ''
   function* reconcileAgent(roundNo, id, label, note) {
     lastShapeFaults = []
+    lastHostRejection = ''
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
       // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
       // round's own `dispatchUnit` loop, which is sequential for the same reason).
       // A RETRY AFTER A SHAPE FAULT CARRIES THE FAULT. `note` is work-item metadata and never reaches the model, so
       // an uninformed retry re-sends byte-identical input and a deterministically dropped field is dropped again for
       // the whole budget. The fault list is appended to the PROMPT instead, which is the one channel the agent reads.
-      const base = reconcilePrompt(roundNo)
+      const attemptId = attempt === 1 ? id : `${id}.retry-${attempt - 1}`
+      const attemptLabel = attempt === 1 ? label : `${label}:retry-${attempt - 1}`
+      const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
       const prompt = lastShapeFaults.length
         ? `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${lastShapeFaults.map((f) => `- ${f}`).join('\n')}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
         : base
-      const answer = yield* dispatch(attempt === 1 ? id : `${id}.retry-${attempt - 1}`, prompt, {
-        schema: RECONCILE_SCHEMA, phase: 'Reconcile', requires: RECONCILE_REQUIRES, note,
-        label: attempt === 1 ? label : `${label}:retry-${attempt - 1}`,
-      })
+      let answer
+      try {
+        answer = yield* dispatch(attemptId, prompt, {
+          schema: RECONCILE_SCHEMA, phase: 'Reconcile', requires: RECONCILE_REQUIRES, note,
+          label: attemptLabel,
+        })
+      } catch (e) {
+        // THE THIRD FAILURE THE BUDGET COVERS. A rejected single-item step reaches the core as a throw, so only a
+        // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
+        // honest `reconcile-failed` stop below never runs.
+        lastShapeFaults = []
+        lastHostRejection = String((e && e.message) || e)
+        if (attempt < RECONCILE_ATTEMPTS) {
+          log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`)
+        } else {
+          log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
+        }
+        continue
+      }
       // THE SHAPE CHECK THE HOST DOES NOT DO. `RECONCILE_SCHEMA` declares these properties without their insides,
       // so the fields are verified here. A schema-valid answer missing `verify.pages[*].buildComplete`, or carrying
       // a string where the arithmetic reads a boolean, spends an attempt and is named in the log — never merged
@@ -3350,8 +3408,15 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
       // nobody established.
       if (answer) {
         const faults = reconcileShapeErrors(answer)
-        if (!faults.length) return answer
+        if (!faults.length) {
+          // The EMPTY prefix travels as `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }` — a bare `""`
+          // value is the token observed dropped from large submissions of this answer — and is decoded back to `''`
+          // here, in the one place every accepted answer passes, so every consumer keeps the string contract.
+          if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
+          return answer
+        }
         lastShapeFaults = faults
+        lastHostRejection = ''
         // THE LOG MUST NOT PROMISE A RETRY THE LOOP WILL NOT RUN. On the LAST attempt `continue` exits the loop and
         // `reconcileAgent` returns null, so a line ending in "retrying" would tell the operator a re-dispatch is
         // coming when the call is actually being abandoned — the same misdiagnosis class this ticket exists to close.
@@ -3371,6 +3436,7 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
       // attempts, the host is not blocking anything" while the host blocked the rest, which is the misdiagnosis
       // this whole ticket corrects.
       lastShapeFaults = []
+      lastHostRejection = ''
       if (attempt < RECONCILE_ATTEMPTS) {
         log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`)
       } else {
@@ -3388,13 +3454,29 @@ THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested 
   // It is a host rule: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs,
   // in `auto`-permission sessions. Neither a re-run nor this retry budget can clear it — the schema has to get
   // smaller, or the session has to not be in `auto` mode.
-  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host\'s own reason: `blocked by safety classifier: output schema too large to classify safely` is deterministic (a serialized agent schema over 4096 bytes, in an `auto`-permission session) and no number of attempts clears it'
+  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host\'s own reason: `blocked by safety classifier: output schema too large to classify safely` is deterministic (a serialized agent schema over 4096 bytes, in an `auto`-permission session) and no number of attempts clears it; `StructuredOutput was called with input that could not be parsed as JSON` repeating on every attempt means the answer keeps reaching the host as invalid JSON — the `reconcile-answer-*` files in the migration folder hold the exact bytes of every submission, and they are the evidence to attach'
   const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent may be transient (a rejected structured answer, a dropped connection): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
-  // A DIFFERENT FAILURE: the host answered every time, so the route is fine and re-running the same call is the
-  // reasonable move. What failed is the transcription, and the named fields are what to look at.
-  const reconcileFailedNext = () => (lastShapeFaults.length
-    ? `the Reconcile agent answered on all ${RECONCILE_ATTEMPTS} attempts and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host is not blocking anything, so re-run this build on the SAME route. If the same field is missing every time, the prompt's list of that object's fields and \`RECONCILE_SHAPE\` disagree about it, which is a defect in this script rather than in the run. Nothing was built`
-    : RECONCILE_FAILED_NEXT)
+  // TWO DIFFERENT FAILURES, each with its own next move. A host REJECTION carries the host's own error verbatim —
+  // that message, not this script's paraphrase, is what the operator triages on. A shape shortfall means the host
+  // answered every time, so the route is fine and re-running the same call is the reasonable move: what failed is
+  // the transcription, and the named fields are what to look at.
+  const reconcileFailedNext = () => {
+    if (lastHostRejection) {
+      return `the host REJECTED the Reconcile agent's answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}) — re-run this build on the SAME route. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
+    }
+    if (lastShapeFaults.length) {
+      return `the Reconcile agent answered on all ${RECONCILE_ATTEMPTS} attempts and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host is not blocking anything, so re-run this build on the SAME route. If the same field is missing every time, the prompt's list of that object's fields and \`RECONCILE_SHAPE\` disagree about it, which is a defect in this script rather than in the run. Nothing was built`
+    }
+    return RECONCILE_FAILED_NEXT
+  }
+  // The same three-way attribution for the ROUND-TAIL reconcile's stop, as a named clause rather than a nested
+  // ternary in the return: the lead-in differs there (the verdict on disk is this round's), so only the failure
+  // clause is shared vocabulary.
+  const reconcileRoundFailureClause = () => {
+    if (lastHostRejection) return `The host REJECTED the answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}). ${REPEATED_REJECTION_TRIAGE}`
+    if (lastShapeFaults.length) return `Every one of the ${RECONCILE_ATTEMPTS} attempts ANSWERED and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host blocked nothing, the transcription is what failed.`
+    return `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`
+  }
 
   let state = yield* reconcileAgent(round, 'reconcile.baseline', 'reconcile:baseline',
     'the baseline: `--units` + `--verify --verify-json`, the queue file, and the round counters')
@@ -4774,7 +4856,7 @@ Return every verdict you wrote.`,
       } else {
         // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
         // have closed. Said out loud rather than retried — the round loop reconciles at its own tail either way.
-        log(`the post-preflight Reconcile returned nothing${lastShapeFaults.length ? ` — every attempt answered but was short of the shape this script computes on (${lastShapeFaults.join(' · ')})` : ''} — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built`)
+        log(`the post-preflight Reconcile ${lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : `returned nothing${lastShapeFaults.length ? ` — every attempt answered but was short of the shape this script computes on (${lastShapeFaults.join(' · ')})` : ''}`} — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built`)
       }
     }
     return null
@@ -5122,7 +5204,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       if (!next) {
         // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
         // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.
-        log(`reconcile after round ${round} did not answer — stopping; the verdict is this round's, the queue state is not refreshed`)
+        log(`reconcile after round ${round} ${lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'} — stopping; the verdict is this round's, the queue state is not refreshed`)
         yield* persistPending('stopping on a failed reconcile')
         return runReturn({
           stopped: 'reconcile-failed',
@@ -5132,9 +5214,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
           planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
           discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
           staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-          next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. ${lastShapeFaults.length
-            ? `Every one of the ${RECONCILE_ATTEMPTS} attempts ANSWERED and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host blocked nothing, the transcription is what failed.`
-            : `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`}`,
+          next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. ${reconcileRoundFailureClause()}`,
         })
       }
       const stopAfterRound = yield* acceptReconciled(next, `round ${round}'s Reconcile`)
