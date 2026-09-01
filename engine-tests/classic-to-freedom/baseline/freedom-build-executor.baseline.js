@@ -4056,7 +4056,8 @@ while (true) {
   if (!next) {
     // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
     // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.
-    log(`reconcile after round ${round} ${lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'} — stopping; the verdict is this round's, the queue state is not refreshed`)
+    const roundTailFailure = lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'
+    log(`reconcile after round ${round} ${roundTailFailure} — stopping; the verdict is this round's, the queue state is not refreshed`)
     await persistPending('stopping on a failed reconcile')
     return runReturn({
       stopped: 'reconcile-failed',
