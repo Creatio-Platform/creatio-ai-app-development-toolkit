@@ -1785,8 +1785,7 @@ check("ENG-95930: the shape check REJECTS a wrong-typed value for every token in
 // The fail-fast branches the diff added: a null where an object belongs, a non-array where an array belongs, and a
 // scalar where the page map belongs. Nothing in the shipped run calls these, so only a probe covers them.
 check("ENG-95930: the shape check fails fast on a value of the wrong SHAPE — `null` for a plain object, a non-array for an array, a scalar for the page map, and a non-object answer",
-  wf.reconcileShapeErrors
-    && wf.reconcileShapeErrors({ approval: null }).length === 1
+  wf.reconcileShapeErrors?.({ approval: null }).length === 1
     && wf.reconcileShapeErrors({ reachability: { key: "k" } }).length === 1
     && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: 7 } }).length === 1
     && wf.reconcileShapeErrors(null).length === 1
