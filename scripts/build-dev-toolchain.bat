@@ -7,32 +7,21 @@ REM   this launcher and build-dev-toolchain.sh on macOS/Linux). This wrapper jus
 REM   resolves a real Python 3 and hands off, forwarding all arguments.
 REM   Usage: build-dev-toolchain.bat [release | <branch-or-tag>]
 REM
-REM   Python is resolved by the repo's tested resolver runtime\scripts\find_python.ps1,
-REM   which prefers `py -3`, verifies `--version` reports Python 3.x, and skips the
-REM   0-byte Microsoft Store stub (a bare `where python` would hand off to that stub,
-REM   silently open the Store, and never run the driver).
+REM   Python resolution (side-effect-free first):
+REM     1. `py -3` -- the Windows Python Launcher is always a real Python 3, never the
+REM        0-byte Microsoft Store stub.
+REM     2. Fallback ONLY if that fails: runtime\scripts\find_python.ps1, which skips the
+REM        Store stub, verifies `--version` is Python 3.x, and (if nothing is found) may
+REM        INSTALL Python via winget.
 REM ===========================================================================
 set "HERE=%~dp0"
 set "DRIVER=%HERE%build_dev_toolchain.py"
 set "RESOLVER=%HERE%..\runtime\scripts\find_python.ps1"
 
 set "PYCMD="
-if exist "%RESOLVER%" (
+py -3 --version >nul 2>&1 && set "PYCMD=py|-3"
+if not defined PYCMD if exist "%RESOLVER%" (
   for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%RESOLVER%' *^> $null; if ($env:PYTHON_CMD) { $env:PYTHON_CMD }"`) do set "PYCMD=%%P"
-)
-REM Fallback resolver if find_python.ps1 is missing: `py -3` first (never the Store stub), then a
-REM python/python3 whose --version actually reports Python 3.x.
-if not defined PYCMD (
-  py -3 --version >nul 2>&1 && set "PYCMD=py|-3"
-)
-if not defined PYCMD (
-  for %%C in (python3.exe python.exe) do (
-    if not defined PYCMD (
-      for /f "usebackq tokens=1,2" %%A in (`%%C --version 2^>^&1`) do (
-        if /I "%%A"=="Python" (echo %%B| findstr /b "3." >nul && set "PYCMD=%%C")
-      )
-    )
-  )
 )
 if not defined PYCMD (
   echo. & echo Python 3 is required but was not found on PATH ^(the Microsoft Store stub does not count^).

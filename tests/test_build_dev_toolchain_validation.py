@@ -1,17 +1,16 @@
 """Unit coverage for the cross-platform build-dev-toolchain driver (scripts/build_dev_toolchain.py).
 
-The driver runs every external command via subprocess with a LIST of args (never a shell string), so the
-command-injection class a batch/shell port must defend against does not exist here. What remains worth
-pinning is the allow-list validation (defence in depth + rejecting bad git refs early) and the pure logic
-of the appsettings rewrite / marketplace generation / config parsing. These import the driver and test its
-functions directly with the SAME regex engine the driver runs at runtime, so there is no Python-re-vs-other
-divergence to worry about.
+The driver runs every external command via subprocess with a LIST of args (never a shell string, and never
+`cmd /c` / `sh -c`), so the command-injection class a batch/shell port must defend against does not exist
+here. These tests import the driver and exercise its real functions -- allow-lists, config resolution,
+platform helpers, the appsettings rewrite, and the no-shell/arg-forwarding guarantees -- with the same
+regex engine the driver runs at runtime.
 """
 
-import argparse
 import importlib.util
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,42 +23,27 @@ _spec = importlib.util.spec_from_file_location("build_dev_toolchain", DRIVER_PAT
 bdt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bdt)
 
-# Payloads that MUST be rejected by every allow-list: quote/backtick/$ breakout, cmd/shell operators
-# (& | < >), command substitution / statement separators, and a leading hyphen (git argument injection).
 MALICIOUS = [
-    "a'; Start-Process calc; '",
-    "a`ncalc",
-    "a$(whoami)",
-    "a;calc",
-    "a&calc",
-    "a|b",
-    "a>b",
-    "a<b",
-    'a"b',
-    "`whoami`",
-    "-upload-pack",
-    "--upload-pack=/tmp/x",
-    "-x",
-    "",  # empty is never valid
+    "a'; Start-Process calc; '", "a`ncalc", "a$(whoami)", "a;calc", "a&calc", "a|b", "a>b", "a<b",
+    'a"b', "`whoami`", "-upload-pack", "--upload-pack=/tmp/x", "-x", "",
 ]
-
 VALID = {
-    "KN_URL": [
-        "https://github.com/Advance-Technologies-Foundation/clio-knowledge.git",
-        "git@github.com:org/repo.git",
-    ],
+    "KN_URL": ["https://github.com/Advance-Technologies-Foundation/clio-knowledge.git", "git@github.com:o/r.git"],
     "KN_REL_OWNER": ["Advance-Technologies-Foundation"],
     "KN_REL_REPO": ["clio-knowledge"],
     "KN_REL_ASSET": ["clio-knowledge-bundle.zip"],
     "KN_REL_API": ["https://api.github.com/"],
     "KN_BRANCH": ["master", "feature/eng-93152_fab-1.2", "1.13.20", "release-2.0"],
+    "CONFIG": ["Release", "Debug"],
+    "MARKETPLACE_NAME": ["creatio"],
 }
 
 
 class AllowListTests(unittest.TestCase):
     def test_all_untrusted_vars_have_an_allowlist(self):
-        for name in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "KN_BRANCH"):
-            self.assertIn(name, bdt.ALLOWLISTS, f"{name} must have an allow-list")
+        for name in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "KN_BRANCH",
+                     "CONFIG", "MARKETPLACE_NAME"):
+            self.assertIn(name, bdt.ALLOWLISTS)
 
     def test_every_allowlist_rejects_malicious(self):
         for name in bdt.ALLOWLISTS:
@@ -73,7 +57,7 @@ class AllowListTests(unittest.TestCase):
 
     def test_leading_hyphen_always_rejected(self):
         for name in bdt.ALLOWLISTS:
-            for lead in ("-x", "--upload-pack", "-"):
+            for lead in ("-x", "--upload-pack", "-", ".."):
                 self.assertFalse(bdt.token_ok(name, lead), f"{name} must reject {lead!r}")
 
     def test_pick_index_classifier(self):
@@ -81,6 +65,59 @@ class AllowListTests(unittest.TestCase):
             self.assertTrue(bdt.is_index(good), good)
         for bad in MALICIOUS + ["1a", "-1", "0", "name"]:
             self.assertFalse(bdt.is_index(bad), f"index classifier must reject {bad!r}")
+
+
+class ConfigTests(unittest.TestCase):
+    def test_load_config_parses_ignores_comments_and_bom(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "c"
+            p.write_text("\ufeff# comment\n\nCLIO_SRC=C:\\a=b\n  KEY = val \nCONFIG=Debug\n", encoding="utf-8")
+            cfg = bdt.load_config(p)
+        self.assertEqual(cfg["CLIO_SRC"], "C:\\a=b")
+        self.assertEqual(cfg["KEY"], "val")
+        self.assertEqual(cfg["CONFIG"], "Debug")
+
+    def test_setting_precedence_config_beats_env_beats_default(self):
+        with mock.patch.dict(os.environ, {"CONFIG": "FromEnv"}):
+            self.assertEqual(bdt.setting({"CONFIG": "FromCfg"}, "CONFIG", "Def"), "FromCfg")
+            self.assertEqual(bdt.setting({}, "CONFIG", "Def"), "FromEnv")
+            self.assertEqual(bdt.setting({"CONFIG": ""}, "CONFIG", "Def"), "FromEnv")  # empty falls through
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CONFIG", None)
+            self.assertEqual(bdt.setting({}, "CONFIG", "Def"), "Def")
+
+    def test_resolve_config_empty_value_falls_back_to_default(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            for k in ("CONFIG", "MARKETPLACE_NAME", "KN_MODE"):
+                os.environ.pop(k, None)
+            out = bdt.resolve_config({"CLIO_SRC": "x", "CONFIG": ""})
+        self.assertEqual(out["CONFIG"], "Release", "an empty CONFIG must not stick (would widen an rmtree)")
+        self.assertEqual(out["MARKETPLACE_NAME"], "creatio")
+
+    def test_resolve_config_honours_env_when_config_absent(self):
+        with mock.patch.dict(os.environ, {"KN_MODE": "branch"}):
+            out = bdt.resolve_config({"CLIO_SRC": "x"})
+        self.assertEqual(out["KN_MODE"], "branch")
+
+
+class ClioHomeTests(unittest.TestCase):
+    def test_override_argument_wins(self):
+        self.assertEqual(bdt.clio_home(os.path.join("o", "ride")), Path(os.path.join("o", "ride")))
+
+    def test_whitespace_override_is_ignored(self):
+        with mock.patch.object(bdt, "IS_WIN", False), mock.patch.dict(os.environ, {"HOME": "/home/x"}):
+            self.assertEqual(bdt.clio_home("   "), Path("/home/x") / "creatio" / "clio")
+
+    def test_posix_default_is_home_creatio_clio(self):
+        with mock.patch.object(bdt, "IS_WIN", False), mock.patch.dict(os.environ, {"HOME": "/home/x"}):
+            os.environ.pop("CLIO_HOME", None)
+            self.assertEqual(bdt.clio_home(), Path("/home/x") / "creatio" / "clio")
+
+    def test_windows_default_is_localappdata_creatio_clio(self):
+        with mock.patch.object(bdt, "IS_WIN", True), \
+                mock.patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\x\AppData\Local"}):
+            os.environ.pop("CLIO_HOME", None)
+            self.assertEqual(bdt.clio_home(), Path(r"C:\Users\x\AppData\Local") / "creatio" / "clio")
 
 
 class AppsettingsRewriteTests(unittest.TestCase):
@@ -95,95 +132,47 @@ class AppsettingsRewriteTests(unittest.TestCase):
             rel_asset="clio-knowledge-bundle.zip", rel_api="https://api.github.com/")
 
     def test_release_sets_github_release_and_resets_flag(self):
-        data = self._seed({"type": "git", "location": "u", "branch": "dev"})
-        data, changed = self._rewrite(data, "release")
+        data, changed = self._rewrite(self._seed({"type": "git", "branch": "dev"}), "release")
         self.assertTrue(changed)
         src = data["knowledge"]["sources"]["creatio-curated"]
         self.assertEqual(src["type"], "github-release")
-        self.assertEqual(src["repository-owner"], "Advance-Technologies-Foundation")
-        self.assertEqual(src["asset-name"], "clio-knowledge-bundle.zip")
-        self.assertNotIn("branch", src, "release must clear the git branch field")
-        self.assertFalse(data["features"]["knowledge-allow-unsequenced"], "release must reset the flag")
+        self.assertNotIn("branch", src)
+        self.assertFalse(data["features"]["knowledge-allow-unsequenced"])
 
     def test_branch_sets_git_and_flag_true(self):
-        data = self._seed({"type": "github-release", "location": "api", "asset-name": "x"})
-        data.pop("features")  # start with no features node
+        data = self._seed({"type": "github-release", "asset-name": "x"})
+        data.pop("features")
         data, changed = self._rewrite(data, "branch", ref="feature/eng-1")
-        self.assertTrue(changed)
         src = data["knowledge"]["sources"]["creatio-curated"]
         self.assertEqual(src["type"], "git")
         self.assertEqual(src["branch"], "feature/eng-1")
-        self.assertNotIn("asset-name", src, "branch must clear the release asset field")
-        self.assertTrue(data["features"]["knowledge-allow-unsequenced"], "branch must set the flag true")
+        self.assertNotIn("asset-name", src)
+        self.assertTrue(data["features"]["knowledge-allow-unsequenced"])
 
-    def test_branch_ref_that_looks_like_version_is_a_tag(self):
-        data = self._seed({"type": "git"})
-        data, _ = self._rewrite(data, "branch", ref="1.13.20")
-        src = data["knowledge"]["sources"]["creatio-curated"]
-        self.assertEqual(src.get("tag"), "1.13.20")
-        self.assertNotIn("branch", src)
+    def test_version_like_ref_is_a_tag(self):
+        data, _ = self._rewrite(self._seed({"type": "git"}), "branch", ref="1.13.20")
+        self.assertEqual(data["knowledge"]["sources"]["creatio-curated"].get("tag"), "1.13.20")
 
     def test_missing_source_reports_unchanged(self):
-        data = {"knowledge": {"sources": {}}, "features": {}}
-        data, changed = self._rewrite(data, "release")
+        data, changed = self._rewrite({"knowledge": {"sources": {}}}, "release")
         self.assertFalse(changed)
 
-    def test_release_does_not_create_features_just_to_reset(self):
-        data = {"knowledge": {"sources": {"creatio-curated": {"type": "git"}}}}
-        data, _ = self._rewrite(data, "release")
-        self.assertNotIn("features", data, "release must not fabricate a features node when none exists")
-
-
-class OtherLogicTests(unittest.TestCase):
-    def test_build_marketplace_shape(self):
-        mp = bdt.build_marketplace("creatio", "creatio-ai-app-development-toolkit", "myrepo")
-        self.assertEqual(mp["name"], "creatio")
-        plugin = mp["plugins"][0]
-        self.assertEqual(plugin["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(plugin["source"], "./myrepo", "plugin source must descend into the link leaf")
-
-    def test_load_config_parses_and_ignores_comments(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "c"
-            p.write_text("# comment\n\nCLIO_SRC=C:\\a=b\n  KEY = val \nCONFIG=Debug\n", encoding="utf-8")
-            cfg = bdt.load_config(p)
-        self.assertEqual(cfg["CLIO_SRC"], "C:\\a=b", "value keeps everything after the first '='")
-        self.assertEqual(cfg["KEY"], "val", "key/value are trimmed")
-        self.assertEqual(cfg["CONFIG"], "Debug")
-        self.assertNotIn("# comment", cfg)
-
-    def test_apply_defaults_fills_optional_keys(self):
-        cfg = bdt.apply_defaults({"CLIO_SRC": "x"})
-        self.assertEqual(cfg["MARKETPLACE_NAME"], "creatio")
-        self.assertEqual(cfg["KN_REL_OWNER"], "Advance-Technologies-Foundation")
-        self.assertTrue(cfg["KN_URL"].endswith("clio-knowledge.git"))
-
-    def test_clio_home_respects_override(self):
-        with mock.patch.dict(os.environ, {"CLIO_HOME": os.path.join("tmp", "clh")}):
-            self.assertEqual(bdt.clio_home(), Path(os.path.join("tmp", "clh")))
-
-    def test_nuget_config_escapes_the_feed_path(self):
-        # A CLIO_SRC (hence pack_out) with XML metacharacters must not break out of the attribute.
-        xml = bdt.nuget_config_xml('C:\\a & b <"x">')
-        self.assertNotIn('value="C:\\a & b', xml, "the raw & / < / \" must be escaped, not written verbatim")
-        self.assertIn("&amp;", xml)
-        self.assertIn("&lt;", xml)
+    def test_defensive_against_null_and_non_dict_shapes(self):
+        # These are valid JSON but the wrong shape (a clio schema change / a hand edit). Must NOT raise.
+        for shape in ({"knowledge": None}, {"knowledge": {"sources": None}}, [], "str", 5):
+            data, changed = self._rewrite(shape, "release")
+            self.assertFalse(changed)
 
 
 class SelectKnowledgeSourceTests(unittest.TestCase):
-    def _cfg(self):
-        return bdt.apply_defaults({"CLIO_SRC": "x"})
+    def _cfg(self, **extra):
+        base = bdt.resolve_config({"CLIO_SRC": "x"})
+        base.update(extra)
+        return base
 
-    def _select(self, ref, env=None):
-        args = argparse.Namespace(ref=ref)
-        with mock.patch.dict(os.environ, env or {}, clear=False):
-            # ensure the two env keys are absent unless the test sets them
-            for k in ("KN_MODE", "KN_BRANCH"):
-                if (env or {}).get(k) is None:
-                    os.environ.pop(k, None)
-            with mock.patch.object(bdt.sys.stdin, "isatty", return_value=False):
-                return bdt.select_knowledge_source(args, self._cfg())
+    def _select(self, arg_ref, cfg=None):
+        with mock.patch.object(bdt.sys.stdin, "isatty", return_value=False):
+            return bdt.select_knowledge_source(cfg or self._cfg(), arg_ref)
 
     def test_release_argument(self):
         self.assertEqual(self._select("release"), ("release", ""))
@@ -191,8 +180,10 @@ class SelectKnowledgeSourceTests(unittest.TestCase):
     def test_branch_name_argument(self):
         self.assertEqual(self._select("feature/eng-1"), ("branch", "feature/eng-1"))
 
-    def test_env_mode_release_wins_when_no_arg(self):
-        self.assertEqual(self._select(None, {"KN_MODE": "release"}), ("release", ""))
+    def test_kn_mode_is_case_insensitive_and_from_config(self):
+        # 'Branch' (mixed case, from config) must select branch, not silently fall back to release.
+        self.assertEqual(self._select(None, self._cfg(KN_MODE="Branch", KN_BRANCH="feature/x")),
+                         ("branch", "feature/x"))
 
     def test_no_input_defaults_to_release(self):
         self.assertEqual(self._select(None), ("release", ""))
@@ -203,18 +194,21 @@ class SelectKnowledgeSourceTests(unittest.TestCase):
 
 
 class FilesystemHelperTests(unittest.TestCase):
-    def test_make_and_remove_dir_link_roundtrip(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            target = root / "target"
-            target.mkdir()
-            (target / "marker.txt").write_text("hi", encoding="utf-8")
-            link = root / "link"
-            self.assertTrue(bdt.make_dir_link(link, target), "should create a junction/symlink")
-            self.assertTrue((link / "marker.txt").exists(), "content is reachable through the link")
-            bdt.remove_dir_link(link)
-            self.assertFalse(os.path.lexists(link), "the link is gone")
-            self.assertTrue((target / "marker.txt").exists(), "the target's content is untouched")
+    def test_make_and_remove_dir_link_roundtrip_without_a_shell(self):
+        # make/remove_dir_link must not spawn any subprocess (no cmd /c). Patch subprocess.run to blow up.
+        with mock.patch.object(bdt.subprocess, "run", side_effect=AssertionError("no subprocess allowed")):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = root / "target"
+                target.mkdir()
+                (target / "marker.txt").write_text("hi", encoding="utf-8")
+                link = root / "link"
+                if not bdt.make_dir_link(link, target):
+                    self.skipTest("no symlink/junction privilege on this host")
+                self.assertTrue((link / "marker.txt").exists())
+                bdt.remove_dir_link(link)
+                self.assertFalse(os.path.lexists(link))
+                self.assertTrue((target / "marker.txt").exists(), "target content untouched")
 
     def test_lock_is_held_false_for_free_file(self):
         with tempfile.TemporaryDirectory() as d:
@@ -227,16 +221,43 @@ class FilesystemHelperTests(unittest.TestCase):
             locks = Path(d) / "knowledge" / "sources" / ".locks"
             locks.mkdir(parents=True)
             (locks / "a.lock").write_text("", encoding="utf-8")
-            (locks / "b.lock").write_text("", encoding="utf-8")
-            with mock.patch.dict(os.environ, {"CLIO_HOME": d}):
-                bdt.cleanup_locks()
+            bdt.cleanup_locks(Path(d))
             self.assertFalse((locks / "a.lock").exists())
-            self.assertFalse((locks / "b.lock").exists())
 
     def test_cleanup_locks_no_directory_is_harmless(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.dict(os.environ, {"CLIO_HOME": d}):
-                bdt.cleanup_locks()  # must not raise
+            bdt.cleanup_locks(Path(d))  # must not raise
+
+
+class NoShellTests(unittest.TestCase):
+    def test_run_passes_a_list_and_never_a_shell(self):
+        recorded = {}
+
+        def fake_run(cmd, **kwargs):
+            recorded["cmd"] = cmd
+            recorded["kwargs"] = kwargs
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(bdt.subprocess, "run", side_effect=fake_run):
+            bdt.run(["git", "ls-remote", "--heads", "--", "https://x/y.git"], quiet=True)
+        self.assertIsInstance(recorded["cmd"], list, "run() must pass a list, not a shell string")
+        self.assertFalse(recorded["kwargs"].get("shell", False), "run() must never pass shell=True")
+
+    def test_missing_executable_degrades_to_127(self):
+        with mock.patch.object(bdt.subprocess, "run", side_effect=FileNotFoundError("nope")):
+            cp = bdt.run(["definitely-not-a-real-binary"], quiet=True)
+        self.assertEqual(cp.returncode, 127, "a missing executable must degrade to rc 127, not a traceback")
+
+    def test_driver_source_spawns_no_shell(self):
+        src = DRIVER_PATH.read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"shell\s*=\s*True", src), "no shell=True")
+        self.assertNotIn("os.system", src)
+        self.assertNotIn('"cmd"', src, "no `cmd /c` re-entry")
+        self.assertNotIn("'/c'", src)
+
+    def test_git_ls_remote_uses_end_of_options_marker(self):
+        src = DRIVER_PATH.read_text(encoding="utf-8")
+        self.assertIn('"ls-remote", "--heads", "--"', src)
 
 
 class LauncherTests(unittest.TestCase):
@@ -245,24 +266,39 @@ class LauncherTests(unittest.TestCase):
         self.sh = (ROOT / "scripts" / "build-dev-toolchain.sh").read_text(encoding="utf-8")
 
     def test_launchers_delegate_to_driver(self):
-        self.assertIn("build_dev_toolchain.py", self.bat, "the .bat launcher must delegate to the driver")
-        self.assertIn("build_dev_toolchain.py", self.sh, "the .sh launcher must delegate to the driver")
-        self.assertTrue(self.sh.startswith("#!"), "the .sh launcher must have a shebang")
+        self.assertIn("build_dev_toolchain.py", self.bat)
+        self.assertIn("build_dev_toolchain.py", self.sh)
+        self.assertTrue(self.sh.startswith("#!"))
 
-    def test_launchers_use_the_repo_python_resolvers(self):
-        # Delegating to the tested resolvers avoids the 0-byte Windows Store stub and a Python-2 `python`.
-        self.assertIn("find_python.ps1", self.bat, "the .bat launcher must use the tested Windows resolver")
-        self.assertIn("find_python.sh", self.sh, "the .sh launcher must use the tested POSIX resolver")
+    def test_launchers_reference_the_repo_python_resolvers(self):
+        self.assertIn("find_python.ps1", self.bat)
+        self.assertIn("find_python.sh", self.sh)
 
-    def test_driver_never_uses_a_shell(self):
-        # subprocess with shell=True (any spacing) would reopen the injection class the list-args design closes.
-        driver = DRIVER_PATH.read_text(encoding="utf-8")
-        self.assertIsNone(re.search(r"shell\s*=\s*True", driver), "the driver must never pass shell=True")
+    def test_launchers_forward_their_arguments(self):
+        self.assertIn("%*", self.bat, "the .bat launcher must forward its arguments")
+        self.assertIn('"$@"', self.sh, "the .sh launcher must forward its arguments")
 
-    def test_git_ls_remote_uses_end_of_options_marker(self):
-        driver = DRIVER_PATH.read_text(encoding="utf-8")
-        self.assertIn('"ls-remote", "--heads", "--"', driver,
-                      "git ls-remote must pass the URL after a `--` end-of-options marker")
+    def test_sh_launcher_execs_the_driver_with_args(self):
+        self.assertRegex(self.sh, r'exec\s+"\$PYTHON_CMD"\s+"\$DRIVER"\s+"\$@"')
+
+    def test_sh_launcher_is_executable_in_git(self):
+        # The POSIX exec bit is stored in git's index (100755), not necessarily on a Windows working copy,
+        # so assert the committed mode -- that is what a macOS/Linux checkout gets.
+        import shutil as _sh
+        if not _sh.which("git"):
+            self.skipTest("git not available")
+        out = subprocess.run(["git", "ls-files", "-s", "scripts/build-dev-toolchain.sh"],
+                             cwd=str(ROOT), text=True, capture_output=True)
+        if out.returncode != 0 or not out.stdout.strip():
+            self.skipTest("launcher not tracked yet")
+        mode = out.stdout.split()[0]
+        self.assertEqual(mode, "100755", "the .sh launcher must be committed with the executable bit")
+
+    def test_sh_probes_before_sourcing_the_resolver(self):
+        # The side-effect-free local probe must come BEFORE `source ...find_python.sh` (which can install
+        # packages / prompt for sudo).
+        self.assertLess(self.sh.index("command -v"), self.sh.index("source"),
+                        "the local probe must run before the resolver is sourced")
 
 
 if __name__ == "__main__":

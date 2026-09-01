@@ -20,7 +20,11 @@ CLIO_SRC=<path-to-your-local-clio-checkout>
 # Optional (default: the Advance-Technologies-Foundation/clio-knowledge repo below).
 # KN_URL=https://github.com/Advance-Technologies-Foundation/clio-knowledge.git
 
-# Optional default knowledge branch (skips the step [0/7] menu when set). A script arg overrides this.
+# Optional default knowledge-source MODE: "release" (signed bundle) or "branch" (git override).
+# Skips the step [0/7] menu when set. A `release` script arg forces release; any other arg forces branch.
+# KN_MODE=release
+
+# Optional default knowledge branch/tag (used in branch mode; skips the [0/7] menu). A script arg overrides.
 # KN_BRANCH=master
 
 # dotnet build configuration for the clio build/pack. Optional (default: Release).

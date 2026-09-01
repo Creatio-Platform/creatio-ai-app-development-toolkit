@@ -6,32 +6,36 @@
 #   resolves a real Python 3 and hands off, forwarding all arguments.
 #   Usage: ./build-dev-toolchain.sh [release | <branch-or-tag>]
 #
-#   Python is resolved by the repo's tested resolver runtime/scripts/find_python.sh,
-#   which verifies `--version` reports Python 3.x (so an unversioned `python` that is
-#   actually Python 2 is rejected instead of exec'd into a SyntaxError).
+#   Python resolution order (side-effect-free first):
+#     1. A local probe: the first of python3/python whose --version reports Python 3.x.
+#     2. Fallback ONLY if that fails: the repo's runtime/scripts/find_python.sh, which
+#        additionally tries standard install locations and, if still nothing is found,
+#        may INSTALL Python via the system package manager (`brew install python3`, or
+#        `sudo apt-get install python3` -- which can prompt for a password).
 # ===========================================================================
-# NB: -e is intentionally NOT set -- the sourced resolver returns non-zero on some
-#     internal probes, and we want to handle "not found" ourselves.
+# NB: -e is intentionally NOT set -- the probe/resolver return non-zero on misses.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRIVER="$DIR/build_dev_toolchain.py"
 RESOLVER="$DIR/../runtime/scripts/find_python.sh"
 
-if [[ -f "$RESOLVER" ]]; then
+PYTHON_CMD=""
+# 1. Local, side-effect-free probe (never installs anything). Reject an unversioned `python` that is
+#    actually Python 2 by requiring the --version banner to say Python 3.x.
+for _cand in python3 python; do
+  if command -v "$_cand" >/dev/null 2>&1 && "$_cand" --version 2>&1 | grep -q '^Python 3\.'; then
+    PYTHON_CMD="$_cand"
+    break
+  fi
+done
+
+# 2. Only if the local probe found nothing, fall back to the repo resolver (may install Python).
+if [[ -z "$PYTHON_CMD" && -f "$RESOLVER" ]]; then
+  set +u                 # the sourced resolver may reference unset vars
   # shellcheck source=/dev/null
   source "$RESOLVER"
-fi
-
-# Fallback if the resolver is missing or did not set PYTHON_CMD: pick the first interpreter that reports
-# Python 3.x (never exec an unversioned `python` blindly -- it may be Python 2).
-if [[ -z "${PYTHON_CMD:-}" ]]; then
-  for _cand in python3 python; do
-    if command -v "$_cand" >/dev/null 2>&1 && "$_cand" --version 2>&1 | grep -q '^Python 3\.'; then
-      PYTHON_CMD="$_cand"
-      break
-    fi
-  done
+  set -u
 fi
 
 if [[ -z "${PYTHON_CMD:-}" ]]; then
