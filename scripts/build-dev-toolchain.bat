@@ -22,11 +22,17 @@ set "PYCMD="
 py -3 --version >nul 2>&1 && set "PYCMD=py|-3"
 if not defined PYCMD if exist "%RESOLVER%" (
   echo Resolving Python 3 via find_python.ps1 ^(may install Python via winget and prompt for confirmation^)...
-  REM Pass the resolver PATH via an env var, never interpolated into the -Command text: an apostrophe in
-  REM the checkout path would otherwise terminate the string and be re-parsed as PowerShell. $env:VAR
-  REM expansion is not re-parsed as script. Its own output is suppressed so the for/f captures only PYTHON_CMD.
+  REM Run the resolver with its output FULLY VISIBLE (no stream redirection) so any winget install progress
+  REM or consent prompt is shown -- the user must see what is being installed. The resolved interpreter is
+  REM captured out-of-band by writing $env:PYTHON_CMD to a temp file (read back with set /p), instead of
+  REM scraping stdout, so nothing needs to be suppressed. The resolver PATH and the out-file PATH are passed
+  REM via env vars, never interpolated into the -Command text (an apostrophe in a path would otherwise be
+  REM re-parsed as PowerShell).
   set "PY_RESOLVER_PATH=%RESOLVER%"
-  for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& $env:PY_RESOLVER_PATH *^> $null; if ($env:PYTHON_CMD) { $env:PYTHON_CMD }"`) do set "PYCMD=%%P"
+  set "PY_OUT=%TEMP%\clio-rebuild-py-%RANDOM%%RANDOM%.txt"
+  if exist "!PY_OUT!" del "!PY_OUT!" >nul 2>&1
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "& $env:PY_RESOLVER_PATH; if ($env:PYTHON_CMD) { [IO.File]::WriteAllText($env:PY_OUT, $env:PYTHON_CMD) }"
+  if exist "!PY_OUT!" ( set /p "PYCMD="<"!PY_OUT!" & del "!PY_OUT!" >nul 2>&1 )
 )
 if not defined PYCMD (
   echo. & echo Python 3 is required but was not found on PATH ^(the Microsoft Store stub does not count^).

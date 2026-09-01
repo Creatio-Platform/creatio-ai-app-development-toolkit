@@ -311,10 +311,11 @@ def select_knowledge_source(cfg, arg_ref):
     raw = None
     if arg_ref and arg_ref.strip().lower() == "release":
         raw = "release"
+    elif arg_ref:
+        # An explicit CLI branch/tag arg always wins over a persisted KN_MODE default.
+        raw = "branch"
     elif cfg.get("KN_MODE"):
         raw = cfg["KN_MODE"]
-    elif arg_ref:
-        raw = "branch"
     elif interactive:
         print("Select knowledge source mode:")
         print("  1) release - latest signed GitHub Release bundle (stable)")
@@ -519,20 +520,24 @@ def _atomic_write_json(path, data):
 
 def _refresh_knowledge_git_cache(home):
     # clio's git transport only fast-forwards refs it ALREADY knows; a freshly-pushed branch is invisible
-    # in the stale cache. A plain fetch --prune --tags makes the new ref visible. Best-effort.
+    # in the stale cache. A plain fetch --prune --tags makes the new ref visible. Best-effort: a filesystem
+    # error (permissions, a concurrently-removed dir, TOCTOU) must NOT abort the stage/rebuild.
     sources = home / "knowledge" / "sources"
     if not sources.is_dir():
         print("  [kn] no knowledge git cache yet -- sync will clone fresh")
         return
-    for entry in sources.iterdir():
-        repo = entry / "repository"
-        if (repo / ".git").exists():
-            print(f"  [kn] refreshing git cache (fetch --prune --tags): {entry.name}")
-            r = run(["git", "-C", str(repo), "fetch", "--prune", "--tags", "origin"],
-                    capture=True, quiet=True)
-            if r.returncode != 0:
-                print(f"  [kn] WARNING: fetch failed for {entry.name} -- proceeding with locally cached "
-                      "refs; synced knowledge may be stale")
+    try:
+        for entry in sources.iterdir():
+            repo = entry / "repository"
+            if (repo / ".git").exists():
+                print(f"  [kn] refreshing git cache (fetch --prune --tags): {entry.name}")
+                r = run(["git", "-C", str(repo), "fetch", "--prune", "--tags", "origin"],
+                        capture=True, quiet=True)
+                if r.returncode != 0:
+                    print(f"  [kn] WARNING: fetch failed for {entry.name} -- proceeding with locally cached "
+                          "refs; synced knowledge may be stale")
+    except OSError as exc:
+        print(f"  [kn] WARNING: could not scan the knowledge git cache ({exc}); skipping refresh.")
 
 
 # ------------------------------------------------------------------ Stage B (plugin) -------------------

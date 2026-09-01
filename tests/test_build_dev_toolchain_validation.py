@@ -188,6 +188,10 @@ class SelectKnowledgeSourceTests(unittest.TestCase):
     def test_no_input_defaults_to_release(self):
         self.assertEqual(self._select(None), ("release", ""))
 
+    def test_explicit_branch_arg_beats_a_stale_config_release_mode(self):
+        # A persisted KN_MODE=release must NOT silently discard an explicit CLI branch/tag argument.
+        self.assertEqual(self._select("feature/x", self._cfg(KN_MODE="release")), ("branch", "feature/x"))
+
     def test_injection_branch_is_rejected(self):
         with self.assertRaises(SystemExit):
             self._select('x"&calc&"')
@@ -360,6 +364,105 @@ class OrchestrationTests(unittest.TestCase):
                     bdt.main([])
             self.assertEqual(ctx.exception.code, 1, "a Stage B failure exits 1")
             self.assertEqual(order, ["A", "C", "B", "cleanup"], "cleanup must run even when Stage B fails")
+
+    def test_install_plugin_call_order_and_success(self):
+        calls = []
+        with mock.patch.object(bdt, "run", side_effect=lambda cmd, **kw: calls.append(cmd) or
+                               subprocess.CompletedProcess(cmd, 0, "", "")):
+            self.assertEqual(bdt._install_plugin("plug@mkt", "mkt", "/root"), "done")
+        self.assertEqual([c[:3] for c in calls], [
+            ["claude", "plugin", "uninstall"],
+            ["claude", "plugin", "marketplace"],  # remove
+            ["claude", "plugin", "marketplace"],  # add
+            ["claude", "plugin", "install"],
+            ["claude", "mcp", "remove"],
+        ], "the 5 claude calls must run in this exact order")
+
+    def test_install_plugin_marketplace_add_failure_short_circuits(self):
+        seen = []
+
+        def rec(cmd, **kw):
+            seen.append(cmd)
+            rc = 1 if cmd[:4] == ["claude", "plugin", "marketplace", "add"] else 0
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+
+        with mock.patch.object(bdt, "run", side_effect=rec):
+            self.assertEqual(bdt._install_plugin("plug@mkt", "mkt", "/root"), "failed")
+        self.assertFalse(any(c[:3] == ["claude", "plugin", "install"] for c in seen),
+                         "plugin install must not run after marketplace add fails")
+
+    def test_install_plugin_install_failure_returns_failed(self):
+        def rec(cmd, **kw):
+            rc = 1 if cmd[:3] == ["claude", "plugin", "install"] else 0
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+
+        with mock.patch.object(bdt, "run", side_effect=rec):
+            self.assertEqual(bdt._install_plugin("p@m", "m", "/r"), "failed")
+
+    def test_install_plugin_tolerates_noise_from_uninstall_remove_mcp(self):
+        def rec(cmd, **kw):
+            noisy = (cmd[:3] == ["claude", "plugin", "uninstall"]
+                     or cmd[:4] == ["claude", "plugin", "marketplace", "remove"]
+                     or cmd[:3] == ["claude", "mcp", "remove"])
+            return subprocess.CompletedProcess(cmd, 1 if noisy else 0, "", "")
+
+        with mock.patch.object(bdt, "run", side_effect=rec):
+            self.assertEqual(bdt._install_plugin("p@m", "m", "/r"), "done",
+                             "non-zero uninstall/remove/mcp-remove must be tolerated")
+
+    def test_cleanup_stage_b_removes_link_and_fallback_preserving_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = root / "repo"
+            target.mkdir()
+            (target / "keep.txt").write_text("x", encoding="utf-8")
+            link = root / "link"
+            if not bdt.make_dir_link(link, target):
+                self.skipTest("no symlink/junction privilege on this host")
+            parent = root / bdt.CLAUDE_PLUGIN_DIR
+            parent.mkdir()
+            fb = parent / "marketplace.json"
+            fb.write_text("{}", encoding="utf-8")
+            bdt._cleanup_stage_b(link, fb)
+            self.assertFalse(os.path.lexists(link), "the link is removed")
+            self.assertTrue((target / "keep.txt").exists(), "the target content is untouched")
+            self.assertFalse(fb.exists(), "the fallback json is removed")
+            self.assertFalse(parent.exists(), "the now-empty .claude-plugin dir is removed")
+
+    def test_cleanup_stage_b_keeps_a_nonempty_parent(self):
+        with tempfile.TemporaryDirectory() as d:
+            parent = Path(d) / bdt.CLAUDE_PLUGIN_DIR
+            parent.mkdir()
+            fb = parent / "marketplace.json"
+            fb.write_text("{}", encoding="utf-8")
+            (parent / "other.txt").write_text("keep", encoding="utf-8")
+            bdt._cleanup_stage_b(None, fb)
+            self.assertFalse(fb.exists(), "the fallback json is removed")
+            self.assertTrue(parent.exists(), ".claude-plugin is kept because it still holds another file")
+
+
+@unittest.skipUnless(bdt.IS_WIN, "Windows FILE_SHARE_NONE locking")
+class WindowsLockTests(unittest.TestCase):
+    def test_lock_is_held_true_under_share_none(self):
+        import ctypes
+        from ctypes import wintypes
+        with tempfile.TemporaryDirectory() as d:
+            lock = Path(d) / "x.lock"
+            lock.write_text("", encoding="utf-8")
+            k32 = ctypes.windll.kernel32
+            k32.CreateFileW.restype = wintypes.HANDLE
+            k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            invalid = ctypes.c_void_p(-1).value
+            # share mode 0 == FileShare.None, exactly how clio opens the marker.
+            handle = k32.CreateFileW(str(lock), 0x80000000, 0, None, 3, 0, None)
+            if not handle or handle == invalid:
+                self.skipTest("could not open a FILE_SHARE_NONE handle")
+            try:
+                self.assertTrue(bdt.lock_is_held(lock), "held while another handle denies sharing")
+            finally:
+                k32.CloseHandle(handle)
+            self.assertFalse(bdt.lock_is_held(lock), "free after the holder closes")
 
 
 @unittest.skipIf(bdt.IS_WIN, "POSIX flock semantics")
