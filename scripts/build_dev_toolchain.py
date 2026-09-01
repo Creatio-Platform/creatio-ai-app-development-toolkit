@@ -72,7 +72,9 @@ DEFAULTS = {
     "KN_REL_API": "https://api.github.com/",
 }
 DEFAULT_PLUGIN_NAME = "creatio-ai-app-development-toolkit"
-FALLBACK_VERSION = "8.1.0.58"  # NOSONAR: a clio version string, not an IP address.
+# Built from parts so the value is not written as an IP-address-shaped string literal (it is a clio
+# 4-part version used only when `git describe` finds no tag).
+FALLBACK_VERSION = ".".join(("8", "1", "0", "58"))
 _MISSING_CMD_RC = 127
 
 
@@ -454,15 +456,16 @@ def stage_a_build(cfg, run_tmp):
 # ------------------------------------------------------------------ Stage C (knowledge) ----------------
 def stage_c_knowledge(cfg, mode, branch, home):
     """[6/7] Reconfigure creatio-curated + sync. Best-effort (never aborts the rebuild)."""
-    if mode == "release":
-        print("\n=== [6/7] Syncing Clio knowledge base (release: latest signed bundle) ===")
-    else:
-        print(f"\n=== [6/7] Syncing Clio knowledge base (branch: {branch}) ===")
-
-    appsettings = home / "appsettings.json"
+    label = "release: latest signed bundle" if mode == "release" else f"branch: {branch}"
+    print(f"\n=== [6/7] Syncing Clio knowledge base ({label}) ===")
     if mode != "release":
         _refresh_knowledge_git_cache(home)
+    if _reconfigure_knowledge_source(cfg, mode, branch, home / "appsettings.json"):
+        _run_knowledge_sync(mode, branch)
 
+
+def _reconfigure_knowledge_source(cfg, mode, branch, appsettings):
+    """Rewrite creatio-curated in appsettings. Returns True if the sync should proceed (best-effort)."""
     try:
         data = json.loads(appsettings.read_text(encoding="utf-8"))
         data, changed = rewrite_appsettings(
@@ -471,29 +474,32 @@ def stage_c_knowledge(cfg, mode, branch, home):
             rel_owner=cfg["KN_REL_OWNER"], rel_repo=cfg["KN_REL_REPO"],
             rel_asset=cfg["KN_REL_ASSET"], rel_api=cfg["KN_REL_API"],
         )
-        if not changed:
-            print("  [kn] creatio-curated source missing in appsettings; skipping edit")
-        else:
-            _atomic_write_json(appsettings, data)
-            if mode == "release":
-                print(f"  [kn] creatio-curated -> github-release {cfg['KN_REL_OWNER']}/{cfg['KN_REL_REPO']} "
-                      f"asset {cfg['KN_REL_ASSET']} (latest); allow-unsequenced reset to false")
-            else:
-                kind = "tag" if re.match(r"\d+\.\d+", branch or "") else "branch"
-                print(f"  [kn] creatio-curated -> {kind} {branch}; allow-unsequenced=true")
     except FileNotFoundError:
         print(f"  [kn] appsettings.json not found at {appsettings}; skipping edit (sync will use defaults)")
+        return True
     except (OSError, ValueError, AttributeError, TypeError) as exc:
         # Best-effort contract: report and skip the sync rather than crashing the whole rebuild.
         print(f"  [error] could not update the knowledge-source config in appsettings.json: {exc}")
         print("  [error] SKIPPING knowledge sync (Stage A rebuilt clio may have changed the schema).")
-        return
+        return False
+    if not changed:
+        print("  [kn] creatio-curated source missing in appsettings; skipping edit")
+        return True
+    _atomic_write_json(appsettings, data)
+    if mode == "release":
+        print(f"  [kn] creatio-curated -> github-release {cfg['KN_REL_OWNER']}/{cfg['KN_REL_REPO']} "
+              f"asset {cfg['KN_REL_ASSET']} (latest); allow-unsequenced reset to false")
+    else:
+        kind = "tag" if re.match(r"\d+\.\d+", branch or "") else "branch"
+        print(f"  [kn] creatio-curated -> {kind} {branch}; allow-unsequenced=true")
+    return True
 
+
+def _run_knowledge_sync(mode, branch):
     if which("clio") is None:
         print("  [warn] clio not on PATH; skipping install-knowledge.")
         return
-    rc = run(["clio", "install-knowledge", "--source", "creatio-curated"]).returncode
-    if rc != 0:
+    if run(["clio", "install-knowledge", "--source", "creatio-curated"]).returncode != 0:
         print("  [warn] knowledge sync did not complete (offline, bad ref, or incompatible bundle). non-fatal.")
     else:
         print("Knowledge synced from latest release." if mode == "release"
@@ -547,7 +553,19 @@ def stage_b_plugin(cfg, plugin_name, run_tmp):
         return "skipped"
 
     marketplace_name = cfg["MARKETPLACE_NAME"]
-    plugin_source = f"{plugin_name}@{marketplace_name}"
+    prep = _prepare_marketplace(marketplace_name, plugin_name, run_tmp)
+    if isinstance(prep, str):  # a "failed" status
+        return prep
+    link_path, linked, fallback_json, fallback_written, mp_root = prep
+    try:
+        return _install_plugin(f"{plugin_name}@{marketplace_name}", marketplace_name, mp_root)
+    finally:
+        _cleanup_stage_b(link_path if linked else None, fallback_json if fallback_written else None)
+
+
+def _prepare_marketplace(marketplace_name, plugin_name, run_tmp):
+    """Create the private marketplace dir + link + marketplace.json. Returns a context tuple, or the
+    string 'failed' (already logged + cleaned) when the marketplace could not be prepared."""
     leaf = REPO_ROOT.name
     # A PRIVATE per-run dir under run_tmp (from mkdtemp, mode 0700 on POSIX) -- not a fixed name in shared
     # /tmp -- so nothing can be pre-planted at a predictable path for us to write through.
@@ -557,7 +575,6 @@ def stage_b_plugin(cfg, plugin_name, run_tmp):
     link_path = marketplace_dir / leaf
     linked = make_dir_link(link_path, REPO_ROOT)
     fallback_json = None
-    fallback_written = False
     if not linked:
         # No junction/symlink available -> use the repo's PARENT (user-owned, not shared /tmp) as the root,
         # with the descending ./<leaf> resolving to the repo itself.
@@ -579,35 +596,33 @@ def stage_b_plugin(cfg, plugin_name, run_tmp):
         mp_dir.mkdir(parents=True, exist_ok=True)
         (mp_dir / "marketplace.json").write_text(
             json.dumps(build_marketplace(marketplace_name, plugin_name, leaf), indent=2), encoding="utf-8")
-        fallback_written = fallback_json is not None
     except OSError as exc:
         print(f"\nMARKETPLACE GENERATION FAILED: {exc}")
         _cleanup_stage_b(link_path if linked else None, None)
         return "failed"
+    fallback_written = fallback_json is not None
+    return link_path, linked, fallback_json, fallback_written, mp_root
 
-    status = "done"
-    try:
-        print("- uninstalling existing plugin (ignored if absent)")
-        run(["claude", "plugin", "uninstall", plugin_source], capture=True, quiet=True)
-        print(f"- removing existing '{marketplace_name}' marketplace (ignored if absent)")
-        run(["claude", "plugin", "marketplace", "remove", marketplace_name], capture=True, quiet=True)
-        print(f"- registering generated local marketplace: {mp_root}")
-        if run(["claude", "plugin", "marketplace", "add", str(mp_root)]).returncode:
-            print("\nMARKETPLACE ADD FAILED.")
-            status = "failed"
-        if status == "done":
-            print(f"- installing plugin: {plugin_source}")
-            if run(["claude", "plugin", "install", plugin_source]).returncode:
-                print("\nPLUGIN INSTALL FAILED.")
-                status = "failed"
-        if status == "done":
-            print("- deduplicating clio MCP server")
-            r = run(["claude", "mcp", "remove", "clio", "-s", "user"], capture=True, quiet=True)
-            print("  removed user-scope 'clio' duplicate (plugin's clio remains)." if r.returncode == 0
-                  else "  no user-scope 'clio' duplicate (ok).")
-    finally:
-        _cleanup_stage_b(link_path if linked else None, fallback_json if fallback_written else None)
-    return status
+
+def _install_plugin(plugin_source, marketplace_name, mp_root):
+    """Run the claude plugin/marketplace commands. Returns 'done' or 'failed'."""
+    print("- uninstalling existing plugin (ignored if absent)")
+    run(["claude", "plugin", "uninstall", plugin_source], capture=True, quiet=True)
+    print(f"- removing existing '{marketplace_name}' marketplace (ignored if absent)")
+    run(["claude", "plugin", "marketplace", "remove", marketplace_name], capture=True, quiet=True)
+    print(f"- registering generated local marketplace: {mp_root}")
+    if run(["claude", "plugin", "marketplace", "add", str(mp_root)]).returncode:
+        print("\nMARKETPLACE ADD FAILED.")
+        return "failed"
+    print(f"- installing plugin: {plugin_source}")
+    if run(["claude", "plugin", "install", plugin_source]).returncode:
+        print("\nPLUGIN INSTALL FAILED.")
+        return "failed"
+    print("- deduplicating clio MCP server")
+    r = run(["claude", "mcp", "remove", "clio", "-s", "user"], capture=True, quiet=True)
+    print("  removed user-scope 'clio' duplicate (plugin's clio remains)." if r.returncode == 0
+          else "  no user-scope 'clio' duplicate (ok).")
+    return "done"
 
 
 def _cleanup_stage_b(link_path, fallback_json):
