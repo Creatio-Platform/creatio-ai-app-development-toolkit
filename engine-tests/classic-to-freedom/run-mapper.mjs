@@ -3215,11 +3215,11 @@ const xsChecklist = renderChecklist(xsBoundary, xsOpts);
 check("ENG-95861: the checklist carries the boundary as `N/A — cross-section boundary (approved)`, never `☐ pending`",
   /\| Cross-section boundaries \(1\) — [^|]*InternalRequest[^|]*\| N\/A — cross-section boundary \(approved\) \|/.test(xsChecklist)
   && !/Cross-section boundaries[^|]*\| ☐ pending/.test(xsChecklist),
-  () => (xsChecklist.match(/^\| \d+ \| Cross-section boundaries.*$/m) || [])[0]);
+  () => (/^\| \d+ \| Cross-section boundaries.*$/m.exec(xsChecklist) || [])[0]);
 check("ENG-95861: `--verify` renders that same row N/A too — and tallies it as neither missing nor unverified",
   /\| Cross-section boundaries \(1\)[^|]*\| N\/A — cross-section boundary \(approved\) \|/.test(xsVerify.markdown)
   && xsVerify.missing === 0,
-  () => ({ missing: xsVerify.missing, row: (xsVerify.markdown.match(/^\| \d+ \| Cross-section boundaries.*$/m) || [])[0] }));
+  () => ({ missing: xsVerify.missing, row: (/^\| \d+ \| Cross-section boundaries.*$/m.exec(xsVerify.markdown) || [])[0] }));
 
 // (4) THE PLAN STATES IT, in the user's terms, in both places a reader looks: the Main-scope row and the child section.
 check("ENG-95861: the Main-scope row calls it `Reuse (Classic)` and names the page + the section it belongs to",
@@ -6315,27 +6315,27 @@ const impTable = (md) => {
   return out
 }
 const foldRows = impTable(foldPlan)
-const rowOf = (m) => foldRows.find((r) => r.split('|')[1].replace(/↳/g, '').trim().replace(/`/g, '') === m)
+const rowOf = (m) => foldRows.find((r) => r.split('|')[1].replaceAll('↳', '').trim().replaceAll('`', '') === m)
 
 check("fold: NO row disappears — the table still carries one row per handler stub",
   foldRows.length === invRun.changeSet.handlerStubs.length,
   () => `${foldRows.length} rows vs ${invRun.changeSet.handlerStubs.length} stubs`)
 check("fold: a single-caller helper is marked ↳ and told to port WITH its caller, not as its own artifact",
-  /^\| ↳ /.test(rowOf('recalcTotals') || '') && /port with `onStageChanged`/.test(rowOf('recalcTotals') || ''),
+  (rowOf('recalcTotals') || '').startsWith('| ↳ ') && /port with `onStageChanged`/.test(rowOf('recalcTotals') || ''),
   () => rowOf('recalcTotals'))
 check("fold: the helper sits DIRECTLY beneath its caller",
   foldRows.indexOf(rowOf('recalcTotals')) === foldRows.indexOf(rowOf('onStageChanged')) + 1)
 check("fold: a second-level helper nests deeper (↳↳) under its own caller",
-  /^\| ↳↳ /.test(rowOf('roundIt') || '') && /port with `recalcTotals`/.test(rowOf('roundIt') || ''),
+  (rowOf('roundIt') || '').startsWith('| ↳↳ ') && /port with `recalcTotals`/.test(rowOf('roundIt') || ''),
   () => rowOf('roundIt'))
 check("fold: a helper with SEVERAL callers is NOT folded — it is the row that becomes a shared converter",
-  !/^\| ↳/.test(rowOf('sharedHelper') || ''),
+  !(rowOf('sharedHelper') || '').startsWith('| ↳'),
   () => rowOf('sharedHelper'))
 // The premise moved, and for the better: `onSaved` here is `callParent` PLUS `this.syncOwner()`, which is a customer
 // wiring behaviour into the save lifecycle — so it is a row now, and its single-caller helper folds UNDER it. The
 // plan therefore says "port syncOwner with onSaved" instead of leaving the reader to infer the trigger.
 check("fold: a helper whose caller is a STANDARD method WITH LOGIC folds under it — that caller is a row now, so the parent exists",
-  /^\| ↳ /.test(rowOf('syncOwner') || '') && /port with `onSaved`/.test(rowOf('syncOwner') || ''),
+  (rowOf('syncOwner') || '').startsWith('| ↳ ') && /port with `onSaved`/.test(rowOf('syncOwner') || ''),
   () => rowOf('syncOwner'))
 check("fold: mutual recursion keeps BOTH rows (the cycle guard must not swallow one)",
   !!rowOf('pingPongA') && !!rowOf('pingPongB'))
@@ -6351,7 +6351,7 @@ const noFoldRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: `de
 }; });` }] })
 const noFoldPlan = renderPlan(noFoldRun, {})
 check("fold: a surface with no body-called helper renders no ↳ and no port-unit clause",
-  !/port unit\(s\)/.test(noFoldPlan) && !impTable(noFoldPlan).some((r) => /^\| ↳/.test(r)),
+  !/port unit\(s\)/.test(noFoldPlan) && !impTable(noFoldPlan).some((r) => r.startsWith('| ↳')),
   () => impTable(noFoldPlan))
 
 /* ---- step-5.1 behaviour handoff: the stub index OUT, the behaviour index BACK (both legs) ---- */
@@ -6746,7 +6746,7 @@ check("wiringOnly: carrying the body card clears the flag — with or without a 
 const hoWireMini = runMigration({ ...wireManifest,
   addRecordMiniPage: { schema: "DealMini" },
   miniPageSchemas: { DealMini: { entity: "Deal", schemas: [{ pkg: "P",
-    body: WIRE_BODY.replaceAll(/WirePage/g, "DealMini").replaceAll(/LeadMixin/g, "MiniMixin") }] } },
+    body: WIRE_BODY.replaceAll("WirePage", "DealMini").replaceAll("LeadMixin", "MiniMixin") }] } },
   behaviourIndex: { "mixin:MiniMixin": { card: "mini/C1", ac: ["AC-9"] } } });
 check("wiringOnly: a wiring-only mixin on a FOLDED scope (mini page) is flagged from the root run",
   hoWireMini.behaviourIndex.wiringOnly.includes("mixin:MiniMixin") &&
@@ -6784,7 +6784,7 @@ check("wiringOnly: a blank `card` is not a wiring card either — the row is UND
 
 // A folded scope (mini page / child page) sees the SAME index: one report covers the whole surface.
 const hoMini = runMigration({ ...handoffManifest, addRecordMiniPage: { schema: "DealMiniPage" },
-  miniPageSchemas: { DealMiniPage: { entity: "Deal", schemas: [{ pkg: "DealPkg", body: HANDOFF_BODY.replace(/HandoffPage/g, "DealMiniPage") }] } },
+  miniPageSchemas: { DealMiniPage: { entity: "Deal", schemas: [{ pkg: "DealPkg", body: HANDOFF_BODY.replaceAll("HandoffPage", "DealMiniPage") }] } },
   behaviourIndex: { "DealMiniPage::privateHelper": { trigger: "internal", card: "C10", ac: ["AC-9"] } } });
 check("handoff: a scoped `<schema>::<method>` key reaches a FOLDED scope (mini page), not just the root",
   hoMini.stubIndex.some(s => s.role === "mini page" && s.schema === "DealMiniPage"));
@@ -7042,10 +7042,10 @@ check("ENG-94975 D7 evidence: tri-state — `convincing: false` is a HARD ❌ MI
 // through `esc`, so a caption with a backtick would yield an id a verifier cannot reproduce). An id the verifier
 // cannot reproduce is silently "not checked" — so every id must be prefixed by the RAW key of the row that carries it.
 const pgEvidenceRows = checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type === "evidence");
-const pgRowEvidenceIds = pgEvidenceRows.map((r) => r.vk.id);
+const pgRowEvidenceIds = new Set(pgEvidenceRows.map((r) => r.vk.id));
 check("ENG-94975 D7: every evidence row's `vk.id` starts with its own RAW `pageKey` + `#` (derived, never hardcoded), and every page's singleton id is `<rawPageKey>#quality-gates`",
   pgEvidenceRows.length > 0 && pgEvidenceRows.every((r) => r.vk.id.startsWith(r.pageKey + "#"))
-  && pgUnitKeys.filter((k) => k !== "child:U1").every((k) => pgRowEvidenceIds.includes(`${k}#quality-gates`)),
+  && pgUnitKeys.filter((k) => k !== "child:U1").every((k) => pgRowEvidenceIds.has(`${k}#quality-gates`)),
   () => ({ rows: pgEvidenceRows.map((r) => [r.pageKey, r.vk.id]) }));
 
 
@@ -7585,7 +7585,7 @@ const tabChild = (tabChildRun.childPages || []).find((c) => c.spec);
 const tabChildTpl = checklistGroups(tabChildRun, tabChildOpts).flatMap((g) => g.rows).find((r) => r.pageKey === tabChild?.pageKey && r.vk?.type === "template")?.vk.exp;
 check("ENG-94975 P4b preconditions: the folded child really is the masked case — a TAB on the page, FEWER than 15 fields and NO related lists of its own (else the template check below passes for the wrong reason)",
   !!tabChild && tabChild.fieldCount > 0 && tabChild.fieldCount < 15 && tabChild.nDetails === 0
-  && (tabChild.spec?.changeSet?.viewConfigDiff || tabChild.spec ? true : false),
+  && !!(tabChild.spec?.changeSet?.viewConfigDiff || tabChild.spec),
   () => ({ found: !!tabChild, fc: tabChild?.fieldCount, nd: tabChild?.nDetails, ht: tabChild?.hasTabs }));
 check("ENG-94975 P4b (fold path): `foldOneChildPage` sees the tab the MAPPER emits (`crt.TabContainer`, not the removed `crt.Tab`) — so a tabbed child with < 15 fields and no related lists is planned and gated as `PageWithAreaFreedomTemplate`, never as the mini page its own design spec rejects",
   tabChild?.hasTabs === true
@@ -9328,7 +9328,7 @@ const n2TreeManifest = (titleA, titleB) => ({
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
-    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => /^Business rules ×/.test(r.label));
+    const ruleRow = checklistGroups(rr, {}).flatMap((g) => g.rows).find((r) => r.label.startsWith("Business rules ×"));
     check("T4 (R3): the Business rules checklist row now carries a `rule` vk (no longer a vk-less skip) with the expected identities",
       ruleRow?.vk?.type === "rule" && ruleRow.vk.names.includes("Contact") && ruleRow.vk.names.includes("Owner"),
       () => ruleRow);
@@ -9474,7 +9474,7 @@ const n2TreeManifest = (titleA, titleB) => ({
   const fidWarn = (fid.effective.warnings || []);
   check("ENG-95862: a FIDELITY warning does NOT block the gate — the plan is approvable (this is the 12-hour ⛔ the ticket was filed for)",
     fidWarn.length === 1 && fidWarn[0].severity === "fidelity"
-    && !(fid.gate.reasons || []).some((r) => /^warnings /.test(r)),
+    && !(fid.gate.reasons || []).some((r) => r.startsWith("warnings ")),
     () => ({ warnings: fidWarn, reasons: fid.gate.reasons }));
   check("ENG-95862: demoting it does NOT hide it — the plan renders a ⚠ fidelity advisory naming the op and quoting its own hint",
     /fidelity note\(s\)/.test(fid.plan) && /KEPT \(correct\)/.test(fid.plan) && /warningDispositions/.test(fid.plan),
@@ -9483,7 +9483,7 @@ const n2TreeManifest = (titleA, titleB) => ({
   // CORRECTNESS: a merge onto an item no lower schema defined. Still a hard block — and the reason now QUOTES the
   // warning that actually fired instead of the one summary string that sent the remedy search to the wrong file.
   const corr = mkRun([{ operation: "merge", name: "Ghost", values: { caption: "x" } }]);
-  const corrReason = (corr.gate.reasons || []).find((r) => /^warnings /.test(r)) || "";
+  const corrReason = (corr.gate.reasons || []).find((r) => r.startsWith("warnings ")) || "";
   check("ENG-95862: a CORRECTNESS warning still blocks the gate",
     corr.gate.blocked === true && /correctness/.test(corrReason), () => corr.gate.reasons);
   check("ENG-95862: the gate reason QUOTES the warning that fired (op, element, schema, its own hint) and no longer pastes 'op hit a missing item / skeletal seed' onto every producer",

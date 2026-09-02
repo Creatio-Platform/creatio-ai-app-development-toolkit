@@ -821,7 +821,8 @@ function triggerText(t) {
     const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
     // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites
     // is not the same port as one with a single caller.
-    const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${t.callers.length > 2 ? "s" : ""})` : "";
+    const callerPlural = t.callers?.length > 2 ? "s" : "";
+    const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${callerPlural})` : "";
     if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${more}`;
     if (t.lifecycle) return `${esc(t.lifecycle)} (platform lifecycle) → internal call${more}`;
     return `internal call from ${esc(t.from)}${via}${more}`;
@@ -1016,13 +1017,13 @@ function foldByCaller(stubs) {
   const parentOf = new Map();
   for (const h of stubs) {
     const t = (h.triggers || [])[0];
-    if (!t || t.kind !== "internal" || t.callers?.length > 1) continue;
+    if (t?.kind !== "internal" || t.callers?.length > 1) continue;
     if (!t.from || t.from === h.sourceMethod || !byName.has(t.from)) continue;
     parentOf.set(h.sourceMethod, t.from);
   }
   // Break any parent chain that loops back on itself: mutual recursion would otherwise make both rows children and
   // neither would ever be emitted by the walk below.
-  for (const name of [...parentOf.keys()]) {
+  for (const name of parentOf.keys()) {
     const seen = new Set([name]);
     for (let p = parentOf.get(name); p; p = parentOf.get(p)) {
       if (seen.has(p)) { parentOf.delete(name); break; }
@@ -1255,9 +1256,16 @@ function renderFidelityWarnings(result) {
   }
   const closed = all.filter((w) => w.accepted);
   if (closed.length) {
-    P.push(`> ℹ ${closed.length} fidelity note(s) CLOSED by a recorded disposition: ${closed.map((w) => `\`${esc(w.op)}:${esc(w.name)}\` → **${esc(w.disposition)}**${w.note ? ` (${esc(w.note)})` : ""}`).join(" · ")}`, "");
+    const closedList = closed.map((w) => {
+      const note = w.note ? ` (${esc(w.note)})` : "";
+      return `\`${esc(w.op)}:${esc(w.name)}\` → **${esc(w.disposition)}**${note}`;
+    }).join(" · ");
+    P.push(`> ℹ ${closed.length} fidelity note(s) CLOSED by a recorded disposition: ${closedList}`, "");
   }
-  if (refused.length) P.push(`> ⛔ ${refused.length} disposition(s) were REFUSED — ${refused.map((w) => `\`${esc(w.op)}:${esc(w.name)}\``).join(", ")}: ${esc(refused[0].dispositionRefused)}`, "");
+  if (refused.length) {
+    const refusedList = refused.map((w) => `\`${esc(w.op)}:${esc(w.name)}\``).join(", ");
+    P.push(`> ⛔ ${refused.length} disposition(s) were REFUSED — ${refusedList}: ${esc(refused[0].dispositionRefused)}`, "");
+  }
   return P;
 }
 
@@ -2352,7 +2360,10 @@ export function renderChecklist(result, opts = {}) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence |", "| --- | --- | --- | --- |");
     // `na` rows are NOT pending work (ENG-95861: an approved cross-section boundary). A `☐ pending` there reads as
     // "someone still owes this", and the whole point of the resolution is that nobody does.
-    for (const r of g.rows) L.push(`| ${++n} | ${r.label} | ${r.na ? `N/A — ${esc(r.na)}` : "☐ pending"} | ${r.na ? "not a deliverable of this plan" : "—"} |`);
+    for (const r of g.rows) {
+      const status = r.na ? `N/A — ${esc(r.na)}` : "☐ pending";
+      L.push(`| ${++n} | ${r.label} | ${status} | ${r.na ? "not a deliverable of this plan" : "—"} |`);
+    }
   }
   return L.join("\n");
 }
@@ -2569,9 +2580,11 @@ export function resolveComponentVk(vk, ctx) {
 // The rule's tokens, or `null` when the slot was never populated (nobody read the rules). Own fn so `resolveRuleVk`
 // stays under Sonar CC 15.
 function builtRuleTokens(built) {
-  const rules = Array.isArray(built) ? built : (Array.isArray(built?.rules) ? built.rules : null);
+  let rules = null;
+  if (Array.isArray(built)) rules = built;
+  else if (Array.isArray(built?.rules)) rules = built.rules;
   if (rules == null) return null;
-  return rules.map((r) => new Set(String(JSON.stringify(r)).match(/[A-Za-z_][A-Za-z0-9_]*/g) || []));
+  return rules.map((r) => new Set(String(JSON.stringify(r)).match(/[A-Za-z_]\w*/g) || []));
 }
 export function resolveRuleVk(vk, ctx) {
   const want = [...new Set(vk.names || [])];

@@ -49,11 +49,11 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
-import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
-import { GATE_KIND, gateForComponentType } from "./mapping-table.mjs";
+import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
+import { GATE_KIND } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, isTabOp, subPageNodes, IMPERATIVE_MEMBER_KINDS,
+  planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2598,7 +2598,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse
   // diagnostics above, so demoting them out of the ⛔ banner does not make them invisible.
   const fidelity = (result.effective?.warnings || []).filter((w) => w.severity === "fidelity" && !w.accepted);
-  if (fidelity.length)
-    process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ")}\n`);
+  if (fidelity.length) {
+    const fidelityList = fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ");
+    process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelityList}\n`);
+  }
   if (notReady) process.exit(2);
 }

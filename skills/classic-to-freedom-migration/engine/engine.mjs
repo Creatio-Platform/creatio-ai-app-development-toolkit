@@ -1472,7 +1472,7 @@ function makeItem(op, seed, pkg) {
     // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
     // then saw a handler that the first run had removed. Harmless while nothing read the map, load-bearing now
     // that an absent entry is what distinguishes a modelled handler from an unmodelled static literal.
-    handlers: { ...(op.handlers || {}) }, // control→method bindings; the CONTROL end of a method's trigger
+    handlers: { ...op.handlers }, // control→method bindings; the CONTROL end of a method's trigger
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move

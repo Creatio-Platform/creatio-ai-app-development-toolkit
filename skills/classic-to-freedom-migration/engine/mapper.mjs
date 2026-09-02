@@ -1510,10 +1510,18 @@ function buildCallerIndex(methods) {
 //
 // `seen` breaks cycles (mutual recursion is common in classic helpers) and the
 // caller sets are sorted so the result never depends on iteration order.
+const byCodeUnit = (a, b) => {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+};
+
 function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
   if (seen.has(name)) return null;
   seen.add(name);
-  const callers = [...(callerIdx.get(name) || [])].sort();
+  // Explicit comparator (Sonar S2871). It reproduces the default sort's code-unit order EXACTLY — the plan
+  // rows are emitted in this order and the goldens pin it, so `localeCompare` (which orders `a` before `Z`)
+  // would silently rewrite every mixed-case row list.
+  const callers = [...(callerIdx.get(name) || [])].sort(byCodeUnit);
   // EVERY caller travels with the answer, not just the one that resolved. A helper called from two places is ported
   // differently from one called from a single site, and dropping the rest would hide that from the reader.
   const all = callers.length > 1 ? { callers } : {};

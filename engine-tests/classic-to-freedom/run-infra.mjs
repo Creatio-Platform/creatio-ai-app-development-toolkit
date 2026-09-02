@@ -16,6 +16,15 @@ import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
 
+// git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
+// could otherwise shadow it (Sonar S4036). These are the stock install locations on the CI
+// runners and on a developer machine; when none of them exists the check below reports that
+// rather than quietly passing.
+const GIT_CANDIDATES = process.platform === "win32"
+  ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe", "C:\\Program Files (x86)\\Git\\cmd\\git.exe"]
+  : ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
+const resolveGitExecutable = () => GIT_CANDIDATES.find((c) => existsSync(c)) || null;
+
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {
   let c = cond, threw = null;
@@ -211,12 +220,17 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
   // quietly passing on nothing.
   {
     const rels = wfFiles.map((f) => path.relative(repoRoot, f));
-    const r = spawnSync("git", ["check-attr", "eol", "--", ...rels], { cwd: repoRoot, encoding: "utf8" });
+    const gitExecutable = resolveGitExecutable();
+    const r = gitExecutable
+      ? spawnSync(gitExecutable, ["check-attr", "eol", "--", ...rels], { cwd: repoRoot, encoding: "utf8" })
+      : { error: { message: `no git executable at any of ${GIT_CANDIDATES.join(", ")}` }, status: null, stdout: "" };
     const usable = !r.error && r.status === 0 && typeof r.stdout === "string" && r.stdout.trim();
     const resolved = usable ? r.stdout.trim().split("\n").map((l) => l.split(": ").pop()) : [];
+    const resolvedDetail = rels.map((rel, i) => `${path.basename(rel)}=${resolved[i]}`).join(", ");
+    const unusableReason = r.error?.message || `status ${r.status}`;
     check("workflow scripts: `.gitattributes` pins EVERY shipped `*.workflow.js` to `eol=lf` — the fix for the Windows CRLF failure, and it must keep covering scripts added later",
       usable ? resolved.length === rels.length && resolved.every((v) => v === "lf") : false,
-      () => (usable ? `git resolved: ${rels.map((p, i) => `${path.basename(p)}=${resolved[i]}`).join(", ")}` : `git check-attr could not be consulted here (${r.error?.message || `status ${r.status}`}) — the on-disk CR checks above still gate the property`));
+      () => (usable ? `git resolved: ${resolvedDetail}` : `git check-attr could not be consulted here (${unusableReason}) — the on-disk CR checks above still gate the property`));
   }
 
   for (const file of wfFiles) {
