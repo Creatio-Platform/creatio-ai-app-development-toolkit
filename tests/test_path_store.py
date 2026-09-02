@@ -124,6 +124,21 @@ class PathStoreTest(unittest.TestCase):
         with self.assertRaises(PathOutsideStore):
             self.store.resolve(link)
 
+    def test_a_symlink_to_a_sibling_sharing_the_base_prefix_is_not_followed(self):
+        # The guard compares real paths; a bare `startswith` on the base would
+        # read a SIBLING whose name merely starts with the base ("<base>2") as
+        # "inside" and let the descent follow it into another tree.
+        sibling = self.base + "2"
+        os.makedirs(sibling)
+        self.addCleanup(shutil.rmtree, sibling, True)
+        link = os.path.join(self.base, "sibling-escape")
+        try:
+            os.symlink(sibling, link, target_is_directory=True)
+        except (OSError, AttributeError, NotImplementedError) as exc:
+            self.skipTest(f"cannot create a directory symlink here: {exc}")
+        with self.assertRaises(PathOutsideStore):
+            self.store.resolve(link)
+
     def test_case_folding_follows_platform_normcase(self):
         # A differently-cased request is accepted only where os.path.normcase
         # actually folds case -- Windows (ntpath). On POSIX (macOS, Linux)

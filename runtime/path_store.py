@@ -166,7 +166,13 @@ class PathStore:
             )
 
         stepped = os.path.join(current, entry)
-        if not _key(os.path.realpath(stepped)).startswith(_key(self._real_base)):
+        stepped_key = _key(os.path.realpath(stepped))
+        base_key = _key(self._real_base)
+        # Compare the way ``_names_under_base`` does: equal to the base, or under
+        # it with a separator in between. A bare ``startswith`` would accept a
+        # sibling whose name merely starts with the base ("/home/user2" for base
+        # "/home/user") and let an escaping symlink through.
+        if stepped_key != base_key and not stepped_key.startswith(base_key.rstrip(os.sep) + os.sep):
             # A symlink pointing out of the store: the name was listed, but
             # following it would leave the base after all.
             raise PathOutsideStore(

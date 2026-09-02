@@ -6791,6 +6791,22 @@ check("handoff: a scoped `<schema>::<method>` key reaches a FOLDED scope (mini p
 check("handoff: a scoped key that matched inside a folded scope is NOT reported as unmatched",
   !hoMini.behaviourIndex.unmatched.includes("DealMiniPage::privateHelper"));
 
+// A MEMBER key may legitimately arrive in the BARE `<kind>:<item>` form even for a scoped scope: `applyBehaviourIndex`
+// resolves members through `behaviourEntry`, which tries the scoped key first and falls back to the bare one. The
+// scope digest therefore has to index BOTH spellings — indexing only the scoped `m.key` made the row show the card
+// applied while the banner claimed the same key matched nothing, i.e. a self-contradicting plan.
+const hoBareMember = runMigration({ ...handoffManifest, addRecordMiniPage: { schema: "DealMiniPage" },
+  // The mixin is renamed so it exists ONLY on the mini page: on the root scope `m.key` is already the bare form,
+  // which would satisfy the digest by accident and make this check vacuous.
+  miniPageSchemas: { DealMiniPage: { entity: "Deal", schemas: [{ pkg: "DealPkg", body: HANDOFF_BODY.replaceAll("HandoffPage", "DealMiniPage").replaceAll("someMixin", "miniOnlyMixin") }] } },
+  behaviourIndex: { "mixin:miniOnlyMixin": { card: "C11", bodyCard: "C12", ac: ["AC-11"] } } });
+check("handoff BACK: a BARE `<kind>:<item>` member key that `behaviourEntry` resolves into a scoped scope is NOT reported unmatched",
+  !hoBareMember.behaviourIndex.unmatched.includes("mixin:miniOnlyMixin"),
+  () => JSON.stringify(hoBareMember.behaviourIndex.unmatched));
+check("handoff BACK: that same bare member key is not mis-bannered as `sectionOnly` either",
+  !hoBareMember.behaviourIndex.sectionOnly.includes("mixin:miniOnlyMixin"),
+  () => JSON.stringify(hoBareMember.behaviourIndex.sectionOnly));
+
 // A TYPED page is a scope of the surface too (step 5.1: "every record page including typed variants"), so its rows
 // must ride the handoff — and a scoped key that matched inside a typed fold must not be reported as unmatched.
 const hoTypedBody = (nm) => `define("${nm}",[],function(){return{entitySchemaName:"Deal",methods:{typedHelper:function(){return this.get("Amount");}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});`;

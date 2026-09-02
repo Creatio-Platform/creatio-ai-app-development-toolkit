@@ -633,7 +633,12 @@ function scopeDigestKeys(scopes) {
   const seen = new Set();
   for (const s of scopes) {
     for (const st of s.stubs) { seen.add(st.method); if (s.schema) seen.add(`${s.schema}::${st.method}`); }
-    for (const m of s.members) seen.add(m.key);
+    // Both spellings, mirroring the stub leg above: `applyBehaviourIndex` resolves a member through
+    // `behaviourEntry` with a scoped-first-then-bare fallback, so a bare `<kind>:<item>` index key is
+    // genuinely applied to a scoped row. Indexing only `m.key` (the scoped form in any scoped scope)
+    // would make `unmatchedIndexKeys` / `sectionOnlyIndexKeys` report such a key as matching nothing
+    // while the row itself shows the card applied.
+    for (const m of s.members) { seen.add(m.key); seen.add(`${m.kind}:${m.item}`); }
   }
   return seen;
 }
