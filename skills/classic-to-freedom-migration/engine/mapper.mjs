@@ -275,6 +275,13 @@ function isProfileCardModule(c) {
 // the widget catalog already owns is excluded so a known base-chrome widget is never mistaken for a card widget.
 function isCardWidgetModule(c) {
   if (!c || !c.recordId || !c.widgetKey) return false;
+  // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
+  // `masterColumnName` is a linked-record PROFILE CARD, handled by mapProfileCards — which runs BEFORE mapWidgets
+  // and accounts for the key. Without this guard such a module would satisfy BOTH predicates and get a profile-card
+  // decision AND a card-widget decision (a double decision R1 forbids), because mapWidgets never sees
+  // mapProfileCards' accountedFor. Genuine card widgets carry no `masterColumnName`, so this excludes ONLY the
+  // ambiguous overlap and lets the profile-card phase win — never a real card widget.
+  if (isProfileCardModule(c)) return false;
   return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
 }
 // standard card actions (from the classic ACTIONS menu / toolbar) -> Freedom card actions (B7).

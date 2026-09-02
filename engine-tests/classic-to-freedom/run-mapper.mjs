@@ -192,6 +192,57 @@ check("ENG-95806: card-widget region resolves from the host diff item's parent t
   && (cwHost.cardWidgets || [])[0]?.region === "AnalyticsTab",
   () => JSON.stringify(cwHost.cardWidgets));
 
+// ENG-95806 (review F3) — a module that satisfies BOTH shapes (masterColumnName AND recordId+widgetKey) is handled
+// by exactly ONE phase. mapProfileCards runs first and accounts for the key, so the module is a profile-card and
+// mapWidgets must NOT also emit a card-widget decision for it (predicates are now mutually exclusive → no double
+// decision, which R1 forbids). Genuine card widgets never carry masterColumnName, so no real widget regresses.
+const cwOverlap = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "DualModule", moduleName: "DualModule", masterColumnName: "Requester", widgetKey: "Dual", recordId: "rec-2" },
+] })]));
+check("ENG-95806 F3: a masterColumnName + recordId + widgetKey module is a profile-card, NOT also a card-widget (exactly one decision)",
+  cwOverlap.needsDecision.filter(n => (n.kind === "profile-card" || n.kind === "card-widget") && n.item === "DualModule").length === 1
+  && cwOverlap.needsDecision.some(n => n.kind === "profile-card" && n.item === "DualModule")
+  && !cwOverlap.needsDecision.some(n => n.kind === "card-widget" && n.item === "DualModule"),
+  () => JSON.stringify(cwOverlap.needsDecision.filter(n => n.item === "DualModule")));
+check("ENG-95806 F3: the overlap module is NOT carried into cardWidgets[]",
+  !(cwOverlap.cardWidgets || []).some(w => w.key === "DualModule"),
+  () => JSON.stringify(cwOverlap.cardWidgets));
+
+/* ---- ENG-95806 (review F1) — the DESIGN-SPEC / CHECKLIST PRINTER output for a card widget (rowsForCardWidgets,
+   buildLayoutGroupRows, buildCoverageRows + the --verify onstand gate) is asserted on RENDERED output, not just the
+   changeSet. A regression that drops a card widget from the Layout table or the --verify checklist would otherwise
+   still pass the changeSet-level cases above, defeating the "nothing silently skipped" guarantee (R2). A side-profile
+   card widget also locks the friendly-region-label consistency fix (F2): the Layout row, the checklist Layout-by-region
+   group AND the Coverage row must all read "Side profile", never the raw "SideAreaProfileContainer". ---- */
+const cwRenderCs = {
+  viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+  cardWidgets: [{ key: "KpiChart", widgetKey: "KpiChart", recordId: "rec-7", region: "SideAreaProfileContainer" }],
+  needsDecision: [{ kind: "card-widget", item: "KpiChart", widgetKey: "KpiChart", recordId: "rec-7", region: "SideAreaProfileContainer", reason: "convert via ConvertCardWidgetsProcess" }],
+};
+const cwSpec = renderDesignSpec({ entity: "X", changeSet: cwRenderCs });
+const cwSpecCardRows = cwSpec.split("\n").filter((l) => /\| Card widget \|/.test(l));
+check("ENG-95806 F1: design-spec Layout has exactly ONE card-widget row, in the friendly region, naming widgetKey + SysWidgetDashboard record",
+  cwSpecCardRows.length === 1
+  && /\| Side profile \| KpiChart \| Card widget \| from SysWidgetDashboard \(record `rec-7`\) \|/.test(cwSpecCardRows[0]),
+  () => cwSpecCardRows);
+const cwChecklist = renderChecklist({ entity: "X", changeSet: cwRenderCs });
+check("ENG-95806 F1: checklist Layout-by-region group lists the card widget under its friendly region",
+  /Side profile — KpiChart \(card widget\)/.test(cwChecklist),
+  () => cwChecklist.split("\n").filter((l) => /card widget/i.test(l)));
+check("ENG-95806 F1+F2: checklist Coverage row names the card widget and its friendly region (not the raw SideAreaProfileContainer)",
+  /Card widget `KpiChart` \(record `rec-7`\) — converted via `ConvertCardWidgetsProcess` and placed in Side profile/.test(cwChecklist)
+  && !/placed in SideAreaProfileContainer/.test(cwChecklist),
+  () => cwChecklist.split("\n").filter((l) => /Card widget `KpiChart`/.test(l)));
+// --verify onstand gate: the card-widget Coverage row carries a `cardWidget:<widgetKey>` evidence key that HARD-gates.
+const cwVerifyMiss = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:KpiChart": false });
+check("ENG-95806 F1: --verify HARD-fails a card widget whose conversion is not done (built['cardWidget:KpiChart']=false → MISSING)",
+  cwVerifyMiss.missing >= 1 && /cardWidget:KpiChart/.test(cwVerifyMiss.markdown) && /❌ MISSING/.test(cwVerifyMiss.markdown),
+  () => `missing=${cwVerifyMiss.missing}`);
+const cwVerifyOk = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:KpiChart": true });
+check("ENG-95806 F1: --verify passes the card-widget row once conversion is confirmed on-stand (built['cardWidget:KpiChart']=true → Done)",
+  /cardWidget:KpiChart confirmed on-stand/.test(cwVerifyOk.markdown),
+  () => cwVerifyOk.markdown.split("\n").filter((l) => /cardWidget:KpiChart/.test(l)));
+
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
 // L/di are the shared schema/op builders (see _testkit.mjs), aliased to keep the assertions terse.
 // Seed contributes a bound FIELD and a business RULE too (the primary payload) — not only methods/details/

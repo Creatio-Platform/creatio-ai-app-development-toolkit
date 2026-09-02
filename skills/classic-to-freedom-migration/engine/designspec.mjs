@@ -199,6 +199,15 @@ function rowsForWidgets(widgets) {
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
+// ENG-95806 — the friendly Region label for a card widget, shared by EVERY printer sink (the Layout row, the
+// checklist Layout-by-region group, and the Coverage/--verify row) so the three can never drift and the raw
+// container name never leaks to one of them. `SideAreaProfileContainer` / `Header / top` map to their friendly
+// labels; anything else (a resolved tab or host container) goes through the region resolver, which already `esc`s
+// its output — so callers embed the result WITHOUT a further `esc` (the friendly literals are inert).
+const cardWidgetRegionLabel = (region, regionOf) =>
+  region === "SideAreaProfileContainer" ? "Side profile"
+    : region === "Header / top" ? "Header / top"
+      : regionOf(region);
 // ENG-95806 — a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
 // Layout row in the region it resolved to, naming the widgetKey and the migrator-driven conversion (Source =
 // SysWidgetDashboard + the record). The full grouping + process-call + Failed-means-blocked instructions stay in
@@ -206,9 +215,7 @@ function rowsForWidgets(widgets) {
 // `esc` neutralizes hostile tokens at this sink (same convention as every other row builder).
 function rowsForCardWidgets(cardWidgets, regionOf) {
   return (cardWidgets || []).map((w) => {
-    const region = w.region === "SideAreaProfileContainer" ? "Side profile"
-      : w.region === "Header / top" ? "Header / top"
-      : regionOf(w.region);
+    const region = cardWidgetRegionLabel(w.region, regionOf);
     const src = `from SysWidgetDashboard (record \`${esc(w.recordId)}\`)`;
     const note = "→ convert via `ConvertCardWidgetsProcess` (group by recordId, batch widgetKeys); place the returned Freedom element — do NOT hand-build a chart (a Failed conversion stays TODO/BLOCKED)";
     return { region, sort: 2, cells: [esc(w.widgetKey), "Card widget", src, DASH, note] };
@@ -907,8 +914,7 @@ function buildLayoutGroupRows(cs, regionOf) {
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
   for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
   for (const w of cs.cardWidgets || []) {
-    const region = w.region === "SideAreaProfileContainer" ? "Side profile" : w.region === "Header / top" ? "Header / top" : regionOf(w.region);
-    add(region, `${esc(w.widgetKey)} (card widget)`);
+    add(cardWidgetRegionLabel(w.region, regionOf), `${esc(w.widgetKey)} (card widget)`);
   }
   return order.map((k) => {
     const e = byRegion.get(k);
@@ -920,7 +926,7 @@ function buildLayoutGroupRows(cs, regionOf) {
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
-function buildCoverageRows(cs, pm, result) {
+function buildCoverageRows(cs, pm, result, regionOf) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
@@ -951,7 +957,7 @@ function buildCoverageRows(cs, pm, result) {
   // true → Done; false → MISSING (a Failed conversion stays TODO/BLOCKED, never a hand-built substitute); absent →
   // unverified. This is what stops `--verify` exiting 0 while a card widget is still unconverted.
   for (const w of cs.cardWidgets || [])
-    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${esc(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
+    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${cardWidgetRegionLabel(w.region, regionOf)}`, vk: { type: "onstand", evidence: `cardWidget:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };
@@ -1014,7 +1020,7 @@ function checklistGroups(result, opts = {}) {
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
-  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
+  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf));
   // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
