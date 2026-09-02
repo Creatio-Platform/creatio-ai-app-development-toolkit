@@ -88,6 +88,8 @@ check("errorShape: a null/undefined error still yields a usable message rather t
   () => errorShape(null).message === "rejected with no reason given" && !/undefined/.test(errorShape(new Error("no message reaches the shape")).message));
 check("reviveError: an ERROR entry round-trips back into a real Error, so the core's own `catch` sees the cause",
   () => { const r = reviveError(errorShape(new RangeError("nope"))); return r instanceof Error && r.name === "RangeError" && r.message === "nope"; });
+check("reviveError: a revived error carries the `workItemOutcome` mark — it is how a core's catch tells a DELIVERED outcome (retry-budget material) from a local throw (a bug that must surface), so dropping the mark silently turns code bugs into 'host rejected' retries",
+  () => { const e = reviveError(errorShape(new TypeError("529 overloaded"))); return e.workItemOutcome === true && e.name === "TypeError"; });
 check("record: an unknown outcome throws — there are exactly three states and a fourth is an orchestration bug",
   () => { try { record(workItem(okItem), "maybe"); return false } catch { return true } });
 
@@ -1118,6 +1120,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       approval: { quote: "— **APPROVED by Katya** (\"implement\") — round 1" },
       evidenceIds: ["main#confirm:detail-add-mechanism:Актуальные вакансии · InternalRequest"],
       notes: "emoji \u{1F600} pair, tab\tand newline\nsurvive stringify",
+      verifyTablePath: "C:\\Users\\k.bondarenko\\My projects\\General \"quoted\" — literal backslashes round-trip",
       schemaNamePrefix: "",
     };
     const raw = path.join(tmp, "reconcile-answer-baseline-1.json");

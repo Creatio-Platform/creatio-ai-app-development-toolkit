@@ -410,7 +410,8 @@ HOW TO SUBMIT THE ANSWER. The host has rejected this answer — the run's larges
 ${ANSWER_ENCODER_SOURCE}
 It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected.
 - Read the \`.ascii.json\` file and submit EXACTLY its content as the structured answer, character for character.
-- If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave every file in place either way.`
+- If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave a REJECTED attempt's files in place: they are the evidence that failure needs.
+- Once the host ACCEPTS a submission, DELETE that attempt's raw and \`.ascii.json\` files. The accepted answer is already recorded by the host, and these copies carry the same live-stand text as this folder's other artifacts (\`verify.md\`, \`built.json\`) — a routine copy should not outlive its purpose. Only a rejected attempt's files stay.`
   }
 
   phase('Reconcile')
@@ -506,6 +507,10 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
       // THE THIRD FAILURE THE BUDGET COVERS. A rejected single-item step reaches the core as a throw, so only a
       // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
       // honest `reconcile-failed` stop below never runs.
+      // ONLY A DELIVERED OUTCOME SPENDS THE BUDGET: the driver marks what it revives from a recorded work-item
+      // outcome (`workItemOutcome`), so a local throw — a genuine bug in this dispatch path — surfaces immediately
+      // with its own stack instead of burning three attempts under a "REJECTED by the host" label.
+      if (!e?.workItemOutcome) throw e
       lastShapeFaults = []
       lastHostRejection = String(e?.message || e)
       logReconcileAttemptFailure(willRetry,

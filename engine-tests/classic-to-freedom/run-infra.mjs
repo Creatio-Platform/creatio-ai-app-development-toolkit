@@ -2017,7 +2017,7 @@ check("workflow: the verifier `evidence` instruction files only the ids this rou
   wfSrc.includes("**FILE ONLY THE IDS THIS ROUND OWNS:**"));
 check("workflow: Reconcile is asked for `pagesRecorded`, without which the read-back scope degrades to the old sweep",
   wfSrc.includes("Also return \\`pagesRecorded\\`")
-    && wfSrc.includes("pagesRecorded: { type: 'array', maxItems: 400, items: { type: 'string' } }"));
+    && wfSrc.includes("pagesRecorded: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } }"));
 
 // --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
 // ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
@@ -2599,6 +2599,22 @@ const faultThenOk = await runWith({}, async (prompt) => {
 check("ENG-95930 EXECUTES the shape fault: an answer short of `buildComplete` is NOT accepted — the attempt is spent, the second answer is taken, and the run proceeds instead of computing on a hole",
   !faultThenOk.threw && faultThenOk.stopped !== "reconcile-failed" && faultThenOkCalls === 2,
   () => (faultThenOk.threw ? `threw: ${faultThenOk.threw}` : `stopped=${faultThenOk.stopped} calls=${faultThenOkCalls}`));
+// The SIZE fault through the SAME retry loop. The byte-cap check is unit-tested above ("SCHEMA-VALID but huge"),
+// but a fault that never drives the loop could regress into an unnamed stop or an unspent attempt without CI
+// noticing — so an oversized-but-valid answer is pushed through the shipped script exactly like the typed fault.
+let sizeFaultCalls = 0;
+const sizeFaultPrompts = [];
+const sizeThenOk = await runWith({}, async (prompt) => {
+  sizeFaultCalls += 1;
+  sizeFaultPrompts.push(typeof prompt === "string" ? prompt : "");
+  if (sizeFaultCalls === 1) return { ...shapeOk, notes: "x".repeat(17000) };
+  if (sizeFaultCalls === 2) return shapeOk;
+  return null;
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95930 (review round 8) EXECUTES the size fault through the retry loop: an oversized-but-valid answer spends the attempt, the SECOND prompt names the byte fault and its largest field, and the second answer proceeds",
+  !sizeThenOk.threw && sizeThenOk.stopped !== "reconcile-failed" && sizeFaultCalls === 2
+    && /serializes to \d+ bytes/.test(sizeFaultPrompts[1] || "") && /notes \(\d+ B\)/.test(sizeFaultPrompts[1] || ""),
+  () => (sizeThenOk.threw ? `threw: ${sizeThenOk.threw}` : `calls=${sizeFaultCalls} stopped=${sizeThenOk.stopped} p2tail=${(sizeFaultPrompts[1] || "").slice(-260)}`));
 // M2 — the retry has to TELL the agent what was short, or a deterministically dropped field is dropped again for the
 // whole budget. `note` is work-item metadata and never reaches the model, so the fault list has to ride the PROMPT.
 check("ENG-95930 EXECUTES the informed retry: the SECOND dispatch's prompt names the field the first answer was missing, and the first one does not — an uninformed retry re-sends byte-identical input and cannot converge",
@@ -2631,6 +2647,11 @@ check("the repeated-rejection triage sentence is a single constant interpolated 
 // back-to-back attempts, which a rejection outlasting them still defeats.
 check("the retry loop takes no clock: no timer call sits between the Reconcile attempts, so the budget is three consecutive dispatches and is not described as spaced",
   !/setTimeout|setInterval/.test(wfSrc) && !/SPACED|spaced by/.test(wfSrc));
+// The catch spends the budget ONLY on a delivered work-item outcome (the driver marks what it revives); a local
+// throw — a genuine bug in the dispatch path — must surface with its own stack, not burn three attempts under a
+// "REJECTED by the host" label.
+check("ENG-95930 (review round 8): the Reconcile catch re-throws anything that is NOT a delivered work-item outcome — the driver's `workItemOutcome` mark is the discriminator, and `reviveError` sets it",
+  /if \(!e\?\.workItemOutcome\) throw e/.test(wfSrc) && /e\.workItemOutcome = true/.test(wfSrc));
 let burstCalls = 0;
 const afterBurst = await runWith({}, async () => {
   burstCalls += 1;

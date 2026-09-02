@@ -214,6 +214,11 @@ function errorShape(err) {
 function reviveError(shape) {
   const e = new Error(shape?.message || 'rejected with no reason given')
   e.name = shape?.name || 'Error'
+  // The driver's mark: this error is a RECORDED WORK-ITEM OUTCOME delivered back into a core — the executed item
+  // itself failed — as opposed to a local throw from the core's own code. A catch in a core keys on it to spend
+  // retry budget only on delivered outcomes, so a genuine code bug surfaces with its own stack instead of being
+  // retried under a "rejected by the host" label.
+  e.workItemOutcome = true
   return e
 }
 
@@ -2020,6 +2025,12 @@ function shapeFieldNames(shape) {
 // An agent reproduces the fields it is told about and drops the rest, so a field named in `RECONCILE_SHAPE` must
 // also be named in `reconcilePrompt`; the two are one contract in two halves.
 
+// The two size caps every loosened Reconcile property shares: one bound on any list's COUNT, one on any free
+// string an array-of-object item carries. Named once so a future re-budgeting (they exist to keep the answer
+// under the host's tool-input cap; ENG-96071 owns tightening them) is one edit, not twenty.
+const RECONCILE_LIST_CAP = 400
+const RECONCILE_TEXT_CAP = 400
+
 const RECONCILE_SCHEMA = {
   type: 'object',
   required: ['approval', 'planVersion', 'unitKeys', 'buildOrder', 'reachabilityState', 'verify', 'planGaps', 'roundOf',
@@ -2042,8 +2053,8 @@ const RECONCILE_SCHEMA = {
     // define the plan. NOT read out of `plan.md`, and never composed: `plan.md` is ENGINE-WRITTEN and presented
     // verbatim, so it carries whatever `--plan` printed and nothing an agent could add would survive a re-run.
     planVersion: { type: 'string' },
-    unitKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },        // `--units.pages[].key`, verbatim
-    buildOrder: { type: 'array', maxItems: 400, items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
+    unitKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },        // `--units.pages[].key`, verbatim
+    buildOrder: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
     // THE TARGET PACKAGE, and whether it EXISTS. Nothing in the run used to ask, and the omission cost a whole
     // run: on a migration into a NEW application every page unit is unbuildable until the package exists, and
     // `create-app` — the only way to obtain it — also mints the starter pages that are `main`'s deliverable, which
@@ -2072,7 +2083,7 @@ const RECONCILE_SCHEMA = {
     // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
     // session found is still an orphan), never overwritten by it.
     // Each entry `{ schema, orphanedBy, at }`, `schema` required.
-    orphanedPagesOnFile: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    orphanedPagesOnFile: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -2089,7 +2100,7 @@ const RECONCILE_SCHEMA = {
     applicationCode: { type: ['string', 'null'] },
     // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
-    componentTypes: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    componentTypes: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
     // resolved against the TARGET stand: `{ type, resolved, note }`. This is what the pre-build component gate
     // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
@@ -2106,20 +2117,20 @@ const RECONCILE_SCHEMA = {
     // gated composite: `kind` ('composite'), the gating package `id`, and the gating `feature` when there is one.
     // Those three are NOT re-declared as `properties` here and that is deliberate (ENG-95930, mode A): the expanded
     // per-property form serializes over the host's 4096-byte classifier cap, which is what refused the schema before
-    // the model ever ran. `additionalProperties: { maxLength: 400 }` carries them — a string cap does not constrain
+    // the model ever ran. `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` carries them — a string cap does not constrain
     // the boolean `resolved` — and `RECONCILE_SHAPE.componentResolution` below enforces the insides on arrival.
-    componentResolution: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    componentResolution: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
     // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
     // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
-    templateNames: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    templateNames: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only resolution of each `templateNames` entry against the TARGET stand:
     // `{ name, resolved, note }`. Same shape, same rules and the same absence rule as `componentResolution`: only an
     // explicit `resolved: false` gates, an unreported name is not a failure, and a plan predating the field behaves
     // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
     // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
     // One `{ name, resolved, note }` per entry, `name`/`resolved` required.
-    templateResolution: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    templateResolution: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
     // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
     // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
@@ -2143,7 +2154,7 @@ const RECONCILE_SCHEMA = {
     parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
     // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
     // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default.
-    reachability: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    reachability: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
     reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
@@ -2152,48 +2163,48 @@ const RECONCILE_SCHEMA = {
     // or the literal `null` on an unanswered item. `null` is LEGAL and `RECONCILE_SHAPE` accepts it: an
     // object-only rule pushes the agent to omit the field instead, and an omitted field cannot be told apart
     // from an engine that publishes no answers at all.
-    preflightItems: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    preflightItems: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
     // the operator believes is applied.
     // IDENTIFIERS ONLY — no `answer` text. An agent retypes every field of this into a tool call each round, and the
     // text is already in the operator's own file; naming which answer missed is the whole job.
     // Both carry `{ id, kind, item }` per entry — identifiers only, no `answer` text.
-    resolutionsUnmatched: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
-    resolutionsConflicts: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
-    evidenceIds: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    resolutionsUnmatched: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    resolutionsConflicts: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    evidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
     // judge is only ever handed ids, so a record nobody names is a page that can never close.
-    unjudgedEvidenceIds: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    unjudgedEvidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // WHAT IS ALREADY ANSWERED, so Preflight does not re-derive it. `--units.preflight` is the plan's list of open
     // questions and says nothing about which have been resolved; without these two a resumed run re-ran the whole
     // fan-out over records that were already on file, and the merge would overwrite each one with the second
     // answer. Both are read off the built file, and both may be empty on a first run.
-    evidenceFiled: { type: 'array', maxItems: 400, items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
-    evidenceRejected: { type: 'array', maxItems: 400, items: { type: 'string' } },  // ids the judge ruled `convincing: false`
+    evidenceFiled: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
+    evidenceRejected: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },  // ids the judge ruled `convincing: false`
     // Keys whose `pages` entry already exists in `built.json` — a recorded object, or `false` for "checked,
     // genuinely not built". Absent or empty fetches every key. This is a REPORT, not a verified fact, and the only
     // thing that makes an over-report survivable is Reconcile's own all-keys sweep running every round regardless of
     // what Verify skipped: a wrongly-skipped page is re-read there, and its unit stays open until it is.
-    pagesRecorded: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    pagesRecorded: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
     // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
     // round for a unit its predecessor already gave up on and asked the user about.
     // Each `{ key, parkedWhy, rounds }`, `key` required.
-    parkedUnits: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    parkedUnits: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // Plan deviations, blockers and builder-vs-stand disagreements already in the queue file from an
     // earlier session. They seed this run's lists so a kill does not erase what a previous one recorded.
     // Each `{ unit, deviation, why, applied }`, `deviation`/`why` required.
-    proposals: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    proposals: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // Each `{ unit, what, why }`, `what`/`why` required.
-    blocked: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    blocked: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // Each `{ unit, claim, found, round }`, `unit`/`claim`/`found` required.
-    discrepancies: { type: 'array', maxItems: 400, items: { type: 'object', additionalProperties: { maxLength: 400 } } },
+    discrepancies: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
     // the run; trusting it silently builds a page nothing gates.
-    staleQueueKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
-    newKeys: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
+    newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
     // planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
     // `openRows`. The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
@@ -2206,7 +2217,7 @@ const RECONCILE_SCHEMA = {
     exitCode: { type: 'integer' },
     // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
     // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
-    planGaps: { type: 'array', maxItems: 400, items: { type: 'string' } },
+    planGaps: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
     continuationOf: { type: 'object', additionalProperties: { type: 'integer' } },
     verifyTablePath: { type: 'string' },
@@ -3338,7 +3349,8 @@ HOW TO SUBMIT THE ANSWER. The host has rejected this answer — the run's larges
 ${ANSWER_ENCODER_SOURCE}
 It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected.
 - Read the \`.ascii.json\` file and submit EXACTLY its content as the structured answer, character for character.
-- If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave every file in place either way.`
+- If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave a REJECTED attempt's files in place: they are the evidence that failure needs.
+- Once the host ACCEPTS a submission, DELETE that attempt's raw and \`.ascii.json\` files. The accepted answer is already recorded by the host, and these copies carry the same live-stand text as this folder's other artifacts (\`verify.md\`, \`built.json\`) — a routine copy should not outlive its purpose. Only a rejected attempt's files stay.`
   }
 
   phase('Reconcile')
@@ -3434,6 +3446,10 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
       // THE THIRD FAILURE THE BUDGET COVERS. A rejected single-item step reaches the core as a throw, so only a
       // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
       // honest `reconcile-failed` stop below never runs.
+      // ONLY A DELIVERED OUTCOME SPENDS THE BUDGET: the driver marks what it revives from a recorded work-item
+      // outcome (`workItemOutcome`), so a local throw — a genuine bug in this dispatch path — surfaces immediately
+      // with its own stack instead of burning three attempts under a "REJECTED by the host" label.
+      if (!e?.workItemOutcome) throw e
       lastShapeFaults = []
       lastHostRejection = String(e?.message || e)
       logReconcileAttemptFailure(willRetry,
