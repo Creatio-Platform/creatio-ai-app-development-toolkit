@@ -34,8 +34,11 @@ _workflow-core/
     claude-template.js the shell the generated .workflow.js is built from
   build-executor/      step 7: build the approved plan on a live stand
     core.mjs           function* run(input, io, { selfPath }) — the round loop
-    helpers.mjs        the decisions: schedule, parks, approval + package gates
-    schemas.mjs        the response contracts
+    helpers.mjs        the decisions: schedule, parks, approval + package gates,
+                       and the walker that checks an answer against a shape table
+    schemas.mjs        the response contracts: the host schemas AND `RECONCILE_SHAPE`,
+                       the inner shape of the fields the schema declares loosely to
+                       stay under the host's 4096-byte cap
     context.mjs        paths, engine command lines, the shared prompt preamble
     claude-template.js the shell the generated .workflow.js is built from
   adapters/

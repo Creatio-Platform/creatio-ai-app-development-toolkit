@@ -3647,3 +3647,43 @@ export function verifyDigest(result, v) {
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
 }
+
+// THE COUNTS-ONLY SUMMARY (`--verify-summary <file>`). SAME SHAPE as `verifyDigest` for the totals and the per-page
+// tallies, but `openRows` is dropped on EVERY page — complete or not — so the file is bounded in size no matter how
+// many rows are open (ENG-95930, mode B). The digest still carries the open rows of pages that are OPEN, which on a
+// fresh stand is every page and every row: measured 21,161 B transcribed into the run's first agent's structured
+// answer, which then truncated at the host's ~20 KB tool-input cap and failed the whole run before it built anything.
+// This is what the Reconcile agent copies instead — its answer carries counts and flags, never per-row prose; each
+// build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. The
+// counts here match the digest's by construction (the same per-page `complete`/`buildComplete`/`missing`/`unverified`/
+// `builderOpen` and the same top-level totals), so nothing that schedules on those numbers changes — only the bytes do.
+// BOUNDED PER PAGE, LINEAR IN PAGE COUNT: every page entry is fixed-shape booleans/integers — measured ~98 wire
+// bytes with an ASCII key and ~140-260 with a localized (Cyrillic) key, whose every character costs six bytes in
+// the \uXXXX submission form — but nothing here caps how many pages a plan publishes: a large-enough plan can
+// approach the answer's 16000-byte wire ceiling on counts alone. Pages are NOT dropped to fit (an absent entry
+// reads as "nobody looked" downstream and would re-open settled units); instead the `--verify-summary` writer warns
+// loudly as the ceiling nears, and the true close at scale is the answer-slimming follow-up, not a silent cut here.
+export function verifySummary(result, v) {
+  const pages = {};
+  for (const [k, p] of Object.entries(v.pages || {})) {
+    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, unverified: p?.unverified, builderOpen: p?.builderOpen };
+  }
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
+}
+
+// THE WIRE'S OWN BYTES — the size the summary costs once the Reconcile agent's answer is ASCII-encoded for
+// submission: 1 per printable-ASCII UTF-16 code unit, 6 per anything else (a \uXXXX escape; an astral pair is two).
+// A raw `.length` undercounts localized page keys six-fold, so a scale warning measured that way stays silent past
+// the very ceiling it guards. This is the engine-side copy of the workflow's own measure — the two cannot share a
+// module across that boundary, so run-infra pins them equal by executing both on the same inputs.
+export function encodedAsciiBytes(s) {
+  if (typeof s !== "string") return 0;
+  let n = 0;
+  // One UTF-16 unit per step; `codePointAt` (Sonar S7758) keeps the per-unit arithmetic — an astral pair reads as
+  // its full code point at the lead unit and an unpaired surrogate at the trail, both non-printable: still 12.
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.codePointAt(i);
+    n += (c >= 0x20 && c <= 0x7e) ? 1 : 6;
+  }
+  return n;
+}

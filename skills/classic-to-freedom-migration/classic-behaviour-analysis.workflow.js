@@ -165,6 +165,11 @@ function errorShape(err) {
 function reviveError(shape) {
   const e = new Error(shape?.message || 'rejected with no reason given')
   e.name = shape?.name || 'Error'
+  // The driver's mark: this error is a RECORDED WORK-ITEM OUTCOME delivered back into a core — the executed item
+  // itself failed — as opposed to a local throw from the core's own code. A catch in a core keys on it to spend
+  // retry budget only on delivered outcomes, so a genuine code bug surfaces with its own stack instead of being
+  // retried under a "rejected by the host" label.
+  e.workItemOutcome = true
   return e
 }
 
