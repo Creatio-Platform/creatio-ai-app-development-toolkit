@@ -910,8 +910,9 @@ check("ContactCommunication: detail over the ContactCommunication entity → Com
   commcs.standardFeatures.some(s => s.feature === "Communication options" && s.uiShape === "component" && s.inferredFromEntity)
   && !commcs.details.some(d => d.entity === "ContactCommunication"),
   () => ({ features: commcs.standardFeatures.map(s => s.feature), details: commcs.details.map(d => d.entity) }));
-check("ContactCommunication: the note says use the native crt.CommunicationOptions component (NOT the fabricated crt.ContactCommunication) + do NOT downgrade to a plain grid (package/feature gap = a decision, not a silent fallback)",
-  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.CommunicationOptions/.test(n.reason) && /NOT `?crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
+check("ContactCommunication / ENG-96327: the plan names the native crt.CommunicationOptions + the human 'confirm Customer 360 on-stand, or raise' line; the build detail (CrtCustomer360App / do-NOT-downgrade) is NOT restated in the plan — it lives in classic-to-freedom-mapping.md + the structured gate",
+  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.CommunicationOptions/.test(n.reason) && /Customer 360/.test(n.reason) && /raise/i.test(n.reason))
+  && !commcs.needsDecision.some(n => n.kind === "standard-feature" && (/do NOT downgrade/i.test(n.reason) || /CrtCustomer360App/.test(n.reason))),
   () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication/.test(n.reason))?.reason);
 
 /* ---- virtual-field: a bound field whose column is NOT on the entity (auto-filled companion from a lookup)
@@ -1032,35 +1033,40 @@ check("design-spec: component feature (Approvals) shown by name; list feature (A
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
 // Visa=Approvals domain note must ride on the standardFeature AND surface in the Layout row (the
 // standard-feature decision is excluded from ⚠ Confirm) — so the agent doesn't wrongly downgrade it.
-check("Approvals: Visa carries the 'don't downgrade' domain note in the feature + design-spec Layout row",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && /how Approvals is stored/.test(s.note || ""))
-  && /Approvals[\s\S]*?how Approvals is stored/.test(spec));
-check("Approvals: the note says it is TWO components (get-component-info) — add the module ABOVE the profile island AND the list, not just the list",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals"
-    && /TWO components/.test(s.note || "") && /get-component-info/.test(s.note || "")
-    && /ABOVE the profile island/.test(s.note || "") && /Adding only the list is INCOMPLETE/.test(s.note || "")),
-  () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note);
-// #6 — Activities/Emails are FILTERED RELATED LISTS, not a Timeline; the 'NOT a Timeline' note must ride on
-// the standardFeature AND surface in the Layout row (a real agent rebuilt them as a crt.Timeline — wrong).
-check("#6: Activities carries a 'NOT a Timeline' note that surfaces in the Layout row",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && /NOT a Timeline/i.test(s.note || ""))
-  && /Activities[\s\S]*?NOT a Timeline/i.test(spec));
+// ENG-96327 — the Visa/Approvals build recipe (Visa=approval, don't-downgrade, TWO components, get-component-info,
+// module ABOVE the profile island) lives in classic-to-freedom-mapping.md (the build agent is handed that doc,
+// "do not re-derive it"), NOT the plan. The plan row shows only the human "reuse the native Approvals components"
+// line — no recipe, visible or hidden.
+const apprFeat = dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals");
+const apprRow = spec.split("\n").find(l => /\| Approvals \| Approvals \|/.test(l)) || "";
+check("Approvals: the plan row shows the human 'reuse the native Approvals components' line and carries NO build recipe — it lives in classic-to-freedom-mapping.md",
+  /Reuse the native Approvals components/.test(apprFeat?.note || "") && !apprFeat?.builderNote
+  && !/how Approvals is stored/.test(apprRow) && !/TWO components/.test(apprRow) && !/ABOVE the profile island/.test(apprRow),
+  () => ({ note: apprFeat?.note, builderNote: apprFeat?.builderNote, row: apprRow }));
+// #6 — Activities/Emails are FILTERED RELATED LISTS, not a Timeline (a real agent rebuilt them as crt.Timeline —
+// wrong). ENG-96327: that caveat lives in classic-to-freedom-mapping.md (the Activities/Emails + Timeline rows),
+// NOT the plan — the plan row is a plain related list with NO 'Timeline' text (visible or hidden).
+const a6 = dsCs.changeSet.standardFeatures.find(s => s.feature === "Activities");
+const a6Row = spec.split("\n").find(l => /\| Activities \| Related list \|/.test(l)) || "";
+check("#6: the Activities plan row is a plain related list and carries NO 'Timeline' text (the caveat lives in classic-to-freedom-mapping.md)",
+  !!a6 && a6.uiShape === "list" && !a6.builderNote && !/Timeline/i.test(a6Row) && !/Timeline/i.test(a6?.note || ""),
+  () => ({ note: a6?.note, builderNote: a6?.builderNote, row: a6Row }));
 // A method belongs to the ⚠ Imperative logic worklist ONLY — never repeated as a Logic row.
-const dsLogicBlock = (spec.split("#### Logic")[1] || "").split("####")[0];
-check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Imperative logic only)",
-  /#### Logic/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
-check("design-spec: the Logic section points at the worklist carrying the methods",
-  /1 custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(dsLogicBlock), () => dsLogicBlock);
+const dsLogicBlock = (spec.split("#### Business rules")[1] || "").split("####")[0];
+check("design-spec: the Business rules table does NOT list the handler (methods live in ⚠ Imperative logic only)",
+  /#### Business rules/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
+check("design-spec: the Business rules section carries NO 'see ⚠ Imperative logic below' pointer — the section's own header below already names the count (ENG-96327)",
+  !/custom method\(s\) — see/.test(dsLogicBlock), () => dsLogicBlock);
 check("design-spec: the handler is still accounted for — it carries its own ⚠ Imperative logic row",
   /#### ⚠ Imperative logic/.test(spec) && /\| onContactChanged \|/.test(spec));
 // Section ORDER, by offset. Every other assertion here is either presence or a block-scoped absence
-// (`split("#### Logic")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
+// (`split("#### Business rules")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
 // worklist being moved back below the confirm list.
 const specAt = (needle) => spec.indexOf(needle);
 check("design-spec: sections run Layout → Logic → ⚠ Imperative logic → ⚠ Confirm → Member ledger",
-  specAt("#### Layout") < specAt("#### Logic") && specAt("#### Logic") < specAt("#### ⚠ Imperative logic")
+  specAt("#### Layout") < specAt("#### Business rules") && specAt("#### Business rules") < specAt("#### ⚠ Imperative logic")
   && specAt("#### ⚠ Imperative logic") < specAt("### ⚠ Confirm"),
-  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Logic"),
+  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Business rules"),
     imperative: specAt("#### ⚠ Imperative logic"), confirm: specAt("### ⚠ Confirm") }));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
@@ -2362,10 +2368,12 @@ check("#8c: the process-launch decision tells to READ THE BINDING and place it a
 // card-action DISPOSITION — standard toolbar buttons are not all migratable: ViewOptions is not migrated,
 // Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
 const caCs = runMigration({ entity: "X",
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ViewOptionsButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
-check("card-actions: ViewOptions NOT migrated; Tag template-provided (Type '—', clear disposition)",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ViewOptionsButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ReloadDataButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("card-actions: ViewOptions NOT migrated; Tag + Reload template-provided (Type '—', clear disposition — no bare 'Action' row)",
   /\| ViewOptions \| — \|.*Not migrated/.test(caCs.designSpec)
-  && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
+  && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec)
+  && /\| ReloadData \| — \|.*default Freedom template \(Reload\).*nothing to migrate/.test(caCs.designSpec)
+  && !/\| ReloadData \| Action \|/.test(caCs.designSpec));
 check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
   /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
 check("card-actions: Process migrates only if a process is connected + shows how to check (ProcessInModules → VwSysProcess)",
@@ -3114,9 +3122,10 @@ check("ENG-95543: a matching schema NAME beats a matching entity — the resolve
   () => resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta);
 // The derived `FEATURE_CATALOG` view must still answer for the callers and goldens that read it — the data moved,
 // the shape did not.
-check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/note/templateProvided)",
+check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/note/builderNote/templateProvided)",
   FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && FEATURE_CATALOG.FileDetailV2?.templateProvided === true
-  && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list" && /Approvals renders as TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.note || ""),
+  && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list" && /Reuse the native Approvals components/.test(FEATURE_CATALOG.VisaDetailV2?.note || "")
+  && "builderNote" in FEATURE_CATALOG.VisaDetailV2,
   () => FEATURE_CATALOG);
 
 // review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
@@ -3174,23 +3183,23 @@ check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] res
   /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
-check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
-  /#### Logic/.test(guidCs.designSpec)
+check("P3: page business rule shows in the Business rules table (field · when <attr> · effect · page business rule)",
+  /#### Business rules/.test(guidCs.designSpec)
   && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
-// #3 — NO method reaches the Logic table. Helper folding is done from the CALL GRAPH in the ⚠ Imperative logic
+// #3 — NO method reaches the Business rules table. Helper folding is done from the CALL GRAPH in the ⚠ Imperative logic
 // worklist (`↳`, covered below), never from a naming convention. Completeness is #3b's job: the worklist carries a
 // row for EVERY method, helpers included — `set<Lookup>Info`/`clear<Lookup>Info` silently disappearing is the
 // documented Known Trap (a companion field loaded by such a helper gets dropped, leaving a lone-field island).
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-const foldLogicTable = (foldCs.designSpec.split("#### Logic")[1] || "").split("####")[0];
-check("#3 Logic: NO method row reaches the Logic table — methods are the ⚠ Imperative logic worklist's alone",
-  /#### Logic/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
+const foldLogicTable = (foldCs.designSpec.split("#### Business rules")[1] || "").split("####")[0];
+check("#3 Logic: NO method row reaches the Business rules table — methods are the ⚠ Imperative logic worklist's alone",
+  /#### Business rules/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
   && !["onContactChange", "setContactInfo", "clearContactInfo"].some((m) => foldLogicTable.includes(m)),
   () => foldLogicTable);
 check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
@@ -3215,21 +3224,24 @@ const dcmCs = runMigration({ entity: "X",
 check("#8 DCM: Action Dashboard emits BOTH Case progress bar and Next steps components",
   dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar")
   && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps"));
-check("#8 DCM: each component carries the 'NOT in the default template — ADD it' + auto-populate note (widget + decision)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /NOT in the default Freedom form template/.test(w.note || "") && /auto-populates/.test(w.note || ""))
-  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /NOT in the default Freedom form template/.test(n.reason)));
-check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema ManagerName='DcmSchemaManager', NOT CaseSchemaManager (the false-negative that missed the stage bar)",
-  dcmCs.changeSet.widgets.every((w) => /DcmSchemaManager/.test(w.note || "") && /NOT 'CaseSchemaManager'/.test(w.note || ""))
-  && /DcmSchemaManager/.test(dcmCs.designSpec) && !/ManagerName='CaseSchemaManager'\b(?!.*wrong)/.test(dcmCs.designSpec));
+// ENG-96327 — the DCM build recipe (add-it / template / placement / on-stand case check) lives once in
+// classic-to-freedom-mapping.md (the Action Dashboard row), which the build agent is handed and told not to
+// re-derive — NOT the plan. Each widget's plan note is the plain human "auto-populates from the case" line and
+// carries no `builderNote`; a "widget" worklist decision still names each component to add.
+const dcmParts = dcmCs.changeSet.widgets.filter((w) => w.widget === "Case progress bar" || w.widget === "Next steps");
+check("#8 DCM: each component's plan note is the plain human auto-populate line (no build recipe on note/builderNote); a 'widget' decision names each",
+  dcmParts.length === 2
+  && dcmParts.every((w) => /auto-populates/.test(w.note || "") && !w.builderNote && !/NOT in the default Freedom form template/.test(w.note || ""))
+  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && n.item === "Case progress bar")
+  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && n.item === "Next steps"),
+  () => dcmCs.changeSet.widgets.map((w) => ({ widget: w.widget, note: w.note, builderNote: w.builderNote })));
+check("#8 DCM: the build recipe is NOT restated in the plan — the on-stand check (DcmSchemaManager) and the flag-icon / tools-slot tab wiring are absent (they live in classic-to-freedom-mapping.md)",
+  !/DcmSchemaManager/.test(dcmCs.designSpec) && !/flag-icon/.test(dcmCs.designSpec) && !/`tools` slot/.test(dcmCs.designSpec));
 check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
   /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
-check("#8 DCM: the notes carry the correct PLACEMENT — progress bar prefers PageWithTabsAndProgressBarTemplate (re-bind) with MainContainer fallback (not MainHeader); Next steps a tab beside Feed/Attachments (tools slot, flag-icon)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /PageWithTabsAndProgressBarTemplate/.test(w.note || "") && /RE-BIND/i.test(w.note || "") && /in `MainContainer`/.test(w.note || "") && /NOT in `MainHeader`/.test(w.note || ""))
-  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "") && /flag-icon/.test(w.note || "")),
-  () => dcmCs.changeSet.widgets.map((w) => w.note));
 // Recommendations is an inherited base-template container (empty by default, runtime-filled). It is classified
 // `chrome` and HIDDEN from the plan (kept in chromeWidgets for inspection) — not via a hardcoded per-run "ignore".
 const recoCs = runMigration({ entity: "X",
@@ -4314,7 +4326,7 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
   () => procSpec.split("\n").find((l) => /Section process/.test(l)));
 
 // Major — a HANDLER method name with a pipe/backtick must be escaped at its rendering sink (no raw pipe breaks the
-// table). That sink is the ⚠ Imperative logic worklist alone; the Logic table renders no method at all.
+// table). That sink is the ⚠ Imperative logic worklist alone; the Business rules table renders no method at all.
 const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
   { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
 const impLines = logicSpec.split("\n").filter((l) => /onFo|setFo/.test(l));
@@ -4322,9 +4334,9 @@ check("Major(imperative-sink): a piped handler/helper name is escaped in the wor
   impLines.length === 2 && impLines.some((l) => l.includes(String.raw`onFo\|oChanged`))
   && impLines.some((l) => l.includes(String.raw`setFo\|oInfo`)) && !impLines.some((l) => /[^\\]\|o(Changed|Info)/.test(l)),
   () => JSON.stringify(impLines));
-check("Major(imperative-sink): the Logic table renders no method name to escape in the first place",
-  /#### Logic/.test(logicSpec) && !(logicSpec.split("#### Logic")[1] || "").split("####")[0].includes("Fo"),
-  () => (logicSpec.split("#### Logic")[1] || "").split("####")[0]);
+check("Major(imperative-sink): the Business rules table renders no method name to escape in the first place",
+  /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
+  () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
 // The CALL names in `Body does` are a second sink for the same hostile input — a call path comes from an untrusted
 // body, and the cell prints it verbatim so the reader can grep for it. Fed straight to the renderer, bypassing the
@@ -4954,7 +4966,7 @@ const docTypedRulesDropped = runMigration({
 });
 check("typed-page tables-filled GATE(2): a typed body with rule sources but 0 mapped rules (empty Logic) → structure INCOMPLETE",
   docTypedRulesDropped.structure.complete === false
-  && docTypedRulesDropped.structure.issues.some((i) => /typed page 'XICPage'.*none mapped into the Logic/i.test(i)),
+  && docTypedRulesDropped.structure.issues.some((i) => /typed page 'XICPage'.*none mapped into the Business rules/i.test(i)),
   () => docTypedRulesDropped.structure.issues);
 // GATE(3) invariant — Overview Size, Main-scope typed rows and Typed-page mappings all come from ONE source,
 // so they cannot diverge: N(Main-scope "typed form" rows) == N("#### Typed form:" mappings) == Size "N typed forms".
@@ -5349,7 +5361,7 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Imperative members"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Logic", "#### ⚠ Imperative logic", "#### ⚠ Imperative members",
+      const order = ["#### Layout", "#### Business rules", "#### ⚠ Imperative logic", "#### ⚠ Imperative members",
         "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
     },
@@ -5580,9 +5592,10 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
 
 // Item 3's empty state and item 5's preamble are BOTH prose the criteria name explicitly, and prose is exactly
 // what a refactor drops silently. The probe page has methods and no rules, so it renders both.
-check("empty state: a page with methods but no rules says so, and still points at the worklist",
+check("empty state: a page with methods but no rules says so; the methods live in the ⚠ Imperative logic section below (no redundant pointer)",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
-  && /> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(evPlan),
+  && /#### ⚠ Imperative logic/.test(evPlan)
+  && !/custom method\(s\) — see/.test(evPlan),
   () => evPlan.split("\n").filter((l) => l.startsWith("> ")).slice(0, 4));
 check("preamble: the worklist names WHERE the ported/dropped/blocked mark is recorded",
   /Plan-vs-Done checklist row/.test(evPlan),
@@ -6064,13 +6077,13 @@ const ck = ckRun.checklist || "";
 // pinned on a fixture carrying only one of them, so nothing asserted the whole section — including that the method
 // count line CLOSES it, after the rules and before the next heading.
 {
-  const logicBlock = (ckRun.plan.split("#### Logic")[1] || "").split(/\n#### /)[0];
+  const logicBlock = (ckRun.plan.split("#### Business rules")[1] || "").split(/\n#### /)[0];
   const lines = logicBlock.split("\n").filter((l) => l.trim());
-  check("Logic (canonical): the rules table comes first and the method-count line closes the section",
-    /#### Logic/.test(ckRun.plan)
+  check("Logic (canonical): the rules table comes first and the section carries NO method-count pointer (ENG-96327 — methods live in ⚠ Imperative logic below)",
+    /#### Business rules/.test(ckRun.plan)
     && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
-    && /^> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\.$/.test(lines[lines.length - 1] || "")
+    && !lines.some((l) => /custom method\(s\) — see/.test(l))
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),
     () => lines);
 }

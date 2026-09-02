@@ -5,7 +5,7 @@
 // loose PARAPHRASE — no per-field table, features mislabelled. The agent cannot paraphrase a table it did
 // not write, so the engine emits it and the skill presents it verbatim.
 //
-// The spec is ONE layout table (structure + contents, no repetition) + a Logic table (behaviour that is
+// The spec is ONE layout table (structure + contents, no repetition) + a Business rules table (behaviour that is
 // not layout) + a Confirm list (the ⚠ worklist). Input = the runMigration() result. Output = Markdown.
 // Markdown tables cannot merge cells, so the Region column REPEATS per row (grouped, first-seen order).
 
@@ -47,6 +47,18 @@ const esc = (s) => strip(s)
 // marker — `#` `>` `-` `+` `*` or `N.` — else e.g. "## Boom" becomes a real heading. Escapes the leading
 // marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
 const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, String.raw`$1\$2`);
+// ENG-96327 — the ONE general rule for keeping AGENT/TECHNICAL guidance out of the plan the human approves.
+// Human-facing text is SHOWN (esc'd in a cell); agent-only build guidance goes through `builderOnly()` — a hidden
+// HTML comment the BUILD agent still reads in the raw plan.md, but the approver never sees it rendered. Emit its
+// output RAW (never `esc` it — `esc` would encode the `<!--` into visible junk, the exact bug this replaces). The
+// text is authored as a mapping row's own `builderNote` field, kept SEPARATE from the human `note`, so no one
+// hand-wraps `<!-- … -->` per comment again. Two sequences are neutralized because the surrounding surface still
+// parses them: `--` (collapsed → a comment cannot be closed early, so `-->` can't appear inside) and the table
+// `|` (escaped → the Markdown table row can't gain a phantom column even though the pipe is inside a comment).
+const builderOnly = (s) => {
+  const t = strip(s).replace(/-{2,}/g, "-").replaceAll("|", String.raw`\|`);
+  return t ? `<!-- ${t} -->` : "";
+};
 const isField = (o) => !!o?.values?.control;
 // A form's "content field" count for STRUCTURE gates (hollow-form / typed / child folds). A bound INPUT is either
 // control-bound (every normal field) OR a `crt.ImageInput` — which binds through `value`, NOT `control`. Counting
@@ -159,7 +171,7 @@ function rowsForFields(fields, regionOf) {
     const col = strip(f.values.control);
     const v = f.values || {};
     const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
-    const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
+    const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Business rules table
     // COMPACT per-field marker — the full cross-datasource recipe is printed ONCE under the Layout table (see
     // `linkedFieldsNote`), not repeated verbatim on every linked field (it was ~5× the same paragraph on a page).
     const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
@@ -189,15 +201,21 @@ function rowsForFeatures(standardFeatures, tabRegion) {
     const type = isList ? "Related list" : esc(s.feature);
     const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
-    const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
-    const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
+    // ENG-96327: a template-provided feature is STATIC (the template ships it), so a byEntity match is nothing to
+    // confirm — the Source cell already says "template-provided". Flag "confirm" only for a byEntity match that is
+    // NOT template-provided (a genuine inference to verify); otherwise the Additional cell contradicted the Source.
+    const inferredNote = (s.inferredFromEntity && !s.templateProvided) ? "⚠ inferred from entity — confirm" : DASH;
+    // The human sees the `note` (or the inferred/DASH marker); the `builderNote` rides along as a hidden comment
+    // (ENG-96327 general rule) so the build agent still gets the wiring guidance without it cluttering the plan.
+    const human = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
+    const add = s.builderNote ? `${human} ${builderOnly(s.builderNote)}` : human;
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
   });
 }
 function widgetSource(w) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
-  if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed) — build the form on that template + RE-BIND to the case; hand-adding to `MainContainer` is the fallback";
+  if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the case-stage bar placed)"; // ENG-96327: the human-facing fact; the build-how-to (build-on-that-template / RE-BIND / MainContainer fallback) rides on the widget's `builderNote`, hidden in the Additional cell
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
@@ -207,7 +225,11 @@ function widgetSource(w) {
 function rowsForWidgets(widgets) {
   return (widgets || []).map((w) => {
     const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
-    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
+    // Human note shown; the agent-only `builderNote` (template/container/tab-wiring recipe + on-stand DCM check)
+    // rides along as a hidden comment (ENG-96327 general rule) so the build detail never clutters the plan.
+    const wHuman = w.note ? esc(w.note) : DASH;
+    const add = w.builderNote ? `${wHuman} ${builderOnly(w.builderNote)}` : wHuman;
+    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, add] };
   });
 }
 const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
@@ -240,6 +262,7 @@ function cardActionNote(name, result, opts) {
   if (/print/i.test(name)) return printActionNote(result, opts, sigList);
   if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
   if (name === "Tag") return { type: "—", note: "Provided by the default Freedom template (tags) — nothing to migrate." };
+  if (name === "ReloadData") return { type: "—", note: "Provided by the default Freedom template (Reload) — nothing to migrate." };
   return { type: "Action", note: DASH };
 }
 function rowsForCardActions(cardActions, result, opts) {
@@ -327,22 +350,21 @@ function entityFilterRows(cs) {
     return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
   });
 }
-// Build the Logic-table rows (declarative page rules → entity/lookup filters → process launch).
-// Logic carries what the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the
-// table that carries the port obligation and traces the trigger from the data.
+// Build the Business-rules table rows: declarative page business rules → entity/lookup filters. Both are
+// declarative Freedom business rules. A process launch is NOT one — it is a card ACTION, and it already renders in
+// the Layout "Card actions" region (from the same `eff.processLaunch`), so it is not repeated here (ENG-96327 —
+// this table carries business rules only, no duplicate of the Card-actions row).
+// The rules the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the table
+// that carries the port obligation and traces the trigger from the data.
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
 function buildLogicRows(cs) {
-  const logic = [...pageRuleRows(cs), ...entityFilterRows(cs)];
-  if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
-    const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
-    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
-  }
-  return logic;
+  return [...pageRuleRows(cs), ...entityFilterRows(cs)];
 }
 
-// The `#### Logic` section. Rendered whenever the page has rules OR methods: a missing section reads as "the engine
-// dropped the rules", not as "there are none", so an all-imperative page states the absence and points at the method
-// worklist instead. Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
+// The `#### Business rules` section. Rendered whenever the page has rules OR methods: a missing section reads as "the
+// engine dropped the rules", not as "there are none", so an all-imperative page still states the absence (the
+// methods themselves live in the `⚠ Imperative logic` section immediately below, which carries its own count).
+// Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderLogicSection(cs) {
   const logic = buildLogicRows(cs);
   const stubCount = (cs.handlerStubs || []).length;
@@ -351,8 +373,9 @@ function renderLogicSection(cs) {
     ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
       ...logic.map((row) => `| ${row.join(" | ")} |`)]
     : ["> No declarative business rules or lookup filters on this page."];
-  const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Imperative logic** below.`] : [];
-  return ["#### Logic", ...table, ...pointer, ""];
+  // ENG-96327: no "see ⚠ Imperative logic below" pointer — that section's own header (with its count) is right
+  // below, so the pointer only repeated it. The empty-state line above still states the absence when there are no rules.
+  return ["#### Business rules", ...table, ""];
 }
 
 // The "Add record" line: which mini page (folded / cyclic / not-folded), a verified full edit page, or unverified.
@@ -640,7 +663,7 @@ function headerTemplateRecommendation(cs, opts) {
 // Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
 // ⚠ Imperative logic worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
 // checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
-// appears in the Logic table: it does not. Removing it from this Set puts every method in two worklists at once.
+// appears in the Business rules table: it does not. Removing it from this Set puts every method in two worklists at once.
 // ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
 // The ⚠ Imperative members worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
 // methods: each is a port unit that must end up ported / dropped / blocked, not a question with an on-stand answer.
@@ -702,7 +725,7 @@ export function renderDesignSpec(result, opts = {}) {
   const tabRegion = (tab) => regionOf(tab);
   const fields = vcd.filter(isField);
 
-  // Declarative page business rules render in the LOGIC table (below), NOT in the Layout Rule column — a reader
+  // Declarative page business rules render in the BUSINESS RULES table (below), NOT in the Layout Rule column — a reader
   // looks for the business rules in ONE place. The Layout Rule column carries only intrinsic field state
   // (read-only mirrors / column metadata), never rule-driven state.
   // `embedded` (rendered inside renderPlan) skips the standalone title/preamble to avoid duplicating renderPlan's

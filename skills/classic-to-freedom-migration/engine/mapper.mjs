@@ -282,7 +282,7 @@ export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
 // wording reaches the plan verbatim, so it is deliberately not reworded on the way through.
 function featureView(r) {
   return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
-    templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null,
+    templateProvided: !!r.meta.templateProvided, note: r.notes || null, builderNote: r.builderNote || null, componentType: r.verify?.componentType || null,
     // ENG-95683 — the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
     // package/feature prerequisite BY KIND instead of parsing it out of `note`/`freedom`. null when the row gates
     // nothing (a plain component).
@@ -1175,13 +1175,16 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
   const emitStandardFeature = (d, dentity, tab, feat, featByEntity) => {
-    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
+    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null, builderNote: feat.builderNote || null });
     const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
     const featProvided = feat.templateProvided
       ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
       : "; confirm the exact Freedom component + wiring";
     const featInferred = featByEntity ? ` — inferred from the entity name; confirm this is ${feat.feature} and not a business detail` : "";
-    const featNote = feat.note ? ` — ${feat.note}` : "";
+    // The reason is an AGENT-facing needsDecision (kind "standard-feature" is in SHOWN_ELSEWHERE, so it never
+    // renders in the human plan) — keep BOTH the human note and the agent-only `builderNote` here so the build
+    // agent's worklist entry stays complete even though the plan's Layout row hides the builder half (ENG-96327).
+    const featNote = [feat.note, feat.builderNote].filter(Boolean).map((n) => ` — ${n}`).join("");
     needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
       reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
   };
@@ -2074,9 +2077,12 @@ function mapWidgets(eff, opts = {}) {
     seenWidget.add(w.widget);
     // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
     if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, builderNote: w.builderNote || null, placement: w.placement || null });
     let tail;
-    if (w.note) tail = ` — ${w.note}`;
+    // The widget needsDecision is AGENT-facing (kind "widget" is in designspec's SHOWN_ELSEWHERE — never in the
+    // human Confirm), so keep BOTH the human note and the agent-only `builderNote` on the reason (ENG-96327).
+    const wNote = [w.note, w.builderNote].filter(Boolean).join(" — ");
+    if (wNote) tail = ` — ${wNote}`;
     else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
     else tail = "; confirm the Freedom component";
     needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });

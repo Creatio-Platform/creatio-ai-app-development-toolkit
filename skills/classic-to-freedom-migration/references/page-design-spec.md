@@ -127,14 +127,11 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
 | Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
-#### Logic
+#### Business rules
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
 | <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
-| Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
-
-> <N> custom method(s) — see **⚠ Imperative logic** below.
 
 #### ⚠ Imperative logic — account for EVERY row (<N>)
 | Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
@@ -194,7 +191,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Side profile › Request | Request | Lookup (InternalRequest) | PDS.InternalRequest | — | — |
 | Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
 | Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
-| Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
+| Tab · Basic information | Contact comms | Communication options | native — confirm component on-stand | — | — |
 | Tab · Basic information | Attachments | Attachments | template-provided | — | — |
 | Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
 | Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
@@ -202,15 +199,13 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Tab · Approvals | Visas | Approvals | native — confirm component on-stand | — | — |
 | Card actions | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
-#### Logic
+#### Business rules
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
 | Specialist expertise level | when Stage | required (else optional) | page business rule |
 | Request | when Stage | required (else optional) | page business rule |
 | Reject reason | when Stage | required (else optional) | page business rule |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
-
-> 2 custom method(s) — see **⚠ Imperative logic** below.
 
 #### ⚠ Imperative logic — account for EVERY row (2)
 | Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
@@ -220,7 +215,5 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 
 #### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.
-- **[detail-editability]** ContactCommunication — view-only vs add/edit/delete not on the master; resolve from the detail schema.
-- **[detail-editpage]** ContactCommunication — the related list opens the ContactCommunication form on add/edit; confirm a Freedom form (and mini page, if used) exists for it, or migrate it as a follow-on page.
 - **risk/gap:** created Freedom pages can't yet be re-opened in the visual designer — edits go via the agent.
 ```

@@ -287,7 +287,7 @@ function typedPageIssue(t) {
   if (t.resolved === "fold") {
     if (t.structIncomplete) return `typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`;
     if (!t.fieldCount) return `typed page '${t.schema}'${typeNote}: folded to an EMPTY Layout (0 fields) — the per-type mapping table is not filled. Check its bundle/seed (a real edit page always has fields); do not proceed on an empty form spec.`;
-    if (t.ruleSources > 0 && !t.ruleCount) return `typed page '${t.schema}'${typeNote}: its body DECLARES ${t.ruleSources} business-rule source(s) but NONE mapped into the Logic table — the rules were not read. Fix the rule extraction / confirm the shape before proceeding (do not build with an empty Logic table when rules exist).`;
+    if (t.ruleSources > 0 && !t.ruleCount) return `typed page '${t.schema}'${typeNote}: its body DECLARES ${t.ruleSources} business-rule source(s) but NONE mapped into the Business rules table — the rules were not read. Fix the rule extraction / confirm the shape before proceeding (do not build with an empty Business rules table when rules exist).`;
     return null;
   }
   return `typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`;
