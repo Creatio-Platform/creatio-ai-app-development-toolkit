@@ -758,6 +758,30 @@ const RETRY_ATTEMPTS = 2
 // Returns `{ result, ran }`, not the bare value. `ran` is what this loop KNOWS — an attempt handed back something.
 // A caller re-deriving it as `!!result` reads any falsy-but-PRESENT value as "the phase never ran" and marks a real
 // answer UNCHECKED downstream (PR#88 review). Death is a NULLISH outcome; `0`, `''` and `false` are results.
+// One yield, both failure shapes, no try/catch at the call site. A nullish outcome comes back as
+// `value: null`; a REJECTION is thrown into the generator by the driver's `sendFor`, and an
+// unwrapped yield let it propagate out of `run()` as a raw exception — past the structured verdict
+// the core had already written for the very same failure. Delegated (`yield*`) so the step still
+// reaches the driver unchanged, and so the two call sites that need it stay single expressions
+// rather than growing a try/catch each.
+function* stepOutcome(step) {
+  try {
+    const [value] = yield step
+    return { value: value ?? null, error: null }
+  } catch (error) {
+    return { value: null, error }
+  }
+}
+
+// How a failed phase names its own cause, in one place: an Error carries `name: message`, and a
+// nullish outcome is terminal death per the work-item contract. `null` when nothing failed.
+function failureCause(error, failed) {
+  if (!failed) return null
+  return error
+    ? `${error.name || 'Error'}: ${error.message || String(error)}`
+    : 'returned nothing (terminal death per the work-item contract)'
+}
+
 function* retryOnDeath(makeStep, onFailure) {
   let outcome = { result: null, ran: false }
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS && !outcome.ran; attempt++) {
@@ -1251,31 +1275,26 @@ function* run(rawInput, io = {}) {
   const sharedCoreDefault = `${input.outDir}/customizations-shared-core.md`
 
   phase('Context')
-  // Wrapped, because the driver has TWO ways to report a failed Context and only one of them used to
-  // reach the structured verdict below. A nullish outcome (terminal death) arrives as `ctx === null`;
-  // a REJECTION is thrown back in here by `sendFor`, and with no catch it propagated straight out of
-  // `run()` as a raw exception — same root cause, two caller-visible results: a documented verdict
-  // object, or a stack trace with no coverage numbers at all.
-  let ctx = null
-  let ctxError = null
-  try {
-    ;[ctx] = yield step({
-      items: [{
-        id: itemId('context', 'census-shared-core'),
-        phase: 'Context',
-        role: 'general-purpose',
-        prompt: contextPrompt(RULES, sharedCoreDefault),
-        inputFiles: [input.digest, input.manifest],
-        responseSchema: CONTEXT_SCHEMA,
-        access: ACCESS.STAND_READ_ONLY,
-        label: 'context:census+shared-core',
-      }],
-      requires: ['subAgents', 'structuredOutput'],
-      note: 'census + shared core (base chain, mixins, message register) + the row inventory',
-    })
-  } catch (e) {
-    ctxError = e
-  }
+  // Through `stepOutcome`, because the driver has TWO ways to report a failed Context and only one of
+  // them used to reach the structured verdict below. A nullish outcome (terminal death) arrives as
+  // `value: null`; a REJECTION is thrown back in here by `sendFor`, and with no catch it propagated
+  // straight out of `run()` as a raw exception — same root cause, two caller-visible results: a
+  // documented verdict object, or a stack trace with no coverage numbers at all.
+  const contextOutcome = yield* stepOutcome(step({
+    items: [{
+      id: itemId('context', 'census-shared-core'),
+      phase: 'Context',
+      role: 'general-purpose',
+      prompt: contextPrompt(RULES, sharedCoreDefault),
+      inputFiles: [input.digest, input.manifest],
+      responseSchema: CONTEXT_SCHEMA,
+      access: ACCESS.STAND_READ_ONLY,
+      label: 'context:census+shared-core',
+    }],
+    requires: ['subAgents', 'structuredOutput'],
+    note: 'census + shared core (base chain, mixins, message register) + the row inventory',
+  }))
+  const ctx = contextOutcome.value
 
   // A Context item that returned NOTHING is an orchestration failure, not a surface with nothing on it. Both used
   // to reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete
@@ -1285,9 +1304,7 @@ function* run(rawInput, io = {}) {
     // compares the return value against the pre-migration script byte for byte, and a rewording would
     // read as a behaviour change where there is none. A rejection is the case that had no verdict at
     // all, so that is the one that gains the cause.
-    const cause = ctxError
-      ? `${ctxError.name || 'Error'}: ${ctxError.message || String(ctxError)}`
-      : null
+    const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
     log(cause
       ? `the Context agent rejected — ${cause} — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe`
       : 'the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
@@ -1450,10 +1467,7 @@ function* run(rawInput, io = {}) {
   // Same gap as the Context yield: a rejecting Merge threw out of `run()` and discarded the deliberate
   // `mergeOk === false` handling immediately below it, which is what tells the caller the coverage
   // numbers stand but there is no deliverable.
-  let merged = null
-  let mergeError = null
-  try {
-    ;[merged] = yield step({
+  const mergeOutcome = yield* stepOutcome(step({
       items: [{
         id: itemId('merge', 'report-index'),
         phase: 'Merge',
@@ -1477,19 +1491,16 @@ function* run(rawInput, io = {}) {
       }],
       requires: ['subAgents', 'structuredOutput'],
       note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
-    })
-  } catch (e) {
-    mergeError = e
-  }
+    }))
+  const merged = mergeOutcome.value
 
   // The verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after the repair
   // round, so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
   // DELIVERABLES, and a Merge item that returned nothing wrote neither.
   const mergeOk = !!(merged?.reportPath && merged?.indexPath)
   if (!mergeOk) {
-    const cause = mergeError
-      ? ` — ${mergeError.name || 'Error'}: ${mergeError.message || String(mergeError)}`
-      : ''
+    const mergeCause = failureCause(mergeOutcome.error, !!mergeOutcome.error)
+    const cause = mergeCause ? ` — ${mergeCause}` : ''
     log(`the Merge phase returned no report/index${cause} — the coverage numbers stand, but this run has no deliverable and is NOT complete`)
   }
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)

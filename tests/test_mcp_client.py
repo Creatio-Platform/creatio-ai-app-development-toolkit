@@ -206,9 +206,23 @@ class McpClientTests(unittest.TestCase):
                 {"environment-name": "local"},
             )
 
-    def test_load_cli_arguments_refuses_a_file_outside_the_home_store(self):
-        # An absolute path outside the base, and a traversal out of it, are both refused BEFORE any
-        # read — and the console message names the base so the caller can see where to move the input.
+    def test_load_cli_arguments_reads_a_file_beside_the_checkout(self):
+        # The SECOND base. On Windows a checkout is routinely on a different volume from the
+        # profile, so a home-only store refused a fixture sitting next to the repo — which is
+        # exactly where a tool's own inputs live.
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp:
+            args_file = os.path.join(temp, "args.json")
+            with open(args_file, "w", encoding="utf-8") as handle:
+                handle.write('{"environment-name":"local"}')
+
+            self.assertEqual(
+                load_cli_arguments(args_file=args_file),
+                {"environment-name": "local"},
+            )
+
+    def test_load_cli_arguments_refuses_a_file_under_neither_base(self):
+        # Refused BEFORE any read, and the message names both bases so the caller can see where to
+        # move the input. A system directory is under neither the profile nor a checkout.
         outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
         traversal = os.path.join(os.path.expanduser("~"), "..", "..", "etc", "hosts")
         for requested in (outside, traversal):

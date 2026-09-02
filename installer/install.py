@@ -437,9 +437,23 @@ def meta_block(text: str, script_path: Path) -> str:
         raise RuntimeError(
             f"Workflow script's `{WORKFLOW_META_BLOCK_OPENER}` is not an object literal: {script_path}"
         )
+    end = _matching_brace(text, brace)
+    if end < 0:
+        raise RuntimeError(
+            f"Workflow script's `{WORKFLOW_META_BLOCK_OPENER}` block is unterminated: {script_path}"
+        )
+    return text[brace : end + 1]
+
+
+def _matching_brace(text: str, opening: int) -> int:
+    """Index of the ``}`` closing the ``{`` at ``opening``, or -1 when there is none.
+
+    Braces inside string literals are skipped, which is the only reason this is a scan rather than
+    a regex: a prompt or a description in the block may contain either character.
+    """
     depth = 0
     quote = ""
-    index = brace
+    index = opening
     while index < len(text):
         char = text[index]
         if quote:
@@ -455,11 +469,9 @@ def meta_block(text: str, script_path: Path) -> str:
         elif char == "}":
             depth -= 1
             if depth == 0:
-                return text[brace : index + 1]
+                return index
         index += 1
-    raise RuntimeError(
-        f"Workflow script's `{WORKFLOW_META_BLOCK_OPENER}` block is unterminated: {script_path}"
-    )
+    return -1
 
 
 def discover_workflow_scripts(source_root: Path) -> list[Path]:

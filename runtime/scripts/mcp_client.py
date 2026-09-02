@@ -21,7 +21,7 @@ import time
 # `path_store` lives one directory up (runtime/), and this script is run directly rather than
 # imported as part of a package, so the parent has to be on the path before it can be imported.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from path_store import home_store  # noqa: E402  (the sys.path line above is a prerequisite)
+from path_store import PathOutsideStore, PathStore, home_store  # noqa: E402  (needs the sys.path line above)
 
 USAGE = (
     "Usage:\n"
@@ -786,11 +786,25 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
     if args_file is not None:
         # Resolved through PathStore, not read from the caller's own string. The value never
         # becomes a path component: it is split into plain names and each name is used only as an
-        # equality key against the listing of the directory reached so far, so `..`, an absolute
-        # escape and a foreign drive letter are inexpressible rather than merely rejected. The
-        # store is rooted at the user's home directory, which keeps this entry point out of
-        # system directories, other volumes and other accounts.
-        return json.loads(Path(home_store().resolve(args_file)).read_text(encoding="utf-8"))
+        # equality key against the listing of the directory reached so far, so `..` and a
+        # traversal are inexpressible rather than merely rejected.
+        #
+        # TWO bases, tried in order, because one is not enough for this entry point. The home
+        # directory is where a session export or a downloaded payload lives; the working
+        # directory is where a checkout's own fixture lives, and on Windows a checkout is
+        # routinely on a different volume from the profile (a CI runner's `D:\a\...`), which a
+        # home-only store refuses outright. Both are bases the PROGRAM chooses, never the
+        # argument -- which is the property that matters; what is excluded is everything under
+        # neither, i.e. system directories and other accounts.
+        for store in (home_store(), PathStore(os.getcwd())):
+            try:
+                resolved = store.resolve(args_file)
+            except PathOutsideStore:
+                continue
+            return json.loads(Path(resolved).read_text(encoding="utf-8"))
+        raise PathOutsideStore(
+            f"--args-file {args_file!r} is under neither your home directory nor the current "
+            f"working directory ({os.getcwd()}); move the file under one of them.")
     data = sys.stdin.read() if stdin_text is None else stdin_text
     if not data.strip():
         raise ValueError("--args-stdin requires JSON on stdin")
