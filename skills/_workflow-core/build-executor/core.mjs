@@ -47,7 +47,8 @@ import {
   buildSchemaWithResolutions, capCarryText, completionLine, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
   pairKey, pairParts, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
   resolutionClaimCount, resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs,
-  tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause, unsettledResolutionClaims,
+  tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause,
+  unnamedRuleSurfaceChecks, unnamedRuleSurfaceLogLine, unsettledResolutionClaims,
   verifierSchemaWithChecks,
   unconsumedResolutions,
   UNCONSUMED_CARRY_WARN,
@@ -224,6 +225,19 @@ let unconsumed = []
 // `runReturn` is defined above that state, and every early return (a hard stop, `reconcile-failed`, the
 // prologue) calls it before the round loop exists. Declared late it was a TDZ throw on all four modes of the
 // run's own prologue — the same class as the missing-import defect this PR opened with, from the other side.
+// PER-INVOCATION ONLY, AND DELIBERATELY SO (PR #128 review, round 18). Every sibling round-crossing field on this
+// channel -- `unconsumed`, `resolutionsReopened`, `resolutionsPending`, `blockedItems` -- rides `carryNow()` and is
+// re-seeded on resume, and a reader who assumed parity here would be right to: this one does NOT, and resets to an
+// empty Map on every fresh `run()`. A build that stops after several `unknown` rounds and resumes reports the
+// unsettled count as if verification had just started.
+// WHY IT IS NOT CARRIED, measured rather than asserted: re-seeding means the value comes back through Reconcile's
+// answer, i.e. a new REQUIRED key on `RECONCILE_SCHEMA`. That schema serialises to 3820 bytes against a stated
+// budget of 3900 and the host's HARD 4096-byte classifier cap -- 80 bytes of headroom, and a required key costs
+// double because it appears in `properties` AND in `required`. It does not fit, and a schema over the cap is a
+// phase that cannot start at all (ENG-95930), which is a strictly worse failure than a diagnostic that restarts.
+// THE COST IS BOUNDED because this signal is NON-GATING: `unsettledResolutionClaims` feeds operator-facing text
+// only, never the `complete` decision, so a reset loses accumulated evidence and never changes a build verdict.
+// An operator reading a resumed run should treat the unsettled count as "since this process started".
 let resolutionCheckTally = new Map()
 
   // ---------------------------------------------------------------------------
@@ -2704,6 +2718,12 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // verifier row is released by a FRESH non-refuting read this round -- `yes` OR `unknown` (finding 2): a rule-shaped
       // answer whose effect the page body cannot show can only ever score `unknown` after its rebuild, so requiring a `yes`
       // to clear it would block `complete` for ever once the unit went green and stopped being re-verified.
+      // PR #128 review (round 18) -- SAY WHICH ROWS THE NARROW ESCAPE REFUSED, before the reconcile consumes the
+      // pre-reconcile list. A rule-shaped row whose `unknown` named no surface is held on a DIFFERENT ground from a
+      // row nobody verified, and the two used to be indistinguishable in the report. Read here because both halves —
+      // this round's checks and the rows as they stand before release — are in hand at exactly this point.
+      const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
+      if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
       unconsumed = reconcileUnconsumed(unconsumed,
         owedResolutionPairs(state.preflightItems, state.unitKeys),
         releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))

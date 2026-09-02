@@ -1540,11 +1540,28 @@ function owedResolutionPairs(items, unitKeys) {
   for (const k of keys) for (const p of resolutionsForUnit(items, k, keys)) out.add(pairKey(k, p.id))
   return out
 }
-const RULE_SURFACE_TOKENS = ['businessrules', 'businessrule_', 'read-page-business-rules', 'business rule']
+const RULE_SURFACE_STEMS = ['businessrule', 'readpagebusinessrules']
 const namesRuleSurface = (found) => {
   if (!nonBlank(found)) return false
-  const t = String(found).toLowerCase()
-  return RULE_SURFACE_TOKENS.some((k) => t.includes(k))
+  const t = String(found).toLowerCase().replace(/[\s_\-]+/g, '')
+  return RULE_SURFACE_STEMS.some((k) => t.includes(k))
+}
+function unnamedRuleSurfaceChecks(checks, entries) {
+  const byPair = new Map((entries || []).filter((u) => u && u.source === UNCONSUMED_FROM_VERIFIER)
+    .map((u) => [pairKey(u.unit, u.id), u]))
+  const out = []
+  for (const c of checkRowsByPair(checks).values()) {
+    if (c.shows !== SHOWS_UNKNOWN || namesRuleSurface(c.found)) continue
+    const u = byPair.get(pairKey(c.unit, c.id))
+    if (!u || !isRuleShapedKind(u.kind)) continue
+    out.push({ unit: c.unit, id: c.id, found: capCarryText(nonBlank(c.found) ? String(c.found).trim() : '') })
+  }
+  return out
+}
+function unnamedRuleSurfaceLogLine(rows) {
+  if (!(rows || []).length) return ''
+  const ids = capCarryText(rows.map((r) => `${JSON.stringify(r.unit)}/${JSON.stringify(r.id)}`).join(', '))
+  return `RULE-SHAPED ANSWER HELD, SURFACE NOT NAMED (${rows.length}): ${ids} — the verifier answered \`unknown\` without naming the business-rule surface, so the narrow rule-shaped release did not apply and these rows stay held. If the verifier did look and simply worded it differently, that is a matcher gap, not an unbuilt answer.`
 }
 function unsettledResolutionClaims(tally, minRounds = 1) {
   const out = []
@@ -1629,12 +1646,12 @@ Build the answer, or return \`applied: false\` with a \`why\` that is a REASON r
 }
 function unconsumedLogLine(entries) {
   if (!(entries || []).length) return ''
-  const ids = (entries || []).map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
-  return `UNCONSUMED OPERATOR ANSWERS: ${ids} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`
+  const ids = capCarryText((entries || []).map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', '))
+  return `UNCONSUMED OPERATOR ANSWERS (${(entries || []).length}): ${ids} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`
 }
 function unconsumedNextClause(entries) {
   if (!(entries || []).length) return ''
-  const ids = entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
+  const ids = capCarryText(entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', '))
   return ` ALSO: ${entries.length} operator answer(s) reached a build agent and produced NO build action — ${ids}. The engine gate has no row for this and never will; put each one to the user with its \`why\` from \`unconsumedResolutions\`, then either fix the build or record the decision to drop the answer.`
 }
 
@@ -3504,6 +3521,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         }
         if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
       }
+      const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
+      if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
       unconsumed = reconcileUnconsumed(unconsumed,
         owedResolutionPairs(state.preflightItems, state.unitKeys),
         releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))

@@ -731,6 +731,16 @@ const genSrc = readFileSync(GENERATED, "utf8");
   const res = spawnSync(process.execPath, [path.join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   check("generator: the shipped `.workflow.js` is IN SYNC with the core — an edit to either alone must fail here, not ship as a silent divergence",
     res.status === 0, () => `${res.stdout}${res.stderr}`);
+  // ANTI-VACUITY on the gate itself (PR #128 review, round 18). `--check` now runs behind an entry-point guard, so
+  // the script is importable and a test can reach `stripComments`. A guard that stopped matching — a launcher that
+  // hands over a symlinked or differently-cased argv[1] — would make this script exit 0 having compared NOTHING,
+  // and a status-only assertion would call that green. So the gate must be seen to have SPOKEN: one line per target.
+  check("generator: `--check` actually COMPARED both targets — a status-0 run that printed nothing is a gate that did not run, not a gate that passed",
+    () => {
+      const lines = `${res.stdout}`.split("\n").filter((l) => /matches the core|is out of sync/.test(l));
+      return lines.length === 2;
+    },
+    () => `stdout was: ${JSON.stringify(res.stdout)}`);
 }
 /* PR #128 (round 17) — EVERY SIBLING EXPORT A MODULE CALLS MUST BE IN ITS IMPORT LIST.
    This is the one defect class the generated artifact CANNOT show and the slice suite cannot see: the inlined

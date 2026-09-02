@@ -388,6 +388,18 @@ nowhere, because nothing asked. So:
 This never softens the invariant above, only tightens it: the verifier files NO evidence record for an answer and
 closes NO row with one. An answer is still an input to a build, never proof that one happened.
 
+**One signal on this channel is NOT persisted, and that is a stated limit rather than an oversight.**
+`unsettledResolutionClaims` — the report of claims a verifier answered `unknown` for and never once settled —
+counts within **a single process lifetime only**. It does not ride the carry and is not re-seeded by Reconcile,
+so a run that stops and resumes reports the unsettled count **as if verification had just started**. Read it as
+"since this process started", not "since this folder began". Everything else on this channel does survive a
+resume, so the asymmetry is worth naming: the reason is size, not principle. Re-seeding it means another REQUIRED
+key on `RECONCILE_SCHEMA`, which serialises to **3820 bytes** against a stated budget of 3900 and the host's hard
+**4096-byte** classifier cap — a required key is charged twice (`properties` and `required`), and a schema over
+that cap is a phase that cannot start at all. The signal is **non-gating** — it feeds operator-facing text and
+never the `complete` decision — so a reset costs accumulated evidence and can never change a build verdict, which
+is what makes it the affordable half of that trade.
+
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand
 all of it back to the fan-out — measured on a real folder, 107 evidence records were on file and every

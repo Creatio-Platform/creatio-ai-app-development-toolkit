@@ -2185,10 +2185,29 @@ function verifierSchemaTable(fetchKeys, unitKeys, schemas) {
 // returns and the wording it appends, which is what the parity scenarios observe. It is never populated here,
 // so a scenario that produced a non-empty carry would diverge — deliberately, and none does today.
 const unconsumed = []
+// PR #128 review (round 18) — MIRRORED SO THE RENDER CAN BE COMPARED ON A POPULATED CARRY. `unconsumed` above stays
+// `[]` and stays deliberately un-driven: the channel's own logic (matching answers to questions, spending a repair
+// grant, blocking `complete`) is NOT modelled here and must not be, or this frozen reference becomes a second
+// implementation to keep honest. But the RENDER is this file's job, and a scenario-driven run can only ever exercise
+// the empty path — so the populated path was covered by nothing at all, which is what `run-workflow-parity.mjs`'s
+// carry-render check now closes by calling THIS function and the shipped one side by side. The cap and its two
+// constants are carried for the same reason the wording is: they are part of the rendered output.
+const CARRY_TEXT_CAP = 400
+const CARRY_TEXT_TRUNCATED = ' …[truncated]'
+function capCarryText(value) {
+  if (typeof value !== 'string') return value ?? null
+  if (value.length <= CARRY_TEXT_CAP) return value
+  return `${value.slice(0, CARRY_TEXT_CAP - CARRY_TEXT_TRUNCATED.length)}${CARRY_TEXT_TRUNCATED}`
+}
 function unconsumedNextClause(entries) {
   if (!(entries || []).length) return ''
-  const ids = entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
+  const ids = capCarryText(entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', '))
   return ` ALSO: ${entries.length} operator answer(s) reached a build agent and produced NO build action — ${ids}. The engine gate has no row for this and never will; put each one to the user with its \`why\` from \`unconsumedResolutions\`, then either fix the build or record the decision to drop the answer.`
+}
+function unconsumedLogLine(entries) {
+  if (!(entries || []).length) return ''
+  const ids = capCarryText((entries || []).map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', '))
+  return `UNCONSUMED OPERATOR ANSWERS (${(entries || []).length}): ${ids} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`
 }
 function runReturn(extra) {
   return {

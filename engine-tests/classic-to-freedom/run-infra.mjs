@@ -185,7 +185,8 @@ const H_ANSWERS_CHANNEL = ["resolutionAccountingMiss", "unconsumedResolutions",
   "grantPairsToPersist", "seedGrantPairs",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "checkRowsByPair", "isRuleShapedKind", "verifierSchemaWithChecks", "resolutionClaimCount",
-  "namesRuleSurface", "tallyResolutionChecks", "unsettledResolutionClaims"];
+  "namesRuleSurface", "tallyResolutionChecks", "unsettledResolutionClaims",
+  "unnamedRuleSurfaceChecks", "unnamedRuleSurfaceLogLine"];
 // The in-context gate: what a unit says about itself, and whether it may continue rather than park.
 const H_SELF_CHECK = ["selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
@@ -2800,6 +2801,77 @@ check("PR #128 review (round 17, review Minor): `namesRuleSurface` accepts the s
     && ["", "   ", "could not tell", "not visible", "unknown"].every((t) => !wf.namesRuleSurface(t))
     && wf.namesRuleSurface(undefined) === false,
   () => "surface tokens accepted, bare prose refused");
+check("PR #128 review (round 18, review Minor): `namesRuleSurface` is SEPARATOR-INSENSITIVE — the four literal spellings were a closed list matched against LLM free text, and an HONEST verifier that named the right surface in a shape nobody anticipated (`BusinessRule schema`: no plural, no underscore, no space inside the term) fell out of all four and had its row held for ever. Every spelling of the ONE term now matches; prose that names NO surface still does not, which is the fail-closed direction this escape depends on",
+  () => ["BusinessRule schema", "the BusinessRule schemas", "business-rules on the page", "BUSINESSRULE_Deal",
+      "checked pages[main].business_rules", "Business Rules section"].every((t) => wf.namesRuleSurface(t))
+    // ...and the widening did not become a generic "is this prose specific enough" heuristic, which is the thing the
+    // narrow escape must keep refusing. Anything that names no surface still fails, including near-misses.
+    && ["could not determine from the fetched view", "the rule is fine", "business logic looks right",
+        "not visible", "nothing found", "rules"].every((t) => !wf.namesRuleSurface(t))
+    && wf.namesRuleSurface(null) === false && wf.namesRuleSurface(42) === false,
+  () => JSON.stringify({
+    shouldMatch: ["BusinessRule schema", "business-rules on the page", "Business Rules section"].filter((t) => !wf.namesRuleSurface(t)),
+    shouldNotMatch: ["the rule is fine", "business logic looks right", "rules"].filter((t) => wf.namesRuleSurface(t)),
+  }));
+check("PR #128 review (round 18, review Minor): a rule-shaped row REFUSED on the surface-naming ground is reported DISTINGUISHABLY — until now it was held silently, i.e. identical from the operator's side to a row nobody looked at, and the two have opposite remedies (widen the matcher vs go read the page). NON-GATING: this changes no release decision, it only says which rows were refused and why",
+  () => {
+    const rows = [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "could not determine from the fetched view" }];
+    const held = wf.unnamedRuleSurfaceChecks(rows, [rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")]);
+    // A verifier that DID name the surface is not reported — it is released, not refused.
+    const named = wf.unnamedRuleSurfaceChecks(
+      [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "read pages[main].businessRules" }],
+      [rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")]);
+    // A NON-rule-shaped row is out of scope: the narrow escape never applied to it, so nothing was refused on this ground.
+    const notRuleShaped = wf.unnamedRuleSurfaceChecks(rows, [rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "field")]);
+    // A DISPATCH-sourced row is out of scope for the same reason — the escape is verifier-sourced only.
+    const dispatchSourced = wf.unnamedRuleSurfaceChecks(rows, [rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_DISPATCH, "lookup-value")]);
+    // A `yes`/`no` row settles the pair and is never "refused for not naming a surface".
+    const settled = wf.unnamedRuleSurfaceChecks(
+      [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_NO, found: "" }],
+      [rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")]);
+    return held.length === 1 && held[0].unit === "main" && held[0].id === RC_B
+      && named.length === 0 && notRuleShaped.length === 0 && dispatchSourced.length === 0 && settled.length === 0
+      // ...and it RENDERS, naming the count and the pair, with an empty list rendering nothing at all.
+      && wf.unnamedRuleSurfaceLogLine(held).includes("RULE-SHAPED ANSWER HELD, SURFACE NOT NAMED (1)")
+      && wf.unnamedRuleSurfaceLogLine(held).includes(JSON.stringify(RC_B))
+      && wf.unnamedRuleSurfaceLogLine([]) === "" && wf.unnamedRuleSurfaceLogLine(undefined) === "";
+  },
+  () => JSON.stringify(wf.unnamedRuleSurfaceChecks(
+    [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "could not determine" }],
+    [rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")])).slice(0, 300));
+check("PR #128 review (round 18): the run LOGS that refusal — a pure helper nobody calls is a report that never reaches an operator, which is this ticket's own failure shape one level up",
+  () => /unnamedRuleSurfaceChecks\(lastVerifier\?\.resolutionChecks, unconsumed\)/.test(wfSrc)
+    && /log\(unnamedRuleSurfaceLogLine\(unnamedSurface\)\)/.test(wfSrc));
+check("PR #128 review (round 18, review Minor): `unconsumedNextClause` and `unconsumedLogLine` CAP their joined id list, the way `missIdList` already does at its call sites. One folder can hold many unconsumed answers, an id is `{pageKey}#confirm:{kind}:{item}` with stand-derived `item` on the end, and this text is re-rendered into the orchestrating agent's instructions on EVERY not-complete close. The COUNT is stated separately and is never truncated, so a capped list still tells the operator how many rows are actually held",
+  () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ unit: `child:Entity${i}`, id: `#confirm:field:AVeryLongQuestionTextThatGoesOnAndOn${i}` }));
+    const next = wf.unconsumedNextClause(many), line = wf.unconsumedLogLine(many);
+    const one = wf.unconsumedNextClause([{ unit: "main", id: "#confirm:dcm:Deal" }]);
+    return next.includes("…[truncated]") && line.includes("…[truncated]")
+      // The COUNT survives the cap on both renders — a truncated list that hid how many rows there were would turn
+      // a bound into exactly the silent loss this channel exists to end.
+      && next.includes("40 operator answer(s)") && line.includes("UNCONSUMED OPERATOR ANSWERS (40)")
+      // ANTI-VACUITY: a SHORT list is not truncated, so the cap is a bound rather than an unconditional slice.
+      && !one.includes("…[truncated]") && one.includes('"main"/"#confirm:dcm:Deal"')
+      && wf.unconsumedNextClause([]) === "" && wf.unconsumedLogLine([]) === "";
+  },
+  () => JSON.stringify({
+    next: wf.unconsumedNextClause(Array.from({ length: 40 }, (_, i) => ({ unit: `u${i}`, id: `#confirm:field:x${i}` }))).slice(0, 300),
+  }));
+check("PR #128 review (round 18): the PER-INVOCATION LIMIT of `unsettledResolutionClaims` is STATED where a reader meets it, not left to be inferred from parity with its siblings. It is the one field on this channel that does NOT ride the carry — `RECONCILE_SCHEMA` has no room for another required key — and an undocumented asymmetry beside four documented carries reads as an oversight, which is how it arrived at review",
+  // `coreSrc`, not `wfSrc`: comments do not ship (round 17b), so a prose pin against the generated artifact could
+  // never pass. The note lives in `_workflow-core/build-executor/core.mjs`, which is what a maintainer reads.
+  () => /PER-INVOCATION ONLY, AND DELIBERATELY SO/.test(coreSrc)
+    // The reason is RECORDED with its numbers, so the next person to consider carrying it does not re-derive them.
+    && /3820 bytes/.test(coreSrc) && /4096-byte classifier cap/.test(coreSrc)
+    // ANTI-VACUITY: the note describes the code that is actually there — the tally is still absent from `carryNow()`
+    // in the SHIPPED artifact, so a future change that DOES carry it makes this pin red and the note gets corrected
+    // with it rather than standing as a stale claim.
+    && /const carryNow = \(\) => \(\{[^}]*\}\)/.test(wfSrc)
+    && !/carryNow = \(\) => \(\{[^}]*resolutionCheckTally/.test(wfSrc)
+    // ...and the field it is about is genuinely still there and still per-invocation.
+    && /let resolutionCheckTally = new Map\(\)/.test(wfSrc),
+  () => "the stated limit and the code must agree");
 check("PR #128 review (round 17, review Minor): a verifier that NEVER SETTLES is reported — a claim with `unknown` and no `yes`/`no` lands in `unsettledResolutionClaims`, counted across rounds, which is the shape of the original defect arriving through a channel that looks compliant. NON-GATING: `unknown` is a legitimate answer, so this reports and never fails a run",
   () => { let t = wf.tallyResolutionChecks(new Map(), [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "x" }]);
     const afterOne = wf.unsettledResolutionClaims(t);
@@ -2905,9 +2977,9 @@ check("PR #128 review: Reconcile can REPORT the record back — a field the sche
       new Set(["i1"])).length === 1,
   () => JSON.stringify(wf.RECONCILE_SHAPE?.unconsumedResolutions));
 check("PR #128 review: the seed RECONCILES what it rehydrates instead of trusting it — a persisted entry whose question has since been withdrawn or re-keyed must not come back from the dead and hold a finished folder open; and it fails closed per entry on the published-id set (finding 1)",
-  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\), publishedResolutionIds\(state\.preflightItems\)\)/.test(wfSrc));
+  /unconsumed = reconcileUnconsumed\(state\.unconsumedResolutions \|\| \[\],\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\), new Set\(\), publishedResolutionIds\(state\.preflightItems\)\)/.test(wfSrc));
 check("PR #128 review: the round tail reconciles the WHOLE set once, AFTER the verifier — the per-dispatch clear could reach neither a stale entry nor a verifier-released one, which is why both defects were invisible to a per-unit pin; the release set is `releasedResolutionPairs` (yes OR unknown, finding 2) and the fail-closed guard is `publishedResolutionIds` (finding 1)",
-  /unconsumed = reconcileUnconsumed\(unconsumed,\s*\n?\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*\n?\s*releasedResolutionPairs\(lastVerifier\?\.resolutionChecks\), publishedResolutionIds\(state\.preflightItems\)\)/.test(wfSrc));
+  /unconsumed = reconcileUnconsumed\(unconsumed,\s*owedResolutionPairs\(state\.preflightItems, state\.unitKeys\),\s*releasedResolutionPairs\(lastVerifier\?\.resolutionChecks\), publishedResolutionIds\(state\.preflightItems\)\)/.test(wfSrc));
 
 /* --- RC-4: "cannot tell" is a state of its own, in the schema AND in the words the verifier reads. --- */
 check("PR #128 review: the verifier's `shows` field is the THREE-value vocabulary and not a boolean — with two values an effect the page cannot show had to be reported as a refutation, so a false contradiction was the EXPECTED outcome for this ticket's own new `lookup-value` id",
@@ -3035,7 +3107,7 @@ check("PR #128 review (finding 1): both reconcile sites pass `publishedResolutio
 // clear drops only dispatch-sourced rows, so a verifier-confirmed contradiction survives it; without this filter the
 // next dispatch's miss for the same `(unit, id)` carried a SECOND row for one answer into the operator report.
 check("PR #128 third-round review (RC-9): a dispatch-sourced miss is deduped against a SURVIVING verifier-sourced row for the same `(unit, id)` — the per-unit clear drops only dispatch rows, so without this filter one answer surfaced twice in the operator report and held the run open twice",
-  /const gone = unconsumedResolutions\(routed, res, unit\.key\)\s*\n?\s*\.filter\(\(g\) => !hasUnconsumedPair\(unconsumed, g\.unit, g\.id\)\)/.test(wfSrc));
+  /const gone = unconsumedResolutions\(routed, res, unit\.key\)\s*\.filter\(\(g\) => !hasUnconsumedPair\(unconsumed, g\.unit, g\.id\)\)/.test(wfSrc));
 /* ===================================================================================================
    PR #128 FIFTH-ROUND REVIEW — the two findings that survived the round-5 fixes: text recorded onto an
    entry that RIDES THE CARRY was capped only at its render sites, and the two `(unit, id)` dedup sites
@@ -3070,9 +3142,9 @@ check("PR #128 review (round 5, Major): the cap leaves a SHORT value byte-identi
     && String(wf.capCarryText(CAP_LONG)).slice(0, CARRY_TEXT_CAP) === wf.capCarryText(CAP_LONG),
   () => JSON.stringify(wf.capCarryText(CAP_LONG)).slice(0, 120));
 check("PR #128 review (round 5, Major): BOTH record sites call `capCarryText` in the shipped source — the helper existing while a site still records raw text is the same silence in a new place",
-  /item: capCarryText\(row\.item\),\s*\n?\s*answer: capCarryText\(row\.answer\), how: capCarryText\(row\.how\)/.test(wfSrc)
+  /item: capCarryText\(row\.item\),\s*answer: capCarryText\(row\.answer\), how: capCarryText\(row\.how\)/.test(wfSrc)
     && /found: nonBlank\(seen\.found\) \? capCarryText\(seen\.found\.trim\(\)\)/.test(wfSrc)
-    && /item: capCarryText\(p\.item\) \|\| null,\s*\n?\s*answer: capCarryText\(p\.resolution\?\.answer\) \|\| null/.test(wfSrc)
+    && /item: capCarryText\(p\.item\) \|\| null,\s*answer: capCarryText\(p\.resolution\?\.answer\) \|\| null/.test(wfSrc)
     && /why: nonBlank\(byId\.get\(idKey\(p\.id\)\)\?\.why\) \? capCarryText\(byId\.get\(idKey\(p\.id\)\)\.why\.trim\(\)\)/.test(wfSrc));
 check("PR #128 review (round 5, Major): `item` is capped on BOTH carry-record sites too — it is stand-derived free text off the customer's Classic schema riding the same persisted row, so an uncapped one floods the round-close prompt for the life of the entry exactly like an uncapped `why` does",
   () => { const gone = wf.unconsumedResolutions(
@@ -4731,6 +4803,15 @@ const execSkill = readFileSync(fileURLToPath(new URL("../../skills/freedom-build
 check("executor SKILL.md: carries the untrusted-data rule across the delegation boundary (the parent skill states it; this side used not to mention it at all)",
   /untrusted DATA/i.test(execSkill) && /<<UNTRUSTED-DATA>>/.test(execSkill),
   () => execSkill.split("\n").filter((l) => /untrusted/i.test(l)).slice(0, 3).join("\n"));
+check("executor SKILL.md (PR #128 review, round 18): the ONE signal on the answers channel that does NOT survive a resume is named as such, with its bound. Everything else here is documented as surviving; an asymmetry a reader has to discover by grepping `carryNow()` is how this reached review as a suspected defect rather than as a stated limit",
+  /`unsettledResolutionClaims`/.test(execSkill)
+    && /single process lifetime/i.test(execSkill)
+    && /as if verification had just started/i.test(execSkill)
+    // The bound is given with its numbers, so the limit reads as a measured trade rather than an excuse.
+    && /3820 bytes/.test(execSkill) && /4096-byte/.test(execSkill)
+    // ...and the reader is told what it costs: non-gating, so a reset can never change a build verdict.
+    && /non-gating/i.test(execSkill),
+  () => execSkill.split("\n").filter((l) => /unsettledResolutionClaims|single process lifetime/i.test(l)).slice(0, 4).join("\n"));
 
 /* --- THE `list` UNIT'S BUILD PROMPT, pinned against the engine constants it DESCRIBES. The prompt is prose, so no
    behavioural test reaches it, and prose that restates a constant is a second copy of it — free to disagree. A

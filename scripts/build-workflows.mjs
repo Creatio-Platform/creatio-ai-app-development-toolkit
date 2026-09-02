@@ -19,7 +19,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE = path.join(ROOT, 'skills', '_workflow-core')
@@ -167,8 +167,13 @@ function topLevelNames(text) {
 // sentinels survive. `OPERATOR FINDINGS from an earlier checkpoint` bounds the `buildPrompt` slice the render
 // harness compiles, and it deliberately stops PART WAY through that function (the tail reaches for paths the
 // harness does not stub). Adding a marker here is a deliberate act, exactly like raising a budget.
-const KEEP_COMMENT = /GENERATED FILE|build-workflows\.mjs|OPERATOR FINDINGS from an earlier checkpoint/
-function stripComments(src) {
+// EXPORTED for `engine-tests/build-workflows/strip-comments.mjs` (PR #128 review, round 18). The only guard this
+// scanner had was `--check`, which asserts the shipped artifact is byte-identical to a fresh regeneration — that
+// proves REPRODUCIBILITY, not CORRECTNESS. A stripper bug that ate a character inside a prompt string would corrupt
+// both sides of that identity comparison identically and pass for ever, and the failure would surface as an agent
+// misbehaving on instructions nobody could see were wrong. So the tokeniser is testable directly.
+export const KEEP_COMMENT = /GENERATED FILE|build-workflows\.mjs|OPERATOR FINDINGS from an earlier checkpoint/
+export function stripComments(src) {
   let out = ''
   let i = 0
   const n = src.length
@@ -337,26 +342,32 @@ function build(target) {
   return stripComments(text).replace(/\r\n/g, '\n')
 }
 
-const check = process.argv.includes('--check')
-let failed = 0
-for (const target of TARGETS) {
-  const outPath = path.join(ROOT, target.out)
-  const next = build(target)
-  const current = safeRead(outPath)
-  if (check) {
-    if (current !== next) {
-      failed++
-      process.stderr.write(`❌ ${target.out} is out of sync with skills/_workflow-core/ — run \`node scripts/build-workflows.mjs\`\n`)
-      process.stderr.write(`   ${firstDifference(current, next)}\n`)
+// RUN THE BUILD ONLY WHEN THIS FILE IS THE ENTRY POINT. It used to run at module scope, which made the script
+// unimportable: a test that wanted `stripComments` got a full regeneration (and, without `--check`, WROTE every
+// shipped artifact) as a side effect of the import. Guarding on the entry point is what lets the tokeniser above be
+// tested directly; the CLI behaviour — both `--check` and the plain regenerate — is byte for byte what it was.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const check = process.argv.includes('--check')
+  let failed = 0
+  for (const target of TARGETS) {
+    const outPath = path.join(ROOT, target.out)
+    const next = build(target)
+    const current = safeRead(outPath)
+    if (check) {
+      if (current !== next) {
+        failed++
+        process.stderr.write(`❌ ${target.out} is out of sync with skills/_workflow-core/ — run \`node scripts/build-workflows.mjs\`\n`)
+        process.stderr.write(`   ${firstDifference(current, next)}\n`)
+      } else {
+        process.stdout.write(`✅ ${target.out} matches the core\n`)
+      }
     } else {
-      process.stdout.write(`✅ ${target.out} matches the core\n`)
+      writeFileSync(outPath, next, 'utf8')
+      process.stdout.write(`${current === next ? '=' : '→'} ${target.out} (${next.split('\n').length} lines)\n`)
     }
-  } else {
-    writeFileSync(outPath, next, 'utf8')
-    process.stdout.write(`${current === next ? '=' : '→'} ${target.out} (${next.split('\n').length} lines)\n`)
   }
+  process.exit(failed ? 1 : 0)
 }
-process.exit(failed ? 1 : 0)
 
 function safeRead(p) {
   try { return readFileSync(p, 'utf8') } catch { return null }

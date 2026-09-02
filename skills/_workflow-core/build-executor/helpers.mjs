@@ -1654,11 +1654,46 @@ export function owedResolutionPairs(items, unitKeys) {
 // is whether `found` names that surface. A verifier that looked can say so; one that shrugged cannot, and its row
 // releases nothing: the answer stays held and the operator settles it, which is the fail-closed direction.
 // Deliberately NOT a generic "is this text specific enough" heuristic — that would be unfalsifiable and would drift.
-const RULE_SURFACE_TOKENS = ['businessrules', 'businessrule_', 'read-page-business-rules', 'business rule']
+// PR #128 review (round 18) -- SEPARATOR-INSENSITIVE, because the four literal spellings were a closed list matched
+// against LLM-generated free text and an honest verifier that named the RIGHT surface in a slightly different shape
+// fell out of all four. `"BusinessRule schema"` is the worked example: lowercased it is `businessrule schema`, which
+// contains neither `businessrules` (plural), nor `businessrule_` (the underscore), nor `business rule` (the space).
+// That verifier looked, said so, and its row was held anyway -- the permanent-hold failure this escape exists to
+// avoid, arriving through a channel that looks compliant. Collapsing separators first folds every spelling of the
+// one term -- `businessRules`, `BusinessRule_`, `business rule`, `business-rules`, `read-page-business-rules` -- onto
+// a single stem, so the check is about WHICH SURFACE was named rather than about how the verifier punctuated it.
+// STILL NOT a generic "is this prose specific enough" heuristic, which is the thing the previous note refused and
+// this keeps refusing: it is one term, matched whatever way it is written. Vague prose that names no surface
+// (`could not tell`, `not visible`, `unknown`) still fails, which is the fail-closed direction.
+const RULE_SURFACE_STEMS = ['businessrule', 'readpagebusinessrules']
 export const namesRuleSurface = (found) => {
   if (!nonBlank(found)) return false
-  const t = String(found).toLowerCase()
-  return RULE_SURFACE_TOKENS.some((k) => t.includes(k))
+  const t = String(found).toLowerCase().replace(/[\s_\-]+/g, '')
+  return RULE_SURFACE_STEMS.some((k) => t.includes(k))
+}
+// PR #128 review (round 18) -- THE ROWS THAT ALMOST ESCAPED AND DID NOT. A rule-shaped, verifier-sourced row whose
+// `unknown` names no surface is held, and until now it was held SILENTLY: identical, from the operator's side, to a
+// row nobody looked at. That is the one outcome worth distinguishing, because the two have opposite remedies -- a
+// verifier phrasing nobody anticipated is a matcher to widen, an unexamined row is a page to go and read. Reported,
+// never gating: this changes no release decision, it only says out loud which rows were refused on this ground.
+export function unnamedRuleSurfaceChecks(checks, entries) {
+  const byPair = new Map((entries || []).filter((u) => u && u.source === UNCONSUMED_FROM_VERIFIER)
+    .map((u) => [pairKey(u.unit, u.id), u]))
+  const out = []
+  for (const c of checkRowsByPair(checks).values()) {
+    if (c.shows !== SHOWS_UNKNOWN || namesRuleSurface(c.found)) continue
+    const u = byPair.get(pairKey(c.unit, c.id))
+    if (!u || !isRuleShapedKind(u.kind)) continue
+    out.push({ unit: c.unit, id: c.id, found: capCarryText(nonBlank(c.found) ? String(c.found).trim() : '') })
+  }
+  return out
+}
+// The operator-facing line for the above. Empty string when there is nothing to say, like every sibling render here,
+// so a call site never has to guard before logging.
+export function unnamedRuleSurfaceLogLine(rows) {
+  if (!(rows || []).length) return ''
+  const ids = capCarryText(rows.map((r) => `${JSON.stringify(r.unit)}/${JSON.stringify(r.id)}`).join(', '))
+  return `RULE-SHAPED ANSWER HELD, SURFACE NOT NAMED (${rows.length}): ${ids} — the verifier answered \`unknown\` without naming the business-rule surface, so the narrow rule-shaped release did not apply and these rows stay held. If the verifier did look and simply worded it differently, that is a matcher gap, not an unbuilt answer.`
 }
 // A CLAIM THE VERIFIER NEVER SETTLED, counted across rounds (same review). A verifier that lands every check on
 // `unknown` produces zero contradictions and zero unconsumed rows — the original ENG-95503 shape reproduced through a
@@ -1856,10 +1891,16 @@ Build the answer, or return \`applied: false\` with a \`why\` that is a REASON r
 // spent — logged nothing and its `next` named nothing. Two call sites needed the same sentence, so it is a helper
 // rather than a second copy, and the ids are fenced here for the reason `unconsumedNextClause` fences them: they come
 // off the persisted, agent-transcribed `unconsumedResolutions`, and a backtick plus a newline closes the code span.
+// PR #128 review (round 18) -- THE JOINED ID LIST IS CAPPED, for the reason `missIdList`'s already is. An id is
+// `{pageKey}#confirm:{kind}:{item}` with stand-derived `item` on the end, one folder can hold many unconsumed
+// answers at once, and this list grows across resumes because the carry it reads from does. `missIdList` closed
+// exactly this gap at its call sites and this pair was left out of that pass. The COUNT is stated separately and
+// is never truncated, so a reader of a capped list still knows how many rows the run is actually holding --
+// truncating the list without saying so is what would turn a bound into a silent loss.
 export function unconsumedLogLine(entries) {
   if (!(entries || []).length) return ''
-  const ids = (entries || []).map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
-  return `UNCONSUMED OPERATOR ANSWERS: ${ids} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`
+  const ids = capCarryText((entries || []).map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', '))
+  return `UNCONSUMED OPERATOR ANSWERS (${(entries || []).length}): ${ids} — each was answered, reached its build agent, and produced no build action. Re-run after fixing, or record the decision to drop it.`
 }
 export function unconsumedNextClause(entries) {
   if (!(entries || []).length) return ''
@@ -1868,7 +1909,11 @@ export function unconsumedNextClause(entries) {
   // agent-transcribed `unconsumedResolutions`, not off a fixed literal. A backtick plus a newline in it closed
   // this code span inside the instruction string `runReturn` hands the orchestrating agent -- the RC-5/O3 break
   // in the one render path that had been fixed on one side only.
-  const ids = entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', ')
+  // PR #128 review (round 18) -- CAPPED, same as `unconsumedLogLine` beside it and `missIdList` before both. This
+  // string goes into the instruction text `runReturn` hands the orchestrating agent on EVERY not-complete close,
+  // so an unbounded list floods the one place an operator reads. `entries.length` already leads the sentence, so
+  // the count survives a truncation of the list.
+  const ids = capCarryText(entries.map((u) => `${JSON.stringify(u.unit)}/${JSON.stringify(u.id)}`).join(', '))
   return ` ALSO: ${entries.length} operator answer(s) reached a build agent and produced NO build action — ${ids}. The engine gate has no row for this and never will; put each one to the user with its \`why\` from \`unconsumedResolutions\`, then either fix the build or record the decision to drop the answer.`
 }
 
