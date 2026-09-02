@@ -5590,19 +5590,14 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
   (factoryStub("makesViaTerrasoft").evidence?.kinds || []).includes("esq"),
   () => JSON.stringify(factoryStub("makesViaTerrasoft").evidence?.kinds));
 
-// Item 3's empty state and item 5's preamble are BOTH prose the criteria name explicitly, and prose is exactly
-// what a refactor drops silently. The probe page has methods and no rules, so it renders both.
+// The empty state is prose the criteria name explicitly, and prose is exactly what a refactor drops silently. The
+// probe page has methods and no rules, so the Business rules section states the absence and the methods live below.
+// (ENG-96327 removed the worklist-mechanics preamble — those semantics live in the build-executor references.)
 check("empty state: a page with methods but no rules says so; the methods live in the ⚠ Imperative logic section below (no redundant pointer)",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
   && /#### ⚠ Imperative logic/.test(evPlan)
   && !/custom method\(s\) — see/.test(evPlan),
   () => evPlan.split("\n").filter((l) => l.startsWith("> ")).slice(0, 4));
-check("preamble: the worklist names WHERE the ported/dropped/blocked mark is recorded",
-  /Plan-vs-Done checklist row/.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /ported/.test(l)).slice(0, 2));
-check("preamble: the worklist says an unresolved trigger is answered by the step-5.1 run, not traced by hand",
-  /step-5\.1 `classic-ui-expert` run answers/.test(evPlan) && /replaces this cell on/.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /unresolved/.test(l)).slice(0, 3));
 
 // Idioms that were being reported as "no call recognised" while doing real work. A method that BUILDS a filter is
 // doing filtering even when it creates no ESQ itself (the filter is handed to a detail); a system-setting read
@@ -6604,9 +6599,6 @@ const invPlan = renderPlan(invRun, {});
 check("inverse graph: the plan distinguishes a recovered internal call from a declarative trigger",
   /\(internal call\)/.test(invPlan) && /platform lifecycle/.test(invPlan),
   () => invPlan.split("\n").filter(l => /internal call|lifecycle/.test(l)).slice(0, 4));
-check("inverse graph: the worklist header counts caller-only rows apart from truly untriggered ones",
-  /know only their calling method/.test(invPlan),
-  () => invPlan.split("\n").filter(l => /no trigger yet/.test(l)));
 check("inverse graph: a multi-caller row says so in the plan",
   /\+1 more caller/.test(invPlan));
 // The digest must keep the two states distinguishable for the handoff prompt.
@@ -6699,10 +6691,7 @@ check("fold: a helper whose caller is a STANDARD method WITH LOGIC folds under i
   () => rowOf('syncOwner'))
 check("fold: mutual recursion keeps BOTH rows (the cycle guard must not swallow one)",
   !!rowOf('pingPongA') && !!rowOf('pingPongB'))
-check("fold: the header reports PORT UNITS alongside the row count — 63 rows that are 44 things to build read differently",
-  /helpers folded under their caller/.test(foldPlan) && /port unit\(s\)/.test(foldPlan),
-  () => foldPlan.split('\n').filter((l) => /port unit/.test(l)))
-// A table with nothing to fold must look exactly as before — no marker, no port-unit clause.
+// A table with nothing to fold must render no ↳ fold marker (ENG-96327 removed the port-unit clause from the header).
 const noFoldRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: `define("NoFold", [], function() { return {
   entitySchemaName: "Deal",
   attributes: { Amount: { dataValueType: 1, dependencies: [{ columns: ["Stage"], methodName: "onStageChanged" }] } },
@@ -6710,8 +6699,8 @@ const noFoldRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: `de
   diff: [{ operation: "insert", name: "Amount", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Amount" } }]
 }; });` }] })
 const noFoldPlan = renderPlan(noFoldRun, {})
-check("fold: a surface with no body-called helper renders no ↳ and no port-unit clause",
-  !/port unit\(s\)/.test(noFoldPlan) && !impTable(noFoldPlan).some((r) => /^\| ↳/.test(r)),
+check("fold: a surface with no body-called helper renders no ↳ fold marker",
+  !impTable(noFoldPlan).some((r) => /^\| ↳/.test(r)),
   () => impTable(noFoldPlan))
 
 /* ---- step-5.1 behaviour handoff: the stub index OUT, the behaviour index BACK (both legs) ---- */
@@ -6770,8 +6759,8 @@ const hoPlan = renderPlan(hoBack, {});
 check("handoff BACK: the generated ⚠ Imperative logic table carries a `Described in` cell per row",
   /\| Method \| Source \| Trigger \| Body does \| Reads → writes \| Freedom target \| Described in \|/.test(hoPlan) &&
   /C01 AC-1, AC-2/.test(hoPlan));
-check("handoff BACK: the worklist header counts described rows, so 'nobody described these' is visible",
-  /carry a behaviour card/.test(hoPlan));
+check("handoff BACK: undescribed rows surface as a warning ('could not identify and describe … method(s)')",
+  /could not identify and describe the logic of \d+ of \d+ method/.test(renderPlan(ho, {})));
 check("handoff BACK: an undescribed row reads ⚠, not a blank",
   /⚠ not described/.test(renderPlan(ho, {})));
 check("handoff BACK: unmatched keys surface as a plan banner",
@@ -6796,10 +6785,9 @@ const ROOTS_BODY = `define("ChainPage", [], function() { return {
 const rootsManifest = { entity: "Deal", schemas: [{ pkg: "DealPkg", body: ROOTS_BODY }] };
 const rootsBare = runMigration(rootsManifest);
 const rootsStub = (r, m) => r.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
-check("chain roots: with NO behaviour index the helper keeps the weak form and the header counts it open",
+check("chain roots: with NO behaviour index the helper keeps the weak form (internal call, no traced root)",
   rootsStub(rootsBare, "setThingInfo").triggers[0].kind === "internal"
-  && !rootsStub(rootsBare, "setThingInfo").triggers[0].rootTrigger
-  && /know only their calling method/.test(renderPlan(rootsBare, {})),
+  && !rootsStub(rootsBare, "setThingInfo").triggers[0].rootTrigger,
   () => JSON.stringify(rootsStub(rootsBare, "setThingInfo").triggers));
 
 const rootsRun = runMigration({ ...rootsManifest, behaviourIndex: {
@@ -6917,21 +6905,13 @@ check("chain roots: the header stops counting that row as knowing only its calli
   !/know only their calling method/.test(renderPlan(lifeRun, {})),
   () => renderPlan(lifeRun, {}).split("\n").filter((l) => /no trigger yet/.test(l)));
 
-// The header counts EMPTY cells, so it must not call them "no TRACED trigger": a row the behaviour run answered
-// leaves that count with nothing traced for it. The described answers are counted next to it, so a reader can see
-// how much of the plan rests on description rather than body evidence.
-check("header: the open count is worded as what it measures (an empty cell), not as 'no traced trigger'",
-  /row\(s\) have no trigger yet/.test(renderPlan(rootsBare, {}))
-  && !/no traced trigger/.test(renderPlan(rootsBare, {})),
-  () => renderPlan(rootsBare, {}).split("\n").filter((l) => /row\(s\) have/.test(l)));
-check("header: rows answered by the behaviour run are counted APART from traced ones",
-  /· 1 answered by the behaviour run/.test(renderPlan(rootsRun, {})),
-  () => renderPlan(rootsRun, {}).split("\n").filter((l) => /row\(s\) have/.test(l)));
-check("header: with no behaviour index the reported clause is absent entirely (no `0 answered` noise)",
-  !/answered by the behaviour run/.test(renderPlan(rootsBare, {})));
-check("header: a helper that only INHERITED a reported root is not double-counted as answered",
+// ENG-96327 removed the header's per-state counts (no-trigger / answered-by-the-run / port-units) — those agent
+// statistics are gone from the plan (replaced by a warning only when rows are undescribed). The reported-root
+// PROPAGATION they used to surface is still asserted on the DATA below.
+check("chain roots: WITH the behaviour index the helper inherits the reported root (still an internal call, root now set)",
   rootsStub(rootsRun, "setThingInfo").triggers[0].kind === "internal"
-  && /· 1 answered by the behaviour run/.test(renderPlan(rootsRun, {})));
+  && !!rootsStub(rootsRun, "setThingInfo").triggers[0].rootTrigger,
+  () => rootsStub(rootsRun, "setThingInfo").triggers);
 
 // SECTION scope: the *Section chain's imperative rows (methods, mixins) travel in the digest too — without
 // this scope, list-page behaviour structurally never reaches the step-5.1 analysis.
@@ -7170,10 +7150,10 @@ const hoConfirm = renderPlan(ho, {});
 check("⚠ Imperative members: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
   () => /^\| \S+ \| (message|mixin) \|.*\| ⚠ not described \|$/m.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /^\| \S+ \| (message|mixin) \|/.test(l)));
-check("⚠ Imperative members: the header counts how many rows carry a card",
+check("⚠ Imperative members: the header renders and undescribed members surface as a warning",
   () => /#### ⚠ Imperative members — account for EVERY row \(\d+\)/.test(hoConfirm)
-    && /> \d+ of \d+ carry a behaviour card/.test(hoConfirm),
-  () => hoConfirm.split("\n").filter((l) => /Imperative members|carry a behaviour card/.test(l)));
+    && /could not identify and describe the logic of \d+ of \d+ member/.test(hoConfirm),
+  () => hoConfirm.split("\n").filter((l) => /Imperative members|could not identify/.test(l)));
 check("⚠ Imperative members: a described member row names its card + AC",
   () => /^\| \S+ \| message \|.*\| .*C02 AC-1.*\|$/m.test(renderPlan(hoBack, {})),
   () => renderPlan(hoBack, {}).split("\n").filter((l) => /^\| \S+ \| message \|/.test(l)));

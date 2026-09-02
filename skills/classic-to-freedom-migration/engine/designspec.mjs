@@ -1016,21 +1016,10 @@ function targetText(h) {
   return freedomTargetFor(h.category);
 }
 
-const IMPERATIVE_LOGIC_PREAMBLE = [
-  "> Each row is a method the classic page defines, and each must end up **ported** (naming the Freedom handler /",
-  "> converter / virtual attribute you built), **dropped** (with the reason) or **blocked** — recorded on this page's",
-  "> Plan-vs-Done checklist row, to the same standard as an ⚠ Confirm item.",
-  "> `⚠ unresolved` means the engine found nothing in this schema that calls it and no declaration that binds it.",
-  "> Resolve it from the control / hook / message — never from the method's name; a row still unresolved after the",
-  "> static pass is what the step-5.1 `classic-ui-expert` run answers, and its reported trigger replaces this cell on",
-  "> the next `--plan`. An `internal call` trigger means the engine",
-  "> found the CALLING method, and where the chain reaches one, the declaration or platform lifecycle hook that starts",
-  "> it. A row marked **`↳`** is a helper the engine traced to the single row above it: port it WITH that caller as one",
-  "> unit — it still needs its own ported / dropped / blocked mark, but not a Freedom artifact of its own. A helper with",
-  "> SEVERAL callers is deliberately NOT folded: it is usually the row that becomes a shared converter.",
-  "> **Described in** names the behaviour card and the",
-  "> acceptance criteria a step-5.1 `classic-ui-expert` run established for the row — port against those criteria,",
-  "> not against the method's name; `⚠ not described` means no run has covered it yet.", "",
+// ENG-96327 — no worklist-mechanics preamble in the plan (ported/dropped/blocked, `↳` fold, `⚠ unresolved`,
+// `Described in`): those semantics are agent-facing and live in the build-executor references, which the build agent
+// is handed. Only the table header remains; a warning above the table flags any rows the analysis could not explain.
+const IMPERATIVE_LOGIC_TABLE_HEADER = [
   "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
   "| --- | --- | --- | --- | --- | --- | --- |",
 ];
@@ -1093,13 +1082,13 @@ function renderImperativeMembers(cs) {
     .sort((a, b) => order.get(a.kind) - order.get(b.kind) || String(a.item).localeCompare(String(b.item)));
   if (!rows.length) return [];
   const described = rows.filter((d) => d.describedIn).length;
-  const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, "",
-    `> ${described} of ${rows.length} carry a behaviour card` +
-    (described < rows.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), "",
-    "> Each row is declared on this page, but its behaviour lives OUTSIDE the page body. Mark each **ported** (naming",
-    "> the Freedom artifact you built), **dropped** (with the reason) or **blocked** — the same standard as a method row.",
-    "> **Described in** names the behaviour card and acceptance criteria a step-5.1 run established: port against those,",
-    "> not against the member's name. `⚠ not described` means no run has covered it yet.", ""];
+  const undescribed = rows.length - described;
+  // ENG-96327 — same as ⚠ Imperative logic: warn ONLY when the analysis could not explain some members (non-blocking,
+  // parallel follow-up; each marked `⚠ not described` below), and drop the worklist-mechanics preamble. The per-kind
+  // note below stays — it says what each member KIND is, which is not worklist mechanics.
+  const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, ""];
+  if (undescribed > 0)
+    L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${rows.length} member(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   // One explanation per kind PRESENT, above the table — a per-row reason repeats the same paragraph on every row.
   for (const k of order.keys()) if (rows.some((r) => r.kind === k)) L.push("> " + (MEMBER_KIND_NOTE[k] || ATTRIBUTE_DEPENDENCY_NOTE));
   L.push("", "| Member | Kind | Detail | Described in |", "| --- | --- | --- | --- |");
@@ -1112,29 +1101,18 @@ function renderImperativeMembers(cs) {
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
-  // Counted, not just listed: how many rows still have no trigger, and how many carry a behaviour card. The
-  // pair is the honest state of the worklist — "51 unresolved, 0 described" and "51 unresolved, 51 described" are
-  // very different plans, and the row-by-row table alone made them look identical.
-  // The count is of EMPTY cells, so it must not claim "no TRACED trigger": a row the behaviour run answered leaves
-  // this count while nothing was traced for it. Those are counted on their own, next to it.
-  const unresolved = stubs.filter((h) => !(h.triggers || []).length).length;
-  const reported = stubs.filter((h) => (h.triggers || []).some((t) => t.kind === "reported")).length;
-  // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
-  // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
-  const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
   const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || h.describedIn.bodyCard || (h.describedIn.ac || []).length)).length;
-  const { ordered, folded } = foldByCaller(stubs);
-  // Rows and PORT UNITS are different numbers once helpers are folded, and the difference is the useful one: 63 rows
-  // that are really 39 things to build reads very differently from 63 independent handlers.
-  const units = stubs.length - folded;
-  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
-    `> ${unresolved} row(s) have no trigger yet` +
-    (reported ? ` · ${reported} answered by the behaviour run` : "") +
-    (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
-    (folded ? ` · ${folded} are helpers folded under their caller (\`↳\`) → **${units} port unit(s)**` : "") +
-    ` · ${described} of ${stubs.length} carry a behaviour card` +
-    (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
-  L.push(...IMPERATIVE_LOGIC_PREAMBLE);
+  const undescribed = stubs.length - described;
+  const { ordered } = foldByCaller(stubs);
+  // ENG-96327 — the plan opens with a WARNING only when the analysis could not explain some rows: the human approver
+  // needs to see that (it becomes separate, parallel follow-up — NOT a blocker), and each such row is marked
+  // `⚠ not described` in the table. When every row is described, no summary line — just the table. The agent-facing
+  // worklist statistics (unresolved / traced-only / helpers folded → port units) are dropped; the `↳` fold still
+  // shows per-row in the table.
+  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, ""];
+  if (undescribed > 0)
+    L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${stubs.length} method(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
+  L.push(...IMPERATIVE_LOGIC_TABLE_HEADER);
   // A call to another row of this table is an INTERNAL call — the fold column already carries it, so it must not
   // also print as an unclassified framework call.
   const siblings = new Set(stubs.map((h) => h.sourceMethod));
