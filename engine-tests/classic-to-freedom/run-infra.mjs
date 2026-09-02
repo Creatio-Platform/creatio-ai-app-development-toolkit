@@ -1299,6 +1299,16 @@ const mgSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(imp
     !!days && (wfSrc.match(/older than (\d+) day/g) || []).length >= 2
       && (wfSrc.match(/older than (\d+) day/g) || []).every((m) => m.includes(`older than ${days} day`)),
     () => ({ engine: days, promptMentions: wfSrc.match(/older than \d+ day/g) }));
+  // The sweep's run-artifact SENTINELS are the same cross-boundary problem as the window: the basenames are owned by
+  // the workflow (`QUEUE_FILE`/`VERIFY_TABLE`) and hard-coded in the engine's guard, and a rename on either side
+  // would turn the sweep into a silent no-op — captures accumulating forever while the code looks like it works.
+  const qBase = (wfSrc.match(/QUEUE_FILE = `\$\{input\.outDir\}\/([\w.-]+)`/) || [])[1];
+  const vBase = (wfSrc.match(/VERIFY_TABLE = `\$\{input\.outDir\}\/([\w.-]+)`/) || [])[1];
+  check("ENG-95930 (review round 11): the sweep's sentinel basenames are BOUND to the workflow's own `QUEUE_FILE`/`VERIFY_TABLE` names — the engine guard must test exactly those files, or a rename disarms the retention sweep without a failure anywhere",
+    !!qBase && !!vBase
+      && mgSrc.includes(`path.join(outDir, "${qBase}")`)
+      && mgSrc.includes(`path.join(outDir, "${vBase}")`),
+    () => ({ qBase, vBase, guardLine: (mgSrc.match(/if \(!fs\.existsSync[^\n]*/) || ["(no guard found)"])[0] }));
 }
 check("plan version: EVERY file-backed manifest input contributes its CONTENT, not its path — a `section` / `detailSchemas` / `profileSchemas` file could be rewritten with the version unchanged, so an old approval authorised a plan the user never saw",
   /typeof value\.file === "string" \|\| typeof value\.body === "string"/.test(mgSrc)
@@ -3906,8 +3916,10 @@ check("ENG-95472: an ABSENT key list gets its own message, distinct from the key
       utimesSync(strayCapture, aged, aged);
       const r2 = spawnSync(process.execPath, [ENGINE_MJS, "-", "--units", "--slices", path.join(bareDir, "slices")],
         { input: manifest, encoding: "utf8" });
-      check("ENG-95930 (review round 10): a folder with NO run artifact (no queue file, no verify table) is NOT swept — an aged capture there survives, because the engine must not delete in a directory nothing proves it owns",
-        existsSync(strayCapture) && !/retention sweep/.test(r2.stderr || ""),
+      check("ENG-95930 (review rounds 10-11): a folder with NO run artifact is NOT swept — the aged capture survives, and the skip is SAID on stderr, so an operator can tell 'nothing to sweep' from 'the sweep never engaged'",
+        existsSync(strayCapture)
+          && /retention sweep SKIPPED — no run artifact/.test(r2.stderr || "")
+          && !/retention sweep removed/.test(r2.stderr || ""),
         () => ({ status: r2.status, strayKept: existsSync(strayCapture),
           sweepLine: ((r2.stderr || "").match(/retention sweep[^\n]*/) || ["(none)"])[0] }));
     } finally {

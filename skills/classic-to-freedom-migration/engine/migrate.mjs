@@ -2644,17 +2644,24 @@ function writePageSlices(dir, prefix, units, sliceOf, fail) {
 // RETENTION FOR THE RECONCILE ANSWER CAPTURES (`reconcile-answer-*.json` beside the queue file). The submission
 // protocol writes the agent's full answer to disk — the evidence a rejected submission needs — and instructs the
 // agent to delete an ACCEPTED attempt's copies; an instruction to an agent is probabilistic, and a REJECTED
-// attempt's files would otherwise persist forever. This sweep is the code-enforced bound: every `--units` run (the
-// head of every Reconcile) removes captures older than the window. Two weeks keeps a failure investigable across a
-// vacation; a sweep problem is never allowed to fail the run — the captures are diagnostics, not deliverables.
+// attempt's files would otherwise persist forever. This sweep is the code-enforced bound: every `--units --slices`
+// run (the form the executor's CLI always uses, at the head of every Reconcile) removes captures older than the
+// window. Two weeks keeps a failure investigable across a vacation; a sweep problem is never allowed to fail the
+// run — the captures are diagnostics, not deliverables.
 const ANSWER_CAPTURE_RETENTION_DAYS = 14;
 function sweepAnswerCaptures(outDir) {
   // ONLY IN A FOLDER THAT IS DEMONSTRABLY A MIGRATION FOLDER. The directory is inferred (the parent of `--slices`,
   // which the production context always shapes as `<outDir>/slices`), not one this run created — and every other
   // destructive path in this engine stays inside a directory it owns. A run artifact is the proof: any folder with
   // leftover captures has a queue file (the reconcile step writes it before any submission) or a verify table.
-  // `--units --slices .` therefore sweeps nothing in the parent of an arbitrary cwd.
-  if (!fs.existsSync(path.join(outDir, "build-queue.json")) && !fs.existsSync(path.join(outDir, "verify.md"))) return;
+  // `--slices .` therefore sweeps nothing in the parent of an arbitrary cwd. The two basenames are the workflow's
+  // own `QUEUE_FILE`/`VERIFY_TABLE` names; `run-infra.mjs` pins the engine literals to them, the same way the
+  // retention window itself is pinned, so a rename cannot silently turn this sweep into a no-op. The skip is SAID,
+  // not silent — an operator must be able to tell "nothing to sweep" from "the sweep never engaged".
+  if (!fs.existsSync(path.join(outDir, "build-queue.json")) && !fs.existsSync(path.join(outDir, "verify.md"))) {
+    process.stderr.write(`migrate.mjs: capture retention sweep SKIPPED — no run artifact (build-queue.json / verify.md) in ${outDir}, so nothing proves it is a migration folder.\n`);
+    return;
+  }
   let removed = 0;
   try {
     const cutoff = Date.now() - ANSWER_CAPTURE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
