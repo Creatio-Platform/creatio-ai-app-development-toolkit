@@ -1985,17 +1985,27 @@ function unconsumedResolutions(routed, res, unitKey) {
   }))
 }
 
-// ONE `(unit, id)` KEY, in one place. Written as the `\u0000` ESCAPE and never as a raw byte: this key used to
-// carry a LITERAL NUL in the source, which is invisible in every editor and diff view AND makes GitHub classify the
-// whole file as binary -- the API served `patch: null` for this file alone, so both reviews of the mechanism this
-// file implements were written without ever seeing its diff, and one of them approved it on that basis. The escape
-// keeps the delimiter exactly as unambiguous (no unit key or evidence id can contain a NUL) while leaving the
-// source plain ASCII that a reviewer can actually read.
-const pairKey = (unit, id) => `${idKey(unit)}\u0000${idKey(id)}`
+// ONE `(unit, id)` KEY, in one place — as a STRUCTURED key, not a delimiter-joined string (PR #128 review round 17,
+// Alexandr-Kravchuk's architecture Minor). The delimiter used to be a NUL: first as a LITERAL byte in the source,
+// which is invisible in every editor and diff view and made GitHub classify the generated workflow as binary, so the
+// file carrying this whole mechanism went unreviewed for two rounds; then as the `\u0000` escape, which fixed that
+// incident while keeping the strategy — and therefore the class — alive, guarded only by a source-scan test that any
+// future NUL-unaware edit could walk past.
+// `JSON.stringify([unit, id])` removes the class instead of guarding it. The encoding of a two-element array of
+// strings is injective, so no `(unit, id)` pair can collide with another (which is all the NUL bought), the key is
+// legible in a log or a debugger instead of invisible, and there is no control byte anywhere for tooling to
+// misread. Both halves go through `idKey` first, so the trim normalisation is applied exactly once and at one site.
+const pairKey = (unit, id) => JSON.stringify([idKey(unit), idKey(id)])
 // The inverse, for the ONE place a pair leaves the process: `resolutionsReopened` is persisted as `{unit, id}`
-// objects rather than as these composite strings, because the delimiter is a NUL and a NUL has no business in a
-// JSON file an agent writes and a human reads -- this file already paid for that lesson once (see the note above).
-const pairParts = (key) => { const i = String(key).indexOf('\u0000'); return { unit: String(key).slice(0, i), id: String(key).slice(i + 1) } }
+// objects rather than as these composite keys, because the key is this mechanism's internal identity and not a
+// contract an agent writes or a human reads. Malformed input yields empty halves rather than throwing — a key that
+// did not come from `pairKey` matches nothing, which is the fail-closed direction for every consumer of this.
+const pairParts = (key) => {
+  try {
+    const [unit, id] = JSON.parse(String(key))
+    return { unit: String(unit ?? ''), id: String(id ?? '') }
+  } catch { return { unit: '', id: '' } }
+}
 // THE PERSISTENCE ROUND-TRIP FOR THE GRANT SET, as two pure halves (PR #128 review, round 9). The claim that the
 // grant survives a restart was asserted only by regexes over this file's source: a refactor that kept the textual
 // shape while breaking the round-trip stayed green, and a genuine bug in the seeding loop that still contained the
@@ -2044,6 +2054,54 @@ function owedResolutionPairs(items, unitKeys) {
 // can never arrive. An ABSENT row is NOT a release: a `resolutionChecks` row exists only for a unit the verifier was
 // asked about — i.e. one that was open and REBUILT this round — so this can never clear a row off a page nobody re-read,
 // and the historical `resolution-not-applied` discrepancy the `no` filed stays in `discrepancies` regardless.
+// A REASONED `unknown` MUST NAME THE SURFACE IT READ (PR #128 review round 17, Alexandr-Kravchuk's Minor).
+// `nonBlank(found)` was satisfied by any prose, so "could not determine from the fetched view" released a row just as
+// well as a real report would. The release exists for ONE class — an answer whose effect lives in `BusinessRule_*`
+// schemas that `viewConfig` cannot show — and the verifier prompt already tells the verifier exactly where to look
+// for that class ("Read `pages[<key>].businessRules` ... or call `read-page-business-rules`"). So the discriminator
+// is whether `found` names that surface. A verifier that looked can say so; one that shrugged cannot, and its row
+// releases nothing: the answer stays held and the operator settles it, which is the fail-closed direction.
+// Deliberately NOT a generic "is this text specific enough" heuristic — that would be unfalsifiable and would drift.
+const RULE_SURFACE_TOKENS = ['businessrules', 'businessrule_', 'read-page-business-rules', 'business rule']
+const namesRuleSurface = (found) => {
+  if (!nonBlank(found)) return false
+  const t = String(found).toLowerCase()
+  return RULE_SURFACE_TOKENS.some((k) => t.includes(k))
+}
+// A CLAIM THE VERIFIER NEVER SETTLED, counted across rounds (same review). A verifier that lands every check on
+// `unknown` produces zero contradictions and zero unconsumed rows — the original ENG-95503 shape reproduced through a
+// channel that LOOKS compliant. Nothing but a human reading the report caught it. This is the lightweight signal:
+// given the per-round check rows for a claimed pair, report the pairs that have accumulated `unknown` and have never
+// once come back `yes` or `no`. NON-GATING by design — `unknown` is a legitimate answer and the run must not start
+// failing on honest uncertainty; it is reported so the operator can see a verifier that is never settling anything.
+// `minRounds` defaults to 1 — ANY claim the verifier never settled is reported. It was 2 on first writing, which
+// defeated the purpose: an all-`unknown` verifier files no contradiction, so nothing re-opens the unit, so there is
+// only ever ONE verify round and the threshold could not be reached. The signal would have been dead in exactly the
+// case it was written for. One `unknown` and no `yes`/`no` means the builder claimed something and nobody confirmed
+// it, which is the fact worth surfacing; the parameter stays so a caller can ask for a stricter cut.
+function unsettledResolutionClaims(tally, minRounds = 1) {
+  const out = []
+  for (const [pair, t] of (tally instanceof Map ? tally : new Map())) {
+    if ((t?.unknown || 0) >= minRounds && !(t?.settled)) {
+      const p = pairParts(pair)
+      out.push({ unit: p.unit, id: p.id, unknownRounds: t.unknown })
+    }
+  }
+  return out
+}
+// Folds one round's check rows into the running tally. `settled` is sticky: a pair that ever came back `yes` or `no`
+// is not vague, however many `unknown`s follow it.
+function tallyResolutionChecks(tally, checks) {
+  const out = tally instanceof Map ? tally : new Map()
+  for (const c of checkRowsByPair(checks).values()) {
+    const k = pairKey(c.unit, c.id)
+    const t = out.get(k) || { unknown: 0, settled: false }
+    if (c.shows === SHOWS_YES || c.shows === SHOWS_NO) t.settled = true
+    else if (c.shows === SHOWS_UNKNOWN) t.unknown += 1
+    out.set(k, t)
+  }
+  return out
+}
 // ONE VERIFIER ROW PER `(unit, id)`, AND A REFUTATION ALWAYS WINS (PR #128 review, round 17).
 // `resolutionContradictions` kept the LAST row per pair (`Map.set`) while `releasedResolutionPairs` unioned ANY
 // non-refuting row, so a verifier that returned two rows for one pair in the order `[yes, no]` filed the
@@ -2092,7 +2150,7 @@ function releasedResolutionPairs(checks) {
     // LAYOUT-shaped answer, whose effect the page body CAN show, was retired in round N+1 by `unknown` plus any
     // prose after being positively refuted with `no` in round N. The strength is recorded here and the kind is
     // matched against `RULE_SHAPED_KINDS` at the reconcile, where the row -- and therefore its `kind` -- is in hand.
-    const reasonedUnknown = c.shows === SHOWS_UNKNOWN && nonBlank(c.found)
+    const reasonedUnknown = c.shows === SHOWS_UNKNOWN && namesRuleSurface(c.found)
     if (c.shows === SHOWS_YES) out.set(pairKey(c.unit, c.id), SHOWS_YES)
     else if (reasonedUnknown) out.set(pairKey(c.unit, c.id), SHOWS_UNKNOWN)
   }
@@ -3533,6 +3591,12 @@ function* run(rawInput, io = {}, opts = {}) {
 // reachable from the earliest stop in the script, so a declaration down with the round state is a temporal-dead-zone
 // throw on exactly the run that stops first.
 let unconsumed = []
+// The running record of what the verifier has SETTLED per answer, for the vague-verifier signal. Declared HERE,
+// beside `unconsumed`, rather than next to the round-loop state it is written from: `runReturn` reads it,
+// `runReturn` is defined above that state, and every early return (a hard stop, `reconcile-failed`, the
+// prologue) calls it before the round loop exists. Declared late it was a TDZ throw on all four modes of the
+// run's own prologue — the same class as the missing-import defect this PR opened with, from the other side.
+let resolutionCheckTally = new Map()
 
   // ---------------------------------------------------------------------------
 
@@ -3558,6 +3622,12 @@ let unconsumed = []
     // same silence: `resolutionsUnmatched` catches an answer that never reached a builder, this catches one that
     // did. On every return, and never defaulted away — a caller reads one field to know whether an answer was lost.
     unconsumedResolutions: unconsumed,
+    // PR #128 review round 17 — THE VAGUE-VERIFIER SIGNAL. A verifier that lands every check on `unknown` files no
+    // contradiction and no unconsumed row, so the original defect shape reproduces through a channel that looks
+    // compliant. NON-GATING on purpose (`unknown` is a legitimate answer and honest uncertainty must not fail a run)
+    // — reported so an operator can see a verifier that never settles anything, which nothing but a human reading the
+    // report could catch before.
+    unsettledResolutionClaims: unsettledResolutionClaims(resolutionCheckTally),
       complete: false,
       skipped: false,
       reason: null,
@@ -5834,6 +5904,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // fresh, and a builder's `applied: true` is its own word until something that did not build the page looks. A
       // contradiction makes the answer UNCONSUMED — the claim is not evidence the answer produced anything — so it is
       // recorded, it holds the run short of `complete`, and it buys the unit the same one repair round.
+      resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
       for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
         log(`answer NOT on the page: \`${c.unit}\` claims it applied \`${c.id}\`, the verifier reads the page and finds ${c.found}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
         // DEFENSE-IN-DEPTH, matching `resolutionClaimsLine` (PR #128 review, O3). `c.id` is stand-derived and `c.how` is
@@ -5965,6 +6036,14 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   const complete = runComplete(state.verify?.complete, parked, unconsumed)
   if (unconsumed.length) {
     log(unconsumedLogLine(unconsumed))
+  }
+  {
+    // The vague-verifier signal, logged as well as returned: an operator watching the run sees it without opening
+    // the return. Non-gating — this never changes `complete`.
+    const vague = unsettledResolutionClaims(resolutionCheckTally)
+    if (vague.length) {
+      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${vague.map((v) => `\`${v.unit}\`/\`${v.id}\` (${v.unknownRounds}x)`).join(", ")}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
+    }
   }
 
   // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it. ONE close-out

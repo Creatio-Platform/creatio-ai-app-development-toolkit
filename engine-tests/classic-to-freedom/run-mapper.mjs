@@ -3856,6 +3856,10 @@ const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\
 // Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
 // registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward
 // direction plus a count lets a simultaneous add+drop pass net-neutral.
+check("PR #128 review (round 17, architecture Minor): the engine resolution index keys on a STRUCTURED pair, not a NUL joiner — the invisible-delimiter strategy already cost this PR two review rounds (GitHub served the generated workflow as binary), and a JSON-encoded pair is exactly as unambiguous for a `kind`/`item` that carries colons while containing no control byte for tooling to misread",
+  /const resolutionKey = \(kind, item\) => JSON\.stringify/.test(DESIGNSPEC_SRC)
+    && !/resolutionKey = \(kind, item\) => `/.test(DESIGNSPEC_SRC),
+  () => (DESIGNSPEC_SRC.match(/const resolutionKey = .*/) || ["(no resolutionKey found)"])[0]);
 check("ENG-95021: EVERY `onstand` emission site in designspec.mjs uses a key registered in REACHABILITY_KEYS",
   emittedKeys.length >= REACHABILITY_KEYS.length            // the scan really found the sites (not a silent 0-match)
   && emittedKeys.every((k) => REACHABILITY_KEYS.includes(k)),

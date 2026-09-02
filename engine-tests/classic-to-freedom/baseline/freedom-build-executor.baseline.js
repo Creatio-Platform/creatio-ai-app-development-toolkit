@@ -2181,6 +2181,11 @@ function runReturn(extra) {
     // of the same silence: `resolutionsUnmatched` catches an answer that never reached a builder, this catches
     // one that did. On every return, and never defaulted away.
     unconsumedResolutions: unconsumed,
+    // Round 17 — mirrored so the parity comparison stays about the DECLARED DIVERGENCES rather than about a field
+    // one side has and the other does not. Hardcoded `[]` for the same reason `unconsumed` is: the parity fixtures
+    // exercise the empty-carry rendering, and a baseline that computed this would be a second implementation to
+    // keep honest rather than a frozen reference.
+    unsettledResolutionClaims: [],
     complete: false,
     skipped: false,
     reason: null,

@@ -45,7 +45,8 @@ import {
   // suite caught exactly that: `reconcileUnconsumed is not defined` on a green baseline the artifact ran fine.
   buildSchemaWithResolutions, capCarryText, completionLine, grantPairsToPersist, hasUnconsumedPair, idKey, owedResolutionPairs,
   pairKey, pairParts, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
-  resolutionClaimCount, resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs, unconsumedLogLine, unconsumedNextClause,
+  resolutionClaimCount, resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs,
+  tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause, unsettledResolutionClaims,
   verifierSchemaWithChecks,
   unconsumedResolutions,
   UNCONSUMED_CARRY_WARN, UNCONSUMED_FROM_DISPATCH,
@@ -198,6 +199,12 @@ export function* run(rawInput, io = {}, opts = {}) {
 // reachable from the earliest stop in the script, so a declaration down with the round state is a temporal-dead-zone
 // throw on exactly the run that stops first.
 let unconsumed = []
+// The running record of what the verifier has SETTLED per answer, for the vague-verifier signal. Declared HERE,
+// beside `unconsumed`, rather than next to the round-loop state it is written from: `runReturn` reads it,
+// `runReturn` is defined above that state, and every early return (a hard stop, `reconcile-failed`, the
+// prologue) calls it before the round loop exists. Declared late it was a TDZ throw on all four modes of the
+// run's own prologue — the same class as the missing-import defect this PR opened with, from the other side.
+let resolutionCheckTally = new Map()
 
   // ---------------------------------------------------------------------------
 
@@ -223,6 +230,12 @@ let unconsumed = []
     // same silence: `resolutionsUnmatched` catches an answer that never reached a builder, this catches one that
     // did. On every return, and never defaulted away — a caller reads one field to know whether an answer was lost.
     unconsumedResolutions: unconsumed,
+    // PR #128 review round 17 — THE VAGUE-VERIFIER SIGNAL. A verifier that lands every check on `unknown` files no
+    // contradiction and no unconsumed row, so the original defect shape reproduces through a channel that looks
+    // compliant. NON-GATING on purpose (`unknown` is a legitimate answer and honest uncertainty must not fail a run)
+    // — reported so an operator can see a verifier that never settles anything, which nothing but a human reading the
+    // report could catch before.
+    unsettledResolutionClaims: unsettledResolutionClaims(resolutionCheckTally),
       complete: false,
       skipped: false,
       reason: null,
@@ -2499,6 +2512,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // fresh, and a builder's `applied: true` is its own word until something that did not build the page looks. A
       // contradiction makes the answer UNCONSUMED — the claim is not evidence the answer produced anything — so it is
       // recorded, it holds the run short of `complete`, and it buys the unit the same one repair round.
+      resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
       for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
         log(`answer NOT on the page: \`${c.unit}\` claims it applied \`${c.id}\`, the verifier reads the page and finds ${c.found}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
         // DEFENSE-IN-DEPTH, matching `resolutionClaimsLine` (PR #128 review, O3). `c.id` is stand-derived and `c.how` is
@@ -2630,6 +2644,14 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   const complete = runComplete(state.verify?.complete, parked, unconsumed)
   if (unconsumed.length) {
     log(unconsumedLogLine(unconsumed))
+  }
+  {
+    // The vague-verifier signal, logged as well as returned: an operator watching the run sees it without opening
+    // the return. Non-gating — this never changes `complete`.
+    const vague = unsettledResolutionClaims(resolutionCheckTally)
+    if (vague.length) {
+      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${vague.map((v) => `\`${v.unit}\`/\`${v.id}\` (${v.unknownRounds}x)`).join(", ")}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
+    }
   }
 
   // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it. ONE close-out

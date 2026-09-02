@@ -2575,7 +2575,11 @@ function listUnitNode(key, opts) {
 // — a list decision rides on `list` when that key is published, on `main` when it is withheld — so id-only matching
 // breaks when a section empties.
 // An answer is an INPUT. Nothing here writes `--built.evidence`, and an answer closes no `--verify` row.
-const resolutionKey = (kind, item) => `${String(kind)}\u0000${String(item)}`;   // NUL joiner: `item` carries colons. Keep it ESCAPED — a literal NUL byte makes git read the file as binary.
+// STRUCTURED KEY, not a NUL joiner (PR #128 review round 17). `item` carries colons, so the two halves need an
+// unambiguous join — and a JSON-encoded pair is exactly as unambiguous as a NUL while being legible and
+// containing no control byte for git or GitHub to misread as binary. Purely an in-process Map key: nothing
+// persists it, so the shape is free to change. Same reasoning as `pairKey` in the build executor.
+const resolutionKey = (kind, item) => JSON.stringify([String(kind), String(item)]);
 const blankStr = (v) => typeof v !== "string" || !v.trim();
 // `{ resolutions: [ … ] }` or a bare array; anything else is unusable.
 function resolutionList(input) {

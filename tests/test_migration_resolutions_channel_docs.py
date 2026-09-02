@@ -303,6 +303,12 @@ class ConsumptionContractDocTests(unittest.TestCase):
         self.assertIn("including on the zero-work", doc.replace("**", ""))
         # Major 6 — the reopen grant is bounded by the round budget.
         self.assertIn("A reopen grant is bounded by the ROUND BUDGET", doc.replace("**", ""))
+        # Review Minor (round 17b) — a reasoned `unknown` must name the surface it read.
+        self.assertIn("means `found` NAMES THE SURFACE IT READ", doc.replace("**", ""))
+        # Review Minor (round 17b) — the residual trust assumption is tracked, and the signal is non-gating.
+        self.assertIn("The residual trust assumption, and the signal that tracks it", doc.replace("**", ""))
+        self.assertIn("unsettledResolutionClaims", doc)
+        self.assertIn("deliberately NON-GATING", doc.replace("**", ""))
 
     def test_round_17_pins_are_not_satisfied_by_pre_existing_text(self):
         """Anti-vacuity for the pins above: each phrase must occur EXACTLY ONCE.
@@ -317,7 +323,10 @@ class ConsumptionContractDocTests(unittest.TestCase):
                        "releases only a verifier-sourced row on a rule-shaped",
                        "a refutation wins whichever order they arrive",
                        "including on the zero-work",
-                       "A reopen grant is bounded by the ROUND BUDGET"):
+                       "A reopen grant is bounded by the ROUND BUDGET",
+                       "means `found` NAMES THE SURFACE IT READ",
+                       "The residual trust assumption, and the signal that tracks it",
+                       "deliberately NON-GATING"):
             self.assertEqual(doc.count(phrase), 1, f"expected exactly one occurrence of {phrase!r}")
 
 

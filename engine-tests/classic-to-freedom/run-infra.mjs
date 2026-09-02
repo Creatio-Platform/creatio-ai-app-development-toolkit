@@ -169,7 +169,8 @@ const H_ANSWERS_CHANNEL = ["resolutionAccountingMiss", "unconsumedResolutions",
   "capCarryText", "hasUnconsumedPair",
   "grantPairsToPersist", "seedGrantPairs",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
-  "checkRowsByPair", "isRuleShapedKind", "verifierSchemaWithChecks", "resolutionClaimCount"];
+  "checkRowsByPair", "isRuleShapedKind", "verifierSchemaWithChecks", "resolutionClaimCount",
+  "namesRuleSurface", "tallyResolutionChecks", "unsettledResolutionClaims"];
 // The in-context gate: what a unit says about itself, and whether it may continue rather than park.
 const H_SELF_CHECK = ["selfCheckStillShort", "selfCheckBuildComplete", "derivedBuildComplete", "inContextParkableKeys", "selfCheckMismatches", "selfCheckDiscrepancyText",
   "continuationAllowed", "continuationBudgetBlock", "repairBlock"];
@@ -2314,9 +2315,22 @@ const rcItems = [
 const rcOwed = () => wf.owedResolutionPairs(rcItems, ["main"]);
 const rcEntry = (id, source, kind = "x") => ({ unit: "main", id, kind, item: "y", answer: "z", why: "w", source });
 
-check("PR #128 review: `pairKey` separates unit from id with a byte that CANNOT occur in either — the two halves are matched as a pair, and a separator a key could contain would let one pair impersonate another",
-  () => wf.pairKey("main", "a") !== wf.pairKey("mai", "na") && wf.pairKey("main", "a").includes("\u0000"),
-  () => JSON.stringify(wf.pairKey("main", "a")));
+check("PR #128 review (round 17): `pairKey` is INJECTIVE over `(unit, id)` and round-trips through `pairParts` — asserted as the property that matters rather than as a particular delimiter byte, which is what let the old NUL-joined shape be pinned by a check that a JSON-encoded pair would fail while being strictly better. No pair can impersonate another, including the shifted-boundary case a naive concatenation gets wrong, and including halves that themselves contain quotes, brackets, colons or a literal NUL",
+  () => { const pairs = [["main", "a"], ["mai", "na"], ["main", ""], ["", "main"],
+      ["main", 'x"y'], ["a]b", "c[d"], ["main", "main#confirm:list-columns:Name, Title"],
+      ["main", `has a ${String.fromCharCode(0)} inside`]];
+    const keys = pairs.map(([u, i]) => wf.pairKey(u, i));
+    const distinct = new Set(keys).size === pairs.length;
+    const roundTrips = pairs.every(([u, i], n) => {
+      const back = wf.pairParts(keys[n]);
+      return back.unit === u.trim() && back.id === i.trim();
+    });
+    // A key that did not come from `pairKey` matches nothing rather than throwing — every consumer of this treats an
+    // unmatched key as "not granted" / "not owed", so failing closed here is the safe direction.
+    const garbage = wf.pairParts("not a key at all");
+    return distinct && roundTrips && garbage.unit === "" && garbage.id === ""
+      && !keys.some((k) => k.includes(String.fromCharCode(0))); },
+  () => JSON.stringify({ sample: wf.pairKey("main", "a"), back: wf.pairParts(wf.pairKey("main", "a")) }));
 // THE REGRESSION GUARD FOR THE REVIEW'S OWN BLIND SPOT. Two raw NUL bytes in this file's source made GitHub serve
 // it as BINARY: the API returned `patch: null` for this file alone, so the diff of the mechanism the whole ticket is
 // about was invisible in review, and a review that could not read it approved the PR while recording the missing
@@ -2347,14 +2361,14 @@ check("PR #128 review: an UNANSWERED item is owed by nobody — `owedResolutionP
   () => "an unanswered item is not owed");
 
 const rcPub = () => wf.publishedResolutionIds(rcItems);
-check("PR #128 review (finding 2): `releasedResolutionPairs` counts a FRESH non-refuting read — `yes` (it confirmed the effect) OR `unknown` (it looked and could not tell) — because both WITHDRAW an earlier `no`; a `no` releases nothing and an ABSENT read releases nothing",
+check("PR #128 review (finding 2, narrowed round 17): `releasedResolutionPairs` records a FRESH non-refuting read and its STRENGTH — `yes` (it confirmed the effect) or a REASONED `unknown` that names the surface it read; a `no` records nothing and an ABSENT read records nothing. What each strength may then release is the reconcile's decision, not this function's",
   () => { const r = wf.releasedResolutionPairs([
       { unit: "main", id: RC_A, shows: SHOWS.SHOWS_YES },
-      { unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "rules are not in the page body" }]);
+      { unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "read-page-business-rules returned no matching condition" }]);
     return r.size === 2 && r.has(wf.pairKey("main", RC_A)) && r.has(wf.pairKey("main", RC_B))
       && wf.releasedResolutionPairs([{ unit: "main", id: RC_A, shows: SHOWS.SHOWS_NO }]).size === 0
       && wf.releasedResolutionPairs([]).size === 0 && wf.releasedResolutionPairs(undefined).size === 0; },
-  () => [...wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }])]);
+  () => [...wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "read-page-business-rules returned no matching condition" }])]);
 check("PR #128 review (finding 1): `publishedResolutionIds` is the set of ids the plan publishes this run, ANSWERED OR NOT — the discriminator that tells an under-reported list (id gone entirely) from a withdrawal (id present, answer nulled)",
   () => { const p = wf.publishedResolutionIds(rcItems);
     return p.size === 2 && p.has(wf.idKey(RC_A)) && p.has(wf.idKey(RC_B))
@@ -2429,7 +2443,7 @@ check("PR #128 review (round 17): a positive independent read (`yes`) releases a
       && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER)], rcOwed(), rel, rcPub()).length === 0; },
   () => "a yes releases either source");
 check("PR #128 review (round 17): the reasoned-`unknown` escape is RULE-SHAPED ONLY — a LAYOUT-shaped answer, whose effect the page body CAN show, is NOT retired by `unknown` plus prose after being refuted with `no`; that was the shrug that retired a proven refutation",
-  () => { const rel = wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "could not determine from the fetched view" }]);
+  () => { const rel = wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "checked pages[main].businessRules — no condition on this lookup" }]);
     const layout = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "list-columns")], rcOwed(), rel, rcPub());
     const ruleShaped = wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(), rel, rcPub());
     return layout.length === 1 && ruleShaped.length === 0
@@ -2440,6 +2454,35 @@ check("PR #128 review (round 17): a bare `unknown` with NO `found` releases noth
       wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }]), rcPub()).length === 1
     && wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN }]).size === 0,
   () => "a bare unknown releases nothing");
+check("PR #128 review (round 17, review Minor): a reasoned `unknown` must NAME THE SURFACE IT READ — generic prose released a row just as well as a real report did, so `could not determine from the fetched view` now releases NOTHING even on a rule-shaped kind. The verifier prompt already says where to look for this class, so a verifier that looked can say so and one that shrugged cannot",
+  () => { const vague = wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "could not determine from the fetched view" }]);
+    const real = wf.releasedResolutionPairs([{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "read-page-business-rules shows no such condition" }]);
+    return vague.size === 0 && real.size === 1
+      && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(), vague, rcPub()).length === 1
+      && wf.reconcileUnconsumed([rcEntry(RC_B, SHOWS.UNCONSUMED_FROM_VERIFIER, "lookup-value")], rcOwed(), real, rcPub()).length === 0; },
+  () => "a reasoned unknown must name the rule surface");
+check("PR #128 review (round 17, review Minor): `namesRuleSurface` accepts the surfaces the prompt actually names and refuses prose that names none — and a `yes` needs no such test, because it is a positive confirmation rather than an excuse",
+  () => ["pages[main].businessRules", "read-page-business-rules", "the BusinessRule_ schemas", "no business rule found"]
+      .every((t) => wf.namesRuleSurface(t))
+    && ["", "   ", "could not tell", "not visible", "unknown"].every((t) => !wf.namesRuleSurface(t))
+    && wf.namesRuleSurface(undefined) === false,
+  () => "surface tokens accepted, bare prose refused");
+check("PR #128 review (round 17, review Minor): a verifier that NEVER SETTLES is reported — a claim with `unknown` and no `yes`/`no` lands in `unsettledResolutionClaims`, counted across rounds, which is the shape of the original defect arriving through a channel that looks compliant. NON-GATING: `unknown` is a legitimate answer, so this reports and never fails a run",
+  () => { let t = wf.tallyResolutionChecks(new Map(), [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "x" }]);
+    const afterOne = wf.unsettledResolutionClaims(t);
+    t = wf.tallyResolutionChecks(t, [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "x" }]);
+    const afterTwo = wf.unsettledResolutionClaims(t);
+    // A pair that EVER settled is not vague, however many `unknown`s follow it.
+    let s2 = wf.tallyResolutionChecks(new Map(), [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_NO, found: "x" }]);
+    s2 = wf.tallyResolutionChecks(s2, [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "x" }]);
+    s2 = wf.tallyResolutionChecks(s2, [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "x" }]);
+    return afterOne.length === 1 && afterTwo.length === 1
+      // ...and the threshold is a real parameter: asking for 2 suppresses the single-round case that the default reports.
+      && wf.unsettledResolutionClaims(wf.tallyResolutionChecks(new Map(), [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_UNKNOWN, found: "x" }]), 2).length === 0
+      && afterTwo[0].unit === "main" && afterTwo[0].id === RC_B && afterTwo[0].unknownRounds === 2
+      && wf.unsettledResolutionClaims(s2).length === 0
+      && wf.unsettledResolutionClaims(new Map()).length === 0 && wf.unsettledResolutionClaims(undefined).length === 0; },
+  () => "an all-unknown pair is reported; a settled one is not");
 check("PR #128 review (round 17): TWO verifier rows for ONE pair — a REFUTATION WINS whichever order they arrive in, so `[yes, no]` files the contradiction AND does not release it; that ordering used to file the row and erase it in the same round",
   () => { const claims = [{ unit: "main", resolutionClaims: [{ id: RC_B, kind: "lookup-value", applied: true, how: "set it", answer: "a" }] }];
     const order1 = [{ unit: "main", id: RC_B, shows: SHOWS.SHOWS_YES }, { unit: "main", id: RC_B, shows: SHOWS.SHOWS_NO, found: "not on the page" }];
@@ -2605,10 +2648,11 @@ check("PR #128 review (RC-10): the answers-blocked row is DEDUPED on `(unit, wha
 // and are seeded straight from the queue, exactly like `unconsumed` — the fact is exact instead of inferred.
 check("PR #128 review (N2): both repair-grant sets RIDE THE CARRY — `carryNow` and `carryFingerprint` carry `resolutionsReopened`/`resolutionsPending`, so the grant fact survives a resume by persistence, not by a lossy derivation from `unconsumed`",
   /const carryNow = \(\) => \(\{[^}]*unconsumed, resolutionsReopened: grantPairsToPersist\(resolutionsReopened\), resolutionsPending: \[\.\.\.resolutionsPending\] \}\)/.test(wfSrc)
-    // The pair leaves the process as `{unit, id}`, never as the NUL-delimited composite -- a NUL in a JSON file an
-    // agent writes and a human reads is the defect this PR spent a Blocker on, and it must not come back by the side door.
-    && /const pairParts = \(key\) => \{ const i = String\(key\)\.indexOf\(/.test(wfSrc)
-    && /return \{ unit: String\(key\)\.slice\(0, i\), id: String\(key\)\.slice\(i \+ 1\) \}/.test(wfSrc)
+    // The pair leaves the process as `{unit, id}`, never as the composite key -- the key is this mechanism's internal
+    // identity, not a contract an agent writes or a human reads. Round 17 made it a JSON-encoded pair rather than a
+    // NUL-joined string, so the pin is on the DECODE existing at all, not on a particular slicing.
+    && /const pairParts = \(key\) => \{/.test(wfSrc)
+    && /const \[unit, id\] = JSON\.parse\(String\(key\)\)/.test(wfSrc)
     && /carryFingerprint = \(\) => JSON\.stringify\(\[[\s\S]*?unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\]\]\)/.test(wfSrc));
 check("PR #128 review (N2): the carry block instructs the writer to persist BOTH grant sets EVEN WHEN `[]`, and the queue-read step reads them back — a dropped `resolutionsReopened` re-grants a spent round, a dropped `resolutionsPending` strands one owed",
   /ANSWER-CHANNEL REPAIR GRANTS[\s\S]{0,260}?resolutionsReopened[\s\S]{0,120}?resolutionsPending[\s\S]{0,200}?EVEN WHEN \\`\[\]\\`/.test(wfSrc)
@@ -3765,6 +3809,127 @@ const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
       firstRoundBuilds: trace.slice(0, trace.findIndex((t) => t.verify)).map((t) => t.build) }))
     .catch((e) => ({ threw: e.message }));
 };
+/* THE CONTRADICTION CHAIN, EXECUTED THROUGH `run()` (PR #128 review round 17, Alexandr-Kravchuk's Major).
+   Every check on this mechanism above is either a pure-helper call or a `.test(wfSrc)` regex. Neither can catch a
+   wrong call ORDER, a variable captured from the wrong scope, or an exception swallowed before the intended return —
+   and this PR's own round history is a list of exactly those. So this drives the real generator through the whole
+   chain the ticket exists for:
+
+     an answered ⚠ Confirm item routed to a builder
+       -> the builder claims `applied: true` and built nothing
+         -> the read-only verifier reads the page and returns `shows: "no"` for that same `(unit, id)`
+           -> the round tail files the contradiction, records the row `source: "verifier"`, and re-opens the unit
+             -> and the run does NOT report `complete`.
+
+   Then the same chain with a corrected follow-up round, asserting the row is RELEASED and `complete` flips. The
+   two runs differ in ONE stubbed value — what the second verifier says — which is what makes the pair a measurement
+   of the gate rather than of the fixture. */
+const CHAIN_ID = "main#confirm:entity-filter:Department";
+const chainItem = {
+  id: CHAIN_ID, pageKey: "main", kind: "entity-filter", item: "Department",
+  resolution: { answer: "filter Department by active records", decidedBy: "op", date: "2026-08-24" },
+};
+// `verifierSays(nth)` is the `shows` value for the nth verify round. Everything else is held identical between runs.
+const runChain = (verifierSays) => {
+  let builds = 0;
+  let verifies = 0;
+  const claimsSeen = [];
+  // Round 1 leaves `main` short so it is dispatched; from round 2 the engine gate is GREEN, which is the whole point
+  // — a green gate plus a refuted answer is the state that used to report `complete: true`.
+  const openVerdict = { complete: false, missing: 1, unverified: 0,
+    pages: { main: { complete: false, buildComplete: false, openRows: [{ deliverable: "Fields — 7 expected" }] } } };
+  const greenVerdict = { complete: true, missing: 0, unverified: 0,
+    pages: { main: { complete: true, buildComplete: true, openRows: [] } } };
+  const baseline = { ...roundBaseline, preflightItems: [chainItem], verify: openVerdict };
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return { ...baseline };
+    if (label.startsWith("build:")) {
+      builds += 1;
+      // THE FALSE CLAIM. `applied: true` with a `how` that reads plausibly, and no page effect anywhere — the exact
+      // shape the ticket measured (`built.json` with zero occurrences of `lookupListConfig`).
+      return { ...buildAnswer(false), resolutionsApplied: [{ id: CHAIN_ID, applied: true, how: "set the lookup filter on Department" }] };
+    }
+    if (label.startsWith("verify:")) {
+      verifies += 1;
+      // What the verifier was HANDED is recorded, so the test can prove the claim actually reached its prompt
+      // rather than assuming the wiring.
+      const at = prompt.indexOf("OPERATOR ANSWERS THIS UNIT WAS BUILT FROM");
+      if (at >= 0) claimsSeen.push(prompt.slice(at, at + 420));
+      return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [],
+        resolutionChecks: [{ unit: "main", id: CHAIN_ID, shows: verifierSays(verifies),
+          found: verifierSays(verifies) === SHOWS.SHOWS_NO ? "get-page shows no filter on the Department lookup" : "the filter is on the page" }] };
+    }
+    // Every later Reconcile reports the gate GREEN — so nothing but the answers channel can hold the run open.
+    if (label.startsWith("reconcile:")) return { ...baseline, verify: greenVerdict };
+    return null;
+  };
+  return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, builds, verifies, claimsSeen }))
+    .catch((e) => ({ threw: e.message }));
+};
+
+// RUN A — the verifier keeps refuting. The row is recorded against the verifier and the run must not close.
+const chainRefuted = await runChain(() => SHOWS.SHOWS_NO);
+const refutedRow = (chainRefuted.res?.unconsumedResolutions || []).find((u) => u.id === CHAIN_ID);
+check("PR #128 review (round 17, executed chain): the builder's answer REACHES the verifier's prompt — the claim, its `how`, and the operator's answer are rendered for the page check, so the rest of this chain is measuring wiring that exists",
+  !chainRefuted.threw && chainRefuted.claimsSeen.length > 0
+    && /Department/.test(chainRefuted.claimsSeen[0] || "")
+    && /claims APPLIED/.test(chainRefuted.claimsSeen[0] || ""),
+  () => (chainRefuted.threw ? `threw: ${chainRefuted.threw}` : (chainRefuted.claimsSeen[0] || "(no claims block reached Verify)").slice(0, 300)));
+check("PR #128 review (round 17, executed chain): a false `applied: true` REFUTED by the verifier lands in `unconsumedResolutions` with `source: \"verifier\"` — recorded against the independent read, not against the builder's own word",
+  !chainRefuted.threw && !!refutedRow && refutedRow.source === SHOWS.UNCONSUMED_FROM_VERIFIER,
+  () => (chainRefuted.threw ? `threw: ${chainRefuted.threw}`
+    : JSON.stringify({ unconsumed: chainRefuted.res?.unconsumedResolutions, discrepancies: chainRefuted.res?.discrepancies })).slice(0, 500));
+check("PR #128 review (round 17, executed chain): the run does NOT report `complete` on a GREEN engine gate while that answer stands refuted — this is the ticket's own failure, and the only thing holding the run open here is the answers channel",
+  // The gate is reported as `{ missing, unverified, pages }` — there is no `complete` on the verdict, so GREEN is
+  // "nothing missing, nothing unverified, every page complete". Asserted that way rather than on a field that does
+  // not exist, which would have made this check vacuously true on any run.
+  !chainRefuted.threw && chainRefuted.res?.complete === false
+    && chainRefuted.res?.verdict?.missing === 0 && chainRefuted.res?.verdict?.unverified === 0
+    && chainRefuted.res?.verdict?.pages?.main?.complete === true,
+  () => (chainRefuted.threw ? `threw: ${chainRefuted.threw}`
+    : `complete=${chainRefuted.res?.complete} verdict=${JSON.stringify(chainRefuted.res?.verdict)} rounds=${chainRefuted.res?.rounds}`));
+check("PR #128 review (round 17, executed chain): the contradiction is also FILED as a discrepancy — the operator-facing record of a claim the page disagreed with, distinct from the gate's own rows",
+  !chainRefuted.threw && (chainRefuted.res?.discrepancies || []).some((d) => JSON.stringify(d).includes(CHAIN_ID)),
+  () => JSON.stringify(chainRefuted.res?.discrepancies || []).slice(0, 400));
+check("PR #128 review (round 17, executed chain): the refuted answer BUYS ITS ONE REPAIR ROUND — the unit is re-dispatched on a gate that already calls it complete, and exactly once, so the grant is neither skipped nor unbounded",
+  !chainRefuted.threw && chainRefuted.builds >= 2 && chainRefuted.builds <= 1 + wf.DEFAULT_MAX_ROUNDS,
+  () => (chainRefuted.threw ? `threw: ${chainRefuted.threw}` : `builds=${chainRefuted.builds} verifies=${chainRefuted.verifies}`));
+
+// RUN C — a verifier that NEVER SETTLES. Every round comes back `unknown`, with `found` that names the surface, so
+// the release rule is satisfied and NOTHING is ever filed against the claim: no contradiction, no unconsumed row.
+// That is the original ENG-95503 shape arriving through a channel that looks compliant, and before the tally the
+// only thing that could catch it was a human reading the report. Mutating the fold-in of this tally left the whole
+// suite green, which is why this run exists rather than only the pure-helper checks above.
+const chainVague = await runChain(() => SHOWS.SHOWS_UNKNOWN);
+check("PR #128 review (round 17, review Minor, executed): a verifier that answers `unknown` on EVERY round is REPORTED on the run's return — nothing is filed against the claim, so without this signal the run looks clean and the answer's fate is unknown to everyone",
+  !chainVague.threw && (chainVague.res?.unsettledResolutionClaims || []).some((v) => v.id === CHAIN_ID && v.unknownRounds >= 1),
+  () => (chainVague.threw ? `threw: ${chainVague.threw}`
+    : JSON.stringify({ unsettled: chainVague.res?.unsettledResolutionClaims, unconsumed: chainVague.res?.unconsumedResolutions })).slice(0, 400));
+check("PR #128 review (round 17, review Minor, executed): the signal is NON-GATING — an all-`unknown` verifier does not fail the run, because `unknown` is a legitimate answer and honest uncertainty must not be punished as a lie; it is reported and the gate is left alone",
+  !chainVague.threw && chainVague.res?.complete === true
+    && (chainVague.res?.unsettledResolutionClaims || []).length > 0,
+  () => (chainVague.threw ? `threw: ${chainVague.threw}`
+    : `complete=${chainVague.res?.complete} unsettled=${(chainVague.res?.unsettledResolutionClaims || []).length}`));
+check("PR #128 review (round 17, executed): a SETTLED claim is never reported as unsettled — run A's verifier refuted on every round, which is a settled answer however unwelcome, so the vague signal must be empty there",
+  !chainRefuted.threw && (chainRefuted.res?.unsettledResolutionClaims || []).length === 0,
+  () => JSON.stringify(chainRefuted.res?.unsettledResolutionClaims || []));
+
+// RUN B — identical, except the SECOND verifier read confirms the effect. One stubbed value differs.
+const chainFixed = await runChain((nth) => (nth === 1 ? SHOWS.SHOWS_NO : SHOWS.SHOWS_YES));
+check("PR #128 review (round 17, executed chain): a CORRECTED follow-up round releases the row and the run closes — `complete` flips to true and `unconsumedResolutions` is empty, so the gate is a gate and not a one-way latch",
+  !chainFixed.threw && chainFixed.res?.complete === true
+    && (chainFixed.res?.unconsumedResolutions || []).length === 0,
+  () => (chainFixed.threw ? `threw: ${chainFixed.threw}`
+    : `complete=${chainFixed.res?.complete} unconsumed=${JSON.stringify(chainFixed.res?.unconsumedResolutions)}`));
+check("PR #128 review (round 17, executed chain): the two runs differ ONLY in what the second verifier said — same fixture, same claim, opposite outcome, which is what makes the pair a measurement of the gate rather than of the stub",
+  !chainRefuted.threw && !chainFixed.threw
+    && chainRefuted.res?.verdict?.missing === chainFixed.res?.verdict?.missing
+    && chainRefuted.res?.verdict?.pages?.main?.complete === chainFixed.res?.verdict?.pages?.main?.complete
+    && chainRefuted.res?.complete !== chainFixed.res?.complete,
+  () => `refuted: complete=${chainRefuted.res?.complete}, fixed: complete=${chainFixed.res?.complete}, gate both green=${chainFixed.res?.verdict?.missing === 0}`);
+
 // A builder that NEVER stops asking. Without a ceiling the unit is never charged a round, so `roundsRun` never
 // advances, `parkedKeys` never reaches MAX_ROUNDS, and the loop cannot end — the run would spin instead of returning.
 const alwaysContinues = await runToRound(() => true);

@@ -38,12 +38,25 @@ strengths are not interchangeable:
   an earlier `"no"` and the builder's own `applied: false`. Before this, a builder that honestly declined an answer
   because the page ALREADY satisfied it filed a row no later `"yes"` could clear, so the unit went green with
   `complete` false for ever and only a hand-edit of the queue file recovered it.
-- A reasoned `"unknown"` (one that says WHY in `found`) releases only a **verifier-sourced** row on a **rule-shaped**
-  kind — `lookup-value`, `rule`, `visibility-rule` — the class whose effect `viewConfig` structurally cannot show.
-  For any other kind it releases nothing: a LAYOUT-shaped answer, whose effect the page body CAN show, must not be
-  retired by a shrug after being positively refuted.
+- A reasoned `"unknown"` releases only a **verifier-sourced** row on a **rule-shaped** kind — `lookup-value`,
+  `rule`, `visibility-rule` — the class whose effect `viewConfig` structurally cannot show. For any other kind it
+  releases nothing: a LAYOUT-shaped answer, whose effect the page body CAN show, must not be retired by a shrug
+  after being positively refuted. **And "reasoned" means `found` NAMES THE SURFACE IT READ** — `businessRules`,
+  `read-page-business-rules`, a `BusinessRule_*` schema. Generic prose ("could not determine from the fetched
+  view") releases nothing: the verifier prompt says exactly where to look for this class, so a verifier that looked
+  can say so, and one that shrugged cannot buy a release with the shrug.
 
 An ABSENT read (the verifier never looked) releases nothing, and a bare `"unknown"` with no `found` releases nothing.
+
+**The residual trust assumption, and the signal that tracks it.** Only `"no"` refutes a claim — correctly, since
+`"unknown"` must never be read as a lie. The cost is that a verifier which lands *every* check on `"unknown"` files
+no contradiction and no unconsumed row, so the original failure shape (an answer that produced nothing, reported as
+finished) can reappear through a channel that looks compliant. Nothing but a human reading the report used to catch
+that. The run now returns `unsettledResolutionClaims` — every `(unit, id)` a builder claimed that the verifier never
+settled either way, with the number of rounds it stayed `"unknown"` — and logs it at the close. It is
+**deliberately NON-GATING**: honest uncertainty must not fail a run, so this reports and leaves `complete` alone.
+An operator seeing entries here should check those pages by hand; a run where the list is long is a verifier
+problem, not a build problem.
 Two rows for the same pair in one result are collapsed to one, and **a refutation wins whichever order they arrive
 in** — `[yes, no]` files the contradiction and does not release it. Without this, a rule-shaped answer whose rebuilt effect the page body can never positively show
 would block `complete` for ever, because once its unit is green it is never re-verified and the confirming `"yes"`
