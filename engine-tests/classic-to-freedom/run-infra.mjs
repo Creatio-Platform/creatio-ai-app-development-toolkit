@@ -4414,7 +4414,10 @@ const chainItem = {
   resolution: { answer: "filter Department by active records", decidedBy: "op", date: "2026-08-24" },
 };
 // `verifierSays(nth)` is the `shows` value for the nth verify round. Everything else is held identical between runs.
-const runChain = (verifierSays) => {
+// `seed` is what a RESUMED run's Reconcile reports back off the queue file. It is merged into EVERY reconcile
+// answer, not only the baseline, because that is what a real queue file does: the rows are on disk and every read
+// of it returns them. Defaulting to `{}` leaves every existing caller a fresh-folder run, byte for byte as before.
+const runChain = (verifierSays, seed = {}, keepOpen = false) => {
   let builds = 0;
   let verifies = 0;
   const claimsSeen = [];
@@ -4424,7 +4427,7 @@ const runChain = (verifierSays) => {
     pages: { main: { complete: false, buildComplete: false, openRows: [{ deliverable: "Fields — 7 expected" }] } } };
   const greenVerdict = { complete: true, missing: 0, unverified: 0,
     pages: { main: { complete: true, buildComplete: true, openRows: [] } } };
-  const baseline = { ...roundBaseline, preflightItems: [chainItem], verify: openVerdict };
+  const baseline = { ...roundBaseline, preflightItems: [chainItem], verify: openVerdict, ...seed };
   const agentStub = async (prompt, opts = {}) => {
     const label = opts.label || "";
     if (label === "reconcile:baseline") return { ...baseline };
@@ -4445,7 +4448,7 @@ const runChain = (verifierSays) => {
           found: verifierSays(verifies) === SHOWS.SHOWS_NO ? "get-page shows no filter on the Department lookup" : "the filter is on the page" }] };
     }
     // Every later Reconcile reports the gate GREEN — so nothing but the answers channel can hold the run open.
-    if (label.startsWith("reconcile:")) return { ...baseline, verify: greenVerdict };
+    if (label.startsWith("reconcile:")) return { ...baseline, verify: keepOpen ? openVerdict : greenVerdict, ...seed };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -4513,6 +4516,53 @@ check("PR #128 review (round 17, executed chain): the two runs differ ONLY in wh
     && chainRefuted.res?.verdict?.pages?.main?.complete === chainFixed.res?.verdict?.pages?.main?.complete
     && chainRefuted.res?.complete !== chainFixed.res?.complete,
   () => `refuted: complete=${chainRefuted.res?.complete}, fixed: complete=${chainFixed.res?.complete}, gate both green=${chainFixed.res?.verdict?.missing === 0}`);
+
+/* THE RESUME BOUNDARY, EXECUTED ACROSS TWO `run()` INVOCATIONS (PR #128 review round 18, Alexandr-Kravchuk's Major).
+   `unsettledResolutionClaims` is the ONE field on this channel that does not survive a resume, and the source pin
+   above asserts that structurally — the note is present and `carryNow()` omits the tally. This is the behavioural
+   half, and it is not redundant with the pin: a pin proves the CODE SHAPE, and every other resume guarantee here is
+   proved by DRIVING two invocations. The asymmetry is the thing worth executing, because it is invisible from either
+   invocation alone and a reader who assumed parity with the four carried siblings would be reading the report wrong.
+
+   The runs are identical but for the seam: `keepOpen` holds the unit open so the round budget is spent and the
+   verifier is asked THREE times, which makes the two possible outcomes far apart — 3 if the tally restarts, 6 if it
+   accumulates — rather than a one-round margin that a fixture change could close by accident. */
+const vagueStop1 = await runChain(() => SHOWS.SHOWS_UNKNOWN, {}, true);
+// THE RESUME: a fresh `run()` in the same folder, whose Reconcile reports back exactly what the first run left on
+// the queue file. Nothing about the second invocation knows the first one happened except through that seam.
+const vagueStop2 = await runChain(() => SHOWS.SHOWS_UNKNOWN,
+  { unconsumedResolutions: vagueStop1.res?.unconsumedResolutions || [] }, true);
+const unknownRoundsOf = (r) => (r.res?.unsettledResolutionClaims || []).find((v) => v.id === CHAIN_ID)?.unknownRounds;
+check("PR #128 review (round 18, executed): the FIRST invocation accumulates the unsettled count ACROSS ITS OWN ROUNDS — three verify rounds, three `unknown` answers, `unknownRounds: 3`. Without this the pair below would compare two zeroes and prove nothing about accumulation at all",
+  !vagueStop1.threw && vagueStop1.verifies === 3 && unknownRoundsOf(vagueStop1) === 3,
+  () => (vagueStop1.threw ? `threw: ${vagueStop1.threw}`
+    : `verifies=${vagueStop1.verifies} unsettled=${JSON.stringify(vagueStop1.res?.unsettledResolutionClaims)}`));
+check("PR #128 review (round 18, executed): the count DOES NOT cross the resume boundary — the second invocation does the same three rounds of `unknown` and still reports `unknownRounds: 3`, not 6. This is the documented per-invocation limit, executed: an operator reading a resumed run is reading 'since this process started', and the two outcomes are three apart so the assertion cannot pass by coincidence",
+  !vagueStop2.threw && vagueStop2.verifies === 3
+    && unknownRoundsOf(vagueStop2) === 3
+    && unknownRoundsOf(vagueStop2) === unknownRoundsOf(vagueStop1)
+    // Stated as the thing that would be TRUE if the tally were carried, so the check reads as the measurement it is.
+    && unknownRoundsOf(vagueStop2) !== unknownRoundsOf(vagueStop1) + 3,
+  () => (vagueStop2.threw ? `threw: ${vagueStop2.threw}`
+    : `run1=${unknownRoundsOf(vagueStop1)} run2=${unknownRoundsOf(vagueStop2)} verifies=${vagueStop2.verifies}`));
+/* THE CONTRAST, and the reason the pair above measures the TALLY rather than the HARNESS. "The count did not grow"
+   is also what a resume seam that carried NOTHING would produce, so on its own it is indistinguishable from a broken
+   fixture. This run seeds the same seam with a sibling field — an `unconsumedResolutions` row, the one this ticket
+   made survive — and requires it to come back and hold the run open. The seam demonstrably carries; the tally
+   demonstrably does not; and the difference between them is the documented limit rather than a dead test. */
+const resumeSeedRow = { unit: "main", id: CHAIN_ID, kind: "entity-filter", item: "Department",
+  answer: "filter Department by active records", why: "an earlier session watched this reach a build and produce nothing",
+  source: SHOWS.UNCONSUMED_FROM_VERIFIER };
+const vagueCarried = await runChain(() => SHOWS.SHOWS_UNKNOWN, { unconsumedResolutions: [resumeSeedRow] }, true);
+check("PR #128 review (round 18, executed): the SAME resume seam DOES carry its siblings — a seeded `unconsumedResolutions` row rides the identical channel, comes back on the return and still blocks `complete`, while the tally beside it restarted. Without this leg, 'the count did not grow' would be equally consistent with a resume that carried nothing at all",
+  !vagueCarried.threw
+    && (vagueCarried.res?.unconsumedResolutions || []).some((u) => u.id === CHAIN_ID)
+    && vagueCarried.res?.complete === false
+    // ...and the tally in THIS run — the one that provably resumed — still reads its own rounds only.
+    && unknownRoundsOf(vagueCarried) === 3,
+  () => (vagueCarried.threw ? `threw: ${vagueCarried.threw}`
+    : JSON.stringify({ complete: vagueCarried.res?.complete, unknownRounds: unknownRoundsOf(vagueCarried),
+      unconsumed: (vagueCarried.res?.unconsumedResolutions || []).map((u) => u.id) })));
 
 // A builder that NEVER stops asking. Without a ceiling the unit is never charged a round, so `roundsRun` never
 // advances, `parkedKeys` never reaches MAX_ROUNDS, and the loop cannot end — the run would spin instead of returning.
