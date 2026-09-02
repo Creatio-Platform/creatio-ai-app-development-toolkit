@@ -154,7 +154,10 @@ check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or
     && /if \(opts\.scopeSchema \|\| !sectionSchemas\.length\) return \[\];/.test(mgSrc)
     && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
-  /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
+  // The block moved into `contextFailedReturn` — `run()` sat at the pinned Sonar cognitive complexity 15, the same
+  // reason `sectionStubScopes` above is its own function. The GUARANTEE is unchanged: the `!ctx` arm still returns
+  // the `context-failed` verdict rather than falling through to the "nothing to describe" exit.
+  /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) return contextFailedReturn\(/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
   // Optional chaining now (the null-guard was spelled out longhand); the GUARANTEE is unchanged — the verdict
   // requires a Merge that produced BOTH deliverables, not merely a coverage count.

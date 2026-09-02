@@ -1249,6 +1249,52 @@ function reportCritique(critique, critiqueReturned, log) {
   return ran
 }
 
+// The three blocks below were lifted OUT of `run()` unchanged — same log strings, same returned object, same
+// order — because `run()` sits at the cognitive-complexity line and every future phase adds to it. Each is pure
+// (`log` in, a value out), so the parity suite still compares the identical bytes it compared before.
+
+// A Context item that returned nothing and a Context item that REJECTED are the same root cause with two
+// caller-visible results, and they need different repairs. The nullish case keeps its EXACT baseline wording,
+// log line and `reason` — `run-workflow-parity` compares the return value against the pre-migration script byte
+// for byte, and a rewording would read as a behaviour change where there is none. A rejection is the case that
+// had no verdict at all, so that is the one that gains the cause.
+function contextFailedReturn(contextOutcome, surface, log) {
+  const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
+  log(cause
+    ? `the Context agent rejected — ${cause} — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe`
+    : 'the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
+  return {
+    surface,
+    skipped: false,
+    stopped: 'context-failed',
+    reason: cause
+      ? `the Context phase rejected (${cause}), so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.`
+      : 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
+    coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
+    conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
+  }
+}
+
+// Coverage alone is not completion: the report and the index are the DELIVERABLES, and a Merge item that returned
+// nothing wrote neither. Returns `mergeOk` so the caller keeps computing the verdict from it.
+function reportMerge(merged, mergeOutcome, log) {
+  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
+  if (!mergeOk) {
+    const mergeCause = failureCause(mergeOutcome.error, !!mergeOutcome.error)
+    const cause = mergeCause ? ` — ${mergeCause}` : ''
+    log(`the Merge phase returned no report/index${cause} — the coverage numbers stand, but this run has no deliverable and is NOT complete`)
+  }
+  return mergeOk
+}
+
+// The closing line, arithmetic only — see `isComplete` for why the verdict is never an agent's closing sentence.
+function verdictLine({ complete, covered, total, uncoveredKeys, wiringOnly }) {
+  const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
+  return complete
+    ? `complete: ${covered}/${total} rows described`
+    : `INCOMPLETE: ${uncoveredKeys.length} of ${total} rows still carry no card${wiringNote}`
+}
+
 function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -1299,26 +1345,7 @@ function* run(rawInput, io = {}) {
   // A Context item that returned NOTHING is an orchestration failure, not a surface with nothing on it. Both used
   // to reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete
   // zero-row analysis for a digest that may be full — the one outcome this workflow exists to make impossible.
-  if (!ctx) {
-    // The nullish case keeps its EXACT baseline wording, log line and `reason` — `run-workflow-parity`
-    // compares the return value against the pre-migration script byte for byte, and a rewording would
-    // read as a behaviour change where there is none. A rejection is the case that had no verdict at
-    // all, so that is the one that gains the cause.
-    const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
-    log(cause
-      ? `the Context agent rejected — ${cause} — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe`
-      : 'the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
-    return {
-      surface: SURFACE,
-      skipped: false,
-      stopped: 'context-failed',
-      reason: cause
-        ? `the Context phase rejected (${cause}), so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.`
-        : 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
-      coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
-      conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
-    }
-  }
+  if (!ctx) return contextFailedReturn(contextOutcome, SURFACE, log)
 
   const scopes = normalizeScopes(ctx.scopes)
   const worked = scopes.filter((s) => s.rows > 0)
@@ -1497,18 +1524,9 @@ function* run(rawInput, io = {}) {
   // The verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after the repair
   // round, so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
   // DELIVERABLES, and a Merge item that returned nothing wrote neither.
-  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
-  if (!mergeOk) {
-    const mergeCause = failureCause(mergeOutcome.error, !!mergeOutcome.error)
-    const cause = mergeCause ? ` — ${mergeCause}` : ''
-    log(`the Merge phase returned no report/index${cause} — the coverage numbers stand, but this run has no deliverable and is NOT complete`)
-  }
+  const mergeOk = reportMerge(merged, mergeOutcome, log)
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
-  const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
-  const verdictLine = complete
-    ? `complete: ${covered.size}/${allKeys.size} rows described`
-    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
-  log(verdictLine)
+  log(verdictLine({ complete, covered: covered.size, total: allKeys.size, uncoveredKeys, wiringOnly }))
 
   return {
     surface: SURFACE,
