@@ -352,6 +352,7 @@ Rules:
 | `built.json` → `pages`, `reachability`, `evidence` | the read-only verifier | the builder, the judge |
 | `built.json` → `judge` | the judge | everyone else |
 | `slices/queue-<n>.json`, `slices/built-<n>.json` | the ENGINE, via `--slices` on the reconcile step's `--units` / `--verify` runs | every agent — a build agent READS its two, and writes neither |
+| `reconcile-answer-*.json` (+ its `.ascii.json` copy) | the RECONCILE agent — its full structured answer, staged on disk before every submission | every other agent. Nothing downstream reads these: they exist as failure evidence (the exact bytes of a host-rejected submission) and can carry live-stand text. The agent deletes an ACCEPTED attempt's pair; the engine sweeps captures older than 14 days on the next `--units` run; delete manually once an investigation closes |
 | the Freedom pages on the stand | the builder | the verifier, the judge |
 
 **`built.json` has THREE writers, in sequence, never at the same time:** the preflight merge step, then the

@@ -411,7 +411,7 @@ ${ANSWER_ENCODER_SOURCE}
 It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected.
 - Read the \`.ascii.json\` file and submit EXACTLY its content as the structured answer, character for character.
 - If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave a REJECTED attempt's files in place: they are the evidence that failure needs.
-- Once the host ACCEPTS a submission, DELETE that attempt's raw and \`.ascii.json\` files. The accepted answer is already recorded by the host, and these copies carry the same live-stand text as this folder's other artifacts (\`verify.md\`, \`built.json\`) — a routine copy should not outlive its purpose. Only a rejected attempt's files stay.`
+- Once the host ACCEPTS a submission, DELETE that attempt's raw and \`.ascii.json\` files. The accepted answer is already recorded by the host, and these copies carry the same live-stand text as this folder's other artifacts (\`verify.md\`, \`built.json\`) — a routine copy should not outlive its purpose. Only a rejected attempt's files stay — and the ENGINE enforces the bound regardless: every \`--units\` run sweeps capture files older than 14 days, so a capture this instruction misses is removed on the next run in this folder.`
   }
 
   phase('Reconcile')
@@ -470,9 +470,14 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
   // move differs between them, so the last attempt's fault list and rejection are held for the failure text to name.
   let lastShapeFaults = []
   let lastHostRejection = ''
+  // ONE WRITER for the attempt-failure pair: both fields move together, so no branch can set one and leave the
+  // other stale — the far readers (the stop texts, the round-tail log) key on whichever is set last.
+  function recordAttemptFailure(faults, rejection) {
+    lastShapeFaults = faults
+    lastHostRejection = rejection
+  }
   function* reconcileAgent(roundNo, id, label, note) {
-    lastShapeFaults = []
-    lastHostRejection = ''
+    recordAttemptFailure([], '')
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
       // Sequential by definition: attempt 2 exists only because attempt 1 failed (same shape as the round's own
       // `dispatchUnit` loop, which is sequential for the same reason).
@@ -494,9 +499,15 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
     // the whole budget. The fault list is appended to the PROMPT instead, which is the one channel the agent reads.
     const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
     const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
-    const prompt = lastShapeFaults.length
-      ? `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
-      : base
+    let prompt = base
+    if (lastShapeFaults.length) {
+      prompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
+    } else if (lastHostRejection) {
+      // THE HOST'S REJECTION REACHES THE NEXT ATTEMPT. A workflow-level retry is a FRESH context: recomposing blind,
+      // it would most likely re-send the same bytes and spend the budget on nothing. The shape-fault branch above
+      // already threads its faults through; this is the same rule for the other failure kind.
+      prompt = `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.`
+    }
     let answer
     try {
       answer = yield* dispatch(attemptId, prompt, {
@@ -511,8 +522,7 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
       // outcome (`workItemOutcome`), so a local throw — a genuine bug in this dispatch path — surfaces immediately
       // with its own stack instead of burning three attempts under a "REJECTED by the host" label.
       if (!e?.workItemOutcome) throw e
-      lastShapeFaults = []
-      lastHostRejection = String(e?.message || e)
+      recordAttemptFailure([], String(e?.message || e))
       logReconcileAttemptFailure(willRetry,
         `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`,
         `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
@@ -523,8 +533,7 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
       // short must report the REFUSAL: keeping the earlier faults told the operator the agent "answered on all
       // attempts, the host is not blocking anything" while the host blocked the rest, which is the misdiagnosis
       // this whole ticket corrects.
-      lastShapeFaults = []
-      lastHostRejection = ''
+      recordAttemptFailure([], '')
       logReconcileAttemptFailure(willRetry,
         `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`,
         `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built; read the host's own reason before re-running, since the schema-size refusal is deterministic`)
@@ -543,8 +552,7 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
       if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
       return answer
     }
-    lastShapeFaults = faults
-    lastHostRejection = ''
+    recordAttemptFailure(faults, '')
     // "on this attempt", NOT "on all N": an earlier attempt may have returned NOTHING (the host refused it), and
     // `lastShapeFaults` is reset on that path, so claiming every attempt answered would tell the operator the host
     // is fine when it may have blocked half the budget.
@@ -566,7 +574,7 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
   // It is a host rule: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs,
   // in `auto`-permission sessions. Neither a re-run nor this retry budget can clear it — the schema has to get
   // smaller, or the session has to not be in `auto` mode.
-  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host\'s own reason: `blocked by safety classifier: output schema too large to classify safely` is deterministic (a serialized agent schema over 4096 bytes, in an `auto`-permission session) and no number of attempts clears it; `StructuredOutput was called with input that could not be parsed as JSON` repeating on every attempt means the answer keeps reaching the host as invalid JSON — the `reconcile-answer-*` files in the migration folder hold the exact bytes of every submission, and they are the evidence to attach'
+  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host\'s own reason: `blocked by safety classifier: output schema too large to classify safely` is deterministic (a serialized agent schema over 4096 bytes, in an `auto`-permission session) and no number of attempts clears it; `StructuredOutput was called with input that could not be parsed as JSON` repeating on every attempt means the answer keeps reaching the host as invalid JSON — the `reconcile-answer-*` files in the migration folder hold the exact bytes of every submission, and they are the evidence to attach. They can carry live-stand data: delete them once the investigation is done (the engine also purges any capture older than 14 days on the next run in this folder)'
   const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent may be transient (a rejected structured answer, a dropped connection): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
   // TWO DIFFERENT FAILURES, each with its own next move. A host REJECTION carries the host's own error verbatim —
   // that message, not this script's paraphrase, is what the operator triages on. A shape shortfall means the host

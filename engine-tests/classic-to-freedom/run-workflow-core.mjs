@@ -1181,6 +1181,12 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       && prompts[1].includes("/mig/reconcile-answer-baseline-retry-1-1.json")
       && prompts[2].includes("/mig/reconcile-answer-baseline-retry-2-1.json"),
     () => prompts.map((p) => (p.match(/reconcile-answer-[\w-]*\.json/) || ["(no answer file in prompt)"])[0]).join(" | "));
+  check("build-executor: a host-rejected attempt's RETRY prompt carries the rejection VERBATIM — a fresh context recomposing blind would re-send the same bytes and spend the budget on nothing; the first attempt carries none",
+    prompts.length === 3
+      && !prompts[0].includes("REJECTED BY THE HOST")
+      && prompts[1].includes("YOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST") && prompts[1].includes(hostErr)
+      && prompts[2].includes("YOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST") && prompts[2].includes(hostErr),
+    () => (prompts[1] || "").slice(-400));
 }
 
 console.log(`\nWORKFLOW-CORE GOLDEN: ${pass} passed, ${fail} failed`);

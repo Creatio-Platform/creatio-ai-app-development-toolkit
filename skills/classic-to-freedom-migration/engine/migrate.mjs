@@ -2641,6 +2641,34 @@ function writePageSlices(dir, prefix, units, sliceOf, fail) {
   return written;
 }
 
+// RETENTION FOR THE RECONCILE ANSWER CAPTURES (`reconcile-answer-*.json` beside the queue file). The submission
+// protocol writes the agent's full answer to disk — the evidence a rejected submission needs — and instructs the
+// agent to delete an ACCEPTED attempt's copies; an instruction to an agent is probabilistic, and a REJECTED
+// attempt's files would otherwise persist forever. This sweep is the code-enforced bound: every `--units` run (the
+// head of every Reconcile) removes captures older than the window. Two weeks keeps a failure investigable across a
+// vacation; a sweep problem is never allowed to fail the run — the captures are diagnostics, not deliverables.
+const ANSWER_CAPTURE_RETENTION_DAYS = 14;
+function sweepAnswerCaptures(outDir) {
+  // ONLY IN A FOLDER THAT IS DEMONSTRABLY A MIGRATION FOLDER. The directory is inferred (the parent of `--slices`,
+  // which the production context always shapes as `<outDir>/slices`), not one this run created — and every other
+  // destructive path in this engine stays inside a directory it owns. A run artifact is the proof: any folder with
+  // leftover captures has a queue file (the reconcile step writes it before any submission) or a verify table.
+  // `--units --slices .` therefore sweeps nothing in the parent of an arbitrary cwd.
+  if (!fs.existsSync(path.join(outDir, "build-queue.json")) && !fs.existsSync(path.join(outDir, "verify.md"))) return;
+  let removed = 0;
+  try {
+    const cutoff = Date.now() - ANSWER_CAPTURE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const f of fs.readdirSync(outDir)) {
+      if (!/^reconcile-answer-.*\.json$/.test(f)) continue;
+      const p = path.join(outDir, f);
+      try {
+        if (fs.statSync(p).mtimeMs < cutoff) { fs.rmSync(p, { force: true }); removed += 1; }
+      } catch { /* a vanished or locked capture is not this sweep's problem */ }
+    }
+  } catch { return; /* an unreadable folder means nothing to sweep — never a dead run over diagnostics */ }
+  if (removed > 0) process.stderr.write(`migrate.mjs: retention sweep removed ${removed} reconcile-answer capture file(s) older than ${ANSWER_CAPTURE_RETENTION_DAYS} day(s) from ${outDir}.\n`);
+}
+
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
 // stdout = the result JSON (parseable); diagnostics go to stderr. Bad input exits 1 with a clear message
 // (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
@@ -2784,7 +2812,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
     const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
-    if (slicesDir) writePageSlices(slicesDir, "queue", units, (k) => pageUnitsSlice(units, k), fail);
+    if (slicesDir) {
+      writePageSlices(slicesDir, "queue", units, (k) => pageUnitsSlice(units, k), fail);
+      sweepAnswerCaptures(path.dirname(path.resolve(slicesDir)));
+    }
     output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
