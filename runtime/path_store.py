@@ -3,9 +3,13 @@
 
 Why this module exists
 ----------------------
-Every Python entry point in this repository takes a path from its command line
--- `cost_counter.py <export-dir>`, `mcp_client.py --args-file ...`,
-`installer/install.py`. The usual defence is to check the path and then use it,
+Every Python entry point in this repository takes a path from its command line.
+`mcp_client.py --args-file ...` resolves through this module; the remaining
+entry points do not yet, and `installer/install.py` closes its own
+content-derived destination by validating the name rather than through a store
+(see `provision_named_workflows`). Adoption at the rest is pending, so this
+module's existence is NOT evidence that those sinks are closed -- check the call
+site. The usual defence is to check the path and then use it,
 but a check is not a transformation: the value that reaches `open()` /
 `os.listdir()` / `glob.glob()` is still the caller's own string, so a `..`
 segment, a symlink or an absolute path from a caller that did not mean well is

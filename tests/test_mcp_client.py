@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -191,6 +192,29 @@ class McpClientTests(unittest.TestCase):
     def test_load_cli_arguments_accepts_stdin_mode(self):
         arguments = load_cli_arguments(args_stdin=True, stdin_text='{"environment-name":"local"}')
         self.assertEqual(arguments, {"environment-name": "local"})
+
+    def test_load_cli_arguments_reads_a_file_through_the_path_store(self):
+        # The taint class path_store.py exists to close: the value must not reach `open()` as the
+        # caller's own string. Resolution is by listing, so a real file under the home store works.
+        with tempfile.TemporaryDirectory(dir=os.path.expanduser("~")) as temp:
+            args_file = os.path.join(temp, "args.json")
+            with open(args_file, "w", encoding="utf-8") as handle:
+                handle.write('{"environment-name":"local"}')
+
+            self.assertEqual(
+                load_cli_arguments(args_file=args_file),
+                {"environment-name": "local"},
+            )
+
+    def test_load_cli_arguments_refuses_a_file_outside_the_home_store(self):
+        # An absolute path outside the base, and a traversal out of it, are both refused BEFORE any
+        # read — and the console message names the base so the caller can see where to move the input.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        traversal = os.path.join(os.path.expanduser("~"), "..", "..", "etc", "hosts")
+        for requested in (outside, traversal):
+            with self.subTest(requested=requested):
+                with self.assertRaises(ValueError):
+                    load_cli_arguments(args_file=requested)
 
     def test_load_cli_arguments_rejects_multiple_sources(self):
         with self.assertRaisesRegex(ValueError, "exactly one argument source"):

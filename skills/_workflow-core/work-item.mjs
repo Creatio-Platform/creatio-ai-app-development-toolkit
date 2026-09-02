@@ -14,9 +14,28 @@
 // the sequence without an AI runtime at all.
 
 // ---------------------------------------------------------------------------
-// Access levels. The safety model is per-item, not per-run: an analysis phase
-// that is read-only says so here, and a host that cannot honour the distinction
-// is refused by `capabilities.mjs` rather than trusted to behave.
+// Access levels. Per-item, not per-run: an analysis phase that is read-only says so
+// here.
+//
+// DECLARATIVE, NOT YET NEGOTIATED — read this before relying on it. `capabilities.mjs`
+// does not know about stand access: `CAPABILITIES` has no entry for it, and
+// `negotiateRun`/`negotiateStep` read only the step-level `requires` array. They never
+// read `item.access`, nor the per-item `item.capabilities` that `workItem()` computes
+// (including the `structuredOutput` a `responseSchema` implies). On the Claude boundary
+// `agentOptionsFor` maps agentType/schema/phase/label and drops `access` and
+// `inputFiles`; `cli.mjs next` echoes `access` into its JSON payload for a HUMAN to
+// read. So across all three adapters this is a label the boundary does not enforce.
+//
+// Nothing is broken today — the behaviour-analysis workflow is entirely read-only, so
+// every item is `stand-read-only` and no host is asked to honour a distinction. It
+// matters for what comes next: the build-side leg (`freedom-build-executor`, the
+// sequential stand-write pass) is the half that will carry `ACCESS.STAND_WRITE`, and
+// adding enforcement afterwards means re-opening the negotiation protocol and every
+// adapter already written against it. Until it lands, the human-in-the-loop expectation
+// before a risky write rests on prompt text, not on this boundary. The earlier version
+// of this header claimed a host that cannot honour the distinction "is refused by
+// `capabilities.mjs`"; it is not, and a declared safety property no host reads is worse
+// than no declaration.
 // ---------------------------------------------------------------------------
 export const ACCESS = {
   NONE: 'none',                       // no stand, no filesystem writes beyond the migration folder

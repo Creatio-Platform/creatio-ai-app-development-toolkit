@@ -86,7 +86,13 @@ Two consequences make the whole thing work:
 `classic-ui-expert` means the analysis contract (member ledger, counted zeros,
 refusals, numbered acceptance criteria). `access` is the per-item safety level:
 an analysis phase says `stand-read-only` and a host that cannot honour that must
-not run it.
+not run it. **It is declarative today, not negotiated** — `capabilities.mjs` has
+no stand-access entry and reads only a step's `requires`, so no adapter enforces
+`access` or the per-item `capabilities` at its boundary. Nothing is broken while
+every shipped item is read-only; making it binding is part of the build-side leg
+that will carry `stand-write`, and until then the expectation before a risky write
+rests on prompt text rather than on this boundary. See the header of
+`work-item.mjs` for the specifics.
 
 ### The three outcomes — the part an adapter most easily gets wrong
 
