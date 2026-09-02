@@ -865,7 +865,7 @@ check("ENG-95471 review fix: none of the files that carried the retired `guideli
   staleScalarHits.length === 0,
   () => ({ hits: staleScalarHits.map((f) => f.rel + (existsSync(f.abs) ? " (still names it)" : " (MISSING)")) }));
 check("ENG-95471 review fix: the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two",
-  /required: \['approval'[\s\S]{0,1400}'evidenceIds', 'evidenceFiled', 'evidenceRejected'\]/.test(wfSrc));
+  /required: \['approval'[\s\S]{0,1400}'evidenceIds', 'evidenceFiled', 'evidenceRejected',/.test(wfSrc));
 check("ENG-95471 review fix: an ABSENT `evidenceFiled` yields the UNKNOWN set, not an empty one — the two must not collapse, or the overwrite guard silently stops firing",
   /const earnedFrom = \(filed, rejected\) => \(Array\.isArray\(filed\)[\s\S]{0,140}: null\)/.test(wfSrc));
 // The BUILDER-FACING wording, pinned on the shipped constant. `ran: false` is an honest answer whose row is a hard
@@ -1254,7 +1254,7 @@ check("ENG-95468: the Reconcile prompt asks for BOTH new gate inputs — the rea
   /return \\`templateResolution\\`/.test(wfSrc) && /\\`templateNames\\`/.test(wfSrc)
     && /Return \\`schemaNamePrefix\\`/.test(wfSrc)
     && /The empty prefix is a REAL answer and is not the same as unreadable/.test(wfSrc)
-    && /\\`schemaNamePrefixEmpty: true\\`/.test(wfSrc));
+    && /\\`schemaNamePrefixEmpty\\` is REQUIRED on EVERY answer/.test(wfSrc));
 check("ENG-95468: the pre-build gate and its mid-run twin are wired to all THREE axes — a stop computed from one of them and returned from another is the failure mode a source pin catches and an execution test cannot name",
   /const templateMismatchesNow = templateMismatches\(state\.templateResolution, state\.templateNames\)/.test(wfSrc)
     && /const appIdentity = appIdentityMismatch\(state\.targetPackage, state\.sectionHost, state\.schemaNamePrefix, state\.applicationCode, appUnitDone\(\)\)/.test(wfSrc)
@@ -1664,8 +1664,9 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // EVERY property still declared. The fix for the byte count was to stop describing the INSIDES of the nested
 // objects — not to drop fields — and the core computes on all 41 of them, so a shrink that removed one would be a
 // silent contract change no other test here would notice.
-check("ENG-95930: the loosened Reconcile schema still declares all 42 properties (41 + the empty-prefix wire form `schemaNamePrefixEmpty`) and its 13-entry `required` list — the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 42 && (wf.RECONCILE_SCHEMA?.required || []).length === 13,
+check("ENG-95930: the loosened Reconcile schema still declares all 42 properties (41 + the empty-prefix wire form `schemaNamePrefixEmpty`) and its 14-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 42 && (wf.RECONCILE_SCHEMA?.required || []).length === 14
+    && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
 // The shape table is the schema's other half now, so an empty or truncated one is a silent loss of every check the
@@ -3592,7 +3593,7 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
     && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
-  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected']/.test(wfSrc));
+  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',/.test(wfSrc));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
   // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
   // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.

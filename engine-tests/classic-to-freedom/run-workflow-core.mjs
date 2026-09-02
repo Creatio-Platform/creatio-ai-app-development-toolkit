@@ -1062,6 +1062,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       pageSchemas: { main: "MainPage" }, parents: {}, reachability: [], reachabilityState: {},
       preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
+      schemaNamePrefixEmpty: false,
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",

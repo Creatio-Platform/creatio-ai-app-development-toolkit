@@ -53,7 +53,11 @@ export const RECONCILE_SCHEMA = {
     // omitted it left the row inert — the gate silently off on the run that needs it. `evidenceFiled` and
     // `evidenceRejected` are required because the close row's overwrite guard reads them: absent, it cannot tell
     // an unfiled id from an earned one, and it then fails closed on every honest `ran: false`.
-    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected'],
+    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
+    // The empty-prefix flag is REQUIRED so it can never be silently dropped: `{ schemaNamePrefix: null }` alone is
+    // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
+    // CLI-enforced), never an empty prefix quietly decoding as unreadable and switching the identity gate off.
+    'schemaNamePrefixEmpty'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
@@ -152,7 +156,9 @@ export const RECONCILE_SCHEMA = {
     // The EMPTY prefix's wire form: `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`. A bare `""` value is
     // the token observed dropped from large submissions of this answer (which then fail to parse at the host), so
     // the empty answer travels as this boolean and `reconcileAgent` decodes the pair back to `''` on acceptance —
-    // every consumer still reads the string contract above. `""` itself remains legal for compatibility.
+    // every consumer still reads the string contract above. `""` itself remains legal for compatibility. REQUIRED
+    // on every answer (`false` when the prefix is non-empty or unreadable): a flag that must always be present
+    // cannot be dropped without the whole answer being refused and retried.
     schemaNamePrefixEmpty: { type: 'boolean' },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
