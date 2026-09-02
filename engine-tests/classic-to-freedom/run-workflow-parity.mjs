@@ -227,9 +227,10 @@ function buildScenarios() {
     engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "DealSection",
   };
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
-  // ENG-95930 — `builderOpen` and the per-page `buildComplete` are part of the digest the engine publishes and
-  // `reconcileShapeErrors` now checks them on arrival, so a fixture that omits them is refused before it can be
-  // compared. The old schema required the same fields; a scripted host simply never had to satisfy it.
+  // ENG-95930 — the per-page `buildComplete` is REQUIRED by `RECONCILE_SHAPE.verify` and checked on arrival, so a
+  // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
+  // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
+  // and a realistic fixture should look like the real answer, not because the checker demands it.
   const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
@@ -244,6 +245,7 @@ function buildScenarios() {
     reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the section is in the app menu", miss: "pages stay unreachable" }],
     reachabilityState: { sectionRegistered: "unset" },
     preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
+    schemaNamePrefixEmpty: false,
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
     staleQueueKeys: [], newKeys: [],

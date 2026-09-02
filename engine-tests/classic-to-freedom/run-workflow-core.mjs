@@ -1188,6 +1188,20 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       && prompts[1].includes("YOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST") && prompts[1].includes(hostErr)
       && prompts[2].includes("YOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST") && prompts[2].includes(hostErr),
     () => (prompts[1] || "").slice(-400));
+  // The OTHER side of the `workItemOutcome` discriminator, DRIVEN rather than source-pinned: an UNMARKED throw — a
+  // genuine local bug, not a delivered outcome — must escape `reconcileAgent` with its own identity instead of being
+  // absorbed into the retry budget under a "REJECTED by the host" label.
+  {
+    const core = bex.run(bex.normalizeInput(BEX_INPUT), { log: () => {}, phase: () => {} },
+      { selfPath: "/plug/skills/_workflow-core/build-executor/core.mjs" });
+    const first = core.next();
+    let escaped = null;
+    try { core.throw(new TypeError("local bug in the dispatch path")); }
+    catch (e) { escaped = e; }
+    check("build-executor: an UNMARKED throw into the Reconcile dispatch ESCAPES with its own identity — no retry, no host-rejection label, so a genuine code bug surfaces with a real stack instead of burning three attempts",
+      first?.value?.kind === "work" && escaped instanceof TypeError && escaped.message === "local bug in the dispatch path",
+      () => ({ firstKind: first?.value?.kind, escaped: escaped && `${escaped.name}: ${escaped.message}` }));
+  }
 }
 
 console.log(`\nWORKFLOW-CORE GOLDEN: ${pass} passed, ${fail} failed`);

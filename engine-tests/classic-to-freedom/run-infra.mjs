@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS, verifySummary } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, GATE_KIND } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
@@ -1711,6 +1711,22 @@ const goodDigest = {
 check("ENG-95930: the shape check ACCEPTS the digest the engine actually publishes — a checker that refused a valid answer would burn all three Reconcile attempts on every run and stop the build with nothing wrong",
   wf.reconcileShapeErrors?.(goodDigest).length === 0,
   () => wf.reconcileShapeErrors?.(goodDigest));
+// THE PRODUCER JOINED TO THE CONSUMER (review round 13): `goodDigest` above is a hand-built fixture, and a fixture
+// cannot catch the real mismatch — the engine's `verifySummary()` (what `--verify --verify-summary` writes and the
+// Reconcile agent transcribes verbatim under mode B) drifting from what `reconcileShapeErrors` accepts. So the REAL
+// projection runs here: a digest-shaped verdict (openRows and all) goes through the shipped `verifySummary`, the
+// counts-only output must carry `buildComplete` per page and NO rows, and the shipped checker must accept it whole.
+{
+  const richVerdict = { complete: false, missing: 2, unverified: 1, builderOpen: 1,
+    pages: { main: { complete: false, buildComplete: false, missing: 2, unverified: 1, builderOpen: 1,
+      openRows: [{ n: 1, deliverable: "Field Amount", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } };
+  const summary = verifySummary({}, richVerdict);
+  check("ENG-95930 (review round 13): the REAL `verifySummary()` output — not a hand-built fixture — passes `reconcileShapeErrors` whole: counts-only (no `openRows` survives the projection), `buildComplete` kept per page, and zero faults on arrival",
+    !JSON.stringify(summary).includes("openRows")
+      && summary.pages.main.buildComplete === false
+      && wf.reconcileShapeErrors?.({ ...goodDigest, verify: summary }).length === 0,
+    () => ({ summary, faults: wf.reconcileShapeErrors?.({ ...goodDigest, verify: summary }) }));
+}
 // ENG-95930 (review round 3) — THE WORST-CASE SIZE TEST. `maxItems` bounds the count and
 // `additionalProperties.maxLength` bounds one string, but not their product: a SCHEMA-VALID answer (400 items,
 // 400-char strings) is about half a megabyte against a ~20 KB tool-input limit. That combination must be caught,
