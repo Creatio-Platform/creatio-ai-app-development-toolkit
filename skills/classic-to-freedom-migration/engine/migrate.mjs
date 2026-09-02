@@ -540,32 +540,40 @@ function describedInOf(entry) {
 //
 // Accepting both a scoped and a bare form is the rule `memberDispositions` already uses; without the scoped one,
 // a single answer would be folded onto two different bodies that happen to share a method name.
+// One index entry applied to one handler stub. Own fn so `applyBehaviourIndex` stays under Sonar's
+// cognitive-complexity budget; it records what it filled into the caller's two lists.
+function applyBehaviourToStub(h, entry, out) {
+  const d = describedInOf(entry);
+  if (d) { h.describedIn = d; out.described.push(h.sourceMethod); }
+  // Fill an EMPTY trigger only. A traced trigger is body-proven; a reported one is a description of it.
+  if (!(h.triggers || []).length && (entry.trigger || entry.from)) {
+    h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
+      note: typeof entry.note === "string" ? entry.note : null }];
+    out.triggersFilled.push(h.sourceMethod);
+  }
+}
+// The entry for a key, scoped first and bare second — the bare fallback is what keeps a `behaviour-index.json`
+// written before keys carried a scope still resolving. `null` when the index has nothing usable for it.
+function behaviourEntry(map, scopeSchema, key) {
+  const entry = (scopeSchema ? map[`${scopeSchema}::${key}`] : undefined) ?? map[key];
+  return entry && typeof entry === "object" ? entry : null;
+}
 function applyBehaviourIndex(changeSet, index, scopeSchema) {
   const map = plainObject(index);
   if (!Object.keys(map).length) return { triggersFilled: [], described: [] };
-  const triggersFilled = [], described = [];
+  const out = { triggersFilled: [], described: [] };
+  const { triggersFilled, described } = out;
   for (const h of changeSet?.handlerStubs || []) {
-    const entry = (scopeSchema ? map[`${scopeSchema}::${h.sourceMethod}`] : undefined) ?? map[h.sourceMethod];
-    if (!entry || typeof entry !== "object") continue;
-    const d = describedInOf(entry);
-    if (d) { h.describedIn = d; described.push(h.sourceMethod); }
-    // Fill an EMPTY trigger only. A traced trigger is body-proven; a reported one is a description of it.
-    if (!(h.triggers || []).length && (entry.trigger || entry.from)) {
-      h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
-        note: typeof entry.note === "string" ? entry.note : null }];
-      triggersFilled.push(h.sourceMethod);
-    }
+    const entry = behaviourEntry(map, scopeSchema, h.sourceMethod);
+    if (entry) applyBehaviourToStub(h, entry, out);
   }
   // ⚠ Confirm members — a `message` whose counterpart lives in another schema, a `mixin` whose members are defined
   // outside this body, the aggregated `module-dep` row. These are the row types step 5.1 exists for just as much as
   // an unresolved method, and they carry no trigger — only the card that describes them.
   for (const n of changeSet?.needsDecision || []) {
-    // Scoped first, bare second — the same precedence the method lookup uses, and the bare fallback is what keeps a
-    // `behaviour-index.json` written before member keys carried a scope still resolving.
-    const entry = (scopeSchema ? map[`${scopeSchema}::${n.kind}:${n.item}`] : undefined) ?? map[`${n.kind}:${n.item}`];
-    if (!entry || typeof entry !== "object") continue;
-    const d = describedInOf(entry);
-    if (d) { n.describedIn = d; described.push(`${n.kind}:${n.item}`); }
+    const key = `${n.kind}:${n.item}`;
+    const d = describedInOf(behaviourEntry(map, scopeSchema, key) || {});
+    if (d) { n.describedIn = d; described.push(key); }
   }
   // Called from HERE, so it runs only when an index was supplied — which is exactly when it can pay off: without a
   // reported trigger every chain was already resolved (or left open) by resolveInternalTrigger during mapping.
@@ -761,21 +769,26 @@ export function placementIssues(manifest) {
     issues.push(`placement.sectionHost.mode '${mode}' is not one of ${SECTION_HOST_MODES.join(" / ")}`);
     return issues;
   }
-  // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs. Each failure
-  // names the alternative modes, because "this app cannot host it" is not a dead end — it is the fork.
-  if (mode === "existing-app") {
-    const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
-    if (!p.application.code) {
-      issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
-    }
-    if (!p.primaryPackage.name) {
-      issues.push(`placement.sectionHost.mode is 'existing-app' but app '${p.application.code || "(none)"}' has NO primary package — create-app-section writes to the app's primary package, so it cannot run at all. ${alt}`);
-    } else if (target && p.primaryPackage.name !== target) {
-      issues.push(`placement.sectionHost.mode is 'existing-app' but the app's primary package is '${p.primaryPackage.name}', not the target package '${target}' — create-app-section takes no package parameter, so the section would land in the WRONG package. ${alt}`);
-    }
-    if (p.primaryPackage.name && p.primaryPackage.editable !== true) {
-      issues.push(`placement.sectionHost.mode is 'existing-app' but the app's primary package '${p.primaryPackage.name}' is not editable — the section cannot be written into it. ${alt}`);
-    }
+  // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs.
+  if (mode === "existing-app") issues.push(...existingAppIssues(p, target));
+  return issues;
+}
+// The `existing-app` half of `placementIssues`, extracted so that function stays under Sonar's
+// cognitive-complexity budget. Each failure names the alternative modes, because "this app cannot host it" is not
+// a dead end — it is the fork.
+function existingAppIssues(p, target) {
+  const issues = [];
+  const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
+  if (!p.application.code) {
+    issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
+  }
+  if (!p.primaryPackage.name) {
+    issues.push(`placement.sectionHost.mode is 'existing-app' but app '${p.application.code || "(none)"}' has NO primary package — create-app-section writes to the app's primary package, so it cannot run at all. ${alt}`);
+  } else if (target && p.primaryPackage.name !== target) {
+    issues.push(`placement.sectionHost.mode is 'existing-app' but the app's primary package is '${p.primaryPackage.name}', not the target package '${target}' — create-app-section takes no package parameter, so the section would land in the WRONG package. ${alt}`);
+  }
+  if (p.primaryPackage.name && p.primaryPackage.editable !== true) {
+    issues.push(`placement.sectionHost.mode is 'existing-app' but the app's primary package '${p.primaryPackage.name}' is not editable — the section cannot be written into it. ${alt}`);
   }
   return issues;
 }
@@ -1895,39 +1908,40 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
     for (const v of value) feedPlanVersion(h, v, null, readBody, state, depth + 1);
     return;
   }
-  if (value && typeof value === "object") {
-    // A `{ file: … }` / `{ body: … }` reference contributes its CONTENT, wherever in the manifest it sits — not
-    // only inside a `schemas`/`seed` array. Before this, `section` entries and file-backed `detailSchemas` /
-    // `profileSchemas` were walked generically, which hashed the PATH STRING: editing one of those files changed
-    // the rendered plan and left `planVersion` identical, so an old approval authorised a plan the user never saw.
-    // Reproduced on a two-file manifest before the fix — same version before and after rewriting the detail body.
-    // The remaining keys (`title`, `entity`, …) are still hashed below; only `body`/`file` are replaced by content.
-    if (typeof value.file === "string" || typeof value.body === "string") {
-      h.update("\u0001B");
-      h.update(schemaBodyFor(value, readBody));
-      h.update("\u0001");
-    }
-    // Object key order is NOT a plan input, so keys are sorted — two manifests differing only in key order must
-    // not read as two different plans.
-    h.update("\u0001O");
-    // Code-unit order (matches the default `.sort()`), NOT `localeCompare` — the key order here canonicalizes a
-    // hash and must be byte-for-byte reproducible across machines/locales, which locale collation is not.
-    for (const k of Object.keys(value).sort((a, b) => {
-      if (a < b) { return -1; }
-      if (a > b) { return 1; }
-      return 0;
-    })) {
-      // `body`/`file` were already replaced by CONTENT above; hashing the raw path here as well would put the
-      // temp-directory name back into the version and break re-planning the same bodies from a fresh folder.
-      if ((k === "file" || k === "body") && (typeof value.file === "string" || typeof value.body === "string")) continue;
-      h.update(k);
-      h.update("\u0001");
-      feedPlanVersion(h, value[k], k, readBody, state, depth + 1);
-    }
-    return;
-  }
+  if (value && typeof value === "object") return feedPlanObject(h, value, readBody, state, depth);
   h.update("\u0001P");
   h.update(value === undefined ? "null" : (JSON.stringify(value) ?? "null"));
+}
+// The OBJECT leg of `feedPlanVersion`, extracted so that function stays under Sonar's cognitive-complexity budget.
+function feedPlanObject(h, value, readBody, state, depth) {
+  // A `{ file: … }` / `{ body: … }` reference contributes its CONTENT, wherever in the manifest it sits — not
+  // only inside a `schemas`/`seed` array. Before this, `section` entries and file-backed `detailSchemas` /
+  // `profileSchemas` were walked generically, which hashed the PATH STRING: editing one of those files changed
+  // the rendered plan and left `planVersion` identical, so an old approval authorised a plan the user never saw.
+  // Reproduced on a two-file manifest before the fix — same version before and after rewriting the detail body.
+  // The remaining keys (`title`, `entity`, …) are still hashed below; only `body`/`file` are replaced by content.
+  if (typeof value.file === "string" || typeof value.body === "string") {
+    h.update("\u0001B");
+    h.update(schemaBodyFor(value, readBody));
+    h.update("\u0001");
+  }
+  // Object key order is NOT a plan input, so keys are sorted — two manifests differing only in key order must
+  // not read as two different plans.
+  h.update("\u0001O");
+  // Code-unit order (matches the default `.sort()`), NOT `localeCompare` — the key order here canonicalizes a
+  // hash and must be byte-for-byte reproducible across machines/locales, which locale collation is not.
+  for (const k of Object.keys(value).sort((a, b) => {
+    if (a < b) { return -1; }
+    if (a > b) { return 1; }
+    return 0;
+  })) {
+    // `body`/`file` were already replaced by CONTENT above; hashing the raw path here as well would put the
+    // temp-directory name back into the version and break re-planning the same bodies from a fresh folder.
+    if ((k === "file" || k === "body") && (typeof value.file === "string" || typeof value.body === "string")) continue;
+    h.update(k);
+    h.update("\u0001");
+    feedPlanVersion(h, value[k], k, readBody, state, depth + 1);
+  }
 }
 // Covers EVERY manifest key that changes what the plan says. An earlier version hashed only
 // {entity, schemas, planMeta}, which left the plan's child pages, details, typed forms, mini page, section and

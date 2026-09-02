@@ -153,30 +153,36 @@ export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), ve
 // A candidate also carries `appliesToCustomEntities` / `entityCouplingNote` when the component publishes them —
 // evidence for the reader, never a filter: `appliesToCustomEntities` is `true` on every real component that has
 // it, so gating on `false` would be unreachable on real data and is not done here.
+// One component scored against the search terms — the candidate, or `null` when nothing matched. Own fn so
+// `rankCandidates` stays under Sonar's cognitive-complexity budget.
+function scoreCandidate(ctype, c, needles) {
+  const tax = c.taxonomy || {};
+  const taxText = [tax.synonyms, tax.useCases, tax.whenToUse].flat().filter((x) => typeof x === "string").join(" ").toLowerCase();
+  const nameText = ctype.toLowerCase();
+  let score = 0; const why = [];
+  for (const n of needles) {
+    if (taxText.includes(n)) { score += 3; why.push(`taxonomy mentions "${n}"`); }
+    else if (nameText.includes(n)) { score += 1; why.push(`type name contains "${n}"`); }
+  }
+  if (score === 0) return null;
+  const candidate = { componentType: ctype, score, evidence: why, hasTaxonomy: Object.keys(tax).length > 0 };
+  // Entity coupling is evidence for the reader deciding among candidates, never a gate: `appliesToCustomEntities`
+  // is `true` on every one of the 8/205 components that publish it (zero `false` in real data), so a branch
+  // keyed on `=== false` would be unreachable here and is deliberately not written. The two fields do not
+  // always co-occur (only 1 of the 8 also publishes `entityCouplingNote`), so each is read independently.
+  if (tax.appliesToCustomEntities !== undefined) candidate.appliesToCustomEntities = tax.appliesToCustomEntities;
+  if (tax.entityCouplingNote !== undefined) candidate.entityCouplingNote = tax.entityCouplingNote;
+  return candidate;
+}
+
 export function rankCandidates(terms, { index = vendoredIndex(), version = null, limit = 5 } = {}) {
   const bit = version ? versionBit(version, index) : null;
   const needles = (Array.isArray(terms) ? terms : [terms]).filter(Boolean).map((t) => String(t).toLowerCase());
   const out = [];
   for (const [ctype, c] of Object.entries(index.components || {})) {
     if (bit !== null && (c.v & bit) === 0) continue;              // not on the target version — not a candidate
-    const tax = c.taxonomy || {};
-    const taxText = [tax.synonyms, tax.useCases, tax.whenToUse].flat().filter((x) => typeof x === "string").join(" ").toLowerCase();
-    const nameText = ctype.toLowerCase();
-    let score = 0; const why = [];
-    for (const n of needles) {
-      if (taxText.includes(n)) { score += 3; why.push(`taxonomy mentions "${n}"`); }
-      else if (nameText.includes(n)) { score += 1; why.push(`type name contains "${n}"`); }
-    }
-    if (score > 0) {
-      const candidate = { componentType: ctype, score, evidence: why, hasTaxonomy: Object.keys(tax).length > 0 };
-      // Entity coupling is evidence for the reader deciding among candidates, never a gate: `appliesToCustomEntities`
-      // is `true` on every one of the 8/205 components that publish it (zero `false` in real data), so a branch
-      // keyed on `=== false` would be unreachable here and is deliberately not written. The two fields do not
-      // always co-occur (only 1 of the 8 also publishes `entityCouplingNote`), so each is read independently.
-      if (tax.appliesToCustomEntities !== undefined) candidate.appliesToCustomEntities = tax.appliesToCustomEntities;
-      if (tax.entityCouplingNote !== undefined) candidate.entityCouplingNote = tax.entityCouplingNote;
-      out.push(candidate);
-    }
+    const candidate = scoreCandidate(ctype, c, needles);
+    if (candidate) out.push(candidate);
   }
   // Sorted in its own statement (not chained onto the return): highest score first, ties by type name so the
   // ranking is stable rather than dependent on the index's key order.

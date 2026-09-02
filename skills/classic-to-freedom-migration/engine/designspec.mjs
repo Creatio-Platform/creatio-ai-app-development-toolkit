@@ -805,6 +805,20 @@ export function renderDesignSpec(result, opts = {}) {
 // A passthrough override is listed too (never silently filtered) but marked as carrying no behaviour of its own,
 // so the reader can tell "nothing to port" from "not looked at".
 // ONE trigger, rendered from its traced origin. `attribute-dependency` names the attribute and the columns whose
+// The `internal` grade of `triggerText`, extracted so that function stays under Sonar's cognitive-complexity
+// budget. Three grades of answer, most specific first: the chain reaches a declaration (name it), it reaches a
+// platform lifecycle method, or only the immediate caller is known.
+function internalTriggerText(t) {
+  const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
+  // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites
+  // is not the same port as one with a single caller.
+  const callerPlural = t.callers?.length > 2 ? "s" : "";
+  const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${callerPlural})` : "";
+  if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${more}`;
+  if (t.lifecycle) return `${esc(t.lifecycle)} (platform lifecycle) → internal call${more}`;
+  return `internal call from ${esc(t.from)}${via}${more}`;
+}
+
 // change fires it; a control trigger names the element and the bound property.
 function triggerText(t) {
   // A trigger the step-5.1 behaviour analysis established, not the AST. Marked as such: the engine traced nothing
@@ -817,16 +831,7 @@ function triggerText(t) {
   // dressed up as a declarative trigger — the reader has to see the difference, because the Freedom target follows
   // from what STARTS the chain, not from the call itself. Three grades of answer, most specific first: the chain
   // reaches a declaration (name it), it reaches a platform lifecycle method, or only the immediate caller is known.
-  if (t.kind === "internal") {
-    const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
-    // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites
-    // is not the same port as one with a single caller.
-    const callerPlural = t.callers?.length > 2 ? "s" : "";
-    const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${callerPlural})` : "";
-    if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${more}`;
-    if (t.lifecycle) return `${esc(t.lifecycle)} (platform lifecycle) → internal call${more}`;
-    return `internal call from ${esc(t.from)}${via}${more}`;
-  }
+  if (t.kind === "internal") return internalTriggerText(t);
   if (t.kind !== "attribute-dependency") return `${esc(t.element)}.${esc(t.property)}`;
   const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
   return `${esc(t.attribute)} changes${cols}`;
@@ -1012,8 +1017,9 @@ const IMPERATIVE_LOGIC_PREAMBLE = [
 //     converter, so it stays a unit of its own;
 //   · a caller that is NOT in this table (a standard lifecycle method, filtered out of the worklist) — there is no
 //     parent row to fold under, and the trigger cell already names the hook.
-function foldByCaller(stubs) {
-  const byName = new Map(stubs.map((h) => [h.sourceMethod, h]));
+// The child→parent links `foldByCaller` walks: a stub folds under the single body caller that is itself a row.
+// Own fn so `foldByCaller` stays under Sonar's cognitive-complexity budget.
+function foldParents(stubs, byName) {
   const parentOf = new Map();
   for (const h of stubs) {
     const t = (h.triggers || [])[0];
@@ -1030,6 +1036,12 @@ function foldByCaller(stubs) {
       seen.add(p);
     }
   }
+  return parentOf;
+}
+
+function foldByCaller(stubs) {
+  const byName = new Map(stubs.map((h) => [h.sourceMethod, h]));
+  const parentOf = foldParents(stubs, byName);
   const childrenOf = new Map();
   for (const [child, parent] of parentOf) {
     if (!childrenOf.has(parent)) childrenOf.set(parent, []);
@@ -1748,6 +1760,38 @@ function buildLayoutGroupRows(cs, regionOf) {
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
+// The ENG-95543 table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected" rather
+// than one row per element. Own fn so `buildCoverageRows` stays under Sonar's cognitive-complexity budget.
+function tableElementRows(cs) {
+  const byType = new Map();
+  for (const el of cs.tableElements || []) {
+    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
+    e.n++; e.kinds.add(String(el.classicKind || "element"));
+    byType.set(el.componentType, e);
+  }
+  return [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([ctype, e]) => ({
+    label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
+    vk: { type: "element", ctype, n: e.n },
+  }));
+}
+
+// One gated row per standard feature, plus a second one for the two-part features. Own fn for the same reason.
+function standardFeatureRows(cs) {
+  const rows = [];
+  for (const s of cs.standardFeatures || []) {
+    const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
+    if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
+    rows.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
+    // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
+    // gated row PER HALF, same as the DCM case-progress-bar/next-steps split in `buildCoverageRows`. Before this,
+    // the second half lived only in `notes` prose, and a build that added just the list read identically to one
+    // that added both — twice, on the same feature, in real runs (see FEATURE_SECOND_HALF in mapping-table.mjs).
+    for (const extra of featureVerifyExtraTypes(f))
+      rows.push({ label: `${esc(f)} — second required component (\`${extra}\`)`, vk: { type: "feature", ftype: extra } });
+  }
+  return rows;
+}
+
 function buildCoverageRows(cs, pm, result) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
@@ -1776,15 +1820,7 @@ function buildCoverageRows(cs, pm, result) {
   // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
   // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
   // page that dropped every one of them, and a builder would never fetch their documentation.
-  const byType = new Map();
-  for (const el of cs.tableElements || []) {
-    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
-    e.n++; e.kinds.add(String(el.classicKind || "element"));
-    byType.set(el.componentType, e);
-  }
-  for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
-    cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
-      vk: { type: "element", ctype, n: e.n } });
+  cover.push(...tableElementRows(cs));
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -1793,17 +1829,7 @@ function buildCoverageRows(cs, pm, result) {
   // local `FEATURE_TYPE` map — a SECOND home for the same knowledge the mapper asserted in prose, so the gate and
   // the plan could disagree about which component a feature means. The table's types are checked against the
   // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
-  for (const s of cs.standardFeatures || []) {
-    const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
-    if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
-    cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
-    // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
-    // gated row PER HALF, same as the DCM case-progress-bar/next-steps split a few lines below. Before this, the
-    // second half lived only in `notes` prose, and a build that added just the list read identically to one that
-    // added both — twice, on the same feature, in real runs (see FEATURE_SECOND_HALF in mapping-table.mjs).
-    for (const extra of featureVerifyExtraTypes(f))
-      cover.push({ label: `${esc(f)} — second required component (\`${extra}\`)`, vk: { type: "feature", ftype: extra } });
-  }
+  cover.push(...standardFeatureRows(cs));
   if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
     cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } }, { label: "DCM Next steps", vk: { type: "dcm-next" } });
   }

@@ -303,8 +303,13 @@ check("engine: a MEMBER key carries its scope — two child pages declaring the 
   /function memberDigestOf\(changeSet, scopeSchema\)/.test(mgSrc)
     && /key: scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
     && /memberDigestOf\(changeSet, schema\)/.test(mgSrc));
+// The scoped-first / bare-second lookup lives in ONE helper now (`behaviourEntry`), shared by the method leg and
+// the member leg, so this pins the helper AND the member call site handing it the `<kind>:<item>` key — pinning
+// only the helper would pass while the member leg quietly stopped using it.
 check("engine: the member lookup accepts the scoped form FIRST and the bare one after, so a `behaviour-index.json` written before scoping still resolves",
-  /map\[`\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`\] : undefined\) \?\? map\[`\$\{n\.kind\}:\$\{n\.item\}`\]/.test(mgSrc));
+  /const entry = \(scopeSchema \? map\[`\$\{scopeSchema\}::\$\{key\}`\] : undefined\) \?\? map\[key\]/.test(mgSrc)
+    && /const key = `\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
+    && /behaviourEntry\(map, scopeSchema, key\)/.test(mgSrc));
 check("engine: the ADVISORY wiring-only leg resolves member keys the same way — reading the scoped key alone made its banner go quiet on an index using bare keys",
   /const memberKey = \(m\) => \(map\[m\.key\] \? m\.key : `\$\{m\.kind\}:\$\{m\.item\}`\)/.test(mgSrc));
 
