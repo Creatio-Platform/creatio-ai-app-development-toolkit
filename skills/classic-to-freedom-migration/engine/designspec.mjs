@@ -204,10 +204,11 @@ function rowsForWidgets(widgets) {
 // container name never leaks to one of them. `SideAreaProfileContainer` / `Header / top` map to their friendly
 // labels; anything else (a resolved tab or host container) goes through the region resolver, which already `esc`s
 // its output — so callers embed the result WITHOUT a further `esc` (the friendly literals are inert).
-const cardWidgetRegionLabel = (region, regionOf) =>
-  region === "SideAreaProfileContainer" ? "Side profile"
-    : region === "Header / top" ? "Header / top"
-      : regionOf(region);
+const cardWidgetRegionLabel = (region, regionOf) => {
+  if (region === "SideAreaProfileContainer") return "Side profile";
+  if (region === "Header / top") return "Header / top";
+  return regionOf(region);
+};
 // ENG-95806 — a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
 // Layout row in the region it resolved to, naming the widgetKey and the migrator-driven conversion (Source =
 // SysWidgetDashboard + the record). The full grouping + process-call + Failed-means-blocked instructions stay in
@@ -954,7 +955,7 @@ function buildCoverageRows(cs, pm, result, regionOf) {
   // ENG-95806 — one on-stand row per CARD WIDGET: the converted+placed Freedom element is a config record not
   // derivable from get-page's component list (it depends on the migrator's ConvertCardWidgetsProcess), so it gates
   // via an explicit on-stand evidence boolean the agent supplies in `--built` (`built["cardWidget:<widgetKey>"]`):
-  // true → Done; false → MISSING (a Failed conversion stays TODO/BLOCKED, never a hand-built substitute); absent →
+  // true → Done; false → MISSING (a Failed conversion stays flagged/BLOCKED, never a hand-built substitute); absent →
   // unverified. This is what stops `--verify` exiting 0 while a card widget is still unconverted.
   for (const w of cs.cardWidgets || [])
     cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${cardWidgetRegionLabel(w.region, regionOf)}`, vk: { type: "onstand", evidence: `cardWidget:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });

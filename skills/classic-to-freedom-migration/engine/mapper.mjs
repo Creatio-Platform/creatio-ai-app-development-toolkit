@@ -274,7 +274,7 @@ function isProfileCardModule(c) {
 // it is deliberately NOT a card widget and keeps the old generic `component` decision (no silent drop). A module
 // the widget catalog already owns is excluded so a known base-chrome widget is never mistaken for a card widget.
 function isCardWidgetModule(c) {
-  if (!c || !c.recordId || !c.widgetKey) return false;
+  if (!c?.recordId || !c?.widgetKey) return false;
   // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
   // `masterColumnName` is a linked-record PROFILE CARD, handled by mapProfileCards — which runs BEFORE mapWidgets
   // and accounts for the key. Without this guard such a module would satisfy BOTH predicates and get a profile-card
@@ -1473,9 +1473,10 @@ function mapWidgets(eff, opts = {}) {
   const emitCardWidget = (c) => {
     const host = index.get(c.key);
     const own = host?.parent ? resolveOwner(host.parent, index, profileAnchors) : null;
-    const region = own?.kind === "tab" ? own.tab
-      : own?.kind === "profile" ? "SideAreaProfileContainer"
-      : "Header / top";
+    let region;
+    if (own?.kind === "tab") region = own.tab;
+    else if (own?.kind === "profile") region = "SideAreaProfileContainer";
+    else region = "Header / top";
     accountedFor.push(c.key);
     if (host?.name) accountedFor.push(host.name);
     cardWidgets.push({ key: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region, fromTemplate: !!c.fromTemplate });
