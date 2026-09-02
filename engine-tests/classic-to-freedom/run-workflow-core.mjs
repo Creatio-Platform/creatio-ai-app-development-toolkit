@@ -146,6 +146,12 @@ check("driftAt: a REPEATED id is drift — `entriesFor` keeps the first occurren
   () => { const r = mkRun();
     for (const id of ["a", "a"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
     return driftAt(r, 0, ["a", "b"]) !== null; });
+check("step: a multi-item step WITHOUT `parallel: true` is refused — `sendFor` collapses a multi-item step's non-VALUE outcomes to null holes instead of throwing into the core, so the narrowing invariant has to be structural rather than a comment nothing enforces",
+  () => { try { step({ items: [{ id: "a", phase: "P", role: "r", prompt: "p" }, { id: "b", phase: "P", role: "r", prompt: "p" }] }); return false; }
+    catch (e) { return /without `parallel: true`/.test(e.message); } });
+check("step: the same two items WITH `parallel: true` are accepted, and a single sequential item still is",
+  () => step({ items: [{ id: "a", phase: "P", role: "r", prompt: "p" }, { id: "b", phase: "P", role: "r", prompt: "p" }], parallel: true }).items.length === 2
+    && step({ items: [{ id: "a", phase: "P", role: "r", prompt: "p" }] }).items.length === 1);
 check("summary: counts outcomes per phase, so a reader sees a dead phase without reading logs",
   () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.DEATH));
     return summary(r).byPhase.Context.death === 1 && summary(r).host === "full"; });
@@ -521,7 +527,34 @@ function driveRetry(outcomes, onFailure) {
     result.critiqueRan === false && logs.some((l) => /Critique never ran/.test(l) && /arithmetic-only/.test(l)),
     () => JSON.stringify({ critiqueRan: result.critiqueRan, logs: logs.filter((l) => /Critique/.test(l)) }));
   check("core: the CAUSE reaches the log, per attempt — a dead pass reports why it died, not merely that it did",
-    logs.filter((l) => /529 overloaded/.test(l)).length === 2, () => JSON.stringify(logs.filter((l) => /critique agent died/.test(l))));
+    logs.filter((l) => /critique agent died on attempt \d+ — Error: 529 overloaded/.test(l)).length === 2,
+    () => JSON.stringify(logs.filter((l) => /critique agent died/.test(l))));
+  check("driver: the ERROR outcome ITSELF reaches the log, naming the item and the cause — the core's own line covers Critique only, and on every other phase a rejection collapsed to a null hole with nothing anywhere saying an agent had errored at all",
+    logs.filter((l) => /item `critique\.coverage(\.retry2)?` of phase Critique ERRORED — Error: 529 overloaded/.test(l)).length === 2,
+    () => JSON.stringify(logs.filter((l) => /ERRORED/.test(l))));
+}
+{
+  // A REJECTING Context, not a dead one. Both are the same orchestration failure, and both must reach
+  // the documented verdict — a raw exception out of `run()` gives the caller a stack trace with no
+  // coverage numbers instead.
+  const { result, logs } = await runCba(INPUT, (i) =>
+    (i.phase === "Context" ? { outcome: OUTCOME.ERROR, error: new Error("529 overloaded") } : happyAnswer(i)));
+  check("core: a REJECTING Context returns the `context-failed` verdict rather than throwing out of run() — same root cause as a dead Context, so it may not produce a different caller-visible result",
+    result?.stopped === "context-failed" && /rejected \(Error: 529 overloaded\)/.test(result?.reason || ""),
+    () => JSON.stringify({ stopped: result?.stopped, reason: result?.reason }));
+  check("core: the Context failure names its CAUSE in the log, not merely that the phase failed",
+    logs.some((l) => /the Context agent rejected — Error: 529 overloaded/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /Context/.test(l))));
+}
+{
+  const { result, logs } = await runCba(INPUT, (i) =>
+    (i.phase === "Merge" ? { outcome: OUTCOME.ERROR, error: new Error("refused") } : happyAnswer(i)));
+  check("core: a REJECTING Merge keeps the deliberate `mergeOk === false` handling — the coverage numbers stand and the run reports NOT complete, instead of throwing the whole run away",
+    result?.coverage?.complete === false && result?.coverage?.described === 4,
+    () => JSON.stringify({ coverage: result?.coverage }));
+  check("core: the Merge failure names its cause too",
+    logs.some((l) => /returned no report\/index — Error: refused/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /Merge/.test(l))));
 }
 {
   const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Critique" ? { outcome: OUTCOME.VALUE, value: 7 } : happyAnswer(i)));

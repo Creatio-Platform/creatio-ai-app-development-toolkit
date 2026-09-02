@@ -105,6 +105,19 @@ const OUTCOME = { VALUE: 'value', DEATH: 'death', ERROR: 'error' }
 function step({ items, parallel = false, requires = [], note = '' }) {
   const list = Array.isArray(items) ? items : [items]
   if (!list.length) throw new Error('work step carries no items')
+  // Structural, not a comment. `sendFor` throws a rejection into the core only for a
+  // SEQUENTIAL SINGLE-item step; a multi-item step collapses every non-VALUE outcome to
+  // a null hole, which is the `parallel()` contract the cores are written against. That
+  // narrowing was justified by "there are no `parallel: false` multi-item steps in either
+  // core" — true, and enforced by nothing. The first core author to yield a two-item
+  // sequential step would have got silent error-swallowing on every host, with a fully
+  // green suite. Refused here instead: say `parallel: true` and read the null holes.
+  if (!parallel && list.length > 1) {
+    throw new Error(
+      `work step in phase ${list[0]?.phase} carries ${list.length} items without \`parallel: true\`. `
+      + 'A multi-item step collapses every non-VALUE outcome to a null hole rather than throwing into '
+      + 'the core, so declare it parallel and read the holes, or yield one item at a time.')
+  }
   return { kind: 'work', items: list.map(workItem), parallel: !!parallel, requires: [...requires], note }
 }
 
@@ -420,6 +433,7 @@ async function drive({ core, run, host, execute, io, requires = [], runBatch }) 
     onPending: async (step, gate) => {
       const entries = await executeStep(step, gate.width, execute, runBatch)
       for (const e of entries) append(run, e)
+      logNonValueOutcomes(entries, io)
       return { entries }
     },
     onDone: (result) => result,
@@ -558,6 +572,29 @@ async function executeStep(step, width, execute, runBatch) {
     out.push(...done)
   }
   return out
+}
+
+// The ONE place a non-VALUE outcome becomes visible. `safeExecute` turns a rejection into
+// an ERROR entry and `sendFor` maps it to a null hole, with nothing in between — and on the
+// Claude host the journal is in-memory state that `driveOnClaude` discards when the script
+// returns, so the error's name and message were gone for good. The common shape was: the
+// single Describe agent rejects, `described` becomes [] after `.filter(Boolean)`, coverage
+// reads 0/N, the run logs "INCOMPLETE: N of N rows still carry no card" and returns
+// normally. The operator saw a coverage failure with no indication that an agent had errored
+// at all, which sends the diagnosis to the prompt instead of to the host failure — precisely
+// what the three-outcome protocol was introduced to make visible.
+function logNonValueOutcomes(entries, io) {
+  for (const e of entries) {
+    if (e.outcome === OUTCOME.VALUE) continue
+    const where = `item \`${e.id}\` of phase ${e.phase}`
+    if (e.outcome === OUTCOME.DEATH) {
+      io?.log?.(`${where} DIED — the host produced no result for it`)
+      continue
+    }
+    const name = e.error?.name || 'Error'
+    const message = e.error?.message || '(no message)'
+    io?.log?.(`${where} ERRORED — ${name}: ${message}`)
+  }
 }
 
 async function safeExecute(item, execute) {
@@ -1195,31 +1232,53 @@ function* run(rawInput, io = {}) {
   const sharedCoreDefault = `${input.outDir}/customizations-shared-core.md`
 
   phase('Context')
-  const [ctx] = yield step({
-    items: [{
-      id: itemId('context', 'census-shared-core'),
-      phase: 'Context',
-      role: 'general-purpose',
-      prompt: contextPrompt(RULES, sharedCoreDefault),
-      inputFiles: [input.digest, input.manifest],
-      responseSchema: CONTEXT_SCHEMA,
-      access: ACCESS.STAND_READ_ONLY,
-      label: 'context:census+shared-core',
-    }],
-    requires: ['subAgents', 'structuredOutput'],
-    note: 'census + shared core (base chain, mixins, message register) + the row inventory',
-  })
+  // Wrapped, because the driver has TWO ways to report a failed Context and only one of them used to
+  // reach the structured verdict below. A nullish outcome (terminal death) arrives as `ctx === null`;
+  // a REJECTION is thrown back in here by `sendFor`, and with no catch it propagated straight out of
+  // `run()` as a raw exception — same root cause, two caller-visible results: a documented verdict
+  // object, or a stack trace with no coverage numbers at all.
+  let ctx = null
+  let ctxError = null
+  try {
+    ;[ctx] = yield step({
+      items: [{
+        id: itemId('context', 'census-shared-core'),
+        phase: 'Context',
+        role: 'general-purpose',
+        prompt: contextPrompt(RULES, sharedCoreDefault),
+        inputFiles: [input.digest, input.manifest],
+        responseSchema: CONTEXT_SCHEMA,
+        access: ACCESS.STAND_READ_ONLY,
+        label: 'context:census+shared-core',
+      }],
+      requires: ['subAgents', 'structuredOutput'],
+      note: 'census + shared core (base chain, mixins, message register) + the row inventory',
+    })
+  } catch (e) {
+    ctxError = e
+  }
 
   // A Context item that returned NOTHING is an orchestration failure, not a surface with nothing on it. Both used
   // to reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete
   // zero-row analysis for a digest that may be full — the one outcome this workflow exists to make impossible.
   if (!ctx) {
-    log('the Context phase returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
+    // The nullish case keeps its EXACT baseline wording, log line and `reason` — `run-workflow-parity`
+    // compares the return value against the pre-migration script byte for byte, and a rewording would
+    // read as a behaviour change where there is none. A rejection is the case that had no verdict at
+    // all, so that is the one that gains the cause.
+    const cause = ctxError
+      ? `${ctxError.name || 'Error'}: ${ctxError.message || String(ctxError)}`
+      : null
+    log(cause
+      ? `the Context agent rejected — ${cause} — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe`
+      : 'the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
     return {
       surface: SURFACE,
       skipped: false,
       stopped: 'context-failed',
-      reason: 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
+      reason: cause
+        ? `the Context phase rejected (${cause}), so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.`
+        : 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
       coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
       conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
     }
@@ -1369,37 +1428,51 @@ function* run(rawInput, io = {}) {
   }
 
   phase('Merge')
-  const [merged] = yield step({
-    items: [{
-      id: itemId('merge', 'report-index'),
-      phase: 'Merge',
-      role: 'general-purpose',
-      prompt: mergePrompt({
-        RULES,
-        sharedCorePath,
-        described,
-        critique,
-        covered: covered.size,
-        total: allKeys.size,
-        uncoveredKeys,
-        wiringOnly,
-        outDir: input.outDir,
-        censusNote: ctx.censusNote,
-      }),
-      inputFiles: [sharedCorePath, ...described.map((r) => r.reportPart).filter(Boolean)],
-      responseSchema: MERGE_SCHEMA,
-      access: ACCESS.STAND_READ_ONLY,
-      label: 'merge:report+index',
-    }],
-    requires: ['subAgents', 'structuredOutput'],
-    note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
-  })
+  // Same gap as the Context yield: a rejecting Merge threw out of `run()` and discarded the deliberate
+  // `mergeOk === false` handling immediately below it, which is what tells the caller the coverage
+  // numbers stand but there is no deliverable.
+  let merged = null
+  let mergeError = null
+  try {
+    ;[merged] = yield step({
+      items: [{
+        id: itemId('merge', 'report-index'),
+        phase: 'Merge',
+        role: 'general-purpose',
+        prompt: mergePrompt({
+          RULES,
+          sharedCorePath,
+          described,
+          critique,
+          covered: covered.size,
+          total: allKeys.size,
+          uncoveredKeys,
+          wiringOnly,
+          outDir: input.outDir,
+          censusNote: ctx.censusNote,
+        }),
+        inputFiles: [sharedCorePath, ...described.map((r) => r.reportPart).filter(Boolean)],
+        responseSchema: MERGE_SCHEMA,
+        access: ACCESS.STAND_READ_ONLY,
+        label: 'merge:report+index',
+      }],
+      requires: ['subAgents', 'structuredOutput'],
+      note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
+    })
+  } catch (e) {
+    mergeError = e
+  }
 
   // The verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after the repair
   // round, so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
   // DELIVERABLES, and a Merge item that returned nothing wrote neither.
   const mergeOk = !!(merged?.reportPath && merged?.indexPath)
-  if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
+  if (!mergeOk) {
+    const cause = mergeError
+      ? ` — ${mergeError.name || 'Error'}: ${mergeError.message || String(mergeError)}`
+      : ''
+    log(`the Merge phase returned no report/index${cause} — the coverage numbers stand, but this run has no deliverable and is NOT complete`)
+  }
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
   const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
   const verdictLine = complete

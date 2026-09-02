@@ -56,6 +56,19 @@ export const OUTCOME = { VALUE: 'value', DEATH: 'death', ERROR: 'error' }
 export function step({ items, parallel = false, requires = [], note = '' }) {
   const list = Array.isArray(items) ? items : [items]
   if (!list.length) throw new Error('work step carries no items')
+  // Structural, not a comment. `sendFor` throws a rejection into the core only for a
+  // SEQUENTIAL SINGLE-item step; a multi-item step collapses every non-VALUE outcome to
+  // a null hole, which is the `parallel()` contract the cores are written against. That
+  // narrowing was justified by "there are no `parallel: false` multi-item steps in either
+  // core" — true, and enforced by nothing. The first core author to yield a two-item
+  // sequential step would have got silent error-swallowing on every host, with a fully
+  // green suite. Refused here instead: say `parallel: true` and read the null holes.
+  if (!parallel && list.length > 1) {
+    throw new Error(
+      `work step in phase ${list[0]?.phase} carries ${list.length} items without \`parallel: true\`. `
+      + 'A multi-item step collapses every non-VALUE outcome to a null hole rather than throwing into '
+      + 'the core, so declare it parallel and read the holes, or yield one item at a time.')
+  }
   return { kind: 'work', items: list.map(workItem), parallel: !!parallel, requires: [...requires], note }
 }
 

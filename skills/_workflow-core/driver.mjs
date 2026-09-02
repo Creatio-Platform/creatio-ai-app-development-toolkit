@@ -48,6 +48,7 @@ export async function drive({ core, run, host, execute, io, requires = [], runBa
     onPending: async (step, gate) => {
       const entries = await executeStep(step, gate.width, execute, runBatch)
       for (const e of entries) append(run, e)
+      logNonValueOutcomes(entries, io)
       return { entries }
     },
     onDone: (result) => result,
@@ -186,6 +187,29 @@ async function executeStep(step, width, execute, runBatch) {
     out.push(...done)
   }
   return out
+}
+
+// The ONE place a non-VALUE outcome becomes visible. `safeExecute` turns a rejection into
+// an ERROR entry and `sendFor` maps it to a null hole, with nothing in between — and on the
+// Claude host the journal is in-memory state that `driveOnClaude` discards when the script
+// returns, so the error's name and message were gone for good. The common shape was: the
+// single Describe agent rejects, `described` becomes [] after `.filter(Boolean)`, coverage
+// reads 0/N, the run logs "INCOMPLETE: N of N rows still carry no card" and returns
+// normally. The operator saw a coverage failure with no indication that an agent had errored
+// at all, which sends the diagnosis to the prompt instead of to the host failure — precisely
+// what the three-outcome protocol was introduced to make visible.
+function logNonValueOutcomes(entries, io) {
+  for (const e of entries) {
+    if (e.outcome === OUTCOME.VALUE) continue
+    const where = `item \`${e.id}\` of phase ${e.phase}`
+    if (e.outcome === OUTCOME.DEATH) {
+      io?.log?.(`${where} DIED — the host produced no result for it`)
+      continue
+    }
+    const name = e.error?.name || 'Error'
+    const message = e.error?.message || '(no message)'
+    io?.log?.(`${where} ERRORED — ${name}: ${message}`)
+  }
 }
 
 async function safeExecute(item, execute) {
