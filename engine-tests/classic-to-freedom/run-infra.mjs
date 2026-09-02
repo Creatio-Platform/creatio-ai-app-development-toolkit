@@ -1689,6 +1689,9 @@ let schemaSizes = {};
 }
 const RECONCILE_SCHEMA_BUDGET = 6250;
 let reconcileSchemaBytes = -1;
+// The loaded Reconcile properties, at module scope for the same reason the byte count is: checks further down assert
+// on the SHIPPED object rather than on its source text, and the slice that loads it is block-scoped.
+let RECONCILE_PROPS = null;
 let tmpSchema;
 try {
   tmpSchema = mkdtempSync(path.join(os.tmpdir(), "wf-schema-"));
@@ -1708,6 +1711,7 @@ try {
   writeFileSync(modPath, `${SCHEMA_LITERALS}\n${slice}\n${verifierSlice}\nexport { RECONCILE_SCHEMA, VERIFY_RESULT, VERIFIER_SCHEMA };\n`);
   const mod = await import(pathToFileURL(modPath).href);
   reconcileSchemaBytes = JSON.stringify(mod.RECONCILE_SCHEMA).length;
+  RECONCILE_PROPS = mod.RECONCILE_SCHEMA.properties;
   // ENG-95901 — the SCHEMA-DRIFT GATE. Every golden above constructs `{buildComplete: ...}` fixtures BY HAND and
   // feeds them straight into the pure functions, bypassing the structured-output schema entirely — none of them
   // would fail if `buildComplete` were silently dropped from VERIFY_RESULT (the exact regression a code review
@@ -2882,9 +2886,22 @@ check("PR #128 review (round 7, G2): the cap is IDEMPOTENT and preserves an abse
     return out[0].answer === "short" && out[0].why === null && out[0].item === null; },
   () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "i1", answer: "short" }],
     new Set([wf.pairKey("main", "i1")]), new Set(), new Set(["i1"]))));
-check("PR #128 review (round 7, G2): the SCHEMA bounds the same fields, so an oversized value fails validation instead of persisting silently — the cap and the contract read the ONE `CARRY_TEXT_CAP` binding, not two re-typed numbers",
-  /item: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}, answer: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}/.test(wfSrc)
-    && /why: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}, how: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}/.test(wfSrc));
+check("PR #128 review (round 7, G2): the SCHEMA bounds every free-text field it still carries, so an oversized value fails validation instead of persisting silently — the cap and the contract read the ONE `CARRY_TEXT_CAP` binding, not two re-typed numbers",
+  /answer: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}/.test(wfSrc)
+    && /why: \{ type: 'string', maxLength: CARRY_TEXT_CAP \}/.test(wfSrc));
+check("PR #128 review (ENG-95930 interaction): `item` and `how` are NOT declared on the unconsumed row — this schema is the run's first agent's, the host refuses one over 4096 serialized bytes before the model runs, and neither field is decided on by the script. A well-meant re-add costs the run its Reconcile, so it is pinned out rather than left to judgement",
+  () => { const p = RECONCILE_PROPS?.unconsumedResolutions?.items?.properties || {};
+    return !("item" in p) && !("how" in p)
+      // ...and the fields that ARE decided on are still declared, so this pin cannot pass by the property vanishing.
+      && ["unit", "id", "kind", "answer", "why", "source"].every((k) => k in p); },
+  () => JSON.stringify(Object.keys(RECONCILE_PROPS?.unconsumedResolutions?.items?.properties || {})));
+check("PR #128 review (ENG-95930 interaction): a rehydrated row that carries NEITHER field still reconciles — a resume reads rows the schema no longer transcribes, so absence has to be the normal case rather than a tolerated one",
+  () => { const row = { unit: "main", id: "i1", source: "dispatch", answer: "a", why: "w" };
+    const out = wf.reconcileUnconsumed([row], new Set([wf.pairKey("main", "i1")]), new Map(), new Set(["i1"]));
+    return out.length === 1 && out[0].item === null && out[0].how === null
+      && out[0].answer === "a" && out[0].why === "w" && out[0].source === "dispatch"; },
+  () => JSON.stringify(wf.reconcileUnconsumed([{ unit: "main", id: "i1", source: "dispatch" }],
+    new Set([wf.pairKey("main", "i1")]), new Map(), new Set(["i1"]))));
 
 // Round-7 Major (G3) + Minor (G7) — the last two raw comparisons on agent-transcribed unit keys.
 check("PR #128 review (round 7, G3): `unconsumedNextClause` fences `u.unit` as well as `u.id` — it was the one render path fixed on one side only, and `u.unit` comes off the persisted, agent-transcribed queue, so a backtick-newline in it broke out of the span inside the instruction string `runReturn` hands the orchestrating agent",

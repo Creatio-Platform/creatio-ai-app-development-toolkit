@@ -2698,12 +2698,23 @@ const RECONCILE_SCHEMA = {
       items: {
         type: 'object',
         required: ['unit', 'id', 'source'],
-        // `maxLength` on every free-text field (round 7): the run caps these at record time, so a value arriving
-        // longer than the cap did not come from a compliant writer, and accepting it silently is how an oversized
-        // row re-enters every later prompt. A schema failure is retried by the tool layer instead.
+        // `maxLength` on every free-text field this contract still carries (round 7): the run caps these at record
+        // time, so a value arriving longer than the cap did not come from a compliant writer, and accepting it
+        // silently is how an oversized row re-enters every later prompt. A schema failure is retried by the tool
+        // layer instead.
+        // `item` AND `how` ARE DELIBERATELY NOT DECLARED (ENG-95930 interaction). Every field here is a toll paid
+        // in the one budget that can stop the run: this schema is Reconcile's, Reconcile is the first agent of
+        // every round, and the host refuses a serialized agent schema over 4096 bytes BEFORE the model runs. So a
+        // field earns its place only if the SCRIPT decides on it, and these two do not — nothing reads their
+        // content anywhere in the run, they were only ever re-capped on rehydration. Neither is lost: `item` is
+        // recoverable from `id`, which is `<pageKey>#confirm:<kind>:<item>` by construction, and a refuted
+        // builder's `how` is preserved in its `discrepancies` row, which is persisted separately. The prose also
+        // stays in the queue file itself — this stops it being TRANSCRIBED back through an agent, not recorded.
+        // Read `capCarryText`'s continued handling of both as the in-process path: `resolutionContradictions`
+        // still composes them onto a row it builds this round, and that row is still capped and still written.
         properties: { unit: { type: 'string' }, id: { type: 'string' }, kind: { type: 'string' },
-          item: { type: 'string', maxLength: CARRY_TEXT_CAP }, answer: { type: 'string', maxLength: CARRY_TEXT_CAP },
-          why: { type: 'string', maxLength: CARRY_TEXT_CAP }, how: { type: 'string', maxLength: CARRY_TEXT_CAP },
+          answer: { type: 'string', maxLength: CARRY_TEXT_CAP },
+          why: { type: 'string', maxLength: CARRY_TEXT_CAP },
           // `source` DECIDES WHETHER A ROW SURVIVES THE NEXT DISPATCH (round 9), so it is REQUIRED and CONSTRAINED.
           // As a free `string`, an ordinary transcription slip that dropped or misspelled it made a
           // verifier-confirmed contradiction read as dispatch-sourced, and the next untrusted `applied: true`
