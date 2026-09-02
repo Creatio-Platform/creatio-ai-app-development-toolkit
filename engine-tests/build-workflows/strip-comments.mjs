@@ -21,7 +21,7 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { stripComments, KEEP_COMMENT } from "../../scripts/build-workflows.mjs";
+import { stripComments, KEEP_COMMENT, TARGETS, assembleTarget } from "../../scripts/build-workflows.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require = createRequire(import.meta.url);
@@ -202,14 +202,18 @@ console.log("\nreal shipped artifacts — every literal payload survives strippi
 
 // The sources the generator consumes, not the generated output: these are the files that still HAVE comments, so
 // they are the only ones on which stripping is a non-trivial operation.
+// DERIVED FROM `TARGETS`, NOT HAND-TYPED (PR #128 review, round 19). The list used to name five files while the
+// generator strips the assembled text of two templates plus THIRTEEN distinct modules -- and the ten it missed
+// included the two worst ones to miss: `build-executor/context.mjs`, which holds `DATA_OPEN`/`DATA_CLOSE`/`dataFence`
+// (the untrusted-data fence this whole channel rests on) and the POSIX shell-quote literal, the most stripper-hostile
+// literal in the repo; and `behaviour-analysis/prompts.mjs`, which is nothing but prompt text and feeds the OTHER
+// artifact, the one with far fewer incidental `wfSrc` pins to catch a mis-strip by accident. The header above claims
+// this leg "covers every prompt actually shipped, including the ones nobody thought to write a case for" -- a
+// hand-copied list cannot keep that promise, because adding a module to `TARGETS` did not add it here and nothing
+// went red. The repo already applies this pattern one directory over (`run-infra.mjs` derives its schema export list
+// from the shipped slice, because "an export nobody listed is still measured").
 const CORE_DIR = path.join(ROOT, "skills", "_workflow-core");
-const SOURCES = [
-  "build-executor/helpers.mjs",
-  "build-executor/core.mjs",
-  "build-executor/schemas.mjs",
-  "build-executor/claude-template.js",
-  "behaviour-analysis/claude-template.js",
-];
+const SOURCES = [...new Set(TARGETS.flatMap((t) => [t.template, ...t.modules]))];
 
 // Every string literal and every template chunk, in source order. Regex literals are included too — a stripper that
 // mistook one for a comment would drop it and change behaviour silently.
@@ -292,6 +296,47 @@ for (const rel of SOURCES) {
   check(`${rel} — stripping is IDEMPOTENT (a second pass finds nothing left to take)`,
     () => stripComments(stripped) === stripped,
     () => "a second pass changed the output, so the first left a comment behind or ate a delimiter");
+}
+
+// THE SEAM (PR #128 review, round 19). Production strips the ASSEMBLED text -- the template with every module
+// inlined into it -- while the per-file leg above strips each file in isolation. A mis-strip AT A JOIN is therefore
+// outside both legs: a file whose last construct leaves the tokeniser in a state the next file's first construct
+// resolves differently (a regex that scans as division, a line comment absorbing the line after it) can only show
+// up on the concatenation. `assembleTarget` is the generator's OWN assembly step, so this checks the exact string
+// `build` hands to `stripComments` -- not a hand-rolled join, which would not even parse: the raw modules still
+// carry their imports and re-declare shared top-level names, which is precisely what `inlineOne` resolves.
+for (const t of TARGETS) {
+  const files = [t.template, ...t.modules];
+  let assembled;
+  try { assembled = assembleTarget(t); }
+  catch (e) { check(`${t.name} — the target assembles for the seam check`, false, e.message); continue; }
+
+  const strippedAll = stripComments(assembled);
+
+  check(`${t.name} — the ASSEMBLED source of all ${files.length} sources still PARSES after stripping (the module seams, which the per-file leg cannot see)`,
+    () => { literalPayloads(strippedAll); return true; });
+
+  check(`${t.name} — every literal payload in the ASSEMBLED source is byte-identical after stripping, so no module JOIN shifts the tokeniser`,
+    () => {
+      const before = literalPayloads(assembled), after = literalPayloads(strippedAll);
+      if (before.length !== after.length) return false;
+      return before.every((v, i) => v === after[i]);
+    },
+    () => {
+      let before = [], after = [];
+      try { before = literalPayloads(assembled); after = literalPayloads(strippedAll); } catch (e) { return "parse failed: " + e.message; }
+      if (before.length !== after.length) return `count differs: ${before.length} before, ${after.length} after`;
+      const i = before.findIndex((v, k) => v !== after[k]);
+      return `first divergence at literal #${i}: before=${JSON.stringify(before[i]?.slice(0, 200))} after=${JSON.stringify(after[i]?.slice(0, 200))}`;
+    });
+
+  // ANTI-VACUITY: an assembly that arrived empty, or a stripper that returned its input, would pass both above.
+  check(`${t.name} — stripping the ASSEMBLED source actually removed prose`,
+    () => assembled.length > 0 && strippedAll.length < assembled.length,
+    () => `before ${assembled.length} bytes, after ${strippedAll.length}`);
+
+  check(`${t.name} — stripping the ASSEMBLED source is IDEMPOTENT`,
+    () => stripComments(strippedAll) === strippedAll);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

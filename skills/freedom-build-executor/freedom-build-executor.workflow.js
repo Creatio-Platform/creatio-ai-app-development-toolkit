@@ -1449,8 +1449,18 @@ function rowsById(rows) {
 
 function capCarryText(value) {
   if (typeof value !== 'string') return value ?? null
-  if (value.length <= CARRY_TEXT_CAP) return value
-  return `${value.slice(0, CARRY_TEXT_CAP - CARRY_TEXT_TRUNCATED.length)}${CARRY_TEXT_TRUNCATED}`
+  if (encodedAsciiBytes(value) <= CARRY_TEXT_CAP) return value
+  const budget = CARRY_TEXT_CAP - encodedAsciiBytes(CARRY_TEXT_TRUNCATED)
+  let used = 0
+  let cut = 0
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.codePointAt(i)
+    const cost = (c >= 0x20 && c <= 0x7e) ? 1 : 6
+    if (used + cost > budget) break
+    used += cost
+    cut = i + 1
+  }
+  return `${value.slice(0, cut)}${CARRY_TEXT_TRUNCATED}`
 }
 
 const missIdList = (ids) => ids.map((id) => JSON.stringify(id)).join(', ')
@@ -2039,7 +2049,7 @@ let resolutionCheckTally = new Map()
     if (carry.proposals.length || carry.blocked.length || carry.discrepancies.length) {
       out.push(`\nALSO PERSIST these lists, verbatim — each already INCLUDES whatever the file held when this run read it, so write them as given:\n- \`proposals\`: ${j(carry.proposals)}\n- \`blocked\`: ${j(carry.blocked)}\n- \`discrepancies\`: ${j(carry.discrepancies)}\nA plan deviation, a blocker or a builder-vs-stand disagreement that lives only in a process is lost to the first usage limit; these are the run's answer to the caller.`)
     }
-      const unconsumedBytes = j(carry.unconsumed).length
+      const unconsumedBytes = encodedAsciiBytes(j(carry.unconsumed))
       if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
         log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
       }
@@ -2074,7 +2084,6 @@ DO SIX THINGS, in order:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
    - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
-   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
@@ -2570,7 +2579,7 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       const confirmedWrite = new Set((persisted.unconsumedWritten || []).map((w) => pairKey(w?.unit, w?.id)))
       const unconfirmedWrite = owedWrite.filter((k) => !confirmedWrite.has(k))
       if (unconfirmedWrite.length) {
-        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${unconfirmedWrite.map((k) => { const p = pairParts(k); return `\`${p.unit}\`/\`${p.id}\`` }).join(', ')} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${capCarryText(unconfirmedWrite.map((k) => { const p = pairParts(k); return `${JSON.stringify(p.unit)}/${JSON.stringify(p.id)}` }).join(', '))} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
       }
       markCarryPersisted()
     }
@@ -2882,7 +2891,7 @@ function reportResolutionAccounting(unit, routed, res, dispatched = true) {
     .filter((g) => !hasUnconsumedPair(unconsumed, g.unit, g.id))
   if (!gone.length) return
   unconsumed = [...unconsumed, ...gone]
-  log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${gone.map((g) => `\`${g.id}\``).join(', ')} — the run cannot report complete while that stands`)
+  log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${capCarryText(missIdList(gone.map((g) => g.id)))} — the run cannot report complete while that stands`)
   if (!dispatched) return
   const ungranted = gone.filter((g) => !resolutionsReopened.has(pairKey(unit.key, g.id)))
   if (!ungranted.length) return
@@ -3461,6 +3470,24 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       }
       absorbVerifier(lastVerifier, builtThisRound, claims)
 
+      resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
+      for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
+        log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
+        const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+          claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${capCarryText(c.how)}` : ''}`, found: c.found }
+        const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
+          && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
+        discrepancies = seenAt >= 0
+          ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
+          : [...discrepancies, notApplied]
+        if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
+          unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
+        }
+        if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
+      }
+      const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
+      if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
+
       yield* persistPending(`closing round ${round}`)
 
       yield* judgeIfWaiting()
@@ -3511,18 +3538,6 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
         discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
       }
-      resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
-      for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
-        log(`answer NOT on the page: \`${c.unit}\` claims it applied \`${c.id}\`, the verifier reads the page and finds ${c.found}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
-        discrepancies = [...discrepancies, { round, unit: c.unit, kind: 'resolution-not-applied',
-          claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${capCarryText(c.how)}` : ''}`, found: c.found }]
-        if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
-          unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
-        }
-        if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
-      }
-      const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
-      if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
       unconsumed = reconcileUnconsumed(unconsumed,
         owedResolutionPairs(state.preflightItems, state.unitKeys),
         releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))
@@ -3602,7 +3617,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   {
     const vague = unsettledResolutionClaims(resolutionCheckTally)
     if (vague.length) {
-      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${vague.map((v) => `\`${v.unit}\`/\`${v.id}\` (${v.unknownRounds}x)`).join(", ")}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
+      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${capCarryText(vague.map((v) => `${JSON.stringify(v.unit)}/${JSON.stringify(v.id)} (${v.unknownRounds}x)`).join(", "))}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
     }
   }
 

@@ -647,6 +647,15 @@ console.log(`\n===== freedom-build-executor: the populated answers-carry render 
 // A top-level `function <name>(…) {` through the next line that is a bare `}` at column 0. Both files are generated
 // or written with that shape, and the slice is asserted non-empty below so a formatting change fails LOUDLY here
 // rather than silently comparing two empty strings.
+// The arrow-const twin of `sliceFunction`: `const NAME = (...) => {` through its closing brace at column 0.
+function sliceArrowConst(src, name) {
+  const start = src.indexOf(`\nconst ${name} = `);
+  if (start === -1) return null;
+  const end = src.indexOf("\n}\n", start);
+  if (end === -1) return null;
+  return src.slice(start + 1, end + 3);
+}
+
 function sliceFunction(src, name) {
   const start = src.indexOf(`\nfunction ${name}(`);
   if (start === -1) return null;
@@ -660,7 +669,13 @@ async function loadRenderers(src, label) {
     const m = new RegExp(`^const ${k} = (.+)$`, "m").exec(src);
     return m ? `const ${k} = ${m[1]}\n` : null;
   });
-  const fns = ["capCarryText", "unconsumedNextClause", "unconsumedLogLine"].map((n) => sliceFunction(src, n));
+  // `encodedAsciiBytes` joined this surface when the carry cap moved to wire bytes (round 19): `capCarryText`
+  // now calls it, so a slice without it throws instead of rendering. It is an arrow const in the generated
+  // artifact and in the baseline, which `sliceFunction` (declaration form only) cannot take -- hence the pair.
+  const fns = [
+    sliceArrowConst(src, "encodedAsciiBytes"),
+    ...["capCarryText", "unconsumedNextClause", "unconsumedLogLine"].map((n) => sliceFunction(src, n)),
+  ];
   if (parts.some((p) => p === null) || fns.some((f) => f === null)) {
     return { error: `${label}: could not slice the render surface (constants: ${parts.map((p) => p !== null).join()}, functions: ${fns.map((f) => f !== null).join()})` };
   }

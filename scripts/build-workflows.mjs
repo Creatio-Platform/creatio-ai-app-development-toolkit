@@ -32,7 +32,10 @@ const PLACEHOLDER = '/*@INLINE@*/'
 // rather than derived: a topological sort over `import` lines would be more
 // clever and less auditable, and the list is short enough that a reviewer can
 // check it by eye.
-const TARGETS = [
+// EXPORTED (PR #128 review, round 19) so the stripper's property check can DERIVE its source list from the one
+// the generator actually strips, instead of hand-copying five of them. Adding a module here now adds it to that
+// coverage automatically -- the drift-by-omission the hand-typed list had.
+export const TARGETS = [
   {
     name: 'creatio-classic-behaviour-analysis',
     template: 'behaviour-analysis/claude-template.js',
@@ -299,7 +302,11 @@ export function stripComments(src) {
   return out
 }
 
-function build(target) {
+// THE ASSEMBLY, exported (PR #128 review, round 19). `stripComments` runs over THIS text -- the template with every
+// module inlined into it -- not over the files one at a time, so a stripper bug at a module JOIN is invisible to any
+// check that reads a single file. The offline property suite asserts literal identity over this exact string, which
+// is only meaningful if it is the SAME string `build` strips. One assembly path, so the two cannot drift.
+export function assembleTarget(target) {
   // Same reason as `inlineOne`: the template is concatenated with the inlined block and scanned for sentinels.
   const template = readFileSync(path.join(CORE, target.template), 'utf8').replace(/\r\n/g, '\n')
   if (!template.includes(PLACEHOLDER)) throw new Error(`${target.template}: no ${PLACEHOLDER} placeholder`)
@@ -317,6 +324,11 @@ function build(target) {
   }
 
   const text = template.replace(PLACEHOLDER, inlined.trim())
+  return text
+}
+
+function build(target) {
+  const text = assembleTarget(target)
 
   // meta.phases ↔ the phases the core emits. Both directions: an advertised phase
   // the core never enters draws an empty progress group, and a phase the core

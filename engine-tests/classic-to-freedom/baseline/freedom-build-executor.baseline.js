@@ -2194,10 +2194,34 @@ const unconsumed = []
 // constants are carried for the same reason the wording is: they are part of the rendered output.
 const CARRY_TEXT_CAP = 400
 const CARRY_TEXT_TRUNCATED = ' …[truncated]'
+// DELIBERATE BASELINE UPDATE (PR #128 review, round 19). The carry cap now truncates in the unit its ceiling is
+// measured in -- `RECONCILE_ANSWER_MAX_BYTES` is enforced with the backslash-u wire encoding, six bytes per
+// non-ASCII unit, so counting UTF-16 units let a row through at 6x on Cyrillic. This is a behaviour change, so
+// the frozen baseline is replaced HERE rather than left to diverge: the parity leg compares rendered prompt
+// text, and a baseline still capping by character would report a drift that is the intended fix.
+const encodedAsciiBytes = (s) => {
+  if (typeof s !== 'string') return 0
+  let n = 0
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.codePointAt(i)
+    n += (c >= 0x20 && c <= 0x7e) ? 1 : 6
+  }
+  return n
+}
 function capCarryText(value) {
   if (typeof value !== 'string') return value ?? null
-  if (value.length <= CARRY_TEXT_CAP) return value
-  return `${value.slice(0, CARRY_TEXT_CAP - CARRY_TEXT_TRUNCATED.length)}${CARRY_TEXT_TRUNCATED}`
+  if (encodedAsciiBytes(value) <= CARRY_TEXT_CAP) return value
+  const budget = CARRY_TEXT_CAP - encodedAsciiBytes(CARRY_TEXT_TRUNCATED)
+  let used = 0
+  let cut = 0
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.codePointAt(i)
+    const cost = (c >= 0x20 && c <= 0x7e) ? 1 : 6
+    if (used + cost > budget) break
+    used += cost
+    cut = i + 1
+  }
+  return `${value.slice(0, cut)}${CARRY_TEXT_TRUNCATED}`
 }
 function unconsumedNextClause(entries) {
   if (!(entries || []).length) return ''
@@ -2407,7 +2431,6 @@ DO SIX THINGS, in order:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
    - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
-   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.

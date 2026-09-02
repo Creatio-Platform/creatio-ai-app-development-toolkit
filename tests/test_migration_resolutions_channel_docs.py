@@ -145,7 +145,22 @@ class ConsumptionContractDocTests(unittest.TestCase):
             # from an unrelated pre-existing line ("a parked `app` unit blocks everything") -- so for
             # that file the marker had no failure mode at all. The test is named for criterion 5's
             # core guarantee and never asserted the word `complete`; both halves are pinned now.
+            #
+            # PR #128 review (round 19) — and `blocks `complete`` then acquired TWO satisfiers in the
+            # queue-file doc, both added by this PR, so deleting either sentence left it green. Same
+            # class as the pin above, same fix: assert the phrase that carries the guarantee occurs
+            # exactly once. SKILL.md and the queue doc state it in their own words, so each gets its own.
             self.assertIn("blocks `complete`", content, path)
+        for path, phrase in (
+            (EXECUTOR_SKILL, "buys its unit ONE repair round, and **blocks"),
+            (EXECUTOR_FILES_DOC, "still blocks `complete` after a usage limit"),
+        ):
+            doc = flat(read_text(path))
+            self.assertEqual(
+                doc.count(phrase), 1,
+                f"{path}: expected exactly one occurrence of {phrase!r} — with a second satisfier the "
+                f"pin survives the deletion of the sentence it is named for",
+            )
         # The invariant must not be broken in the other direction while closing this gap: the
         # whole fix is monotone, and a doc that stopped saying so is how it stops being true.
         self.assertIn(
@@ -190,12 +205,38 @@ class ConsumptionContractDocTests(unittest.TestCase):
         record was persisted it was the one outcome with no trace at all, and a re-run on a
         green gate reported the folder complete over a dropped answer.
         """
-        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
-            content = flat(read_text(path))
-            self.assertIn("persisted", content, path)
-            self.assertIn("re-seeded", content, path)
+        # PR #128 review (round 19) — THIS PIN WAS VACUOUS, confirmed by execution: deleting the
+        # persistence clause from SKILL.md left this module at 17/17 and the whole repo at 521/521.
+        # `assertIn("persisted")` had four satisfiers in SKILL.md alone; `assertIn("re-seeded")` was
+        # satisfied by the sentence stating the OPPOSITE for `unsettledResolutionClaims` ("is not
+        # re-seeded by Reconcile"); and "even when it is empty" matched the surviving fragment. That is
+        # the RC-14 defect this module already records at `test_round_17_pins_are_not_satisfied_by_
+        # pre_existing_text`, reintroduced in the same file. Pinned the way that test pins: a
+        # sentence-length phrase unique to the guarantee, asserted to occur EXACTLY ONCE, so rewriting
+        # the sentence turns it red instead of sliding onto a neighbour.
+        for path, phrase in (
+            (EXECUTOR_SKILL, "The record is persisted in the queue file under"),
+            (EXECUTOR_FILES_DOC, "`unconsumedResolutions` is at the ROOT"),
+        ):
+            doc = flat(read_text(path))
+            self.assertEqual(
+                doc.count(phrase), 1,
+                f"{path}: expected exactly one occurrence of {phrase!r} — a pin with a second "
+                f"satisfier cannot fail when the guarantee it names is deleted",
+            )
         skill = flat(read_text(EXECUTOR_SKILL))
-        self.assertIn("even when it is empty", skill.lower())
+        # The three halves of the guarantee, each pinned to the clause that carries it rather than to a
+        # word the file uses elsewhere: it is persisted, it is re-seeded BY RECONCILE (the sibling field
+        # says it is NOT, which is why the bare word could never fail), and the empty value is written.
+        self.assertEqual(
+            skill.count("re-seeded by the next Reconcile"), 1,
+            "the re-seed half must be pinned to its own clause: the bare word `re-seeded` is also "
+            "satisfied by the sentence stating the opposite for `unsettledResolutionClaims`",
+        )
+        self.assertEqual(
+            skill.count("and written **even when it is empty**"), 1,
+            "the empty value is load-bearing and must be pinned to the clause that states it",
+        )
         # The queue-file doc has to say WHERE, or an agent cannot write it.
         doc = flat(read_text(EXECUTOR_FILES_DOC))
         self.assertIn("`unconsumedResolutions` is at the ROOT", doc)

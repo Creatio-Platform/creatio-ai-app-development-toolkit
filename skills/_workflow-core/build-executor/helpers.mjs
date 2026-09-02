@@ -1450,10 +1450,31 @@ export function rowsById(rows) {
 // comparison and the verifier's echoed `resolutionChecks[].id` all key on it byte for byte, so truncating it would
 // turn a long question into a permanently unmatchable one, which is the accounting miss RC-13 exists to prevent.
 // `item` carries no such duty on this row -- it is the question text a reader sees beside the id -- so it is capped.
+// MEASURED IN WIRE BYTES, NOT UTF-16 UNITS (PR #128 review, round 19). The ceiling this cap defends is
+// `RECONCILE_ANSWER_MAX_BYTES`, and that one is enforced with `encodedAsciiBytes` -- the backslash-u submission form,
+// where every non-printable-ASCII unit costs SIX. Counting `value.length` here made the two units differ by 6x on
+// Cyrillic: a single rehydrated `unconsumedResolutions` row, every field legally inside 400 CHARACTERS, could reach
+// ~14400 wire BYTES on its own, and four held answers beside an 80-page verify summary cleared the 16000 ceiling.
+// It fails worse than a plain overflow: the size fault tells the agent to leave the bulk on disk while the Reconcile
+// prompt simultaneously forbids it ("Do NOT filter, re-judge or tidy them"), so there is no legal shrink -- the folder
+// faults, spends its retries, stops, and does the same on every resume. That is ENG-95930's mode B re-entered through
+// a different field. Truncating on the ceiling's OWN unit closes it at the source.
+// The budget is walked per code unit rather than sliced arithmetically, because one unit can cost 1 or 6 and the
+// marker must stay INSIDE the budget -- the same reason it is inside the character budget today.
 export function capCarryText(value) {
   if (typeof value !== 'string') return value ?? null
-  if (value.length <= CARRY_TEXT_CAP) return value
-  return `${value.slice(0, CARRY_TEXT_CAP - CARRY_TEXT_TRUNCATED.length)}${CARRY_TEXT_TRUNCATED}`
+  if (encodedAsciiBytes(value) <= CARRY_TEXT_CAP) return value
+  const budget = CARRY_TEXT_CAP - encodedAsciiBytes(CARRY_TEXT_TRUNCATED)
+  let used = 0
+  let cut = 0
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.codePointAt(i)
+    const cost = (c >= 0x20 && c <= 0x7e) ? 1 : 6
+    if (used + cost > budget) break
+    used += cost
+    cut = i + 1
+  }
+  return `${value.slice(0, cut)}${CARRY_TEXT_TRUNCATED}`
 }
 
 // ENG-95503 — IS EVERY ANSWER THIS UNIT WAS HANDED ACCOUNTED FOR? Returns a reason string when the builder's report
