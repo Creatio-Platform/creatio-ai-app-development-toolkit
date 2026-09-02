@@ -532,6 +532,19 @@ export function packagePreconditionStop(targetPackage, packageState, sectionHost
   return null
 }
 
+// ENG-96147 — THE SECTION'S NAVIGATION ROUTE, assembled in exactly ONE place. A guessed `#Section/<schema>` URL
+// cost a database flush and a `compile-creatio` on a shared stand: an agent retyped a section's code from memory,
+// dropped the `_ListPage` suffix, got `Script error`, and reported a working page as broken. The fix is not a
+// smarter guess — it is that nothing guesses: `create-app-section`/`list-app-sections` already return the list
+// page's own schema name, and this is the only function that turns that VERBATIM string into a route. Pure, so
+// the composition is testable on its own and no second writer in the run can independently invent a different
+// prefix. `null` in ⇒ `null` out: an empty/missing schema name is never padded into a route that looks real.
+export function sectionRouteFrom(schemaName) {
+  const name = String(schemaName ?? '').trim()
+  if (!name) return null
+  return { route: `#Section/${name}`, schemaName: name }
+}
+
 // THE COMPONENT-TYPE PRE-BUILD GATE (ENG-95468). Every `crt.*` type the plan names must resolve on the TARGET
 // stand before the first build unit. The one that did not — the fabricated `crt.ContactCommunication`, which is
 // not a component type at all — made a builder hit the wall mid-Build, and the run paid repair rounds for a plan

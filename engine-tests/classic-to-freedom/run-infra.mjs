@@ -141,7 +141,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
   // app/package identity it promises is producible on this stand at all.
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
@@ -1022,6 +1022,21 @@ check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy s
   () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
+
+// ENG-96147 — sectionRouteFrom is the ONLY place in the whole run that assembles a `#Section/...` string. A
+// guessed one (dropped `_ListPage` suffix, retyped from the section's code) cost a database flush and a
+// compile on a shared stand, so this function's whole job is to make composition impossible anywhere else:
+// given a schema name a builder copied verbatim out of a tool response, and NOTHING besides that name.
+check("sectionRouteFrom: a real schema name becomes '#Section/' + that name, verbatim",
+  () => { const r = wf.sectionRouteFrom("UsrApplicants_ListPage"); return r?.route === "#Section/UsrApplicants_ListPage" && r?.schemaName === "UsrApplicants_ListPage"; });
+check("sectionRouteFrom: surrounding whitespace is trimmed, never folded into the route itself",
+  () => { const r = wf.sectionRouteFrom("  UsrApplicants_ListPage  "); return r?.route === "#Section/UsrApplicants_ListPage" && r?.schemaName === "UsrApplicants_ListPage"; });
+check("sectionRouteFrom: empty / whitespace-only / missing / non-string input returns null — never a route padded from nothing",
+  () => (wf.sectionRouteFrom("") === null
+    && wf.sectionRouteFrom("   ") === null
+    && wf.sectionRouteFrom(undefined) === null
+    && wf.sectionRouteFrom(null) === null));
+
 check("packagePreconditionStop: an own record ALSO resolves a `new-app` stop over 'unknown' — 'unknown' + a matching COMPLETE record is exactly the resumed-run-over-its-own-success case ENG-95884 exists to let through, not a stop to preserve",
   () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()) === null));
 check("packagePreconditionStop: 'unknown' + a matching but INCOMPLETE record resolves to the OWNERSHIP stop, not the generic unknown one — the record already answers 'exists', so the operator is told to finish the app unit, not to go check `list-packages` by hand",
@@ -1465,7 +1480,8 @@ check("ENG-95850 (B2): NOTHING in the run unbinds a workplace — both the verif
     && /reports it instead of unbinding/.test(wfSrc));
 check("ENG-95850 (B2): a count that is not exactly one becomes a BLOCKER in the run's answer, and 0 vs 2+ are given different reasons — unreachable is not the same defect as a leftover binding",
   /function applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
-    && /if \(unit\.kind === 'reach'\) applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
+    // ENG-96147 widened this dispatch line to also record the section's route; still one `reach`-kind hook.
+    && /if \(unit\.kind === 'reach'\) \{ applyWorkplaceBindings\(unit, res\);/.test(wfSrc)
     && /a section in no workplace is unreachable/.test(wfSrc)
     && /the previous binding is still there/.test(wfSrc));
 check("ENG-95850 (B2): a non-integer count is IGNORED rather than reported as a binding — a malformed claim must not manufacture a blocker",
@@ -1492,6 +1508,31 @@ check("ENG-95850 (A2): Reconcile is told to read the provenance OFF THE FILE and
   /Return \\`packageCreatedByRun\\`/.test(wfSrc)
     && /do NOT derive it from the stand/.test(wfSrc)
     && /no stand read can say WHO created it/.test(wfSrc));
+
+// ENG-96147 — the section's navigation route, mirroring the packageCreated block above call for call: ONE
+// recording function, called from BOTH write sites (the `new-app` app unit and the `existing-app` reach unit),
+// threaded into every return, and persisted immediately after either site writes it — the same "irreversible
+// stand write, then a long killable agent" reasoning packageCreated already gets, extended to the write site
+// that did not have it.
+check("ENG-96147: recordSectionRoute is ONE function, and it goes through sectionRouteFrom — no second place in the run may assemble the '#Section/' prefix",
+  /function recordSectionRoute\(schemaName\)/.test(wfSrc)
+    && /const rec = sectionRouteFrom\(schemaName\)/.test(wfSrc)
+    && /if \(!rec\) return/.test(wfSrc));
+check("ENG-96147: the app unit records the route on BOTH branches — the closed one and the short one — from `res.starterListPage`, exactly where packageCreated is recorded on both",
+  (wfSrc.match(/recordSectionRoute\(res\.starterListPage\)/g) || []).length === 2);
+check("ENG-96147: the reach unit's dispatch hook reports its route from `res.sectionRoute.schemaName` — a builder-owned field, never a name the script reconstructs",
+  /if \(unit\.kind === 'reach'\) \{ applyWorkplaceBindings\(unit, res\); recordSectionRoute\(res\.sectionRoute\?\.schemaName\) \}/.test(wfSrc));
+check("ENG-96147: `sectionRouteByRun` is threaded into every return, defaulted from THIS process's own record like `packageCreatedByRun`",
+  /sectionRouteByRun: standWrites\.sectionRoute \|\| null/.test(wfSrc));
+check("ENG-96147: the reach unit's stand write is ALSO persisted IMMEDIATELY after dispatch — the gap the app-unit-only guard left, closed by this ticket rather than for a later run to lose its route to",
+  /if \(unit\.kind === 'reach' && standWrites\.sectionRoute\) yield\* persistPending\(/.test(wfSrc));
+check("ENG-96147: Reconcile is told to read the route OFF THE FILE, never compose or reconstruct it from a naming convention",
+  /Return \\`sectionRouteByRun\\`/.test(wfSrc)
+    && /do NOT compose it/.test(wfSrc)
+    && /do NOT reconstruct it from a schema-naming convention/.test(wfSrc));
+check("ENG-96147: the reach-unit build prompt forbids the builder from composing the '#Section/...' URL itself",
+  /do NOT compose the \\`#Section\/\.\.\.\\` URL yourself/.test(wfSrc)
+    && /this script is the only thing that assembles that prefix/.test(wfSrc));
 // THE THREE call sites are the baseline, the post-preflight refresh and the round tail. The retry is only a fix if
 // ALL of them go through it, so the pin counts both directions: three calls to the helper, and the prompt itself
 // built in exactly ONE place — its own definition plus the single dispatch INSIDE the helper. A fourth

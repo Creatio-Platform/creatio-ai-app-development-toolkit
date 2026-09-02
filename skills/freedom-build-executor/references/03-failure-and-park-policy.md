@@ -10,6 +10,7 @@ into an infinite loop or a silent drop.
 | a unit is still short after 3 rounds | **PARK** it, keep the rest going, exit once with all of them | the script |
 | the PLAN itself is incomplete (D12) | **STOP the whole run**, return to the caller | the script |
 | the plan says X and X looks wrong | return a **proposal**, build the plan as written | the builder, then the user |
+| opening the built section fails and no recorded route was used | report `blocked[]` as an **UNRESOLVED ROUTE** — never a page defect, never a dependency-ordering theory | the reader (orienting agent, per-page render check), from `standWrites.sectionRoute` |
 
 ## Exit 2 is not one condition
 
@@ -165,6 +166,35 @@ The five non-page units — `typedFormsBuilt`, `typedRouting`, `miniPageWired`, 
 `sectionRegistered` — are not in `buildOrder`. Each `--units.reachability[]` entry publishes the
 page keys whose rows read it, so it is scheduled after the last of those pages — arithmetic from
 published data, not a judgement in a prompt.
+
+## An unresolved navigation route is not a page defect, and never authorises a stand-wide recovery (ENG-96147)
+
+`Script error` when opening a built section is ambiguous by construction: it looks identical whether the page
+is genuinely broken or the URL that was typed simply does not resolve. On the ST_2 run an agent opened
+`#Section/UsrApplicants` — a URL it composed from the section's code, dropping the actual page's `_ListPage`
+suffix — got `Script error`, and reported a real page defect. The recovery ran a database flush and a
+`compile-creatio` against a **shared stand**, for a page that was never broken; the same wrong diagnosis then
+repeated as a "dependency-ordering block" across the run's remaining rounds.
+
+The rule this incident produces: **before diagnosing a navigation failure as anything, check whether the route
+came from `standWrites.sectionRoute`.**
+
+- **A route WAS used, and still failed to open.** That is real evidence about the page — diagnose it as any
+  other build defect would be diagnosed.
+- **No recorded route exists, or none was used** — `standWrites.sectionRoute` is absent, or the failure came
+  from a URL someone composed rather than the one on file. This is reported as `blocked[]`, `what: "unresolved
+  route"`, naming the schema key and that no published route was available. It is **never**:
+  - reported as a page defect (the page was never actually opened by a route this run can vouch for);
+  - reported as a dependency-ordering or build-gap theory (an unresolved route says nothing about build order —
+    attaching a causal story to it is exactly the second misdiagnosis the ST_2 run made, repeated across all
+    six of its rounds);
+  - grounds for a stand-wide recovery action. **A database flush or a `compile-creatio` is never authorised by
+    a `Script error` alone** — see `04-per-page-build-recipe.md`'s render-check step for the same rule stated
+    against the compile caveat.
+- **Composing a route is never the fallback.** The record exists precisely so nothing has to guess; an agent
+  that cannot find `standWrites.sectionRoute` reports the gap, it does not reconstruct a `#Section/<guess>`
+  string from the schema name or section code — that reconstruction is the defect this section exists to stop,
+  not a workaround for it.
 
 ## Never weaken a gate to reach green
 

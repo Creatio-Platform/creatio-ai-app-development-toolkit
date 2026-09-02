@@ -168,6 +168,21 @@ export const RECONCILE_SCHEMA = {
         },
       },
     },
+    // ENG-96147 — WHERE THE SECTION THIS RUN BUILT ACTUALLY OPENS, read off `build-queue.json`.`standWrites.sectionRoute`.
+    // NOT REQUIRED, for the same reason `packageCreatedByRun` is not: an agent that cannot read the file must be able
+    // to say nothing rather than guess, and the safe side of "nothing" is a reader falling back to reporting an
+    // unresolved route instead of composing one. `null`/absent on a folder written before this field existed, or on a
+    // run that has not yet registered a section — both read identically, and both are the correct "nothing to report".
+    sectionRouteByRun: {
+      type: ['object', 'null'],
+      required: ['route', 'schemaName'],
+      properties: {
+        route: { type: 'string' },       // '#Section/' + the list page's own schema name, VERBATIM
+        schemaName: { type: 'string' },
+        sectionHost: { type: ['string', 'null'] },
+        planVersion: { type: ['string', 'null'] },
+      },
+    },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -408,6 +423,19 @@ export const BUILD_PROPERTIES = {
     properties: {
       count: { type: 'integer' },
       names: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  // ENG-96147 — THE SECTION'S OWN LIST-PAGE SCHEMA NAME, copied VERBATIM from `create-app-section`'s response —
+  // never retyped from the section's code/caption, never reconstructed with a guessed `_ListPage` suffix. This is
+  // the ONE fact `recordSectionRoute()` turns into `standWrites.sectionRoute`; the script — not the builder —
+  // assembles the `#Section/...` prefix from it, so no two writers can independently invent a different one. A
+  // guessed route produced exactly this incident: `Script error` on a wrong URL, misread as a real page defect,
+  // recovered with a database flush and a compile on a shared stand.
+  sectionRoute: {
+    type: 'object',
+    required: ['schemaName'],
+    properties: {
+      schemaName: { type: 'string' },
     },
   },
   // The UI-guidelines pass, as the record the verifier files from. REQUIRED on a page unit: an absent answer
