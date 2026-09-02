@@ -36,14 +36,21 @@ VALID = {
     "KN_BRANCH": ["master", "feature/eng-93152_fab-1.2", "1.13.20", "release-2.0"],
     "CONFIG": ["Release", "Debug"],
     "MARKETPLACE_NAME": ["creatio"],
+    "TFM": ["net10.0", "net472", "netstandard2.0", "net8.0-windows", "net10.0;net8.0"],
 }
 
 
 class AllowListTests(unittest.TestCase):
     def test_all_untrusted_vars_have_an_allowlist(self):
         for name in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "KN_BRANCH",
-                     "CONFIG", "MARKETPLACE_NAME"):
+                     "CONFIG", "MARKETPLACE_NAME", "TFM"):
             self.assertIn(name, bdt.ALLOWLISTS)
+
+    def test_tfm_rejects_digitless_segments(self):
+        # Each ';'-separated segment must look like a real TFM (letters, then a digit) -- a list whose
+        # segments are arbitrary words must not validate even though ';' itself is allowed.
+        for bad in ("net", "calc", "net10.0;calc", "a;calc", ";net10.0", "net10.0;"):
+            self.assertFalse(bdt.token_ok("TFM", bad), f"TFM must reject {bad!r}")
 
     def test_every_allowlist_rejects_malicious(self):
         for name in bdt.ALLOWLISTS:
@@ -298,6 +305,26 @@ class LauncherTests(unittest.TestCase):
         mode = out.stdout.split()[0]
         self.assertEqual(mode, "100755", "the .sh launcher must be committed with the executable bit")
 
+    def test_command_wrapper_delegates_forwards_args_and_pauses(self):
+        # The macOS double-click wrapper must hand off to the .sh (not the driver directly), forward its
+        # args, and pause before the Terminal window can close.
+        cmd = (ROOT / "scripts" / "build-dev-toolchain.command").read_text(encoding="utf-8")
+        self.assertTrue(cmd.startswith("#!"))
+        self.assertIn('"$DIR/build-dev-toolchain.sh" "$@"', cmd,
+                      "the .command must delegate to the .sh and forward its arguments")
+        self.assertIn("read -r", cmd, "the .command must pause so the output stays readable")
+
+    def test_command_wrapper_is_executable_in_git(self):
+        import shutil as _sh
+        if not _sh.which("git"):
+            self.skipTest("git not available")
+        out = subprocess.run(["git", "ls-files", "-s", "scripts/build-dev-toolchain.command"],
+                             cwd=str(ROOT), text=True, capture_output=True)
+        if out.returncode != 0 or not out.stdout.strip():
+            self.skipTest("wrapper not tracked yet")
+        self.assertEqual(out.stdout.split()[0], "100755",
+                         "the .command wrapper must be committed with the executable bit")
+
     def test_sh_probes_before_sourcing_the_resolver(self):
         # The side-effect-free local probe must come BEFORE `source ...find_python.sh` (which can install
         # packages / prompt for sudo).
@@ -344,6 +371,48 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(dotnet, "dotnet build/pack must run")
         for c, kw in dotnet:
             self.assertEqual(kw.get("cwd"), clio_src, f"{c[:2]} must run with cwd=clio_src")
+
+    @staticmethod
+    def _record_build_and_pack(tfm):
+        calls = []
+
+        def rec(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:2] == ["dotnet", "pack"]:
+                out = Path(kw["cwd"]) / "artifacts" / "local-tool"
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "clio.9.9.9.9.nupkg").write_text("", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(bdt, "run", side_effect=rec):
+                bdt._build_and_pack(Path(d), "Release", "9.9.9.9", tfm)
+        return calls
+
+    def test_build_and_pack_tfm_override_two_pass_restore_and_forwarding(self):
+        # With a TFM override the sequence must be: full-graph restore WITHOUT the override (referenced
+        # projects keep their own TFMs -- NETSDK1005 otherwise), then a clio-only --no-dependencies
+        # restore WITH it (keeps dropped TFMs out of clio's assets -- NU5128 otherwise), then build and
+        # pack, both --no-restore and both carrying the override.
+        calls = self._record_build_and_pack("net10.0")
+        restores = [c for c in calls if c[:2] == ["dotnet", "restore"]]
+        self.assertEqual(len(restores), 2, "exactly two restore passes with a TFM override")
+        self.assertNotIn("-p:TargetFrameworks=net10.0", restores[0], "pass 1 must NOT carry the override")
+        self.assertIn("-p:TargetFrameworks=net10.0", restores[1], "pass 2 must carry the override")
+        self.assertIn("--no-dependencies", restores[1], "pass 2 must restore clio alone")
+        for verb in ("build", "pack"):
+            cmd = next(c for c in calls if c[:2] == ["dotnet", verb])
+            self.assertIn("-p:TargetFrameworks=net10.0", cmd, f"dotnet {verb} must carry the TFM override")
+            self.assertIn("--no-restore", cmd, f"dotnet {verb} must not re-restore (would re-leak the override)")
+        self.assertEqual([c[1] for c in calls if c[0] == "dotnet"], ["restore", "restore", "build", "pack"])
+
+    def test_build_and_pack_omits_tfm_property_when_unset(self):
+        calls = self._record_build_and_pack(None)
+        for cmd in calls:
+            self.assertFalse(any(a.startswith("-p:TargetFrameworks") for a in cmd),
+                             "no TFM override may be injected when TFM is unset (csproj decides)")
+        restores = [c for c in calls if c[:2] == ["dotnet", "restore"]]
+        self.assertEqual(len(restores), 1, "no second restore pass without a TFM override")
 
     def test_main_order_and_cleanup_runs_when_stage_b_fails(self):
         order = []
@@ -547,6 +616,21 @@ class LauncherExecutionTests(unittest.TestCase):
             r = subprocess.run([bash, str(sh), "boom"], text=True, capture_output=True)
             self.assertIn("ARGV:boom", r.stdout)
             self.assertEqual(r.returncode, 42, "the .sh must propagate the driver's exit code")
+
+    @unittest.skipIf(bdt.IS_WIN, "POSIX launcher")
+    def test_command_forwards_args_and_exit_code_through_the_sh(self):
+        import shutil as _sh
+        bash = _sh.which("bash")
+        if not bash:
+            self.skipTest("bash required")
+        with tempfile.TemporaryDirectory() as d:
+            self._stage(d, "build-dev-toolchain.sh")
+            cmd = self._stage(d, "build-dev-toolchain.command")
+            # stdin closed -> the trailing `read -r` returns EOF immediately instead of blocking the test.
+            r = subprocess.run([bash, str(cmd), "boom"], text=True, capture_output=True,
+                               stdin=subprocess.DEVNULL)
+            self.assertIn("ARGV:boom", r.stdout)
+            self.assertEqual(r.returncode, 42, "the .command must propagate the driver's exit code")
 
 
 if __name__ == "__main__":

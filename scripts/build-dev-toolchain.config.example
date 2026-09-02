@@ -29,3 +29,9 @@ CLIO_SRC=<path-to-your-local-clio-checkout>
 
 # dotnet build configuration for the clio build/pack. Optional (default: Release).
 # CONFIG=Release
+
+# Target framework(s) for the clio build/pack. Optional. When unset, clio's own csproj decides
+# (net10.0;net8.0 on an SDK >= 10, otherwise net8.0). A dev machine with only the .NET 10 runtime
+# makes the net8.0 half dead weight (double build time, ~103 MB -> ~53 MB package when dropped),
+# so set TFM=net10.0 to build just that one; a ';'-separated list also works (net10.0;net8.0).
+# TFM=net10.0
