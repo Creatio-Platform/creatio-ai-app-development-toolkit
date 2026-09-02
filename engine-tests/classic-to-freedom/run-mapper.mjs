@@ -71,7 +71,21 @@ check("3 details as Expanded list with dependency",
   cs.details.length === 3 && cs.details.some(d => d.detailSchema === "SupportScheduleEmployeeDetail"
     && d.dependency?.attributePath === "SupportUnit" && d.dependency?.relationPath === "PDS.Id"));
 check("setName -> handler stub", cs.handlerStubs.some(h => h.sourceMethod === "setName"));
-check("chart widgets flagged as needsDecision (component)", cs.needsDecision.some(n => n.kind === "component"));
+// ENG-95806 — the CardWidgetModule now carries BOTH coordinates (widgetKey + recordId), so it is a concrete
+// `card-widget` decision (was the vague `component`), carrying widgetKey/recordId and a resolved region.
+const suCardWidget = cs.needsDecision.find(n => n.kind === "card-widget" && n.item === "KpiChart");
+check("card widget → one card-widget decision (not a generic component)",
+  !!suCardWidget && !cs.needsDecision.some(n => n.kind === "component" && n.item === "KpiChart"),
+  () => `card-widget decisions: ${JSON.stringify(cs.needsDecision.filter(n => n.kind === "card-widget"))}`);
+check("card-widget decision carries widgetKey + recordId + region",
+  suCardWidget?.widgetKey === "KpiChart" && suCardWidget?.recordId === "b1e2c3d4-0000-4000-8000-000000000001" && !!suCardWidget?.region,
+  () => JSON.stringify(suCardWidget));
+check("card widget carried into changeSet.cardWidgets[] with coordinates",
+  (cs.cardWidgets || []).some(w => w.key === "KpiChart" && w.widgetKey === "KpiChart" && w.recordId === "b1e2c3d4-0000-4000-8000-000000000001" && !!w.region),
+  () => JSON.stringify(cs.cardWidgets));
+check("card widget is NOT double-reported as an unmapped component (accountedFor covers the module key)",
+  !cs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "KpiChart"),
+  () => JSON.stringify(cs.needsDecision.filter(n => /component/.test(n.kind))));
 
 // Contract sanity — TRUE dependency order (F1), with base-template seed (F2).
 const seed = load("_base", ["BaseModulePageV2_skeleton.js"]);
@@ -126,6 +140,57 @@ check("F3: layout is NOT flattened (≥2 distinct field containers)",
   new Set(co.viewConfigDiff.filter(o => o.values?.control).map(o => o.parentName)).size >= 2);
 check("F3: no field left in the old catch-all GeneralInfoTabContainer",
   !co.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
+
+/* ---- ENG-95806: record-scoped CARD WIDGETS (SysWidgetDashboard) → concrete card-widget decisions ---- */
+// Synthetic modules carry the already-normalized shape (widgetKey/recordId directly), mirroring what
+// engine.mjs normalizeModules projects from the real config.parameters.viewModelConfig for the file fixture.
+// Grouping: two widgets sharing ONE recordId → two card-widget decisions that group into a single recordId
+// (so the agent makes ONE ConvertCardWidgetsProcess call for the pair).
+const cwGroup = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "KpiA", moduleName: "CardWidgetModule", widgetKey: "KpiA", recordId: "rec-1" },
+  { key: "KpiB", moduleName: "CardWidgetModule", widgetKey: "KpiB", recordId: "rec-1" },
+] })]));
+const cwGroupDec = cwGroup.needsDecision.filter(n => n.kind === "card-widget");
+check("ENG-95806: two card widgets → two card-widget decisions, both carrying recordId",
+  cwGroupDec.length === 2 && cwGroupDec.every(d => d.recordId === "rec-1"),
+  () => JSON.stringify(cwGroupDec));
+check("ENG-95806: two widgets sharing one recordId group into a SINGLE recordId (one process call), both in cardWidgets[]",
+  (cwGroup.cardWidgets || []).length === 2 && new Set((cwGroup.cardWidgets || []).map(w => w.recordId)).size === 1,
+  () => JSON.stringify(cwGroup.cardWidgets));
+check("ENG-95806: grouped card widgets emit NO generic component decision",
+  !cwGroup.needsDecision.some(n => n.kind === "component"));
+
+// Fallback: a module missing EITHER coordinate degrades to the old generic `component` decision (never dropped).
+const cwMissing = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "NoRecord", moduleName: "CardWidgetModule", widgetKey: "NoRecord" },   // widgetKey but NO recordId
+  { key: "NoKey", moduleName: "CardWidgetModule", recordId: "rec-9" },          // recordId but NO widgetKey
+] })]));
+check("ENG-95806: a widget missing recordId degrades to a generic component (not card-widget, not dropped)",
+  cwMissing.needsDecision.some(n => n.kind === "component" && n.item === "NoRecord")
+  && !cwMissing.needsDecision.some(n => n.kind === "card-widget" && n.item === "NoRecord"),
+  () => JSON.stringify(cwMissing.needsDecision));
+check("ENG-95806: a widget missing widgetKey degrades to a generic component (not card-widget, not dropped)",
+  cwMissing.needsDecision.some(n => n.kind === "component" && n.item === "NoKey")
+  && !cwMissing.needsDecision.some(n => n.kind === "card-widget" && n.item === "NoKey"),
+  () => JSON.stringify(cwMissing.needsDecision));
+check("ENG-95806: coordinate-incomplete widgets are NOT carried into cardWidgets[]",
+  !(cwMissing.cardWidgets || []).length, () => JSON.stringify(cwMissing.cardWidgets));
+
+// No-duplicate + region: a card widget WITH a host diff item under a tab — accountedFor covers the module key AND
+// the host diff-item name (so mapUnmappedDrop does not re-report it), and the region resolves from that host.
+const cwHost = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
+  modules: [{ key: "KpiChart", moduleName: "CardWidgetModule", widgetKey: "KpiChart", recordId: "rec-5" }],
+  diff: [
+    di({ name: "AnalyticsTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+    di({ name: "KpiChart", parentName: "AnalyticsTab", propertyName: "items", itemType: 0 }),
+  ] })]));
+check("ENG-95806: no duplicate unmapped-component / component for a card widget with a host diff item",
+  !cwHost.needsDecision.some(n => (n.kind === "unmapped-component" || n.kind === "component") && n.item === "KpiChart"),
+  () => JSON.stringify(cwHost.needsDecision.filter(n => /component/.test(n.kind))));
+check("ENG-95806: card-widget region resolves from the host diff item's parent tab (AnalyticsTab)",
+  cwHost.needsDecision.find(n => n.kind === "card-widget" && n.item === "KpiChart")?.region === "AnalyticsTab"
+  && (cwHost.cardWidgets || [])[0]?.region === "AnalyticsTab",
+  () => JSON.stringify(cwHost.cardWidgets));
 
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
 // L/di are the shared schema/op builders (see _testkit.mjs), aliased to keep the assertions terse.
