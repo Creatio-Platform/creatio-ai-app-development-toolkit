@@ -1120,7 +1120,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       approval: { quote: "— **APPROVED by Katya** (\"implement\") — round 1" },
       evidenceIds: ["main#confirm:detail-add-mechanism:Актуальные вакансии · InternalRequest"],
       notes: "emoji \u{1F600} pair, tab\tand newline\nsurvive stringify",
-      verifyTablePath: "C:\\Users\\k.bondarenko\\My projects\\General \"quoted\" — literal backslashes round-trip",
+      verifyTablePath: String.raw`C:\Users\k.bondarenko\My projects\General "quoted" — literal backslashes round-trip`,
       schemaNamePrefix: "",
     };
     const raw = path.join(tmp, "reconcile-answer-baseline-1.json");
