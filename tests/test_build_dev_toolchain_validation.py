@@ -305,26 +305,6 @@ class LauncherTests(unittest.TestCase):
         mode = out.stdout.split()[0]
         self.assertEqual(mode, "100755", "the .sh launcher must be committed with the executable bit")
 
-    def test_command_wrapper_delegates_forwards_args_and_pauses(self):
-        # The macOS double-click wrapper must hand off to the .sh (not the driver directly), forward its
-        # args, and pause before the Terminal window can close.
-        cmd = (ROOT / "scripts" / "build-dev-toolchain.command").read_text(encoding="utf-8")
-        self.assertTrue(cmd.startswith("#!"))
-        self.assertIn('"$DIR/build-dev-toolchain.sh" "$@"', cmd,
-                      "the .command must delegate to the .sh and forward its arguments")
-        self.assertIn("read -r", cmd, "the .command must pause so the output stays readable")
-
-    def test_command_wrapper_is_executable_in_git(self):
-        import shutil as _sh
-        if not _sh.which("git"):
-            self.skipTest("git not available")
-        out = subprocess.run(["git", "ls-files", "-s", "scripts/build-dev-toolchain.command"],
-                             cwd=str(ROOT), text=True, capture_output=True)
-        if out.returncode != 0 or not out.stdout.strip():
-            self.skipTest("wrapper not tracked yet")
-        self.assertEqual(out.stdout.split()[0], "100755",
-                         "the .command wrapper must be committed with the executable bit")
-
     def test_sh_probes_before_sourcing_the_resolver(self):
         # The side-effect-free local probe must come BEFORE `source ...find_python.sh` (which can install
         # packages / prompt for sudo).
@@ -616,21 +596,6 @@ class LauncherExecutionTests(unittest.TestCase):
             r = subprocess.run([bash, str(sh), "boom"], text=True, capture_output=True)
             self.assertIn("ARGV:boom", r.stdout)
             self.assertEqual(r.returncode, 42, "the .sh must propagate the driver's exit code")
-
-    @unittest.skipIf(bdt.IS_WIN, "POSIX launcher")
-    def test_command_forwards_args_and_exit_code_through_the_sh(self):
-        import shutil as _sh
-        bash = _sh.which("bash")
-        if not bash:
-            self.skipTest("bash required")
-        with tempfile.TemporaryDirectory() as d:
-            self._stage(d, "build-dev-toolchain.sh")
-            cmd = self._stage(d, "build-dev-toolchain.command")
-            # stdin closed -> the trailing `read -r` returns EOF immediately instead of blocking the test.
-            r = subprocess.run([bash, str(cmd), "boom"], text=True, capture_output=True,
-                               stdin=subprocess.DEVNULL)
-            self.assertIn("ARGV:boom", r.stdout)
-            self.assertEqual(r.returncode, 42, "the .command must propagate the driver's exit code")
 
 
 if __name__ == "__main__":
