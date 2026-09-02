@@ -334,10 +334,24 @@ function pendingIds(run, ids) {
 // one, and sent the operator hunting a core-version mismatch that does not exist.
 // Returning null hands the case to `entriesFor` → null → the pending path, which is
 // what `entriesFor`'s "null when ANY id is absent" and `pendingIds` were written for.
+// Nor is ARRIVAL ORDER drift. `cli next` advertises a `parallel: true` step as one
+// `submit` command PER ITEM, so a Codex or generic-CLI host is invited to run them
+// concurrently and report back as each finishes — and `cmdSubmit` appends to the
+// journal tail. Submitting item 2 before item 1 therefore left the journal holding
+// [ctx, describe.2] where a positional comparison expected describe.1, reported a
+// core-version mismatch that had not happened, and bricked every following `next`,
+// `submit` and `status` with no recovery short of hand-editing the JSON. The run's
+// DATA was always fine: `entriesFor` is id-keyed and order-insensitive. So membership
+// is what is checked here — a recorded id belonging to no expected id in the window is
+// real drift, a permutation of them is not. A REPEATED id is drift too: `entriesFor`
+// would silently keep the first occurrence and the second entry's outcome would vanish.
 function driftAt(run, index, ids) {
+  const expected = new Set(ids)
   const slice = run.journal.slice(index, index + ids.length).map((e) => e.id)
-  for (let i = 0; i < slice.length; i++) {
-    if (slice[i] !== ids[i]) return { at: index, expected: ids, found: slice }
+  const seen = new Set()
+  for (const id of slice) {
+    if (!expected.has(id) || seen.has(id)) return { at: index, expected: ids, found: slice }
+    seen.add(id)
   }
   return null
 }

@@ -134,6 +134,18 @@ check("pendingIds: names exactly the items still to run, so a host resumes the b
 check("driftAt: the same ids in the same order is NO drift; a different id at that position IS",
   () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.VALUE, 1));
     return driftAt(r, 0, ["a"]) === null && driftAt(r, 0, ["z"]) !== null; });
+check("driftAt: a PERMUTATION of the window's own ids is NOT drift — `cli next` hands out one submit per item of a parallel batch, so arrival order is the host's to choose and appending them out of order used to brick the run",
+  () => { const r = mkRun();
+    for (const id of ["c", "a", "b"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a", "b", "c"]) === null; });
+check("driftAt: an id from OUTSIDE the window is still drift, whatever the order — that is the stale-journal case the guard exists for",
+  () => { const r = mkRun();
+    for (const id of ["b", "OTHER"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a", "b"]) !== null; });
+check("driftAt: a REPEATED id is drift — `entriesFor` keeps the first occurrence, so the second entry's outcome would silently vanish",
+  () => { const r = mkRun();
+    for (const id of ["a", "a"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a", "b"]) !== null; });
 check("summary: counts outcomes per phase, so a reader sees a dead phase without reading logs",
   () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.DEATH));
     return summary(r).byPhase.Context.death === 1 && summary(r).host === "full"; });
@@ -284,6 +296,30 @@ console.log("\n===== driver: replay and resume =====");
     third.status === "pending" && third.pending.join(",") === "b1,b2,b3", () => JSON.stringify(third.pending));
   check("advance: a batch reports EVERY pending id, so a host can perform them together",
     third.step.parallel === true && third.step.items.length === 3);
+}
+{
+  // The CLI/Codex path submits one item at a time and appends to the journal TAIL. A host told
+  // "parallel: true, one submit command per item" reports back as each finishes, so item 3 can land
+  // first. The run has to replay and complete anyway.
+  const run = newRun({ workflow: "echo", host: codexHost() });
+  const pending = await advance({ core: echoCore([]), run, host: run.host });
+  append(run, record(pending.step.items[0], OUTCOME.VALUE, { ok: 1 }));
+  const afterFirst = await advance({ core: echoCore([]), run, host: run.host });
+  append(run, record(afterFirst.step.items[0], OUTCOME.ERROR, new Error("refused")));
+  const batch = await advance({ core: echoCore([]), run, host: run.host });
+  for (const id of ["b3", "b1", "b2"]) {
+    append(run, record(batch.step.items.find((i) => i.id === id), OUTCOME.VALUE, id));
+  }
+  const seenOutOfOrder = [];
+  let outOfOrderError = null;
+  const replayed = await advance({ core: echoCore(seenOutOfOrder), run, host: run.host })
+    .catch((e) => { outOfOrderError = e; return null; });
+  check("advance: a parallel batch submitted in the order 3, 1, 2 still REPLAYS and completes — the journal is a tail-append log, and the run's data was always id-keyed; only the drift guard was positional, and it destroyed the run with a core-version message that was not true",
+    outOfOrderError === null && replayed?.status === "done" && replayed?.result === "done",
+    () => JSON.stringify({ error: outOfOrderError?.message, status: replayed?.status }));
+  check("advance: the out-of-order batch reaches the core ALIGNED TO THE STEP'S OWN ITEM ORDER, not to arrival order — a core reading results[0] must get item 1",
+    JSON.stringify(seenOutOfOrder.find((e) => e[0] === "batch")?.[1]) === JSON.stringify(["b1", "b2", "b3"]),
+    () => JSON.stringify(seenOutOfOrder));
 }
 {
   const run = newRun({ workflow: "echo", host: codexSingleAgentHost() });
