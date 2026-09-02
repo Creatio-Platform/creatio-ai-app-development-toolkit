@@ -74,6 +74,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     methods: methodKeys,
     emptyMethods: methodKeys.filter(k => s.methods[k] === AST_FN_EMPTY), // stub methods `(){}` — the seed gate's structural signal
     attributes: safeKeys(s.attributes),
+    // ---- imperative members, captured with their VALUES (not just names) ----
+    // `attributeDefs`/`messageDefs`/`mixinDefs`/`moduleDeps` are what makes the member ledger possible: before
+    // they existed, `attributes` reached this object as bare keys and then never reached `mergeHierarchy`'s
+    // return at all, while `messages`/`mixins` were not read anywhere in the engine. A behaviour declared only
+    // in one of these blocks (an imperatively filtered lookup, a sandbox contract, a mixed-in action) therefore
+    // had NO member the plan could account for. Values come from the same static evaluation as `diff` — no body
+    // is executed, and function-valued sub-keys are recorded as names rather than dropped.
+    attributeDefs: attributeFacts(s.attributes),
+    messageDefs: messageFacts(s.messages),
+    mixinDefs: mixinFacts(s.mixins),
+    // the FULL define() dep list (`refModules` below is only the UI-rendering subset) — a constants/utility
+    // module is still a member: it is where lookup GUIDs and shared helpers come from.
+    moduleDeps: (Array.isArray(amdDeps) ? amdDeps : []).filter(isStr),
     modules: normalizeModules(s.modules),
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
@@ -122,21 +135,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
       }
       return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
     })(),
-    // section-level actions (bulk / section-toolbar) built in getSectionActions — a SEPARATE surface from
-    // the record page's getActions. Surface the handler tags / navigate hints (#8b).
-    sectionActions: (() => {
-      const body = extractFnBody(src, "getSectionActions");
-      if (!body) return [];
-      return [...new Set([
-        // classic STANDARD shape: actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "handler"} }))
-        // — the Click handler IS the action identity. Also the direct "Click": "handler" form. This is what the
-        // old Tag/navigate-only patterns missed (e.g. `createRegistry`), so real section actions were dropped.
-        ...[...body.matchAll(/"Click"\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
-        // alternative/older shapes: menu-item handler Tags and navigate/run hints
-        ...[...body.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
-        ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
-      ])].filter((n) => n !== "callParent");
-    })(),
+    // section-level actions from getSectionActions — a SEPARATE surface from the record page's getActions. One
+    // entry per menu item with its metadata (#8b): a handler name alone cannot build a Freedom command-bar
+    // button, and an item ported without its `Enabled` condition ships always-enabled. Filled from the AST on
+    // the parse path that reaches a `methods:` object; empty here so every other path yields a list, not
+    // `undefined`.
+    sectionActions: [],
+    // menu helpers resolved in this schema.
+    sectionActionHelpers: [],
+    // menu helpers called but defined nowhere in this schema: the item set is short by an unknown number.
+    sectionActionUnresolved: [],
+    // seen and deliberately not read — a helper called by a helper. The items behind these are missing too, but
+    // the cause is this parse's one-hop rule, not a method nobody defines.
+    sectionActionNotFollowed: [],
     // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
     // it as data-driven (#2).
@@ -179,16 +190,77 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
 // and statically evaluates the returned object literal — no code runs, so a hostile body cannot reach
 // process/fs/env. Anything it cannot resolve statically is left null AND recorded in `astDiagnostics`
 // (fail-loud) rather than silently guessed.
-const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
+// `Terrasoft.ViewItemType`, complete, transcribed from core `Terrasoft.Nui/Resources/Terrasoft/core/enums/
+// sysenums.js`. Classic identifies every element with one `switch (itemType)` over all of these
+// (`ViewGeneratorV2.generateStandardItem`), so the table stays complete and the values stay exact — a schema may
+// write `itemType` as a raw number instead of the enum member.
+const AST_VIEW_ITEM_TYPE = {
+  GRID_LAYOUT: 0, TAB_PANEL: 1, DETAIL: 2, MODEL_ITEM: 3, MODULE: 4, BUTTON: 5, LABEL: 6, CONTAINER: 7,
+  MENU: 8, MENU_ITEM: 9, MENU_SEPARATOR: 10, SECTION_VIEWS: 11, SECTION_VIEW: 12, GRID: 13, SCHEDULE_EDIT: 14,
+  CONTROL_GROUP: 15, RADIO_GROUP: 16, DESIGN_VIEW: 17, COLOR_BUTTON: 18, IMAGE_TAB_PANEL: 19, HYPERLINK: 20,
+  INFORMATION_BUTTON: 21, TIP: 22, COMPONENT: 23, TIP_LABEL: 24,
+  PROGRESS_BAR: 30, GRID_LAYOUT_EDIT: 31, IFRAMECONTROL: 32, EXTERNAL_WIDGET: 33,
+};
 // The classic Terrasoft.core.enums vocabulary the mapper also switches on — one named source of truth so the
 // two files never drift on a raw itemType/contentType literal (an off-by-value waiting to happen).
-export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE; // ViewItemType: GridLayout 0 · Detail 2 · ControlGroup 15
-export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a column rendered via a picker)
+export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE;
+// `Terrasoft.ContentType`, complete. LOOKUP (5) is the only member that drives a mapping decision (the mapper
+// renders it via a picker); the rest are pinned so a member the schema names is identified rather than collapsing
+// to null — "could not read it" and "the page set none" must stay distinguishable.
+export const CONTENT_TYPE = {
+  LONG_TEXT: 0, SHORT_TEXT: 1, DATE_TIME: 2, ENUM: 3, RICH_TEXT: 4, LOOKUP: 5, SEARCHABLE_TEXT: 6,
+};
+// `Terrasoft.DataValueType`, complete. A diff item may declare its own `dataValueType`; for a VIRTUAL field (no
+// entity column behind it) that declaration is the only type evidence there is.
+// GROUNDWORK, deliberately unread: the item's own `dataValueType` is projected onto `items[]`/`fields[]` but has NO
+// consumer yet — `control()` is still called with the ENTITY column's type only, so a virtual field keeps raising
+// the loud `field-control` decision rather than being typed from its own declaration. Wiring that fallback is the
+// mapping task's business (ENG-95543); the projection lands here so the evidence is already carried when it does.
+export const DATA_VALUE_TYPE = {
+  GUID: 0, TEXT: 1, INTEGER: 4, FLOAT: 5, MONEY: 6, DATE_TIME: 7, DATE: 8, TIME: 9, LOOKUP: 10, ENUM: 11,
+  BOOLEAN: 12, BLOB: 13, IMAGE: 14, CUSTOM_OBJECT: 15, IMAGELOOKUP: 16, COLLECTION: 17, COLOR: 18,
+  LOCALIZABLE_STRING: 19, ENTITY: 20, ENTITY_COLLECTION: 21, ENTITY_COLUMN_MAPPING_COLLECTION: 22,
+  HASH_TEXT: 23, SECURE_TEXT: 24, FILE: 25, MAPPING: 26, SHORT_TEXT: 27, MEDIUM_TEXT: 28, MAXSIZE_TEXT: 29,
+  LONG_TEXT: 30, FLOAT1: 31, FLOAT2: 32, FLOAT3: 33, FLOAT4: 34, LOCALIZABLE_PARAMETER_VALUES_LIST: 35,
+  METADATA_TEXT: 36, STAGE_INDICATOR: 37, OBJECT_LIST: 38, COMPOSITE_OBJECT_LIST: 39, FLOAT8: 40,
+  FILE_LOCATOR: 41, PHONE_TEXT: 42, RICH_TEXT: 43, WEB_TEXT: 44, EMAIL_TEXT: 45, COMPOSITE_OBJECT: 46,
+  FLOAT0: 47, MONEY0: 48, MONEY1: 49, MONEY3: 50,
+};
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
 // stored as `Foo` was looked up as `Foo#bar` and the raw key leaked into the plan.
 export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "");
+// ---- ENUM DRIFT GUARD ------------------------------------------------------------------------------------
+// The tables above are a snapshot of core, so they can drift from the target platform. `manifest.enumVocabulary`
+// is the stand's own echo of these enums (`{ ViewItemType: {…}, ContentType: {…}, DataValueType: {…} }`).
+// Severities are deliberately unequal:
+//  • MISMATCH on a member both sides carry ⇒ blocking. The engine's number is wrong for this stand, so every
+//    element of that kind is mis-read and there is no safe partial reading.
+//  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
+//    stop every migration on the day a release adds a member.
+//  • A member only the ENGINE carries ⇒ not a finding: an older stand legitimately predates it.
+const DRIFT_TABLES = { ViewItemType: AST_VIEW_ITEM_TYPE, ContentType: CONTENT_TYPE, DataValueType: DATA_VALUE_TYPE };
+export function enumDriftIssues(vocabulary) {
+  const live = plainObj(vocabulary);
+  const mismatches = [], newMembers = [];
+  for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
+    const standTable = plainObj(live[enumName]);
+    if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
+    for (const [member, standValue] of Object.entries(standTable)) {
+      if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
+      // `Object.hasOwn`, never `in`: the echo is UNTRUSTED input, and `in` walks the prototype chain — an echoed
+      // `toString`/`constructor`/`valueOf` key would count as pinned and be compared against a native function,
+      // producing a BLOCKING mismatch whose text names `function toString() { [native code] }`.
+      if (!Object.hasOwn(pinned, member)) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
+      if (pinned[member] !== standValue) mismatches.push(`${enumName}.${member}: engine ${pinned[member]}, stand ${standValue}`);
+    }
+  }
+  mismatches.sort(byLocale);
+  newMembers.sort(byLocale);
+  return { mismatches, newMembers };
+}
+
 // Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
 // not blow the call stack (DoS). `path.length` is the current nesting depth — bail to null + a diagnostic
 // well before any real stack limit. Real page schemas nest only a handful of levels; 500 is unreachable by
@@ -212,16 +284,27 @@ const TAG_TRANSITIONS = {
   this: { BusinessRuleModule: "brm", Terrasoft: "terrasoft" },
   brm: { enums: "brm.enums" },
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
-  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", controls: "terrasoft.controls", core: "terrasoft.core" },
+  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
+    controls: "terrasoft.controls", core: "terrasoft.core",
+    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
-  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct" },
+  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
+    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
 };
-// "t:ct" indexes ContentType. Only LOOKUP (5) drives behavior (the mapper renders it via a picker); every other
-// ContentType key is a display hint the mapper does not switch on, so it intentionally stays null (unknown-key →
-// null, exactly as before) rather than being pinned to a guessed numeric — resolving LOOKUP is the fix, and no
-// other value can silently equal 5 and mis-flag a scalar as a lookup.
-const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY, "t:ct": CONTENT_TYPE };
+// "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
+// the `messages` block's `mode`/`direction` (`Terrasoft.MessageMode.PTP`, `…MessageDirectionType.PUBLISH`).
+// Deliberately not a numeric enum table: the migration needs to know a message is PUBLISH vs SUBSCRIBE, and the
+// plan reads better naming it, so there is no reason to pin numeric constants the engine would have to assert.
+// An unknown key under this state still yields its name (any member of these two namespaces is a symbol we want).
+const TAG_SYMBOLIC = "t:sym";
+// The terminal enum tables, each complete against core `sysenums.js`. A member that does NOT resolve against one
+// is a vocabulary gap in this engine and is reported BY NAME (`unknown-enum-member`), never as a silent null.
+const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY,
+  "t:ct": CONTENT_TYPE, "t:dvt": DATA_VALUE_TYPE };
+// The enum a terminal state indexes, by NAME — the miss-report cites `ViewItemType.RADIO_GROUP`, not the tag.
+const TAG_ENUM_NAME = { "t:vit": "ViewItemType", "t:rule": "RuleType", "t:prop": "Property",
+  "t:ct": "ContentType", "t:dvt": "DataValueType" };
 
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
@@ -251,29 +334,53 @@ function baseTag(cur, scope) {
   return cur.name === "Terrasoft" ? "terrasoft" : "proxy";
 }
 
-function resolveMemberValue(node, scope) {
-  const chain = memberChain(node);
-  if (!chain) return null;
-  const { path } = chain;
-  let cur = chain.base;
-  // If the base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
-  // `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
+// If the chain's base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
+// `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
+// Mutates `path` in place; returns the resolved base node, or null when an alias link is unreadable.
+function spliceAliasChain(path, base, scope) {
+  let cur = base;
   let guard = 0;
   while (cur?.type === "Identifier" && scope.get(cur.name)?.kind === "memberAlias" && guard++ < 20) {
     const aliased = memberChain(scope.get(cur.name).node);
     if (!aliased) return null;
-    path.unshift(...aliased.path); cur = aliased.base;
+    path.unshift(...aliased.path);
+    cur = aliased.base;
   }
-  let tag = baseTag(cur, scope);
-  if (tag == null) return null;
+  return cur;
+}
+
+// Walk the transition table from `tag` along `path` to the value it lands on. Returns `{ value }`, plus
+// `unknown: "<Enum>.<MEMBER>"` when the walk REACHED a terminal enum table and the member was not in it: the enum
+// and the member are then both identified and only the number is missing, so it is reported by name. A miss on a
+// non-terminal state stays a plain null — an opaque proxy has nothing to name.
+function walkTagAutomaton(tag, path) {
   for (const k of path) {
+    if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
-    if (enumTable) return k in enumTable ? enumTable[k] : null; // terminal: the next key indexes the enum table
+    if (enumTable) {                                             // terminal: the next key indexes the enum table
+      // `Object.hasOwn`, never `in`: the body is UNTRUSTED, and `in` walks the prototype chain — a body naming
+      // `Terrasoft.ViewItemType.constructor` would resolve to a native function instead of raising the
+      // `unknown-enum-member` advisory, so the member would go unreported rather than fail loud.
+      if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
+      return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
+    }
     const next = TAG_TRANSITIONS[tag];
-    if (!next) return null;                                     // proxy (or already a value) — further access is null
-    tag = next[k] || "proxy";                                   // unknown key at this state collapses to proxy
+    if (!next) return { value: null };                           // proxy (or already a value) — further access is null
+    tag = next[k] || "proxy";                                    // unknown key at this state collapses to proxy
   }
-  return null; // ended on a resolver, not a concrete value
+  return { value: null }; // ended on a resolver, not a concrete value
+}
+
+// Same `{ value, unknown? }` shape as walkTagAutomaton: the caller needs the reason a null is null.
+function resolveMemberValue(node, scope) {
+  const chain = memberChain(node);
+  if (!chain) return { value: null };
+  const { path } = chain;
+  const cur = spliceAliasChain(path, chain.base, scope);
+  if (cur === null) return { value: null };
+  const tag = baseTag(cur, scope);
+  if (tag == null) return { value: null };
+  return walkTagAutomaton(tag, path);
 }
 
 // The root identifier a member chain reads off (`cfg.items[0].x` → "cfg"), or null if the base isn't a plain
@@ -282,7 +389,10 @@ function memberBase(node) { let cur = node; while (cur?.type === "MemberExpressi
 
 function makeAstEvaluator(scope, diagnostics, src) {
   const snippet = (n) => { try { return src.slice(n.start, Math.min(n.end, n.start + 60)).replace(/\s+/g, " "); } catch { return "?"; } };
-  const flag = (kind, node, path) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node) });
+  // `detail` (optional) — a machine-readable rider a consumer reads instead of re-parsing `snippet` (today: the
+  // enum member name). Omitted when absent, so a diagnostic without one keeps its exact shape.
+  const flag = (kind, node, path, detail) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node),
+    ...(detail ? { detail } : {}) });
   function evalNode(node, path) {
     if (!node) return null;
     if (path.length > MAX_AST_DEPTH) { flag("max-nesting-depth", node, path); return null; }
@@ -332,12 +442,16 @@ function makeAstEvaluator(scope, diagnostics, src) {
     });
   }
   function evalMember(node, path) {
-    const v = resolveMemberValue(node, scope);
+    const { value, unknown } = resolveMemberValue(node, scope);
+    // A member of a known framework enum the pinned table does not carry: a vocabulary gap in THIS engine, so it
+    // is reported by name in `detail`. ADVISORY — the kind is identified, only its number is not, which is why the
+    // gate treats it differently from a value it genuinely could not read (see migrate.mjs).
+    if (unknown) flag("unknown-enum-member", node, path, unknown);
     // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
     // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
     // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
-    if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
-    return v;
+    if (value == null && !unknown) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
+    return value;
   }
   function evalIdentifier(node, path) {
     if (node.name === "undefined") return undefined;
@@ -437,7 +551,10 @@ export function parseSchema(src, pkg) {
   const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   const astDiagnostics = [];
   let ast;
-  try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
+  // `locations: true` so each method node carries its 1-based line span — the plan cites WHERE a behaviour lives
+  // in the classic body, which is what lets a reviewer check the engine's reading against the source. Purely
+  // additive to the AST shape; nothing else reads `loc`.
+  try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations: true }); }
   catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e?.message || e), {}, []), astDiagnostics }; }
   const call = findDefineCall(ast);
   if (!call) return { ...buildSchemaResult(pkg, src, "no define() call found", {}, []), astDiagnostics };
@@ -461,7 +578,11 @@ export function parseSchema(src, pkg) {
       astDiagnostics.push({ kind: "unresolved-return", path: "", snippet: src.slice(retArg.start, Math.min(retArg.end, retArg.start + 60)).replace(/\s+/g, " ") });
       return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics };
     }
-    return { ...buildSchemaResult(pkg, src, null, captured, amdDeps), astDiagnostics };
+    // Body facts are read from the AST the parse already produced — a second, independent pass over the SAME
+    // nodes, so a failure here degrades the same way the value pass does (below), never half-populated.
+    return { ...buildSchemaResult(pkg, src, null, captured, amdDeps),
+      ...sectionActionsFromAst(retArg, scope, pkg),
+      methodFacts: methodFactsFromAst(retArg, scope), astDiagnostics };
   } catch (e) {
     const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e?.message || e);
     return { ...buildSchemaResult(pkg, src, "static evaluation failed: " + why, {}, amdDeps), astDiagnostics };
@@ -483,6 +604,225 @@ function referencedUiModules(deps) {
   const css = new Set(names.filter(d => d.startsWith("css!")).map(d => d.slice(4).replace(/CSS$/, "")));
   return [...new Set(names.filter(d => !d.startsWith("css!"))
     .filter(m => css.has(m) || css.has(m.replace(/CSS$/, "")) || UI_MODULE_RX.test(m)))].sort(byLocale);
+}
+
+// ---- Per-method BODY FACTS (read the AST, never execute it) ---------------------------------------------
+// The engine deliberately does not run schema bodies (see the SECURITY note on the parser). It does not have to:
+// acorn already built the AST for every method, so the facts below come from reading it — which framework calls the
+// method makes, which attributes it reads and writes, which sandbox messages it publishes/subscribes. They are what
+// `categorize()` classifies a method from, and the only thing it may classify from: the plan states a method's
+// behaviour from its body, never from its name.
+//
+// Bounded on purpose: the body is UNTRUSTED, so the walk carries a node budget and a depth cap, and a method that
+// exceeds either is reported `truncated: true` (fail-loud) rather than silently half-analysed.
+const MAX_WALK_NODES = 20000;
+const MAX_WALK_DEPTH = 400;
+
+// Render a callee as a readable dotted path (`this.callParent`, `this.sandbox.publish`, `Terrasoft.EntitySchemaQuery`).
+// Returns null for a callee no static reading can name (a computed index, an immediately-invoked expression).
+// how a member chain's ROOT reads in a dotted path: `this`, a plain identifier, or nothing nameable
+function chainBaseName(base) {
+  if (base?.type === "ThisExpression") return "this";
+  return base?.type === "Identifier" ? base.name : null;
+}
+
+function calleePath(node) {
+  if (node?.type === "Identifier") return node.name;
+  const chain = memberChain(node);
+  if (!chain) return null;
+  const base = chainBaseName(chain.base);
+  if (base == null) return null;
+  return [base, ...chain.path].join(".");
+}
+
+// The FIRST string-literal argument of a call — the attribute/message/service name in every classic idiom
+// (`this.get("X")`, `this.sandbox.publish("Msg", …)`, `this.callService("Svc", …)`).
+const firstStringArg = (call) => {
+  const a = call.arguments?.[0];
+  return a?.type === "Literal" && typeof a.value === "string" ? a.value : null;
+};
+
+// Which framework capability a callee path represents. One table so the taxonomy is inspectable and a new
+// idiom is a one-line addition rather than a new branch buried in the walker.
+const CALL_KIND_RX = [
+  ["callParent", /(?:^|\.)callParent$/],
+  ["esq", /EntitySchemaQuery|getEntityCollection|createEntitySchemaQuery|EntitySchemaManager/],
+  // `sendSaveCardModuleResponse` IS a sandbox publish — its base body (CrtUIPlatform7x) builds the info object and
+  // calls `sandbox.publish("CardModuleResponse", …)`. Classified from that definition, not from its name.
+  ["publish", /(?:^|\.)sandbox\.publish$|(?:^|\.)sendSaveCardModuleResponse$/],
+  ["subscribe", /(?:^|\.)sandbox\.subscribe$/],
+  ["sandbox-load", /(?:^|\.)sandbox\.(?:load|unload)$/],
+  ["process-launch", /ProcessModuleUtilities|executeProcess|RunProcessRequest|(?:^|\.)runProcess$|showProcessPage|openProcessByRecord/],
+  ["service", /(?:^|\.)callService$|AjaxProvider|(?:^|\.)ServiceHelper\.|(?:^|\.)callConfigurationService$/],
+  // each ANCHORED alternative carries its own group, so the trailing `$` visibly belongs only to that
+  // alternative and never reads as applying to the whole alternation (S5850)
+  ["dialog", /showInformationDialog|showConfirmationDialog|showMessageDialog|(?:(?:^|\.)utils\.showMessage$)/],
+  ["validator", /addColumnValidator|(?:(?:^|\.)validate$)/],
+  ["save", /(?:^|\.)save$|(?:^|\.)saveEntity$/],
+  ["lookup", /openLookup|LookupUtilities|(?:^|\.)openCard$|(?:^|\.)getLookupValue$/],
+  // Filter CONSTRUCTION is filtering logic even when no ESQ is created in the same method (the filter is often
+  // built here and handed to a detail's filter method). Reporting it as "no call recognised" understated exactly
+  // the behaviour that has to become a Freedom data-source filter.
+  ["filter-build", /createColumnFilterWithParameter|createColumnIsNotNullFilter|createColumnInFilterWithParameters|createFilterGroup|createExistsFilter|(?:^|\.)createFilter$|filterGroup\.add/],
+  // a system-setting read gates behaviour by configuration — it must be re-read on the Freedom side, not inlined
+  ["sys-setting", /SysSettings/],
+  // reloading fields / a detail after a change → a Freedom data-source reload request, not a no-op
+  ["refresh", /(?:^|\.)refreshFields$|(?:^|\.)updateDetail(?:s)?$|(?:^|\.)reloadEntity$|(?:^|\.)reloadGridData$|(?:^|\.)loadEntity$/],
+  ["feature-toggle", /getIsFeatureEnabled/],
+  ["mixin-call", /(?:^|\.)mixins\./],
+];
+const classifyCall = (p) => CALL_KIND_RX.filter(([, rx]) => rx.test(p)).map(([kind]) => kind);
+
+// Where a call's first string argument lands: `this.get("X")` reads an attribute, `this.set("X", …)` writes one,
+// `sandbox.publish/subscribe("Msg")` moves a message. A table so a new accessor is one entry, not a new branch.
+const ARG_SINKS = [
+  [/(?:^|\.)get$/, "reads"],
+  [/(?:^|\.)set$/, "writes"],
+  [/(?:^|\.)sandbox\.publish$/, "publishes"],
+  [/(?:^|\.)sandbox\.subscribe$/, "subscribes"],
+];
+
+// A factory names the class it builds in a STRING argument — `Ext.create("Terrasoft.EntitySchemaQuery", …)` is the
+// standard classic way to open a query, and classifying only the callee path sees `Ext.create` and nothing else. So
+// the constructed class name is classified too: the evidence is in the argument, not in the call.
+const CLASS_FACTORY_RX = /(?:^|\.)Ext\.create$|(?:^|\.)Terrasoft\.create$/;
+
+// record ONE call/new expression into the fact sinks
+function recordCall(node, sinks) {
+  const p = calleePath(node.callee);
+  if (!p) return;
+  sinks.calls.add(p);
+  for (const k of classifyCall(p)) sinks.kinds.add(k);
+  const arg = firstStringArg(node);
+  if (!arg) return;
+  if (CLASS_FACTORY_RX.test(p)) for (const k of classifyCall(arg)) sinks.kinds.add(k);
+  const hit = ARG_SINKS.find(([rx]) => rx.test(p));
+  if (hit) sinks[hit[1]].add(arg);
+}
+
+// push every child NODE of `node` onto the walk stack. Generic (every own value that is a node or array of
+// nodes) so the walker needs no per-node-type child list to stay complete as the AST shape grows.
+const WALK_SKIP_KEYS = new Set(["loc", "range", "start", "end", "type"]);
+function pushChildren(node, depth, stack) {
+  for (const key of Object.keys(node)) {
+    if (WALK_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const el of v) if (el?.type) stack.push([el, depth + 1]);
+    } else if (v?.type) stack.push([v, depth + 1]);
+  }
+}
+
+// Walk one method body, collecting the facts above. Iterative (explicit stack) so a deeply nested body cannot
+// blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH.
+function walkMethodBody(fnNode) {
+  const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
+  const publishes = new Set(), subscribes = new Set();
+  let nodes = 0, truncated = false;
+  const stack = [[fnNode.body, 0]];
+  while (stack.length) {
+    const [node, depth] = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (++nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { truncated = true; break; }
+    // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
+    // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
+    // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
+    if (node.type === "CallExpression" || node.type === "NewExpression")
+      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
+    pushChildren(node, depth, stack);
+  }
+  const sorted = (s) => [...s].sort(byLocale);
+  // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
+  // accessor for both. Splitting them keeps `readsAttrs` a true list of view-model attributes (what a Freedom
+  // handler binds to) and gives the localization step its own list.
+  const isRes = (n) => n.startsWith("Resources.Strings.");
+  return { calls: sorted(calls), kinds: sorted(kinds),
+    readsAttrs: sorted(reads).filter((n) => !isRes(n)), readsResources: sorted(reads).filter(isRes),
+    writesAttrs: sorted(writes),
+    publishes: sorted(publishes), subscribes: sorted(subscribes), truncated };
+}
+
+// A pure passthrough override (`f: function(){ this.callParent(arguments); }`) declares NO behaviour of its own.
+// Recognising it is what keeps the worklist honest: a real base-template chain contributes hundreds of such
+// overrides, and listing each as "imperative logic — review" would bury the methods that actually do something.
+// the single statement's expression, whether it is `this.callParent(…)` or `return this.callParent(…)`
+function loneExpression(st) {
+  if (st.type === "ExpressionStatement") return st.expression;
+  if (st.type === "ReturnStatement") return st.argument;
+  return null;
+}
+function isCallParentOnly(fnNode, facts) {
+  const body = fnNode.body?.type === "BlockStatement" ? fnNode.body.body : null;
+  if (body?.length !== 1) return false;
+  const expr = loneExpression(body[0]);
+  if (expr?.type !== "CallExpression") return false;
+  return /(?:^|\.)callParent$/.test(calleePath(expr.callee) || "") && facts.calls.length === 1;
+}
+
+// Resolve a node to an inline ObjectExpression, following a single-level scope alias (`var cfg = {…}; … cfg`)
+// exactly as the value evaluator does. Returns null when it is not statically an object literal — for the
+// factory return that is the same case which already produces an `unresolved-return` diagnostic.
+// Used for BOTH the factory return and the `methods:` value: `methods: M` (an aliased object) is a real classic
+// shape, and the value evaluator resolves it, so reading facts only from an inline literal made the two disagree
+// about which methods the layer declares (see mergeMethods).
+function objectNodeOf(node, scope) {
+  if (node?.type === "ObjectExpression") return node;
+  if (node?.type === "Identifier") {
+    const m = scope.get(node.name);
+    if (m?.kind === "node" && m.node.type === "ObjectExpression") return m.node;
+  }
+  return null;
+}
+
+// `methods: { … }` facts for one schema body. Empty array when the block is absent or not statically readable —
+// the method NAMES still come from the evaluated object, so an unreadable body loses evidence, never members.
+// an object-literal property's static key, or null when it is a spread / computed / unreadable key
+function staticPropKey(p) {
+  if (p.type === "SpreadElement" || p.computed) return null;
+  if (p.key?.type === "Identifier") return p.key.name;
+  return p.key == null ? null : String(p.key.value);
+}
+
+const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+
+// `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is not in
+// this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the module is a
+// define() dependency the ledger already tracks. Recording the reference is the difference between a blank cell
+// the reader skips and "port this from VisaHelper".
+function externalMethodFact(name, fn) {
+  const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
+  return { name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
+    writesAttrs: [], publishes: [], subscribes: [], truncated: false,
+    externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false };
+}
+
+function ownMethodFact(name, fn) {
+  const facts = walkMethodBody(fn);
+  const startLine = fn.loc?.start?.line ?? null;
+  const endLine = fn.loc?.end?.line ?? null;
+  return {
+    name,
+    lines: startLine == null ? null : { start: startLine, end: endLine },
+    sloc: startLine == null ? null : endLine - startLine + 1,
+    params: (fn.params || []).filter((x) => x.type === "Identifier").map((x) => x.name),
+    ...facts,
+    callParentOnly: isCallParentOnly(fn, facts),
+    isEmpty: fn.body?.type === "BlockStatement" && fn.body.body.length === 0,
+  };
+}
+
+function methodFactsFromAst(retArg, scope) {
+  const obj = objectNodeOf(retArg, scope);
+  if (!obj) return [];
+  const mo = objectNodeOf(obj.properties.find((p) => staticPropKey(p) === "methods")?.value, scope);
+  if (!mo) return [];
+  const out = [];
+  for (const p of mo.properties) {
+    const name = staticPropKey(p);
+    if (!name) continue;
+    out.push(isFnNode(p.value) ? ownMethodFact(name, p.value) : externalMethodFact(name, p.value));
+  }
+  return out;
 }
 
 // Extract a named function/method BODY by brace-matching (a regex can't balance braces) — used to scope
@@ -551,6 +891,240 @@ function fixedFilterObjects(body) {
   return objs;
 }
 
+// ---- getSectionActions items, read from the AST -----------------------------------------------------------------
+// Read from the nodes `parseSchema` already built, never from the source text: nesting, a helper's parameters and
+// a call's statement-vs-value position are structural facts here.
+const NON_MENU_METHODS = new Set(["getButtonMenuItem", "callParent", "get", "set"]);
+// The one heuristic. An action registered through neither a menu-item object nor a helper leaves no structural
+// trace, so a statement-position call reading as a navigate/run name yields a NAME-ONLY item; a real declaration
+// carries metadata and wins.
+const MENU_HINT_RX = /^(?:navigateTo|goTo|run|open|process)[A-Z]\w+$/;
+
+// `this.foo(…)` / `foo(…)` → "foo"; a longer path (`Terrasoft.utils.x`) → null, because only a method the schema
+// itself could define is a candidate carrier.
+function ownCallName(call) {
+  const path = calleePath(call?.callee);
+  if (!path) return null;
+  const parts = path.split(".");
+  if (parts.length === 1) return parts[0];
+  return parts.length === 2 && parts[0] === "this" ? parts[1] : null;
+}
+// A menu property's static string, in the three forms classic uses: `X: "v"`, `X: { bindTo: "v" }`, and
+// `X: $Resources.Images.V` (a member path, whose last segment is the name).
+function menuPropValue(node) {
+  if (node == null) return null;
+  if (node.type === "Literal") return typeof node.value === "string" ? node.value : null;
+  if (node.type === "ObjectExpression") {
+    const bind = node.properties.find((p) => staticPropKey(p) === "bindTo");
+    return bind ? menuPropValue(bind.value) : null;
+  }
+  const path = calleePath(node);
+  return path ? path.split(".").pop() : null;
+}
+const menuProp = (obj, key) => obj.properties.find((p) => staticPropKey(p) === key)?.value ?? null;
+const isSeparatorType = (v) => !!v && v.endsWith("MenuSeparator");
+// A menu node: item, separator, or handler-less submenu container. Keyed on the properties classic gives them,
+// not on the calling method, so every add shape is recognised without a callee list.
+function isMenuNode(node) {
+  if (node?.type !== "ObjectExpression") return false;
+  if (menuProp(node, "Click") || menuProp(node, "Tag")) return true;
+  if (isSeparatorType(menuPropValue(menuProp(node, "Type")))) return true;
+  return !!(menuProp(node, "Caption") && menuProp(node, "Items"));
+}
+// One menu node's fields, read from its OWN properties.
+function readMenuNode(obj) {
+  const caption = menuPropValue(menuProp(obj, "Caption"));
+  return {
+    name: menuPropValue(menuProp(obj, "Click")) ?? menuPropValue(menuProp(obj, "Tag")) ?? null,
+    caption: caption ? resourceKey(caption) : null,   // stored as the lookup key, not a qualified path
+    condition: menuPropValue(menuProp(obj, "Enabled")),
+    icon: menuPropValue(menuProp(obj, "ImageConfig")),
+    separator: isSeparatorType(menuPropValue(menuProp(obj, "Type"))),
+  };
+}
+// Ordered child nodes. Generic (every own value that is a node or array of nodes) so the walk stays complete as
+// the AST shape grows.
+function childNodesOf(node) {
+  const out = [];
+  for (const key of Object.keys(node)) {
+    if (WALK_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v)) { for (const el of v) if (el?.type) out.push(el); }
+    else if (v?.type) out.push(v);
+  }
+  return out;
+}
+// Menu nodes under `node`, in source order, tagged with nesting depth. A menu node's children are its submenu, so
+// depth increments only there. Bounded by the member-facts walk limits.
+function collectMenuNodes(node, depth, out, state) {
+  if (!node || typeof node !== "object") return;
+  if (++state.nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { state.truncated = true; return; }
+  const isMenu = isMenuNode(node);
+  if (isMenu) out.push({ obj: node, depth });
+  for (const child of childNodesOf(node)) collectMenuNodes(child, isMenu ? depth + 1 : depth, out, state);
+}
+// Calls in STATEMENT or RETURN position, braceless `if`/`else`/loop forms included. A carrier is called; a data
+// read sits in value position and never appears here.
+function statementCalls(fnNode) {
+  const out = [];
+  const visit = (st) => {
+    if (!st || typeof st !== "object") return;
+    const expr = loneExpression(st);
+    if (expr?.type === "CallExpression") out.push(expr);
+    for (const key of ["body", "consequent", "alternate", "block", "handler", "finalizer", "cases"]) {
+      const v = st[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v?.type) visit(v);
+    }
+  };
+  (fnNode.body?.body || []).forEach(visit);
+  return out;
+}
+// Every CallExpression in the body.
+function allCalls(fnNode, state) {
+  const out = [];
+  const visit = (n) => {
+    if (!n || typeof n !== "object" || ++state.nodes > MAX_WALK_NODES) return;
+    if (n.type === "CallExpression") out.push(n);
+    childNodesOf(n).forEach(visit);
+  };
+  visit(fnNode.body);
+  return out;
+}
+// The locals this method builds its menu in: assigned from `this.callParent(…)`, used with `<id>.addItem(`, or
+// handed back by `return`. Several are possible, and helper matching runs over all of them.
+// A local assigned from `this.callParent(…)`, or handed back by `return`.
+function collectionsFromStatements(fnNode) {
+  const out = [];
+  for (const st of fnNode.body?.body || []) {
+    if (st.type === "ReturnStatement" && st.argument?.type === "Identifier") out.push(st.argument.name);
+    if (st.type !== "VariableDeclaration") continue;
+    for (const d of st.declarations) {
+      const fromParent = d.init?.type === "CallExpression" && /(?:^|\.)callParent$/.test(calleePath(d.init.callee) || "");
+      if (d.id?.type === "Identifier" && fromParent) out.push(d.id.name);
+    }
+  }
+  return out;
+}
+// A local used as `<id>.addItem(…)`.
+function collectionsFromAddItem(calls) {
+  const out = [];
+  for (const call of calls) {
+    const c = call.callee;
+    if (c?.type === "MemberExpression" && c.property?.name === "addItem" && c.object?.type === "Identifier") out.push(c.object.name);
+  }
+  return out;
+}
+function menuCollections(fnNode, calls) {
+  const names = new Set([...collectionsFromStatements(fnNode), ...collectionsFromAddItem(calls)]);
+  if (!names.size) names.add("actionMenuItems");
+  return names;
+}
+// A helper HANDED the collection: `this.foo(actionMenuItems)`.
+function helpersHandedCollection(calls, colls) {
+  const out = [];
+  for (const call of calls) {
+    const name = ownCallName(call);
+    const handed = (call.arguments || []).some((a) => a.type === "Identifier" && colls.has(a.name));
+    if (name && handed && !NON_MENU_METHODS.has(name)) out.push(name);
+  }
+  return out;
+}
+// A helper whose returned item is ADDED: `actionMenuItems.addItem(this.foo())`.
+function helpersReturningItem(calls, colls) {
+  const out = [];
+  for (const call of calls) {
+    const c = call.callee;
+    if (c?.type !== "MemberExpression" || c.property?.name !== "addItem") continue;
+    if (c.object?.type !== "Identifier" || !colls.has(c.object.name)) continue;
+    for (const a of call.arguments || []) {
+      const n = a.type === "CallExpression" ? ownCallName(a) : null;
+      if (n && !NON_MENU_METHODS.has(n)) out.push(n);
+    }
+  }
+  return out;
+}
+const menuHelpers = (calls, colls) =>
+  [...new Set([...helpersHandedCollection(calls, colls), ...helpersReturningItem(calls, colls)])];
+// Identity, order and separator-delimited group. A separator is a group boundary, not an action. A node with no
+// handler is a submenu CONTAINER: not published, because a checklist row for it could never be built, but its
+// caption becomes the `parent` label its children carry.
+function shapeMenuNodes(nodes, pkg) {
+  const out = [];
+  const parents = [];
+  let group = 0;
+  for (const { obj, depth } of nodes) {
+    if (depth === 0) parents.length = 0;
+    const { separator, ...item } = readMenuNode(obj);
+    if (separator) { group++; continue; }
+    parents[depth] = item.name || item.caption || null;
+    if (!item.name || item.name === "callParent") continue;
+    out.push({ ...item, parent: depth > 0 ? (parents[depth - 1] ?? null) : null,
+      order: out.length, group, package: pkg });
+  }
+  return out;
+}
+// Resolve each menu helper against the schema's own methods and take the items it adds. ONE hop: a method a
+// helper delegates to is RECORDED, never followed — `notFollowed` when this schema defines it, `unresolved` when
+// nothing does.
+function scanHelperNodes(names, methodNodes, nodes, state) {
+  const helpers = [];
+  const unresolved = [];
+  const notFollowed = [];
+  for (const name of names) {
+    const fn = methodNodes.get(name);
+    if (!fn) { unresolved.push(name); continue; }
+    helpers.push(name);
+    collectMenuNodes(fn.body, 0, nodes, state);
+    const param = (fn.params || []).find((x) => x.type === "Identifier")?.name;
+    const calls = allCalls(fn, state);
+    const own = param ? menuHelpers(calls, new Set([param])) : statementCalls(fn).map(ownCallName)
+      .filter((n) => n && !NON_MENU_METHODS.has(n));
+    for (const callee of new Set(own)) (methodNodes.has(callee) ? notFollowed : unresolved).push(callee);
+  }
+  return { helpers, unresolved, notFollowed };
+}
+// Name-only hint items appended in place. Every value the parsed items already consumed is excluded, so a
+// condition or caption matching the pattern is not republished as an action.
+function appendHintItems(items, entry, pkg) {
+  const seen = new Set();
+  for (const i of items) for (const v of [i.name, i.condition, i.caption, i.icon]) if (v) seen.add(v);
+  for (const call of statementCalls(entry)) {
+    const name = ownCallName(call);
+    if (!name || seen.has(name) || !MENU_HINT_RX.test(name)) continue;
+    seen.add(name);
+    items.push({ name, caption: null, condition: null, icon: null, parent: null,
+      order: items.length, group: 0, package: pkg });
+  }
+}
+// `{ items, helpers, unresolved, notFollowed }` for one schema. Empty on any path that did not reach a `methods:`
+// object; the layer carries the parse error that explains it.
+function sectionActionsFromAst(retArg, scope, pkg) {
+  const empty = { sectionActions: [], sectionActionHelpers: [], sectionActionUnresolved: [], sectionActionNotFollowed: [] };
+  const obj = objectNodeOf(retArg, scope);
+  const mo = obj && objectNodeOf(obj.properties.find((p) => staticPropKey(p) === "methods")?.value, scope);
+  if (!mo) return empty;
+  const methodNodes = new Map(mo.properties
+    .filter((p) => staticPropKey(p) && isFnNode(p.value)).map((p) => [staticPropKey(p), p.value]));
+  const entry = methodNodes.get("getSectionActions");
+  if (!entry) return empty;
+  const state = { nodes: 0, truncated: false };
+  const nodes = [];
+  collectMenuNodes(entry.body, 0, nodes, state);
+  const calls = allCalls(entry, state);
+  const colls = menuCollections(entry, calls);
+  const { helpers, unresolved, notFollowed } = scanHelperNodes(menuHelpers(calls, colls), methodNodes, nodes, state);
+  const items = shapeMenuNodes(nodes, pkg);
+  if (state.truncated) notFollowed.push("a body too large or too deeply nested to walk fully");
+  appendHintItems(items, entry, pkg);
+  return {
+    sectionActions: items,
+    sectionActionHelpers: helpers,
+    sectionActionUnresolved: [...new Set(unresolved)],
+    sectionActionNotFollowed: [...new Set(notFollowed)].filter((n) => !helpers.includes(n)),
+  };
+}
+
 // One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a
 // brace returning to depth 0 closes an entry — its source text is pushed to `objs`.
 function trackFilterDepth(c, i, depth, body, objs) {
@@ -581,6 +1155,78 @@ const numOrNull = (v) => (isNum(v) ? v : null);
 function safeKeys(o) { return o && typeof o === "object" ? Object.keys(o).filter(k => typeof k === "string") : []; }
 function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? o : {}; }
 
+// ---- Imperative-member capture: `attributes` / `messages` / `mixins` ------------------------------------
+// These three blocks used to be read for their KEYS at most (`attributes`) or not at all (`messages`, `mixins`),
+// so the behaviour they declare could not be reported, let alone accounted for. The values are ordinary object
+// literals, so the SAME static evaluator that already resolved `diff`/`businessRules` has them in hand — no
+// function body is executed or read here. Only the sub-keys whose value is a FUNCTION collapse to the AST_FN
+// placeholder, and those are recorded as names (`fnKeys`) rather than dropped.
+
+// Is this evaluated value the function placeholder? (`AST_FN` is a Symbol, so it would vanish from JSON —
+// every sink below converts it to a name instead of letting it disappear.)
+const isFnPlaceholder = (v) => v === AST_FN;
+
+// One `attributes` entry → the facts that decide its Freedom target. `lookupListConfig.filters` and
+// `dependencies` are the two imperative shapes with an exact Freedom analog (filter handler / on-change
+// handler), so they are surfaced explicitly instead of being folded into an opaque "attribute exists".
+function attributeFact(name, def) {
+  const d = plainObj(def);
+  const llc = plainObj(d.lookupListConfig);
+  const filters = Array.isArray(llc.filters) ? llc.filters : [];
+  const columns = Array.isArray(llc.columns) ? llc.columns.filter(isStr) : [];
+  // `dependencies: [{ columns: [...], methodName: "x" }]` — the classic "recompute Y when X changes" wiring.
+  const deps = (Array.isArray(d.dependencies) ? d.dependencies : []).map((raw) => {
+    const e = plainObj(raw);
+    return { columns: (Array.isArray(e.columns) ? e.columns : []).filter(isStr), methodName: strOrNull(e.methodName) };
+  }).filter((e) => e.columns.length || e.methodName);
+  return {
+    name,
+    // a function-valued sub-key (`value: function(){…}`, a `dependencies[].methodName` body elsewhere) is
+    // imperative logic on the attribute itself — name it so the ledger can account for it.
+    fnKeys: Object.keys(d).filter((k) => isFnPlaceholder(d[k])),
+    lookupFilters: filters.length,
+    // each filter object's own keys — enough for the plan to say WHAT is filtered without reading a function
+    lookupFilterKeys: [...new Set(filters.flatMap((f) => safeKeys(f)))].sort(byLocale),
+    lookupColumns: columns,
+    dependencies: deps,
+    dataValueType: numOrNull(d.dataValueType),
+    // `value` may be a static default, a function, or unresolved — keep the three cases distinct
+    value: ["number", "string", "boolean"].includes(typeof d.value) ? d.value : null,
+    valueIsFn: isFnPlaceholder(d.value),
+    isRequired: typeof d.isRequired === "boolean" ? d.isRequired : null,
+    isCollection: d.isCollection === true,
+    caption: strOrNull(d.caption),
+    // `isVirtual`-style marker used by some schemas; the mapper also infers virtuality from the entity columns
+    isLookup: d.isLookup === true || !!llc.entitySchemaName,
+    referenceSchema: strOrNull(llc.entitySchemaName),
+  };
+}
+
+function attributeFacts(attrs) {
+  const o = plainObj(attrs);
+  return safeKeys(o).map((k) => attributeFact(k, o[k]));
+}
+
+// `messages: { "Name": { mode, direction } }` — the sandbox contract. `mode`/`direction` resolve to their
+// SYMBOLIC name (PTP / BROADCAST / PUBLISH / SUBSCRIBE / …) via the TAG_SYMBOLIC terminal; a numeric literal
+// in the body is kept as the number, and anything unresolved stays null (never guessed).
+function messageFacts(messages) {
+  const o = plainObj(messages);
+  return safeKeys(o).map((k) => {
+    const m = plainObj(o[k]);
+    // a symbolic name (PUBLISH / PTP) or a numeric literal is kept AS WRITTEN; anything unresolved stays null
+    const pick = (v) => (isStr(v) || isNum(v) ? v : null);
+    return { name: k, mode: pick(m.mode), direction: pick(m.direction) };
+  });
+}
+
+// `mixins: { LocalName: "Terrasoft.SomeMixin" }` — behaviour mixed in from ANOTHER schema. The mixin's own
+// members are outside this page body entirely, so the act of mixing in is the member we can account for.
+function mixinFacts(mixins) {
+  const o = plainObj(mixins);
+  return safeKeys(o).map((k) => ({ name: k, module: strOrNull(o[k]) }));
+}
+
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
   // pass the index explicitly rather than handing `normalizeDiffOp` straight to `.map` — the second parameter
@@ -588,8 +1234,24 @@ function normalizeDiff(diff) {
   return diff.map((op, i) => normalizeDiffOp(op, i)).filter(op => op && op.name !== "?");
 }
 
+// A LITERAL option value (`value: true` / `0` / `"high"`), or null when the key carries something else (an
+// object — e.g. a `{bindTo}` binding — or an array). `false`/`0`/`""` are legal values and must survive.
+const primitiveOrNull = (x) => (typeof x === "boolean" || typeof x === "number" || typeof x === "string" ? x : null);
+
 // caption resource key: `caption.bindTo`, else a bare string, else null.
 const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
+
+// The CONTROL LABEL's own caption (`labelConfig: { caption: … }`), modelled as its OWN field and never folded into
+// `caption` (ENG-95862). Folding them would make `remove properties: ["labelConfig"]` unrepresentable: there would be
+// no `labelConfig` slot left to clear, the op would pass the membership test and change nothing, and the lower
+// layer's custom label would survive a removal the runtime honours — a silent wrong answer in place of today's
+// warning. Precedence is resolved at PROJECTION time, mirroring the platform's own `getLabelCaption`
+// (`ViewGeneratorV2` L1675-1689, already documented at `mapping-table.mjs` TIP_LABEL): `config.caption`, then
+// `labelConfig.caption`, then the column's own title.
+const labelCaptionKey = (v) => {
+  const lc = plainObj(v.labelConfig);
+  return isStr(lc.caption?.bindTo) ? lc.caption.bindTo : strOrNull(lc.caption);
+};
 
 // field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
 function hintKey(v) {
@@ -613,6 +1275,7 @@ function visibility(v) {
 function normalizeDiffOp(op, i) {
   if (op == null || typeof op !== "object") return null;
   const v = plainObj(op.values);
+  const labelCaption = labelCaptionKey(v);   // computed once: both `hasCaption` and the field below read it
   const opIndex = numOrNull(op.index); // diff-op index fallback (RV5, used for `order` below)
   return {
     operation: isStr(op.operation) ? op.operation : "?",
@@ -621,13 +1284,25 @@ function normalizeDiffOp(op, i) {
     propertyName: strOrNull(op.propertyName),
     index: opIndex,
     bindTo: strOrNull(v.bindTo),
-    itemType: numOrNull(v.itemType),      // 0 grid,2 detail,15 group
+    itemType: numOrNull(v.itemType),      // the element KIND — the whole ViewItemType vocabulary (see AST_VIEW_ITEM_TYPE)
     contentType: numOrNull(v.contentType),
+    // The item's OWN declared data type. PRECEDENCE, verified against the runtime and the reverse of what this
+    // comment said before: `ViewGeneratorV2.getItemDataValueType` (CrtNUI 7.8.0 L1796-1810) returns
+    // `config.dataValueType` FIRST and only consults the view-model column when the item declares none — so the
+    // item's own value OVERRIDES the column, it is not a fallback to it. The guard there is `Ext.isEmpty`, and
+    // `Ext.isEmpty(0)` is false, so `dataValueType: 0` (GUID) is a legal declared value: test with `!= null` /
+    // `Object.hasOwn`, never with truthiness. Reading it is still the mapping task's business (ENG-95543); what
+    // changes here is only that the recorded precedence is now the right way round.
+    dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
-    hasCaption: !!(v.caption),
+    // `labelConfig.caption` counts here too: once it can supply the rendered label, reading only `v.caption` reports
+    // "this op states no caption" about an op that states one.
+    hasCaption: !!(v.caption || labelCaption),
     // caption resource key (tab/group/detail label) — carried so the real caption is shown for
     // cross-check instead of only a synthesized placeholder.
     caption: captionKey(v),
+    // the control label's own caption — a SEPARATE key from `caption`, see `labelCaptionKey`
+    labelCaption,
     // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
     // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
     order: isNum(v.order) ? v.order : opIndex,
@@ -641,8 +1316,59 @@ function normalizeDiffOp(op, i) {
     hint: hintKey(v),
     generator: strOrNull(v.generator),
     visible: visibility(v),
+    // Handler bindings on the item (`click: {bindTo:"onSaveClick"}`, `change: "onXChange"`, `changeMethod`, …).
+    // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
+    // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
+    handlers: handlerBindings(v),
+    // ENG-95543 item 3 — PER-KIND CONFIG CAPTURE. A RADIO_GROUP binds its selection through a NESTED
+    // `value: { bindTo: "<col>" }`, not through the top-level `bindTo` a field uses, and each of its options is a
+    // CHILD item carrying a literal `value` plus its own caption. Both are captured here together with the mapping
+    // row that consumes them: capturing the binding alone builds a plain input and silently drops the option
+    // captions, which is the exact failure the ticket names. `optionValue` keeps `false` and `0` — they are legal
+    // option values, so the test is key presence + primitiveness, never truthiness.
+    valueBindTo: strOrNull(plainObj(v.value).bindTo),
+    optionValue: Object.hasOwn(v, "value") ? primitiveOrNull(v.value) : null,
     astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
+    // Which keys this op's `values` actually CARRIES. Required because `numOrNull` collapses "key absent" and
+    // "key present but not statically a number" into the same `null`, and the runtime treats those two as
+    // opposites (see `replayMerge`). Without this the merge rule cannot be implemented at all.
+    valuesKeys: new Set(safeKeys(v)),
+    // `remove` with a `properties` array is a DIFFERENT operation from a plain remove: it deletes the named keys
+    // and KEEPS the element (core `json-applier.js` L726-730). Carried here because dropping it made the engine
+    // tombstone an element the runtime still renders — the one divergence in this family that HIDES real UI.
+    properties: Array.isArray(op.properties) ? op.properties.filter(isStr) : null,
+    // An `insert` may register an ALIAS (a top-level op property, not inside `values`): core `json-applier.js` calls
+    // `saveAlias` from `insert` (L629). A later op may then target the element by the alias name, and the alias can
+    // also EXCLUDE whole operations or individual merge properties from ever applying (L583-591, L601-608).
+    alias: op.alias && isStr(op.alias.name) ? {
+      name: op.alias.name,
+      excludeProperties: Array.isArray(op.alias.excludeProperties) ? op.alias.excludeProperties.filter(isStr) : [],
+      excludeOperations: Array.isArray(op.alias.excludeOperations) ? op.alias.excludeOperations.filter(isStr) : [],
+    } : null,
+    // The body STATED a kind and this engine could not resolve it to a number (a member `AST_VIEW_ITEM_TYPE`
+    // lacks, or a non-static expression). Distinct from "stated no kind": the remedy is to extend the engine's
+    // pinned table, not to go read the page.
+    itemTypeUnresolved: Object.hasOwn(v, "itemType") && numOrNull(v.itemType) === null,
   };
+}
+
+// Every `values` property that names a view-model METHOD, as `{ <property>: <methodName> }`. Accepts both the
+// `{bindTo:"m"}` wrapper and the bare-string form, on the classic event/handler property vocabulary.
+const HANDLER_PROPS = new Set(["click", "change", "changeMethod", "handler", "onChange", "onClick",
+  "enabled", "visible", "readonly", "required", "getSrc", "onPhotoChange", "selectionChanged", "onKeyDown"]);
+function handlerBindings(v) {
+  const out = {};
+  for (const [k, raw] of Object.entries(plainObj(v))) {
+    if (!HANDLER_PROPS.has(k)) continue;
+    const bound = plainObj(raw).bindTo;
+    let name = null;
+    if (isStr(raw)) name = raw;
+    else if (isStr(bound)) name = bound;
+    // a bound METHOD name, not a bound attribute: attribute bindings are resolved elsewhere (visibility/rules),
+    // and a name that matches no method simply yields no trigger — the caller cross-references the method map.
+    if (name) out[k] = name;
+  }
+  return out;
 }
 
 function normalizeLayout(l) {
@@ -738,20 +1464,102 @@ function sanitizeConditions(conds) {
 function makeItem(op, seed, pkg) {
   return {
     name: op.name, parent: op.parentName, propertyName: op.propertyName,
-    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
+    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
+    labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
+    // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
+    // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
+    // then saw a handler that the first run had removed. Harmless while nothing read the map, load-bearing now
+    // that an absent entry is what distinguishes a modelled handler from an unmodelled static literal.
+    handlers: { ...(op.handlers || {}) }, // control→method bindings; the CONTROL end of a method's trigger
+    valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
+    itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
 }
 
+// ⚠ SEVERITY — the axis `eff.warnings` lacked (ENG-95862). Two values, and the sentence that decides each is
+// written here so a NEW producer cannot be added without answering it:
+//   "correctness" — the op targeted something that DOES NOT EXIST (an item no lower schema defined), or the seed is
+//                   not a real fetched body. The engine's reading of the page is wrong or unsafe, and the remedy is
+//                   an act the operator CAN perform (fix schema order F1 / fetch the base seed F2) ⇒ the gate blocks.
+//   "fidelity"    — the mapping the engine produced is RIGHT; some EFFECT of the op is not represented in the item
+//                   model. There is nothing to fix in the body or the seed — only in this engine — so the gate's
+//                   remedy would be an instruction nobody can act on ⇒ advisory, never a block. Same reasoning the
+//                   `unknown-enum-member` exemption already uses (migrate.mjs `isStructuralDiag`).
+// `migrate.mjs` blocks on `correctness` only, and quotes each warning's OWN hint rather than pasting one summary
+// sentence ("op hit a missing item / skeletal seed") onto every producer — that string sent a 12-hour investigation
+// to the wrong file.
+const SEVERITY = { CORRECTNESS: "correctness", FIDELITY: "fidelity" };
+
 // diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
-function replayDiffOp(op, items, { seed, pkg }, warnings) {
-  const cur = items.get(op.name);
-  if (op.operation === "insert") { items.set(op.name, makeItem(op, seed, pkg)); return; }
+// ALIASES. `saveAlias` (core `json-applier.js` L554-566) keys the table by the ALIAS's declared name and stores the
+// REAL item name on it — an inversion worth stating, because it is what lets a later op refer to the element by the
+// alias. Two further effects: `excludeOperations` makes a whole operation on that name a no-op (L601-608, with the
+// carve-out that a `remove` carrying `properties` is never excluded), and `excludeProperties` drops individual keys
+// from a merge (L583-591). The table is singleton state that survives every layer — `applyDiff` resets it only when
+// the source object is empty (L793-795), i.e. once — so an alias registered in layer 1 keeps acting in layer 9.
+// No `alias` appears in the harvested corpus (130 schema bodies, 5 real pages), so this path is synthetic.
+function saveAlias(aliases, op) {
+  if (op.alias) aliases.set(op.alias.name, { ...op.alias, realName: op.name });
+}
+function aliasFor(aliases, name) { return aliases.get(name) || null; }
+// The item an op targets, resolving the alias when the literal name is not in the map.
+function resolveTarget(items, aliases, name) {
+  if (items.has(name)) return name;
+  const a = aliasFor(aliases, name);
+  return a && items.has(a.realName) ? a.realName : name;
+}
+function isExcludedByAlias(aliases, op) {
+  if (op.operation === "remove" && op.properties?.length) return false; // never excluded — runtime carve-out
+  const a = aliasFor(aliases, op.name);
+  return !!a && a.excludeOperations.includes(op.operation);
+}
+
+function replayDiffOp(op, items, { seed, pkg, aliases }, warnings) {
+  const target = aliases ? resolveTarget(items, aliases, op.name) : op.name;
+  const cur = items.get(target);
+  if (op.operation === "insert") {
+    if (aliases) saveAlias(aliases, op);
+    items.set(op.name, makeItem(op, seed, pkg));
+    return;
+  }
+  // An aliased op works on the REAL item, so every branch below must see the resolved name, not the written one.
+  // The excluded-property set is captured HERE, while the written name is still available: the table is keyed by the
+  // ALIAS name, so looking it up after the rewrite would find nothing.
+  const aliasExcluded = aliases ? (aliasFor(aliases, op.name)?.excludeProperties || []) : [];
+  if (target !== op.name || aliasExcluded.length) op = { ...op, name: target, aliasExcluded };
+  if (op.operation === "set") return replaySet(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
-  if (op.operation === "remove") return replayRemove(op, cur, items, { seed, pkg }, warnings);
+  if (op.operation === "remove") {
+    // the `properties` form is a different operation wearing the same name — and only when the item exists
+    if (cur && op.properties?.length) return replayRemoveProperties(op, cur, { seed, pkg }, warnings);
+    return replayRemove(op, cur, items, { seed, pkg }, warnings);
+  }
+}
+
+// The three IDENTITY properties, merged by the RUNTIME's rule — which is key PRESENCE, never the value.
+// `JsonApplier.merge` takes `Object.keys(config.values)` (core `utils/common/json-applier.js` L583-585) and assigns
+// unconditionally (L702-705). So a later layer carrying an `itemType` key AT ALL overwrites the base — including with
+// `null`/`undefined`/a member this engine cannot resolve. Keeping the lower layer's kind is the one provably wrong
+// answer: it reports a RADIO_GROUP the runtime has ALREADY turned into a plain bound field, because
+// `ViewGeneratorV2.generateStandardItem` routes every unrecognised itemType to `default -> generateModelItem`
+// (CrtNUI 7.8.0 L626-628) with no throw and no log. The engine's old value-based guard hid that behaviour change.
+// Its own function so `replayMerge` keeps its guard chain at nesting level 0 (S3776 ceiling), same reason as
+// `isStructuralDiag` / `methodLedgerDetail`.
+function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
+  for (const k of ["contentType", "itemType", "dataValueType"]) {
+    if (!op.valuesKeys?.has(k)) continue;
+    if (op.aliasExcluded?.includes(k)) continue;   // the alias forbids this key (json-applier.js L583-591)
+    if (k === "itemType" && cur.itemType != null && op.itemType == null) {
+      warnings.push({ op: opName, name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
+        hint: `this layer restates \`itemType\` with a value the engine cannot resolve, so the base kind (${cur.itemType}) is CLEARED — the runtime renders such an element as a plain bound field (generateModelItem). If this platform version carries a member the engine lacks, add it to AST_VIEW_ITEM_TYPE.` });
+    }
+    cur[k] = op[k];
+  }
+  if (op.valuesKeys?.has("itemType")) cur.itemTypeUnresolved = !!op.itemTypeUnresolved;
 }
 
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
@@ -761,12 +1569,39 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
     // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
     // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
-    items.set(op.name, makeItem(op, seed, pkg));
-    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
+    // ENGINE-ONLY, and now marked as such. The runtime does NOT do this: `JsonApplier.merge` finds no item, returns
+    // `false` (core `json-applier.js` L688) and `applyOperations` discards that return value (L301) — a silent no-op.
+    // The stub is a deliberate diagnostic (a merge onto nothing means a missing base seed or schemas out of order),
+    // but without the flag a consumer reads it as an element that is actually on the rendered page.
+    const stub = makeItem(op, seed, pkg);
+    stub.engineOnlyStub = true;
+    items.set(op.name, stub);
+    warnings.push({ op: "merge", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). Recorded as an ENGINE-ONLY stub (`engineOnlyStub`): the runtime silently does nothing here, so this element is NOT on the rendered page." });
     return;
   }
-  for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
-  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
+  mergeIdentityProps(op, cur, pkg, warnings);
+  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
+  // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
+  // caption or UNBINDS a control — the engine then reported a caption the page no longer shows. Same rule as
+  // `mergeIdentityProps`, so content and identity properties stop behaving differently for no reason.
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
+    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
+  }
+  // `labelConfig` is ONE diff key modelled as the `labelCaption` field, so the presence test is on the DIFF key —
+  // a layer that restates `labelConfig` (the WorkInternalRequest custom-label idiom) must be able to overwrite a
+  // lower layer's label, and `caption` never appears in its `values` at all.
+  if (op.valuesKeys?.has("labelConfig") && !op.aliasExcluded?.includes("labelConfig")) cur.labelCaption = op.labelCaption;
+  // Both `valueBindTo` and `optionValue` are derived from ONE diff key (`value`), so the presence test is on that
+  // key and both fields move together: a layer that restates `value` as a binding must also clear a literal an
+  // earlier layer set, and the reverse. Testing the derived fields separately would leave the loser behind.
+  if (op.valuesKeys?.has("value") && !op.aliasExcluded?.includes("value")) {
+    cur.valueBindTo = op.valueBindTo;
+    cur.optionValue = op.optionValue;
+  }
+  // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
+  // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
+  if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
 }
@@ -776,13 +1611,21 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
 // e.g. Product's IsArchive/"Inactive" checkbox).
 function replayMove(op, cur, { seed, pkg }, warnings) {
   if (!cur) {
-    warnings.push({ op: "move", name: op.name, schema: pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+    warnings.push({ op: "move", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
     return;
   }
   if (op.parentName) { cur.parent = op.parentName; }
   // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
   // (previously only the parent was updated, so a pure reorder silently kept the old position).
   if (op.order != null) { cur.order = op.order; }
+  // A `move` also carries its OWN `values`, and the runtime applies them: `convertMoveOperationToRemove` turns the
+  // move into a remove + an insert and then does `Ext.apply(insertOperationItem, operationItem)` (core
+  // `json-applier.js` L283-289), so every key the move op states lands on the reinserted item. Applying only
+  // parent/order dropped an `itemType` restated by a move — a real occurrence: ContactPageV2's `SiteEventDetail` is
+  // moved by `EventTracking` with `values: { itemType: Terrasoft.ViewItemType.DETAIL }`. There the value merely
+  // repeats what `SiteEvent`'s insert already set, so nothing was visibly wrong; a move that states a DIFFERENT
+  // kind was silently ignored. Same key-presence rule as `merge`, same helper, so the two cannot drift apart.
+  mergeIdentityProps(op, cur, pkg, warnings, "move");
   if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
@@ -793,7 +1636,106 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
 function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
   items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
-  warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+  warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+}
+
+// `remove` carrying a `properties` array: delete ONLY those keys, keep the element (core `json-applier.js`
+// L719-732, and it runs in a LATER group than plain removes at L304). The engine models a subset of a view item's
+// keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
+// alternative is telling the reader a property was cleared when nothing happened.
+// `labelConfig` and the HANDLER vocabulary joined the set in ENG-95862: an audit of what a real `remove … properties`
+// may name, against what the engine models on an item, found exactly those two families modelled-but-unclearable —
+// the worst of the three states, because the plan then reports a property the page no longer has. (The audit and how
+// to re-run it: `engine-internals.md` → "remove … properties key audit".)
+// `TOP_LEVEL_ITEM_PROPS` = the keys held as a FIELD on the item record (cleared with `cur[k] = null`), as opposed to
+// the two families modelled elsewhere: `value`/`labelConfig` (own named fields) and the handlers map.
+const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
+  "layout", "tip", "hint", "generator", "visible", "caption"]);
+const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
+function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
+  const unmodelled = [];
+  for (const k of op.properties) {
+    if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
+    // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
+    // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
+    // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
+    // here as well listed the same package twice on an element whose `value` a layer cleared.)
+    if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
+    // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
+    // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
+    // what the runtime renders (`getLabelCaption`).
+    if (k === "labelConfig") { cur.labelCaption = null; continue; }
+    // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
+    // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
+    // silenced the trigger but left the static value would be half-applied.
+    if (HANDLER_PROPS.has(k)) {
+      // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
+      // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
+      // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
+      // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
+      // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
+      // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+      const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
+      if (wasModelled) delete cur.handlers[k];
+      if (!TOP_LEVEL_ITEM_PROPS.has(k)) {   // handler-only key: the map entry was the whole effect it could have
+        if (!wasModelled) unmodelled.push(k);
+        continue;
+      }
+    }
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // not a handler and not a field: nothing modelled to clear
+    // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
+    // "absent vs unreadable" ambiguity this ticket removed elsewhere.
+    cur[k] = null;
+    if (k === "itemType") cur.itemTypeUnresolved = false;
+  }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true;
+  if (unmodelled.length) {
+    warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
+      hint: `this remove deletes propert(ies) the engine does not model on an item: ${unmodelled.join(", ")}. The element is KEPT (correct), but the effect of clearing those keys is not represented — read the classic body if the plan depends on them.` });
+  }
+}
+
+// `set` = remove-then-reinsert-from-`values` (core `json-applier.js` L660-677): the element keeps its POSITION but
+// loses every property the op does not restate AND every child, because the runtime rebuilds it from `values` alone
+// and recovers only `index`/`parentName`/`propertyName` from the item it removed (L670-673).
+// Bucket ordering IS mirrored now (`splitDiffOps`): the whole `set` group runs after every other group, exactly as
+// `applyOperations` does (L299-306) — the earlier note here saying the engine replayed in diff-array order is no
+// longer true. What is still NOT reproduced is insert ordering WITHIN a bucket (parent-chain depth, then `index`).
+// No real occurrence of `set` was found in a corpus of 130 schema bodies across 5 real Classic pages, so this path
+// is exercised only by goldens.
+function replaySet(op, cur, items, { seed, pkg }, warnings) {
+  if (!cur) {
+    items.set(op.name, makeItem(op, seed, pkg));
+    warnings.push({ op: "set", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "set onto an item no lower schema defined — recorded as a plain definition; check base seed (F2) / schema order (F1)" });
+    return;
+  }
+  // Direct children are tombstoned here; `cascadeRemove` sweeps the deeper levels on its fixpoint pass, and marks
+  // them `cascadeRemoved` so they read as structural cleanup rather than as a client decision to drop them.
+  let dropped = 0;
+  for (const it of items.values()) {
+    if (it.parent === op.name && !it.removed) {
+      it.removed = true; it.removedBy = pkg; it.removedBySeed = seed;
+      // `cascadeRemoved` ONLY for template-owned children (PR #105 review, Major). `cascadeRemove` deliberately
+      // skips non-templateOwned items (see its `!it.templateOwned` guard), and `removed[]` filters out anything
+      // carrying the flag — so setting it unconditionally hid CLIENT-authored children of a replaced container from
+      // the decision rows entirely. The op's own warning counts them but does not name them, which is not the same
+      // thing: this engine's rule is that an element is never hidden, and a count is not an element.
+      if (it.templateOwned) it.cascadeRemoved = true;
+      dropped++;
+    }
+  }
+  const fresh = makeItem(op, seed, pkg);
+  items.set(op.name, { ...fresh,
+    // position is recovered from the item being replaced, not from the op
+    parent: cur.parent, propertyName: cur.propertyName, order: cur.order,
+    templateOwned: cur.templateOwned, provenance: [...cur.provenance, pkg],
+    schemaTouched: seed ? cur.schemaTouched : true });
+  // The child clause is named rather than nested inside the hint: one template per string, so the sentence stays
+  // readable and the optional half is not a second template inside the first.
+  const droppedNote = dropped ? `, and ${dropped} direct child(ren) were dropped with it` : "";
+  warnings.push({ op: "set", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
+    hint: `set REPLACES this element wholesale: every property its \`values\` does not restate is gone${droppedNote}. If the classic page still shows content here, it must be restated in this op.` });
 }
 
 // businessRules + legacy rules (merge by attribute::ruleKey)
@@ -837,12 +1779,66 @@ function mergeDetails(L, seed, details) {
   }
 }
 
-// methods (override stack) — track whether any schema schema contributed
+// methods (override stack) — track whether any schema schema contributed, and carry the TOP layer's body facts.
+// The facts follow last-write-wins (the effective implementation is the topmost override's), while `pkgs`
+// accumulates the whole stack — so the plan can say both "what it does" and "who overrode it".
 function mergeMethods(L, seed, methods) {
+  const factsByName = new Map((L.methodFacts || []).map((f) => [f.name, f]));
   for (const m of L.methods) {
     const prev = methods.get(m);
-    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed });
+    // The facts belong to THIS layer's body, and this layer's body is the effective one — so a layer that
+    // declares the method but whose body was not statically readable yields NULL, never the lower layer's facts.
+    // Inheriting them would report the base implementation's line span, calls and category as the effective
+    // method's evidence: a plan stating "body does: service-call" about a body that makes no service call.
+    const facts = factsByName.get(m) ?? null;
+    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed, facts });
   }
+}
+
+// Imperative members (attributes / messages / mixins / module deps) — one override stack each, keyed by name,
+// EXACTLY like mergeMethods: `schemaTouched` records that at least one non-seed schema contributed, which is
+// what separates a client customization from inherited base-template context. The ledger keys on this rather
+// than on `fromTemplate` alone, so a client OVERRIDE of a base member is payload, not context — the same
+// distinction `base-field-override` already makes for template-owned fields a client reconfigured.
+// The later layer's facts win (last write) while provenance accumulates, mirroring mergeDetails.
+function mergeNamedFacts(defs, seed, pkg, sink) {
+  for (const def of defs || []) {
+    if (!def || !isStr(def.name)) continue;
+    const prev = sink.get(def.name);
+    sink.set(def.name, {
+      ...def,
+      provenance: [...(prev?.provenance || []), pkg],
+      schemaTouched: (prev?.schemaTouched || false) || !seed,
+    });
+  }
+}
+
+// module deps are bare strings, not named objects — same stack, keyed by the module id itself
+function mergeModuleDeps(L, seed, sink) {
+  for (const dep of L.moduleDeps || []) {
+    const prev = sink.get(dep);
+    sink.set(dep, { name: dep, provenance: [...(prev?.provenance || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed });
+  }
+}
+
+// Where a method is called FROM, resolved against the merged attribute + layout maps rather than guessed from
+// the method's name. `04-units.md` makes this the difference between a described behaviour and an open thread:
+// "the trigger must be traced to its concrete origin — the actual control, the actual hook, the actual message —
+// and never inferred from schema or method names".
+function methodTriggers(name, attributes, items) {
+  const out = [];
+  for (const a of attributes.values()) {
+    for (const d of a.dependencies || [])
+      if (d.methodName === name)
+        out.push({ kind: "attribute-dependency", attribute: a.name, columns: d.columns });
+  }
+  // a diff item binding a handler: `values: { click: { bindTo: "onX" } }` / `changeMethod` / a bound property.
+  for (const i of items.values()) {
+    if (i.removed) continue;
+    for (const [prop, handler] of Object.entries(i.handlers || {}))
+      if (handler === name) out.push({ kind: "control", element: i.name, property: prop });
+  }
+  return out;
 }
 
 // modules (widgets/charts) — merge by key
@@ -857,16 +1853,56 @@ function mergeModules(L, seed, components) {
 
 // Replay each tagged schema (seed-template first, then the page's own schemas) into the merge stores: diff ops
 // into `items`, and the keyed rule/detail/method/module blocks into their maps. Extracted for Sonar CC 15.
+// A layer's `diff` is NOT applied in array order by the runtime. `applyOperations` (core `json-applier.js`
+// L299-306) splits it into buckets and runs them in a fixed sequence: all `merge`, then the position group
+// (removes — move sources included — then the inserts, `applyChangePositionOperationGroup` L329-364), then
+// `remove`-with-`properties`, then `set`. The headline consequence: a layer that does `insert X` then `merge X`
+// has its merge applied to NOTHING at runtime, because the merge bucket runs before X exists. Replaying in array
+// order applied it, so the engine reported properties the page does not have.
+//
+// TWO runtime behaviours deliberately NOT copied here, both recorded in engine-internals.md:
+//   * `filterMoveOperation` (L313-320) drops a `move` whose name also appears in the SAME layer's removes, leaving
+//     the element removed. This engine keeps the classic reposition idiom instead (a move onto a tombstone
+//     RESURRECTS it) because a real page motivated it — Product's IsArchive/"Inactive" checkbox — and dropping the
+//     move there made a displayed field vanish. Neither reading can be settled without a fixture for that page, so
+//     the safer of the two is kept. No layer in the harvested corpus contains such a pair, so nothing observed
+//     depends on the choice.
+//   * insert ordering WITHIN the bucket (by parent-chain depth, then `index`, L359/L513-545) is not reproduced;
+//     sibling order is carried by the item's own `order`, and the projections do not promise array position.
+// An unrecognized operation name lands in no bucket and is dropped — which is what the runtime's empty `default:`
+// (L244) does too, so that arm needed no special case.
+const DIFF_OP_BUCKETS = ["merge", "remove", "insert", "move", "removeProperties", "set"];
+function splitDiffOps(diff, aliases) {
+  const b = { merge: [], remove: [], insert: [], move: [], removeProperties: [], set: [] };
+  for (const op of diff || []) {
+    if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
+    // Checked at SPLIT time, as the runtime does (`getSplittedOperations` L220-222), so the table an op is tested
+    // against holds only aliases registered by EARLIER layers — an alias cannot exclude an op in its own layer.
+    if (aliases && isExcludedByAlias(aliases, op)) continue;
+    if (op.operation === "remove") { (op.properties?.length ? b.removeProperties : b.remove).push(op); continue; }
+    if (b[op.operation]) b[op.operation].push(op);
+  }
+  return b;
+}
+
 function replayTagged(tagged, stores, warnings) {
-  const { items, rules, details, methods, components } = stores;
+  const { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps } = stores;
+  // Singleton across the whole fold, matching the runtime's one-reset lifetime.
+  const aliases = new Map();
   for (const { L, seed } of tagged) {
-    for (const op of L.diff) {
-      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
+    const buckets = splitDiffOps(L.diff, aliases);
+    for (const bucket of DIFF_OP_BUCKETS) {
+      for (const op of buckets[bucket]) replayDiffOp(op, items, { seed, pkg: L.pkg, aliases }, warnings);
     }
     mergeRuleBlocks(L, seed, rules);
     mergeDetails(L, seed, details);
     mergeMethods(L, seed, methods);
+    // the imperative members (attributes / messages / mixins / define() deps) — each an override stack keyed by
+    // name, exactly like mergeMethods, so a client override of a base member is payload rather than context.
+    mergeNamedFacts(L.attributeDefs, seed, L.pkg, attributes);
+    mergeNamedFacts(L.messageDefs, seed, L.pkg, messages);
+    mergeNamedFacts(L.mixinDefs, seed, L.pkg, mixins);
+    mergeModuleDeps(L, seed, moduleDeps);
     mergeModules(L, seed, components);
   }
 }
@@ -892,6 +1928,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const rules = new Map();     // "attr::ruleKey" -> record
   const details = new Map();   // key -> record
   const methods = new Map();   // name -> [pkgs] (override stack)
+  const attributes = new Map(); // name -> attribute facts + override stack (lookup filters / dependencies / …)
+  const messages = new Map();   // name -> { mode, direction } + override stack (the sandbox contract)
+  const mixins = new Map();     // local name -> { module } + override stack (behaviour from another schema)
+  const moduleDeps = new Map(); // define() dep id -> override stack (constants / utility / mixin modules)
   const components = new Map(); // module key -> {moduleName, provenance} (widgets/charts → B9/B10)
   // Non-fatal diagnostics. A merge/move/remove that targets an item NO lower schema defined means
   // either the schemas were passed out of dependency order (F1) or the base-template element it
@@ -912,7 +1952,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   ];
   const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
-  replayTagged(tagged, { items, rules, details, methods, components }, warnings);
+  replayTagged(tagged, { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps }, warnings);
   // Propagate container removals down the subtree (runtime parity) — see cascadeRemove. This clears the false
   // `unresolvedParents` that HARD-BLOCKED legitimate remove+re-layout pages (base children of a removed container).
   cascadeRemove(items);
@@ -993,8 +2033,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     const allStub = seedMethodNames.size >= SEED_MIN_METHODS && seedNonEmptyMethods.size === 0;
     const detail = allStub ? "but ALL of them are EMPTY stubs (no bodies)" : `(below the ${SEED_MIN_METHODS}-method floor)`;
     warnings.push({
-      op: "seed", name: "skeletal-seed", schema: "(seed)",
-      message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+      op: "seed", name: "skeletal-seed", schema: "(seed)", severity: SEVERITY.CORRECTNESS,
+      // `hint` (not only `message`) because every consumer quotes `hint`: the gate's new per-warning quote, and the
+      // plan's advisory. A producer that names its text differently is a producer the reader renders as `undefined`.
+      hint: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
     });
   }
 
@@ -1005,10 +2047,25 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     // (defining insert came from a seed schema): payload = client-authored items, structural identity =
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema schema contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
-      itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
+      // `?? null` because an item built from an op whose `itemType` key was absent used to project as `undefined`,
+      // which no consumer could tell from "the key was there and we could not read it".
+      itemType: i.itemType ?? null, itemTypeUnresolved: !!i.itemTypeUnresolved,
+      // `engineOnlyStub` marks an item the RUNTIME does not have (see `replayMerge`). It must reach consumers, or
+      // the flag exists only inside the fold and every reader still treats the stub as a rendered element.
+      engineOnlyStub: !!i.engineOnlyStub,
+      contentType: i.contentType, dataValueType: i.dataValueType ?? null, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
-      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
+      // EFFECTIVE caption, in the platform's own order: `config.caption`, then `labelConfig.caption`
+      // (`getLabelCaption`, ViewGeneratorV2 L1675-1689). `labelCaption` rides along so a reader can tell WHICH of
+      // the two supplied the text — a label a later layer may remove on its own (`remove properties:
+      // ["labelConfig"]`) is not the same fact as a caption stated on the control itself.
+      visible: i.visible ?? null, caption: i.caption || i.labelCaption || null, labelCaption: i.labelCaption || null,
+      provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
+      // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
+      // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
+      // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.
+      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).
@@ -1018,7 +2075,25 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     }),
     rules: activeRules.map(r => ({ ...r, fromTemplate: !r.schemaTouched })),
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
-    methods: [...methods.entries()].map(([n, m]) => ({ name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched })),
+    methods: [...methods.entries()].map(([n, m]) => ({
+      name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched,
+      // body evidence (calls / attribute reads-writes / message traffic / line span), null when the layer's body
+      // was not statically readable — the NAME still survives, so a member is never lost for lack of evidence
+      facts: m.facts || null,
+      // Where the method is INVOKED FROM, sourced from data rather than inferred from its name:
+      //  • `attributes.<Col>.dependencies[].methodName` → the classic "recompute when these columns change" wiring
+      //  • a diff item's click/change binding → a control on the page
+      //  • `messages` + a subscribe call in the body → a sandbox message
+      // A method with a resolved trigger needs no guess in the plan; one with none is honestly "trigger unresolved".
+      triggers: methodTriggers(n, attributes, items),
+    })),
+    // Imperative members, now reaching the effective model. `attributes` in particular used to be parsed and
+    // then dropped here, which is why an imperatively filtered lookup (`lookupListConfig.filters`) had no member
+    // in the plan at all while the declarative FILTRATION equivalent was fully mapped.
+    attributes: [...attributes.values()].map(a => ({ ...a, fromTemplate: !a.schemaTouched })),
+    messages: [...messages.values()].map(m => ({ ...m, fromTemplate: !m.schemaTouched })),
+    mixins: [...mixins.values()].map(m => ({ ...m, fromTemplate: !m.schemaTouched })),
+    moduleDeps: [...moduleDeps.values()].map(m => ({ ...m, fromTemplate: !m.schemaTouched })),
     components: [...components.values()].map(c => ({ ...c, fromTemplate: !c.schemaTouched })),
     warnings,
     unresolvedParents,
