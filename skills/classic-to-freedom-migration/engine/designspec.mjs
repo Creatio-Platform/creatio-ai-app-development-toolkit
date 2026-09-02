@@ -3679,8 +3679,10 @@ export function verifySummary(result, v) {
 export function encodedAsciiBytes(s) {
   if (typeof s !== "string") return 0;
   let n = 0;
+  // One UTF-16 unit per step; `codePointAt` (Sonar S7758) keeps the per-unit arithmetic — an astral pair reads as
+  // its full code point at the lead unit and an unpaired surrogate at the trail, both non-printable: still 12.
   for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
+    const c = s.codePointAt(i);
     n += (c >= 0x20 && c <= 0x7e) ? 1 : 6;
   }
   return n;

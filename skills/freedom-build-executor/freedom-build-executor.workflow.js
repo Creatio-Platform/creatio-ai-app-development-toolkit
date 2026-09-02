@@ -1820,14 +1820,16 @@ const describeValue = (v) => {
 // escape (an astral pair becomes two of them). Measuring raw UTF-8 undercounts that by 3-6x on the Cyrillic/CJK
 // captions and `·`/`—`/`✅` a real migration answer is full of — an answer under a raw ceiling could still overflow
 // the host's ~20 KB tool-input cap once encoded, reproducing mode B with an intermittent, localized-content-only
-// signature. Per code UNIT (`charCodeAt`), deliberately matching the encoder's own per-unit `[^ -~]` replacement.
+// signature. Per code UNIT — the loop advances one UTF-16 unit at a time, deliberately matching the encoder's own
+// per-unit `[^ -~]` replacement; `codePointAt` (Sonar S7758) keeps that arithmetic exactly, since an astral pair
+// reads as its full code point at the lead unit and an unpaired surrogate at the trail, both non-printable — 12.
 // Module scope, like every pure helper here (Sonar S7721). Not `TextEncoder`/`Buffer`: neither is an ECMAScript
 // built-in, and this module is inlined into a workflow script whose sandbox promises only those.
 const encodedAsciiBytes = (s) => {
   if (typeof s !== 'string') return 0
   let n = 0
   for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i)
+    const c = s.codePointAt(i)
     n += (c >= 0x20 && c <= 0x7e) ? 1 : 6
   }
   return n
@@ -1952,7 +1954,7 @@ function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxByt
       .map((k) => [k, encodedAsciiBytes(JSON.stringify(state[k]))])
       .sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([k, n]) => `${k} (${n} B)`).join(', ')
-    out.push(`the answer encodes to ${size} ASCII bytes on the wire (the \\uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
+    out.push(String.raw`the answer encodes to ${size} ASCII bytes on the wire (the \uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
   }
   for (const [key, spec] of Object.entries(shape)) {
     if (state[key] === undefined) continue
