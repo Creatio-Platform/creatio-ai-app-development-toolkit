@@ -595,6 +595,62 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
             self.assertTrue((claude_home / "workflows" / "creatio-build-thing.js").exists())
             self.assertFalse((claude_home / "workflows" / "build.js").exists())
 
+    def test_refuses_a_meta_name_that_escapes_the_workflows_directory(self):
+        # `pathlib` does not sanitise the right-hand side of `/`, and update.py re-runs this
+        # provisioner over the marketplace cache unattended, so a traversing name would be an
+        # arbitrary-file-write primitive running with the user's privileges.
+        installer = load_installer()
+        for meta_name in ("creatio-../../evil", "creatio-a/b", "..", "", "/tmp/evil", "evil"):
+            with self.subTest(meta_name=meta_name), tempfile.TemporaryDirectory() as temp:
+                source_root = Path(temp) / "src"
+                write_bundled_workflow(source_root, "a-skill", "build", meta_name)
+                claude_home = Path(temp) / "home" / ".claude"
+
+                with self.assertRaises(RuntimeError):
+                    installer.provision_named_workflows(source_root, claude_home)
+
+                written = sorted(
+                    path.relative_to(temp).as_posix()
+                    for path in Path(temp).rglob("*.js")
+                    if path.is_file()
+                )
+                self.assertEqual(
+                    written,
+                    ["src/skills/a-skill/build.workflow.js"],
+                    "nothing may be written outside the source tree for a rejected name",
+                )
+
+    def test_refuses_two_scripts_claiming_one_meta_name(self):
+        # Named workflows share one flat user-scope directory, so the second copy would silently
+        # replace the first while both were reported as provisioned.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-same")
+            write_bundled_workflow(source_root, "skill-b", "two", "creatio-same")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            with self.assertRaises(RuntimeError):
+                installer.provision_named_workflows(source_root, claude_home)
+
+    def test_reads_the_name_from_the_meta_block_not_the_first_matching_line(self):
+        # These scripts inline core modules and prompt text, so a later line beginning `name:` must
+        # not be able to supply the destination filename.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            script = write_bundled_workflow(
+                source_root,
+                "a-skill",
+                "build",
+                "creatio-real",
+                body="const agentSpec = {\n"
+                "name: 'creatio-../../evil',\n"
+                "}\n",
+            )
+
+            self.assertEqual(installer.workflow_meta_name(script), "creatio-real")
+
     def test_provisions_every_bundled_workflow(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
