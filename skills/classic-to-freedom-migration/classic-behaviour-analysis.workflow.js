@@ -1508,8 +1508,29 @@ function makeExecute(agent) {
 // The host's own batch primitive. `parallel()` caps concurrency and draws the
 // progress tree, so a batch goes through it rather than through a bare
 // `Promise.all` the runtime knows nothing about.
+// The negotiated WIDTH is honoured, not discarded. The driver passes
+// `min(host.parallelism, itemCount)` as the third argument, and handing the whole
+// batch to one `parallel()` call ignored it: the runtime's own ceiling
+// (`min(16, cpus - 2)`) applied instead, so a caller-supplied `maxDescribeAgents: 20`
+// fanned out up to 16 concurrent stand-reading agents against a live stand, and
+// `resolveStep` logged "in waves of W — a reported reduction in parallelism" for a
+// reduction that never happened. The generic-CLI path already sliced into waves, so
+// the two disagreed on the one property this module exists to guarantee. It was safe
+// only by coincidence: DEFAULT_MAX_DESCRIBE is 8, the same as the declared
+// parallelism, so width === itemCount for the default input.
 function makeRunBatch(parallel) {
-  return (items, execute) => parallel(items.map((item) => () => execute(item)))
+  return async (items, execute, width) => {
+    const w = Math.max(1, Number.isFinite(width) ? width : items.length)
+    if (w >= items.length) return parallel(items.map((item) => () => execute(item)))
+    const out = []
+    // One await boundary per wave. The host keeps its progress tree and its own
+    // concurrency accounting inside each wave; what changes is that the negotiated
+    // budget now binds across them.
+    for (let i = 0; i < items.length; i += w) {
+      out.push(...(await parallel(items.slice(i, i + w).map((item) => () => execute(item)))))
+    }
+    return out
+  }
 }
 
 function driveOnClaude({ core, run, io, agent, parallel, requires }) {

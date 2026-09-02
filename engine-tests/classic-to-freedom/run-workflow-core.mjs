@@ -37,7 +37,7 @@ import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } fr
 import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
 import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
-import { CLAUDE_HOST, makeExecute, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
+import { CLAUDE_HOST, makeExecute, makeRunBatch, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
 import { codexHost, codexSingleAgentHost } from "../../skills/_workflow-core/adapters/codex.mjs";
 import { genericHost, explainMissing } from "../../skills/_workflow-core/adapters/generic-cli.mjs";
 
@@ -591,6 +591,32 @@ console.log("\n===== cross-host parity =====");
     core: cba.run(INPUT, claudeIo), run: claudeRun, io: claudeIo,
     agent: fakeAgent, parallel: fakeParallel, requires: cba.WORKFLOW_REQUIRES,
   });
+
+  {
+    // The negotiated width has to BIND on this host, not merely be logged. `resolveStep`
+    // reports "in waves of W — a reported reduction in parallelism" whenever the gate
+    // reduced; handing the whole batch to one `parallel()` call made that log untrue and
+    // let the runtime's own ceiling apply instead, so a caller-supplied
+    // `maxDescribeAgents` above the declared parallelism fanned out unbounded against a
+    // live stand.
+    const batchSizes = [];
+    const recordingParallel = async (thunks) => {
+      batchSizes.push(thunks.length);
+      return Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
+    };
+    const runBatch = makeRunBatch(recordingParallel);
+    const twelve = Array.from({ length: 12 }, (_, n) => ({ id: `w${n}` }));
+    const done = await runBatch(twelve, async (item) => item.id, CLAUDE_HOST.parallelism);
+
+    check("makeRunBatch: a 12-item step is dispatched in waves no wider than the host's DECLARED parallelism — the width the driver negotiated was being discarded, so the declared cap did not bind and the 'waves of N' log described something that did not happen",
+      batchSizes.length > 1 && Math.max(...batchSizes) <= CLAUDE_HOST.parallelism,
+      () => JSON.stringify({ batchSizes, parallelism: CLAUDE_HOST.parallelism }));
+    check("makeRunBatch: waving does not drop or reorder results — the core reads them aligned to the step's items",
+      done.join(",") === twelve.map((i) => i.id).join(","), () => JSON.stringify(done));
+    check("makeRunBatch: a width at or above the item count is still ONE `parallel()` call, so the host keeps its single progress tree in the common case",
+      await (async () => { const sizes = []; const p = async (t) => { sizes.push(t.length); return Promise.all(t.map((f) => f())); };
+        await makeRunBatch(p)(twelve.slice(0, 4), async (i) => i.id, 8); return sizes.length === 1 && sizes[0] === 4; })());
+  }
 
   // Host B: the Codex/CLI adapter — sequential, no `parallel()`, journal-driven.
   const codex = codexHost();

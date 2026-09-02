@@ -236,6 +236,46 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
       () => (usable ? `git resolved: ${resolvedDetail}` : `git check-attr could not be consulted here (${unusableReason}) — the on-disk CR checks above still gate the property`));
   }
 
+  // The symmetric guard for the OTHER side of `.gitattributes`: the `fixtures/** -text` carve-out. That one
+  // rule is all that stands between the CR CR LF fixtures and a renormalisation that halves 2401 lines — and
+  // because the engine normalizes line endings before parsing, such a rewrite leaves every golden GREEN, so
+  // the corpus would quietly stop being the bytes the stand produced with no failing test to notice. A later
+  // `*.js` or `*` rule, a reordering of the file, or a `git add --renormalize` defeats it, and until now
+  // nothing observed that. Asserted through git's own resolution, exactly like the `eol=lf` pin above.
+  {
+    const crFixtures = [
+      "ContractInInvoice", "ContractInOrder", "CoreContracts", "DocumentInContract",
+      "SalesContracts", "WorkCompliance", "WorkOverride",
+    ].map((stem) => path.join("engine-tests", "classic-to-freedom", "fixtures", "contract", `${stem}.js`));
+
+    const gitExecutable = resolveGitExecutable();
+    const r = gitExecutable
+      ? spawnSync(gitExecutable, ["check-attr", "text", "--", ...crFixtures], { cwd: repoRoot, encoding: "utf8" })
+      : { error: { message: `no git executable at any of ${GIT_CANDIDATES.join(", ")}` }, status: null, stdout: "" };
+    const usable = !r.error && r.status === 0 && typeof r.stdout === "string" && r.stdout.trim();
+    const resolved = usable ? r.stdout.trim().split("\n").map((l) => l.split(": ").pop()) : [];
+    const detail = crFixtures.map((rel, i) => `${path.basename(rel)}=${resolved[i]}`).join(", ");
+    const unusableReason = r.error?.message || `status ${r.status}`;
+    // `-text` resolves as "unset"; anything else (`set`, `auto`, `unspecified`) means an EOL conversion can reach them.
+    check("fixtures: `.gitattributes` still resolves `text` to UNSET for every CR CR LF fixture — the `-text` carve-out is the only thing keeping the corpus byte-identical to what the stand emitted, and a renormalisation would leave the goldens green",
+      usable ? resolved.length === crFixtures.length && resolved.every((v) => v === "unset") : false,
+      () => (usable ? `git resolved: ${detail}` : `git check-attr could not be consulted here (${unusableReason}) — the on-disk CR canary below still gates the property`));
+
+    // The positive byte canary. `check-attr` proves the RULE; this proves the FILES, so the pair also catches a
+    // rewrite that already happened before the rule was weakened. A count, not "it parses" — parsing survives
+    // the corruption, which is the whole problem.
+    for (const rel of crFixtures) {
+      const abs = path.join(repoRoot, rel);
+      const buf = readFileSync(abs);
+      let doubleCr = 0;
+      for (let i = 0; i + 2 < buf.length; i++) {
+        if (buf[i] === 0x0d && buf[i + 1] === 0x0d && buf[i + 2] === 0x0a) doubleCr++;
+      }
+      check(`fixtures: ${path.basename(rel)} still holds CR CR LF sequences on disk — a halved fixture parses exactly as well and would ship silently`,
+        doubleCr > 0, () => `${doubleCr} CR CR LF sequence(s) found; expected at least one`);
+    }
+  }
+
   for (const file of wfFiles) {
     const name = path.basename(file);
     const src = readFileSync(file, "utf8");
