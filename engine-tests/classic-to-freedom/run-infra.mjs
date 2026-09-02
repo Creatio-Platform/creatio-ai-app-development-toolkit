@@ -167,6 +167,15 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
 // (round 13 replaced a source-regex wiring check with a real `composeBuildPrompt` composition).
 const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings", "reopenKeySet"];
+// ENG-96204 — THE CONTROL-MODE DECISION AND THE ROUND-BOUNDARY STOP, filed as its own concern per the rule stated
+// above: a new name goes under a concern, and this one is a surface rather than "a few more scheduling names".
+// `buildModes`/`buildModeMenu` are the ONE mode list and its operator-facing descriptions; `resolveControlMode` is
+// the three-input precedence and its reported source; `stopsAtRoundBoundary`/`isLayoutPassMode` are the two new
+// predicates; `roundsOnFile`, `rankOpenItems`, `openItemsFor`, `runStatusDoc` and `passScopeText` are the stop's
+// arithmetic and its text.
+const H_CONTROL_MODE = ["buildModes", "buildModeMenu", "resolveControlMode", "runResolutionAnswer", "roundDecisionItem",
+  "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "rankOpenItems", "openItemsFor",
+  "runStatusDoc", "passScopeText"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
@@ -209,7 +218,7 @@ const SHAPE_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-
 // schema stopped enforcing when it had to shrink under the host's 4096-byte classifier cap, which is a
 // different concern from what a build agent is handed. Asserted through the SHIPPED functions.
 const H_RESPONSE_SHAPE = ["reconcileShapeErrors", "shapeVocabularyErrors", "shapeFieldNames", "encodedAsciiBytes"];
-const HELPER_GROUPS = { H_SCHEDULING, H_PRECONDITIONS, H_BUILD_PROMPT, H_ANSWERS_CHANNEL, H_SELF_CHECK, H_VERIFY_SCOPE, H_REPORTING, H_RESPONSE_SHAPE };
+const HELPER_GROUPS = { H_SCHEDULING, H_CONTROL_MODE, H_PRECONDITIONS, H_BUILD_PROMPT, H_ANSWERS_CHANNEL, H_SELF_CHECK, H_VERIFY_SCOPE, H_REPORTING, H_RESPONSE_SHAPE };
 const HELPERS = Object.values(HELPER_GROUPS).flat();
 // A name filed under two concerns is a grouping that has stopped describing the code, and it would also emit a
 // duplicate into the generated `export {...}` — a syntax error in the slice, which is a confusing way to learn it.
@@ -224,10 +233,13 @@ check("PR #128 review (round 16): the grouped helper surface has no name in two 
 // because the block was assembled from one flat file; now that the core is real modules and the block closes over
 // nothing, they are ordinary exported members and this suite reads the shipped values directly. A live verifier
 // echoes `shows` back and the clear keys on `source` exactly, so a copy re-typed here could drift from the run's.
+// `CONTROL_MODE_ITEM` (ENG-96204) joins them for the same reason: it is the `item` string BOTH sides of the answer
+// channel key on — the operator writes it into `resolutions.json` and the run looks it up — so a copy of the
+// literal in this file would let the two drift and the mode answer would silently stop being found.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS", "RESOLUTIONS_RETURN",
   "CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED", "UNCONSUMED_CARRY_WARN",
   "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH",
-  "RESOLUTION_NOT_APPLIED"];
+  "RESOLUTION_NOT_APPLIED", "CONTROL_MODE_ITEM"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
@@ -422,7 +434,9 @@ check("ENG-95469: a still-short-after-one-fix selfCheck is collected in buildRou
 // applyInContextParks now decides through the pure helper, which confirms the unit is still OPEN on the post-hoc
 // verdict before parking — the self-check is engine arithmetic reported through the builder, never its word on trust.
 check("ENG-95469: applyInContextParks decides through the pure `inContextParkableKeys` (double-guard), then only turns the chosen keys into park records",
-  /function applyInContextParks\(selfCheckShort\)[\s\S]{0,600}inContextParkableKeys\(selfCheckShort, unitOf, state\.verify/.test(wfSrc)
+  // ENG-96204 widened the window: the layout-pass exemption (a pass that is short BY DESIGN parks nothing) now
+  // sits between the declaration and the pure call, so a 600-character span no longer reaches it.
+  /function applyInContextParks\(selfCheckShort\)[\s\S]{0,1600}inContextParkableKeys\(selfCheckShort, unitOf, state\.verify/.test(wfSrc)
   && /isUnitOpen\(unitFor\(s\.key\), verify, reachState, packageState\)/.test(wfSrc)
   && /parkRecord\(k, inContextParkWhy\(shortByKey\.get\(k\)\.shortRows\)/.test(wfSrc));
 
@@ -708,12 +722,139 @@ check("ENG-95469 RC-17: the round loop renders the discrepancy via `selfCheckDis
 // open the built page and exercise it — the only check the `Form — Logic` handler rows get, since they carry no
 // verification key. Every failure mode below is silent-in-the-wrong-direction if it regresses: the operator asked
 // to be stopped, and a run that does not stop writes the whole section before they find out.
-check("buildMode: an absent mode is `auto` — the pre-existing behaviour, unchanged",
-  () => (wf.buildMode(undefined) === "auto" && wf.buildMode(null) === "auto" && wf.buildMode("") === "auto"));
-check("buildMode: the three modes are accepted, case- and whitespace-insensitively (an operator types these by hand)",
-  () => (wf.buildMode("auto") === "auto" && wf.buildMode(" Checkpoints ") === "checkpoints" && wf.buildMode("GUIDED") === "guided"));
+// --- ENG-96204 extends the set with two ROUND-boundary modes (`round1`, `layout-first`) and REPLACES the
+// absent-mode default. The check below used to assert that an absent mode is `auto`; that default was the one
+// answer nobody can un-choose — a run the operator meant to watch had already written the whole section by the
+// time they found out it never stopped — so an absent mode now yields `null` and the run refuses to start (AC 1).
+// The unattended path is DECLARED instead, through `defaultMode`.
+check("ENG-96204: an absent mode is `null`, NOT `auto` — the run refuses to start rather than choosing for the operator, which is the whole of AC 1. `defaultMode` is how a non-interactive run declares itself",
+  () => (wf.buildMode(undefined) === null && wf.buildMode(null) === null && wf.buildMode("") === null));
+check("buildMode: the modes are accepted, case- and whitespace-insensitively (an operator types these by hand)",
+  () => (wf.buildMode("auto") === "auto" && wf.buildMode(" Checkpoints ") === "checkpoints" && wf.buildMode("GUIDED") === "guided"
+    && wf.buildMode("round1") === "round1" && wf.buildMode(" Layout-First ") === "layout-first"));
 check("buildMode: an UNKNOWN mode THROWS — it must never fall back to `auto`, which would silently run unattended the one time the operator asked to watch",
   () => { try { wf.buildMode("semi"); return false; } catch (e) { return /unknown mode/i.test(e.message) && /checkpoints/.test(e.message); } });
+check("ENG-96204: the refusal message LISTS every mode, including the two new ones — it is the menu an operator picks from at the stop, so a mode missing from it is a mode nobody can choose",
+  () => { try { wf.buildMode("semi"); return false; } catch (e) { return wf.buildModes().every((m) => e.message.includes(m)); } },
+  () => { try { wf.buildMode("semi"); return ""; } catch (e) { return e.message; } });
+check("ENG-96204: `buildModes` is the ONE list, and `buildModeMenu` describes every entry of it — a mode added to the list and left undescribed renders as exactly that, loudly, instead of vanishing from the operator's menu",
+  () => { const menu = wf.buildModeMenu();
+    return menu.length === wf.buildModes().length
+      && wf.buildModes().every((m, i) => menu[i].startsWith("`" + m + "`"))
+      && menu.every((l) => !/NO DESCRIPTION/.test(l)); },
+  () => wf.buildModeMenu());
+/* ENG-96204 — MODE RESOLUTION AND ITS SOURCE. Three inputs in falling order of how specifically they speak about
+   this invocation, and the SOURCE is reported because AC 5 turns on it: a run that proceeded on a configured
+   default and one the operator launched in that mode are the same `mode` string and very different facts. */
+const RUN_MODE_ANSWER = (answer) => [{ item: "control-mode", answer }];
+check("ENG-96204 (R2/R8): the launch ARGUMENT wins, then the operator's recorded run-scoped answer, then the configured `defaultMode` — each reporting where it came from",
+  () => { const a = wf.resolveControlMode({ mode: "guided", defaultMode: "auto", runResolutions: RUN_MODE_ANSWER("round1") });
+    const b = wf.resolveControlMode({ defaultMode: "auto", runResolutions: RUN_MODE_ANSWER("round1") });
+    const c = wf.resolveControlMode({ defaultMode: "auto" });
+    return a.mode === "guided" && a.source === "argument"
+      && b.mode === "round1" && b.source === "resolutions"
+      && c.mode === "auto" && c.source === "default"; },
+  () => [wf.resolveControlMode({ mode: "guided", defaultMode: "auto", runResolutions: RUN_MODE_ANSWER("round1") }),
+    wf.resolveControlMode({ defaultMode: "auto", runResolutions: RUN_MODE_ANSWER("round1") }),
+    wf.resolveControlMode({ defaultMode: "auto" })]);
+check("ENG-96204 (R1): with NONE of the three saying anything the answer is the REFUSAL — `{ mode: null, source: null }`, which is what the run stops on",
+  () => { const r = wf.resolveControlMode({});
+    const empty = wf.resolveControlMode({ runResolutions: [{ item: "control-mode", answer: "   " }] });
+    return r.mode === null && r.source === null && empty.mode === null; },
+  () => [wf.resolveControlMode({}), wf.resolveControlMode({ runResolutions: [{ item: "control-mode", answer: "   " }] })]);
+check("ENG-96204: a TYPO'd mode in the RECORDED answer throws exactly as one on the command line does — an answer file is not a softer channel, and the operator who wrote it must hear about it rather than get `auto`",
+  () => { try { wf.resolveControlMode({ runResolutions: RUN_MODE_ANSWER("round-one") }); return false; }
+    catch (e) { return /unknown mode/i.test(e.message); } });
+check("ENG-96204 (R7): `runResolutionAnswer` reads ONE run-scoped answer by item, normalising what the operator typed, and treats a blank answer as no answer",
+  () => (wf.runResolutionAnswer([{ item: "round-2", answer: "go" }], "round-2") === "go"
+    && wf.runResolutionAnswer([{ item: "Round-2", answer: "go" }], " ROUND-2 ") === "go"
+    && wf.runResolutionAnswer([{ item: "round-2", answer: "  " }], "round-2") === null
+    && wf.runResolutionAnswer([], "round-2") === null
+    && wf.runResolutionAnswer(undefined, "round-2") === null),
+  () => wf.runResolutionAnswer([{ item: "Round-2", answer: "go" }], "round-2"));
+check("ENG-96204: the run-level question items are FIXED strings both sides key on — `control-mode`, and `round-<N>` composed by `roundDecisionItem`",
+  () => (wf.CONTROL_MODE_ITEM === "control-mode" && wf.roundDecisionItem(2) === "round-2" && wf.roundDecisionItem(7) === "round-7"));
+check("ENG-96204 (R2): the ROUND-boundary predicate is its own decision, separate from `shouldPauseAfter` — `round1` and `layout-first` stop after a ROUND, the other three do not, and adding a mode costs one entry in one list",
+  () => (wf.stopsAtRoundBoundary("round1") === true && wf.stopsAtRoundBoundary("layout-first") === true
+    && wf.stopsAtRoundBoundary("auto") === false && wf.stopsAtRoundBoundary("checkpoints") === false
+    && wf.stopsAtRoundBoundary("guided") === false && wf.stopsAtRoundBoundary(null) === false));
+check("ENG-96204 (R9): only `layout-first` is a two-pass mode — the predicate the layout prompt, the budget exemption and the stop wording all read",
+  () => (wf.isLayoutPassMode("layout-first") === true && wf.isLayoutPassMode("round1") === false
+    && wf.isLayoutPassMode("auto") === false && wf.isLayoutPassMode(undefined) === false));
+check("ENG-96204: the two stop mechanisms do NOT overlap — no mode both pauses after a unit and stops at the round boundary, or an operator would be stopped twice for one decision",
+  () => wf.buildModes().every((m) => !(wf.stopsAtRoundBoundary(m) && (wf.shouldPauseAfter(m, new Set(["main"]), "main") || wf.shouldPauseAfter(m, new Set(), "main")))),
+  () => wf.buildModes().map((m) => `${m}: round=${wf.stopsAtRoundBoundary(m)} unit=${wf.shouldPauseAfter(m, new Set(["main"]), "main")}`));
+/* ENG-96204 — THE RUN-LEVEL ROUND COUNT, derived from the PER-UNIT counters on file. There is no run-level round
+   number anywhere, and the resume gate needs one: the highest per-unit count is the number of rounds this folder
+   has already spent, so the next round is that plus one. A folder three rounds deep must ask for `round-4`. */
+check("ENG-96204 (R7): `roundsOnFile` is the HIGHEST per-unit round counter — never a sum, never a count of keys, and 0 for a fresh folder",
+  () => (wf.roundsOnFile({ main: 1, "child:X": 3, list: 2 }) === 3 && wf.roundsOnFile({}) === 0
+    && wf.roundsOnFile(undefined) === 0 && wf.roundsOnFile({ main: 0 }) === 0),
+  () => wf.roundsOnFile({ main: 1, "child:X": 3 }));
+/* ENG-96204 (T3, workflow half) — the RANKING the stop reports. The severity itself is the engine's; this is the
+   ordering the operator reads, and the claim is that no fidelity item is ever presented above a correctness one. */
+check("ENG-96204 (T3): `rankOpenItems` puts EVERY correctness item before ANY fidelity one and is STABLE inside each band — the ranked list still reads as the engine's table",
+  () => { const ranked = wf.rankOpenItems([
+      { deliverable: "design pass", severity: "fidelity" },
+      { deliverable: "Fields", severity: "correctness" },
+      { deliverable: "design pass judged", severity: "fidelity" },
+      { deliverable: "Business rules", severity: "correctness" }]);
+    return ranked.map((r) => r.deliverable).join("|") === "Fields|Business rules|design pass|design pass judged"; },
+  () => wf.rankOpenItems([{ deliverable: "design pass", severity: "fidelity" }, { deliverable: "Fields", severity: "correctness" }]).map((r) => r.deliverable));
+check("ENG-96204 (T3): an item with NO severity ranks as CORRECTNESS — the same fail-loud default the engine applies, so a dropped field surfaces at the top of the list instead of sinking to the bottom of it",
+  () => { const ranked = wf.rankOpenItems([{ deliverable: "fid", severity: "fidelity" }, { deliverable: "unstamped" }]);
+    return ranked[0].deliverable === "unstamped"; },
+  () => wf.rankOpenItems([{ deliverable: "fid", severity: "fidelity" }, { deliverable: "unstamped" }]));
+check("ENG-96204: `openItemsFor` carries the engine's own three cells plus the unit and BOTH axes, and normalises neither text nor verdict — a status that paraphrased an open row would send an operator to repair something the gate did not say",
+  () => { const [it] = wf.openItemsFor("main", [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "missing: Amount", severity: "correctness", owner: "builder", id: "main#x" }]);
+    return it.unit === "main" && it.deliverable === "Fields — 7 expected" && it.status === "❌ MISSING"
+      && it.evidence === "missing: Amount" && it.severity === "correctness" && it.owner === "builder" && it.id === "main#x"; },
+  () => wf.openItemsFor("main", [{ deliverable: "d", status: "s", evidence: "e" }]));
+check("ENG-96204: an open row with an unrecognised `severity`/`owner` is normalised to the SAFE side of each axis — correctness (ranked first) and builder (its own work), never silently dropped from the payload",
+  () => { const [it] = wf.openItemsFor("main", [{ deliverable: "d", status: "s", evidence: "e", severity: "cosmetic", owner: "nobody" }]);
+    return it.severity === "correctness" && it.owner === "builder"; },
+  () => wf.openItemsFor("main", [{ deliverable: "d", status: "s", evidence: "e", severity: "cosmetic", owner: "nobody" }]));
+/* ENG-96204 (AC 5) — THE STATUS DOCUMENT. Composed here rather than by an agent: a status an agent writes in its
+   own words is a paraphrase of the verdict, and the reason this run computes rather than asserts is that
+   paraphrases of verdicts drift. Every one of the four facts AC 5 names must be in it. */
+check("ENG-96204 (R5): `runStatusDoc` carries all four facts — what was built, the open list RANKED, the parked units WITH their reasons, and the next step",
+  () => { const doc = wf.runStatusDoc({ mode: "round1", modeSource: "argument", stopped: "paused-at-round", rounds: 1,
+      built: ["main"],
+      openRanked: [{ unit: "main", deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "missing: Amount", severity: "correctness" },
+        { unit: "main", deliverable: "design pass", status: "⚠", evidence: "not filed", severity: "fidelity" }],
+      parked: [{ key: "child:X", rounds: 3, parkedWhy: "still short after 3 round(s)" }],
+      remainingOpen: ["main", "child:X"], next: "authorise round 2" });
+    return /## Built this round/.test(doc) && /`main`/.test(doc)
+      && doc.indexOf("[correctness]") < doc.indexOf("[fidelity]")
+      && /still short after 3 round\(s\)/.test(doc)
+      && /## Next step/.test(doc) && /authorise round 2/.test(doc)
+      && /from argument/.test(doc); },
+  () => wf.runStatusDoc({ mode: "round1", built: ["main"], openRanked: [], parked: [], remainingOpen: [], next: "x" }));
+check("ENG-96204: every section of the status document says something when it is EMPTY — a heading with nothing under it reads as a document that failed to render, not as 'nothing is parked'",
+  () => { const doc = wf.runStatusDoc({ mode: "round1", modeSource: "default", stopped: "paused-at-round", rounds: 1 });
+    return /nothing was built in this round/.test(doc) && /nothing is open/.test(doc)
+      && /nothing is parked/.test(doc) && /no unit is still open/.test(doc); },
+  () => wf.runStatusDoc({ mode: "round1", stopped: "paused-at-round", rounds: 1 }));
+/* ENG-96204 (R9) — THE PASS SCOPE the layout-first builder is handed. The text matters as much as the arithmetic:
+   the in-context gate WILL report a layout-pass unit short, and a builder reading its own honest verdict as a
+   failure would spend its one bounded fix inventing the very rows this pass exists not to build. */
+check("ENG-96204 (R9): the LAYOUT pass prompt scopes the work to the layout steps, EXCLUDES the business-rules/handlers step by number, and forbids claiming a logic row",
+  () => { const t = wf.passScopeText("layout-first", false, "page");
+    return /LAYOUT PASS/.test(t) && /steps 1-5 and 7-11/.test(t)
+      && /DO NOT OWN STEP 6/.test(t) && /business rules and the handlers/.test(t)
+      && /DO NOT CLAIM A LOGIC ROW/.test(t)
+      && /WILL REPORT THIS UNIT SHORT, and that is the CORRECT verdict/.test(t); },
+  () => wf.passScopeText("layout-first", false, "page"));
+check("ENG-96204 (R9): once the layout pass is on record the SAME mode renders the LOGIC pass instead — step 6, and an explicit instruction not to lay the page out again",
+  () => { const t = wf.passScopeText("layout-first", true, "page");
+    return /LOGIC PASS/.test(t) && /STEP 6/.test(t) && /Do NOT rebuild the layout/.test(t)
+      && !/DO NOT OWN STEP 6/.test(t); },
+  () => wf.passScopeText("layout-first", true, "page"));
+check("ENG-96204 (R9): every OTHER mode renders NOTHING, and so does a NON-page unit in layout-first — the `app` unit and a reachability record have no layout/logic split to make, and the unit boundary is what keeps a builder from ever being stopped mid-unit",
+  () => (wf.passScopeText("auto", false, "page") === "" && wf.passScopeText("round1", false, "page") === ""
+    && wf.passScopeText("guided", true, "page") === ""
+    && wf.passScopeText("layout-first", false, "app") === "" && wf.passScopeText("layout-first", false, "reach") === ""),
+  () => ({ auto: wf.passScopeText("auto", false, "page"), app: wf.passScopeText("layout-first", false, "app") }));
 
 // ENG-95855 — the migration skill's verification-surface preflight, handed over as an explicit argument.
 // Unlike `buildMode`, absence is never guessed into one of the three tokens: a caller that omits the field
@@ -1106,7 +1247,7 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function claimFor(unit, res, routed)"), wfSrc.indexOf("// The read-only VERIFIER."));
 check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
   wfSrc.includes("function* buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
-    && /!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
+    && /!continuation && shouldPauseAfter\(mode, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
 // ONLY a checkpoint terminates the round. A continuation in that guard truncated the round and deferred every other
 // open unit, buying a full extra Verify + Judge + Reconcile cycle for units that do not depend on the continued one.
@@ -1130,7 +1271,7 @@ check("workflow: operator findings reach the BUILD prompt, and are marked as the
     && /findings: findingsPromptBlock\(unit\.key\)/.test(wfSrc)
     && /\$\{resolutions\}\$\{findings\}\$\{checkFirst\}/.test(wfSrc));
 check("workflow: `checkFirst` is asked for ONLY at a checkpoint, and is sourced from the card's acceptance criteria including the negative ones",
-  /function checkFirstPromptBlock\(/.test(wfSrc) && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unitKey\)/.test(wfSrc)
+  /function checkFirstPromptBlock\(/.test(wfSrc) && /shouldPauseAfter\(mode, CHECKPOINT_SET, unitKey\)/.test(wfSrc)
     && /NEGATIVE ones/.test(wfSrc));
 
 // --- THE APPLICATION UNIT. Measured failure it exists for: a migration into a NEW application where the target
@@ -1914,8 +2055,8 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
 // `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
 // `resolutions*` keys are the reopen bookkeeping that must survive a resume.
-check("ENG-95930: the loosened Reconcile schema still declares all 46 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun`) and its 18-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 46 && (wf.RECONCILE_SCHEMA?.required || []).length === 18
+check("ENG-95930: the loosened Reconcile schema still declares all 48 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions` and `layoutPassDone`) and its 18-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 48 && (wf.RECONCILE_SCHEMA?.required || []).length === 18
     && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
@@ -2178,7 +2319,9 @@ const looseWithoutShape = looseProps.filter((k) => !wf.RECONCILE_SHAPE?.[k]);
 check("ENG-95930: every LOOSENED property (a bare object / array of objects, which the host cannot validate) has a `RECONCILE_SHAPE` entry — a loosened property with no shape entry is a field nothing checks on either side",
   // Round 17b: 14 -> 16, then ENG-96147 -> 17 (`sectionRouteByRun` is bare too). The answers channel added two object arrays (`unconsumedResolutions`,
   // `resolutionsReopened`) in the same compacted form, so both are loosened and both carry a shape entry.
-  looseProps.length === 17 && looseWithoutShape.length === 0,
+  // ENG-96204 -> 18: `runResolutions` is the control-mode channel's own object array, declared in the same
+  // compacted form for the same byte reason, so it is loosened and carries a `RECONCILE_SHAPE` entry too.
+  looseProps.length === 18 && looseWithoutShape.length === 0,
   () => `${looseProps.length} loosened: ${looseProps.join(", ")} | without a shape entry: ${looseWithoutShape.join(", ") || "(none)"}`);
 // The table can only enforce what its own vocabulary covers: a mistyped token (`'bool'`) accepts every value, so it
 // is a disabled check that no answer-shaped probe would reveal.
@@ -4183,8 +4326,14 @@ for (const fn of HELPERS) {
 }
 check("workflow: no helper the CONSTANTS PROLOGUE calls reads a module-level const declared later — the shipped TDZ crash that broke every explicit `mode` before any agent ran",
   tdzOffenders.length === 0, () => tdzOffenders.join(" | "));
-check("workflow: `buildMode` owns its mode list rather than closing over a module const — the fix that keeps it callable from the prologue",
-  /function buildMode\(raw\) \{[ \t]*\n[ \t]*const BUILD_MODES = \[/.test(wfSrc) && topLevelConstAt("BUILD_MODES") < 0);
+// ENG-96204 — the list moved into its own `buildModes()`, so the refuse-to-start stop can put the operator's menu
+// in front of them without a SECOND copy of the set. The GUARANTEE is unchanged and is what this still asserts:
+// `buildMode` binds the list to a LOCAL const inside its own body, and the source of that list is a hoisted
+// FUNCTION DECLARATION — never a module-level const, which is the thing that shipped broken.
+check("workflow: `buildMode` binds its mode list to a local const off a HOISTED function, never a module-level const — the fix that keeps it callable from the constants prologue",
+  /function buildMode\(raw\) \{[ \t]*\n[ \t]*const BUILD_MODES = buildModes\(\)/.test(wfSrc)
+    && /^function buildModes\(\) \{/m.test(wfSrc)
+    && topLevelConstAt("BUILD_MODES") < 0);
 
 // …and the same failure caught by EXECUTION rather than by reading the source, which is the only check that
 // covers initialization order in general. The script is a function body with injected globals and top-level await,
@@ -4215,13 +4364,221 @@ const runWith = (argsExtra, agent, parallel = async () => []) =>
     () => {}, () => {}, agent, parallel, "/x/skills/freedom-build-executor/w.js");
 // Every agent stubbed to return nothing: the run reaches its first Reconcile, gets nothing, returns `reconcile-failed`.
 const runPrologue = (mode) => runWith({ mode }, async () => null);
-for (const mode of ["checkpoints", "guided", "auto", undefined]) {
-  const label = mode === undefined ? "(omitted)" : mode;
-  // eslint-disable-next-line no-await-in-loop -- four sequential runs, each a whole script prologue
+// EVERY mode the run accepts, driven through the real prologue — including the two ENG-96204 added, because the
+// TDZ crash this loop exists for broke every EXPLICITLY NAMED mode and only spared the defaulted one.
+for (const mode of ["checkpoints", "guided", "auto", "round1", "layout-first"]) {
+  // eslint-disable-next-line no-await-in-loop -- sequential runs, each a whole script prologue
   const res = await runPrologue(mode).catch((e) => ({ threw: e.message }));
-  check(`workflow prologue EXECUTES with mode ${label} and reports it back — the shipped defect threw here, before any agent, for every mode but the omitted one`,
-    !res.threw && res.mode === (mode || "auto") && res.stopped === "reconcile-failed",
-    () => (res.threw ? `threw: ${res.threw}` : `mode=${res.mode} stopped=${res.stopped}`));
+  check(`workflow prologue EXECUTES with mode ${mode} and reports it back — the shipped defect threw here, before any agent, for every explicitly named mode`,
+    !res.threw && res.mode === mode && res.modeSource === "argument" && res.stopped === "reconcile-failed",
+    () => (res.threw ? `threw: ${res.threw}` : `mode=${res.mode} source=${res.modeSource} stopped=${res.stopped}`));
+}
+// ENG-96204 — THE OMITTED MODE is no longer one of the cases above: it does not resolve to `auto`, it resolves to
+// nothing, and the run reports `mode: null` on whatever stop it reaches. Here that stop is still
+// `reconcile-failed` — the mode gate lives AFTER the baseline Reconcile, because the operator's recorded answer
+// arrives with `--units.runResolutions` and there is no earlier point at which the run could know it. The
+// refuse-to-start stop itself is executed end-to-end in `run-workflow-core.mjs` against a real Reconcile answer.
+const omittedMode = await runPrologue(undefined).catch((e) => ({ threw: e.message }));
+check("ENG-96204: with the mode OMITTED the prologue still executes and reports `mode: null` / `modeSource: null` — it never fills in `auto`, and it does not throw either: the refusal is a stop the operator can read, not a crash",
+  !omittedMode.threw && omittedMode.mode === null && omittedMode.modeSource === null && omittedMode.stopped === "reconcile-failed",
+  () => (omittedMode.threw ? `threw: ${omittedMode.threw}` : `mode=${omittedMode.mode} source=${omittedMode.modeSource} stopped=${omittedMode.stopped}`));
+// A `defaultMode` with no `mode` resolves through the prologue too, and says where it came from — the declared
+// non-interactive path (AC 5). A typo'd DEFAULT must fail at launch, not at the stop it was meant to prevent.
+const defaultedMode = await runWith({ mode: undefined, defaultMode: "round1" }, async () => null).catch((e) => ({ threw: e.message }));
+check("ENG-96204 (R8): a `defaultMode` and no `mode` resolves in the prologue and reports `modeSource: default` — a run nobody is watching declares itself on file instead of being guessed for",
+  !defaultedMode.threw && defaultedMode.mode === "round1" && defaultedMode.modeSource === "default",
+  () => (defaultedMode.threw ? `threw: ${defaultedMode.threw}` : `mode=${defaultedMode.mode} source=${defaultedMode.modeSource}`));
+const badDefault = await runWith({ mode: undefined, defaultMode: "round-one" }, async () => null).catch((e) => ({ threw: e.message }));
+check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agent — a non-interactive run's fallback is validated when it is declared, not at the stop it was supposed to prevent",
+  !!badDefault.threw && /unknown mode/i.test(badDefault.threw), () => JSON.stringify(badDefault).slice(0, 200));
+
+/* ================================================================================================================
+   ENG-96204 — THE ROUND-BOUNDARY MODES, DRIVEN AS WHOLE RUNS.
+   The pure checks above prove each decision; these run the REAL generated script through a scripted host, because
+   a decision nothing calls is a decision that ships switched off. The claims that only a full run can make:
+     · a shortfall in `round1` ENDS the invocation after ONE round — while the SAME answers under `auto` go on to
+       round 2. That contrast is the whole of AC 3, and it is also what proves the change is scoped to the new
+       modes rather than a global cap on retries.
+     · the stop's payload carries what was built, the open list RANKED, the parked units with reasons and a next
+       step — and the same four facts are written to `run-status.md` by the persistence step.
+     · a RE-RUN after a round stop refuses to build until the operator authorises the next round through the one
+       answer channel, and builds the moment they do.
+     · in `layout-first` round 1 hands every page builder a LAYOUT-ONLY scope, does NOT spend a repair round, and
+       records the pass so the resumed run ports the logic instead of laying the pages out twice.
+   ================================================================================================================ */
+{
+  const APPROVED_R = { found: true, version: "plan-r1", date: "2026-09-02", who: "kamil", recordedIn: "decisions.md", quote: "approved plan-r1" };
+  // TWO open rows on `main`, one of each severity — so the ranking claim has something to rank. The severity is
+  // the ENGINE's (`rowSeverity` stamps it into `--verify-json`); here it arrives the way the run really receives
+  // it, transcribed by Reconcile out of the digest.
+  const ROW_CORRECTNESS = { n: 1, deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "missing: Amount", outcome: "missing", owner: "builder", severity: "correctness" };
+  const ROW_FIDELITY = { n: 2, deliverable: "`creatio-ui-guidelines` design pass", status: "⚠ verify", evidence: "filed but NOT judged", outcome: "unverified", owner: "verifier", severity: "fidelity", id: "main#quality-gates" };
+  const SHORT_VERIFY = { complete: false, missing: 1, unverified: 1, planGaps: [],
+    pages: { main: { complete: false, buildComplete: false, missing: 1, unverified: 1, builderOpen: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } };
+  const RECONCILE_R = (over = {}) => ({
+    approval: APPROVED_R, planVersion: "plan-r1",
+    unitKeys: ["main"], buildOrder: ["main"],
+    targetPackage: "DealPkg", packageState: "exists", mainEntity: "Deal",
+    sectionHost: "existing-app", applicationCode: "DealApp",
+    componentTypes: [], componentResolution: [],
+    pageSchemas: { main: "DealFormPage" }, parents: {},
+    reachability: [], reachabilityState: {},
+    preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [], runResolutions: [],
+    evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
+    parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
+    verify: SHORT_VERIFY, exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
+    ...over,
+  });
+  const BUILT_R = (unit) => ({ unit, claimedBuilt: ["crt.Input"], schemaName: `${unit}Page`, packageName: "DealPkg",
+    guidelines: { evidenceId: "main#quality-gates", ran: true, referencePage: "ShippedPage", componentsDiffed: ["crt.Input"] },
+    // `fixAttempted: false` — the unit's one bounded in-context fix is NOT yet spent, which is the ordinary
+    // round-1 shape. A `true` here would make the unit park after round 1 (ENG-95469's in-context park), the
+    // schedule would empty, and the run would correctly CLOSE rather than stop at the boundary — a park is
+    // terminal, so there is genuinely nothing left for a human to gate. These scenarios are about the boundary
+    // stop, so they keep the unit open and cover the parked case separately.
+    selfCheck: { ran: true, buildComplete: false, complete: false, missing: 1, unverified: 1, fixAttempted: false, stillShortRows: [ROW_CORRECTNESS] },
+    blocked: [], proposals: [] });
+  // One scripted host, recording every dispatch so the assertions can read what the run actually asked for. The
+  // Reconcile answers are a LIST: the baseline is answer 1, and each round's own Reconcile takes the next.
+  // `agent(prompt, { agentType, schema, phase, label })` is the host contract this adapter calls — see
+  // `adapters/claude-workflow.mjs`. The work-item ID is deliberately NOT part of it, so the id discriminator the
+  // two passes need is pinned at the source below and its EFFECT (a distinct dispatch per pass) is what these
+  // scenarios observe.
+  const scriptRun = (argsExtra, reconciles) => {
+    const calls = [];
+    let r = 0;
+    const agent = async (prompt, opts = {}) => {
+      const { phase, label } = opts;
+      calls.push({ phase, label, prompt });
+      if (phase === "Reconcile") { const a = reconciles[Math.min(r, reconciles.length - 1)]; r += 1; return a; }
+      if (phase === "Refs") return { written: true, files: ["/mig/refs/index.md"], slices: ["main"], notes: "" };
+      if (phase === "Preflight") return { resolved: [], unresolved: [] };
+      if (phase === "Build") return BUILT_R(/^build:(.*)$/.exec(label || "")?.[1] || "main");
+      if (phase === "Verify") return { builtFile: "/mig/built.json", pagesWritten: ["main"], pagesRecordedFalse: [], unknownSchema: [], schemasConfirmed: {}, reachabilityWritten: {}, evidenceWritten: ["main#quality-gates"], discrepancies: [], notes: "" };
+      if (phase === "Judge") return { verdicts: [{ id: "main#quality-gates", convincing: true, why: "diffed" }], notes: "" };
+      if (phase === "Close") return { written: true, statusWritten: true, queueFile: "/mig/build-queue.json", parkedKeys: [], notes: "" };
+      return null;
+    };
+    return runWith({ checkpointAfter: [], ...argsExtra }, agent).then((res) => ({ res, calls }), (e) => ({ res: { threw: e.message }, calls }));
+  };
+  const buildCalls = (calls) => calls.filter((c) => c.phase === "Build");
+  const persistPrompt = (calls) => calls.filter((c) => c.phase === "Close" && c.label === "persist:carry").map((c) => c.prompt).join("\n");
+
+  /* --- T2: `round1` stops after ONE round; the same answers under `auto` go on to round 2 ------------------- */
+  const r1 = await scriptRun({ mode: "round1" }, [RECONCILE_R(), RECONCILE_R({ roundOf: { main: 1 } })]);
+  check("ENG-96204 (T2/R3): a `round1` run whose verification reports a SHORTFALL returns `paused-at-round` after EXACTLY one round — the deviation surfaces now instead of at round 6",
+    !r1.res.threw && r1.res.stopped === "paused-at-round" && r1.res.rounds === 1 && r1.res.complete === false,
+    () => (r1.res.threw ? `threw: ${r1.res.threw}` : `stopped=${r1.res.stopped} rounds=${r1.res.rounds}`));
+  check("ENG-96204 (T2/R3): it dispatched ONE build round and no second one — a stop that let another round run would satisfy the `stopped` assertion above and still be the defect",
+    buildCalls(r1.calls).length === 1 && buildCalls(r1.calls)[0].label === "build:main",
+    () => buildCalls(r1.calls).map((c) => c.id));
+  const rAuto = await scriptRun({ mode: "auto" }, [RECONCILE_R(), RECONCILE_R({ roundOf: { main: 1 } }), RECONCILE_R({ roundOf: { main: 2 } })]);
+  check("ENG-96204 (T2/R4): the SAME answers under `auto` proceed into round 2 and beyond — the stop is scoped to the round-boundary modes and did NOT become a global cap on repair rounds",
+    !rAuto.res.threw && rAuto.res.stopped !== "paused-at-round" && buildCalls(rAuto.calls).length > 1,
+    () => (rAuto.res.threw ? `threw: ${rAuto.res.threw}` : `stopped=${rAuto.res.stopped} rounds=${rAuto.res.rounds} builds=${buildCalls(rAuto.calls).length}`));
+  /* --- R5/AC2: the stop's payload, and the same four facts on disk ----------------------------------------- */
+  check("ENG-96204 (R5): the stop payload carries all four facts — what was BUILT, the open list RANKED with every correctness item first, the PARKED units, and a `next` naming the concrete action",
+    Array.isArray(r1.res.built) && r1.res.built.includes("main")
+      && Array.isArray(r1.res.openRanked) && r1.res.openRanked.length === 2
+      && r1.res.openRanked[0].severity === "correctness" && r1.res.openRanked[1].severity === "fidelity"
+      && Array.isArray(r1.res.parked)
+      && Array.isArray(r1.res.remainingOpen) && r1.res.remainingOpen.includes("main")
+      && /round-2/.test(r1.res.next || ""),
+    () => ({ built: r1.res.built, openRanked: r1.res.openRanked, remainingOpen: r1.res.remainingOpen, next: (r1.res.next || "").slice(0, 200) }));
+  check("ENG-96204 (R6): the RANKING is the engine's severity and not the table order — the fidelity row is row 1 in the verdict and row 2 in the ranked list, which is the whole point of the axis",
+    SHORT_VERIFY.pages.main.openRows[0].severity === "fidelity" && r1.res.openRanked[0].deliverable === ROW_CORRECTNESS.deliverable,
+    () => r1.res.openRanked.map((it) => `${it.severity}:${it.deliverable}`));
+  check("ENG-96204 (R8/R5): the persistence step is handed `run-status.md` as LITERAL BYTES to write — the four facts are computed, never paraphrased by an agent, and the file is named on the return",
+    /run-status\.md/.test(persistPrompt(r1.calls))
+      && /RUN STATUS BEGIN/.test(persistPrompt(r1.calls))
+      && /## Built this round/.test(persistPrompt(r1.calls))
+      && /## Open, ranked/.test(persistPrompt(r1.calls))
+      && /## Parked, and why/.test(persistPrompt(r1.calls))
+      && /## Next step/.test(persistPrompt(r1.calls))
+      && r1.res.runStatusFile === "out/run-status.md",
+    () => ({ statusFile: r1.res.runStatusFile, prompt: persistPrompt(r1.calls).slice(-900) }));
+  check("ENG-96204: the status document the persistence step is given puts the correctness row ABOVE the fidelity one — the ranking reaches the FILE an operator reads, not only the return value a caller sees",
+    persistPrompt(r1.calls).indexOf("[correctness]") > 0
+      && persistPrompt(r1.calls).indexOf("[correctness]") < persistPrompt(r1.calls).indexOf("[fidelity]"),
+    () => persistPrompt(r1.calls).split("\n").filter((l) => /^- \[/.test(l)).join(" | "));
+  /* --- R7/AC4: the resume gate, and the one channel that opens it ------------------------------------------ */
+  const noDecision = await scriptRun({ mode: "round1" }, [RECONCILE_R({ roundOf: { main: 1 } })]);
+  check("ENG-96204 (R7): re-running after a round stop WITHOUT the round-scoped answer stops `awaiting-round-decision` and builds NOTHING — a re-run that quietly ran another round is the one thing this mode exists to prevent",
+    !noDecision.res.threw && noDecision.res.stopped === "awaiting-round-decision"
+      && noDecision.res.rounds === 0 && noDecision.res.roundsOnFile === 1
+      && buildCalls(noDecision.calls).length === 0
+      && /round-2/.test(noDecision.res.next || ""),
+    () => (noDecision.res.threw ? `threw: ${noDecision.res.threw}` : `stopped=${noDecision.res.stopped} rounds=${noDecision.res.rounds} builds=${buildCalls(noDecision.calls).length}`));
+  check("ENG-96204 (R7): that stop reports the open list RANKED too — an operator deciding whether to authorise another round is deciding about those rows, so they travel with the question",
+    Array.isArray(noDecision.res.openRanked) && noDecision.res.openRanked.length === 2
+      && noDecision.res.openRanked[0].severity === "correctness",
+    () => noDecision.res.openRanked);
+  const authorised = await scriptRun({ mode: "round1" },
+    [RECONCILE_R({ roundOf: { main: 1 }, runResolutions: [{ item: "round-2", answer: "go" }] }),
+      RECONCILE_R({ roundOf: { main: 2 }, runResolutions: [{ item: "round-2", answer: "go" }] })]);
+  check("ENG-96204 (R7): with `{\"kind\":\"run\",\"item\":\"round-2\"}` on file the re-run BUILDS its round and stops at the next boundary — the answer channel is the whole of the resume decision, with no second input",
+    !authorised.res.threw && buildCalls(authorised.calls).length === 1 && authorised.res.stopped === "paused-at-round",
+    () => (authorised.res.threw ? `threw: ${authorised.res.threw}` : `stopped=${authorised.res.stopped} builds=${buildCalls(authorised.calls).length}`));
+  check("ENG-96204 (R7): the authorised run asks for round THREE next, not round two again — the gate counts the rounds already CHARGED on file, so a folder three rounds deep never re-asks a question it has been answered",
+    /round-3/.test(authorised.res.next || ""), () => (authorised.res.next || "").slice(0, 240));
+  /* --- R7: the mode itself through the same channel -------------------------------------------------------- */
+  const modeByAnswer = await scriptRun({ mode: undefined },
+    [RECONCILE_R({ runResolutions: [{ item: "control-mode", answer: "round1" }] }),
+      RECONCILE_R({ roundOf: { main: 1 }, runResolutions: [{ item: "control-mode", answer: "round1" }] })]);
+  check("ENG-96204 (R7/T4): with NO mode argument, a run-scoped `control-mode` answer resolves the mode and the run proceeds in it — reported as `modeSource: resolutions`, so the operator can see their recorded choice took effect",
+    !modeByAnswer.res.threw && modeByAnswer.res.mode === "round1" && modeByAnswer.res.modeSource === "resolutions"
+      && modeByAnswer.res.stopped === "paused-at-round",
+    () => (modeByAnswer.res.threw ? `threw: ${modeByAnswer.res.threw}` : `mode=${modeByAnswer.res.mode} source=${modeByAnswer.res.modeSource} stopped=${modeByAnswer.res.stopped}`));
+  /* --- R9: the layout pass, the logic pass, and the budget it does not spend ------------------------------- */
+  const layout = await scriptRun({ mode: "layout-first" }, [RECONCILE_R(), RECONCILE_R({ roundOf: {} })]);
+  const layoutBuild = buildCalls(layout.calls)[0]?.prompt || "";
+  check("ENG-96204 (R9): in `layout-first` round 1 the page builder is scoped to the LAYOUT steps, is told step 6 is not its own, and is told its own gate will read short — the three things that keep it from porting logic anyway",
+    !layout.res.threw && /LAYOUT PASS/.test(layoutBuild) && /DO NOT OWN STEP 6/.test(layoutBuild)
+      && /DO NOT CLAIM A LOGIC ROW/.test(layoutBuild) && /WILL REPORT THIS UNIT SHORT/.test(layoutBuild),
+    () => (layout.res.threw ? `threw: ${layout.res.threw}` : layoutBuild.slice(0, 400)));
+  check("ENG-96204 (R9): the layout pass does NOT spend the per-unit repair budget — the carry never tells the queue writer to increment `main`'s round counter, so the logic pass still has its full budget and the unit cannot park before it runs",
+    !/ROUND COUNTERS/.test(persistPrompt(layout.calls)),
+    () => persistPrompt(layout.calls).split("\n").filter((l) => /ROUND COUNTERS|`main`/.test(l)).slice(0, 6).join(" | "));
+  check("ENG-96204 (R9): the layout pass is RECORDED — the carry sets `layoutPassDone` on the queue file and the stop reports it, which is the only thing that can tell a resumed run to port the logic instead of laying the pages out again",
+    /layoutPassDone/.test(persistPrompt(layout.calls)) && layout.res.layoutPassDone === true,
+    () => ({ reported: layout.res.layoutPassDone, inPrompt: /layoutPassDone/.test(persistPrompt(layout.calls)) }));
+  check("ENG-96204 (R9): at the layout stop the open LOGIC rows are reported as SCHEDULED for the logic pass rather than as a shortfall of this round — an operator told to repair a page that is on plan repairs the wrong thing",
+    /Round 1 built LAYOUT ONLY/.test(layout.res.next || "") && /SCHEDULED for the logic pass/.test(layout.res.next || ""),
+    () => (layout.res.next || "").slice(0, 320));
+  check("ENG-96204 (R9): the layout pass PARKS NOTHING even though every unit's own gate reports it short — a park is terminal for the run, and these units were never stuck",
+    Array.isArray(layout.res.parked) && layout.res.parked.length === 0,
+    () => layout.res.parked);
+  const logicPass = await scriptRun({ mode: "layout-first" },
+    [RECONCILE_R({ layoutPassDone: true, roundOf: { main: 1 }, runResolutions: [{ item: "round-2", answer: "go" }] }),
+      RECONCILE_R({ layoutPassDone: true, roundOf: { main: 2 }, runResolutions: [{ item: "round-2", answer: "go" }] })]);
+  const logicBuild = buildCalls(logicPass.calls)[0]?.prompt || "";
+  check("ENG-96204 (R9): a resumed `layout-first` run whose queue file records the layout pass runs the LOGIC pass — step 6, with an explicit instruction not to rebuild the layout — and never a second layout pass",
+    !logicPass.res.threw && /LOGIC PASS/.test(logicBuild) && /STEP 6/.test(logicBuild)
+      && /Do NOT rebuild the layout/.test(logicBuild) && !/DO NOT OWN STEP 6/.test(logicBuild),
+    () => (logicPass.res.threw ? `threw: ${logicPass.res.threw}` : logicBuild.slice(0, 400)));
+  check("ENG-96204 (R9): the logic pass DOES spend a repair round — the exemption is for the layout pass alone, or the run would have no budget arithmetic left to park a unit that genuinely cannot close",
+    /ROUND COUNTERS/.test(persistPrompt(logicPass.calls)),
+    () => persistPrompt(logicPass.calls).split("\n").filter((l) => /ROUND COUNTERS/.test(l)).join(" | "));
+  // THE WORK-ITEM ID DISCRIMINATOR, source-pinned. The id is not part of the host's `agent()` contract, so it
+  // cannot be read off the dispatches above — but it is a correctness requirement, not a detail: the layout pass
+  // charges no repair round, so the logic pass comes back at the SAME `nth`, and the journal replays by id. Two
+  // items sharing one id would replay the logic pass as the layout pass's recorded answer, i.e. the run would
+  // silently believe it had ported the behaviour. This is the same lesson the continuation counter already paid
+  // for (ENG-95474), which is why the two discriminators are composed side by side.
+  check("ENG-96204 (R9): the layout pass carries its own work-item-id mark, next to the continuation one — a pass that charges no round must not reuse the id the next pass will ask for, or the journal replays one as the other",
+    /const passMark = layoutPassNow\(\) \? '\.layout' : ''/.test(wfSrc)
+      && /const itemId = continuationsSpent \? `build\.\$\{unit\.key\}\.r\$\{nth\}\.c\$\{continuationsSpent\}\$\{passMark\}` : `build\.\$\{unit\.key\}\.r\$\{nth\}\$\{passMark\}`/.test(wfSrc),
+    () => wfSrc.slice(wfSrc.indexOf("const passMark"), wfSrc.indexOf("const passMark") + 320));
+  /* --- the stop is never `complete`, and a round that closes everything is never a stop ------------------- */
+  const GREEN_R = RECONCILE_R({ verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } }, roundOf: { main: 1 } });
+  const closed = await scriptRun({ mode: "round1" }, [RECONCILE_R(), GREEN_R]);
+  check("ENG-96204: a `round1` round that CLOSES everything is not stopped at the boundary — there is nothing left for a human to gate, so the run falls through to the normal close, exactly as a reached checkpoint does",
+    !closed.res.threw && closed.res.stopped === null && closed.res.complete === true && closed.res.rounds === 1,
+    () => (closed.res.threw ? `threw: ${closed.res.threw}` : `stopped=${closed.res.stopped} complete=${closed.res.complete} rounds=${closed.res.rounds}`));
+  const greenResume = await scriptRun({ mode: "round1" }, [GREEN_R]);
+  check("ENG-96204 (R7): the resume gate does NOT fire when nothing is open — a finished run must close, not ask permission to do nothing",
+    !greenResume.res.threw && greenResume.res.stopped === null && greenResume.res.complete === true,
+    () => (greenResume.res.threw ? `threw: ${greenResume.res.threw}` : `stopped=${greenResume.res.stopped} complete=${greenResume.res.complete}`));
 }
 const badMode = await runPrologue("semi").catch((e) => ({ threw: e.message }));
 check("workflow prologue: an UNKNOWN mode still throws its own error — the TDZ fix did not turn the validation into a silent fallback to `auto`",
@@ -5679,7 +6036,12 @@ check("ENG-95474 review: both build budgets reject a non-finite value — `Numbe
 check("ENG-95474 BUILD continuation: continuation handoff is verified but does NOT spend the repair-round counter",
   /const chargeBuildAttempt = \(key\) => \{[\s\S]{0,180}?localRounds\[key\][\s\S]{0,180}?dispatched\.add\(key\)/.test(wfSrc)
     && /const continuation = resolveContinuation\(unit, res, r\)/.test(wfSrc)
-    && /if \(!continuation\) chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
+    // ENG-96204 — the guard gained a SECOND exemption of the same kind: a `layout-first` LAYOUT pass is a
+    // deliberate part-delivery this run asked for, not a failed attempt at the whole unit, so it does not spend a
+    // repair round either. Both exemptions are pinned here together, because charging the layout pass would let a
+    // three-round budget be spent by the layout pass plus two repairs and park pages before the logic pass ran.
+    && /if \(!continuation && !layoutPassNow\(\)\) chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
+    && /const layoutPassNow = \(\) => isLayoutPassMode\(mode\) && !layoutPassDone/.test(wfSrc)
     && /build continuation \$\{continuations\[unit\.key\]\} of \$\{MAX_CONTINUATIONS\}[\s\S]*does not consume a repair round/.test(wfSrc)
     && /CONTINUATION: \$\{r\.continued\.length\}/.test(wfSrc));
 check("ENG-95474 BUILD continuation: continuation counts are tracked and persisted separately from repair rounds",
@@ -5699,7 +6061,7 @@ check("ENG-95474 review: an over-budget continuation ask is REFUSED and charged 
     && /if \(!continuationAllowed\(spent, MAX_CONTINUATIONS\)\) \{[\s\S]{0,320}?return false/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /REFUSED|spent/.test(l)).join("\n"));
 check("ENG-95474 BUILD continuation: an unfinished continuation result cannot also trigger a human checkpoint pause",
-  /if \(!continuation && shouldPauseAfter\(MODE, CHECKPOINT_SET, unit\.key\)\)/.test(wfSrc));
+  /if \(!continuation && shouldPauseAfter\(mode, CHECKPOINT_SET, unit\.key\)\)/.test(wfSrc));
 check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistPending` runs more than once per round, and re-sending the same set charged one build attempt two or three times, parking a unit before it spent its real repair rounds",
   /dispatched\.clear\(\)/.test(wfSrc)
     && /dispatched\.clear\(\)[\s\S]{0,200}carryPersisted = carryFingerprint\(\)/.test(wfSrc)
@@ -6229,6 +6591,11 @@ check("ENG-95472: Reconcile is told to run BOTH commands verbatim — a dropped 
     const STUBS = String.raw`
 const MAX_ROUNDS = 3
 const BUILD_TURN_BUDGET = 80
+// ENG-96204 — the run's resolved control mode and the layout-pass marker, which buildPrompt reads to render the
+// pass scope. NO BACKTICKS IN THIS BLOCK: it is a String.raw template, so one would close it. Mode auto renders
+// no pass scope at all, which is what every render below is asserted against.
+let mode = "auto"
+let layoutPassDone = false
 const VERIFY_TABLE = "/m/verify.md"
 const REFS_DIR = "/m/refs"
 const REFS_INDEX = "/m/refs/index.md"
@@ -6315,6 +6682,8 @@ ${pureFn("repairBlock")}
 ${pureFn("continuationBudgetBlock")}
 ${pureFn("requiredAppCode")}
 ${pureFn("appCodeInstruction")}
+${pureFn("isLayoutPassMode")}
+${pureFn("passScopeText")}
 ${kindBlockFnsSrc}
 ${fnSrc}
 export { buildPrompt };

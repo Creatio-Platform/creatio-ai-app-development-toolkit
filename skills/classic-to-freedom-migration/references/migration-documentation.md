@@ -50,7 +50,8 @@ migrations/<app-or-section-slug>/
   behaviour-index.json # the same run's row → card/AC index, merged into the manifest as `behaviourIndex`
   roadmap.md           # living execution tracker (status of every task)
   decisions.md         # decision and approval log (append-only; the plan approval lives here at BOTH scopes)
-  resolutions.json     # the operator's ANSWERS to the ⚠ Confirm questions, machine-read by the build
+  resolutions.json     # the operator's ANSWERS — the ⚠ Confirm questions AND the run-level decisions, machine-read by the build
+  run-status.md        # engine-written: the CURRENT status at a round-boundary stop (overwritten each stop)
   worklog.md           # session log and runtime read-back evidence (append-only)
 ```
 
@@ -67,6 +68,27 @@ Take `kind` and `item` verbatim from `--units.preflight` (the published `id` als
 `pageKey` half moves between runs). Record the decision in `decisions.md` as usual for the humans, and put the
 answer here for the build — the engine attaches it to the queue item that asked it, and the build agent for that
 page is handed it. An answer here closes no `--verify` row; the deliverable is still built, verified and judged.
+
+**The SAME file carries the RUN-level decisions, under the reserved kind `run`** (ENG-96204). A ⚠ Confirm item
+belongs to a page; these belong to the invocation and to no page:
+
+```jsonc
+{ "resolutions": [ { "kind": "run", "item": "control-mode", "answer": "round1" },
+                   { "kind": "run", "item": "round-2", "answer": "go" } ] }
+```
+
+`control-mode` chooses how closely the operator watches (`auto` · `checkpoints` · `guided` · `round1` ·
+`layout-first`); `round-<N>` authorises round N in a round-boundary mode. They are republished at
+`--units.runResolutions` and are **excluded from `resolutionsUnmatched`** — they answer no ⚠ Confirm question by
+construction, so reporting them would call a correctly-recorded mode choice an answer nobody asked for. **One
+channel, no exceptions:** there is no second state file for either decision, and `findings` is not it — `findings`
+re-opens a unit the gate called complete, which is a different job.
+
+**`run-status.md` is ENGINE-WRITTEN, and it is the only one of these documents that is.** A round-boundary stop
+writes it: what was built, the open rows ranked correctness-first, the parked units with their reasons, and the one
+next step — every line computed from the gate's own numbers, never composed by an agent. It is the CURRENT status
+and is overwritten at each stop; the history stays in `worklog.md`. Do not hand-edit it, and do not treat its
+absence as a failed run: a run that never stopped at a round boundary never writes it.
 
 Use a stable slug, for example `gdpr-for-creatio`. Do not rename the folder mid-project.
 

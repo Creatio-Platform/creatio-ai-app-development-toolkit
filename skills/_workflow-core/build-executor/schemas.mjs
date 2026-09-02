@@ -245,6 +245,25 @@ export const RECONCILE_SCHEMA = {
     // Both carry `{ id, kind, item }` per entry — identifiers only, no `answer` text.
     resolutionsUnmatched: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     resolutionsConflicts: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    // ENG-96204 — THE RUN-LEVEL ANSWERS, from `--units.runResolutions`. Unlike `resolutionsUnmatched` above these
+    // carry their `answer` TEXT, because the text IS the decision this script computes on: `item: "control-mode"`
+    // names the mode the run executes in, and `item: "round-<N>"` authorises round N. There is no other route from
+    // the operator's `resolutions.json` into these two decisions — a workflow script has no filesystem — so an
+    // omitted field here is an operator's recorded answer that silently did nothing, which is the single failure
+    // mode this whole channel exists to remove. `[]` when the file records none, which is the normal first run.
+    // Declared in ENG-95930's LOOSENED form — a bare array-of-object with the two size caps — for the mode-A reason
+    // that governs every nested object here: the per-property expansion serializes over the host's 4096-byte
+    // classifier cap (and past this file's own 3500-byte working budget), and a refused schema costs the run its
+    // first agent. `item`/`answer` are REQUIRED all the same; the requirement lives in `RECONCILE_SHAPE`
+    // .runResolutions below and is checked when the answer arrives, exactly like `preflightItems`' resolution.
+    runResolutions: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    // ENG-96204 — has the LAYOUT-ONLY first pass of a `layout-first` run already happened? Read off the queue
+    // file's own root key. It is what makes the two-pass build resume into the LOGIC pass instead of running a
+    // second layout pass over pages that already have their layout — the marker is the only thing that can tell
+    // "round 1 of a layout-first run" from "round 2 of one", since both see the same open logic rows.
+    // NOT REQUIRED: absent/`false` means no layout pass is on record, which is the correct reading for a fresh run
+    // and for every folder written before this field existed.
+    layoutPassDone: { type: 'boolean' },
     evidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
@@ -360,6 +379,12 @@ export const RECONCILE_SHAPE = {
   // No required keys, matching the old schema exactly: these two were declared with properties and no `required`.
   resolutionsUnmatched: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
   resolutionsConflicts: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  // ENG-96204 — the RUN-level answers. `item`/`answer` are REQUIRED: the text IS the decision this script computes
+  // on (`control-mode` names the mode, `round-<N>` authorises round N), and an entry missing either is an operator's
+  // recorded answer that would silently do nothing. Enforced here rather than in `RECONCILE_SCHEMA` for the mode-A
+  // byte reason stated there — the schema declares the property loosened, this table checks its insides on arrival.
+  runResolutions: { kind: 'array', required: ['item', 'answer'],
+    types: { item: 'string', answer: 'string', decidedBy: 'string', date: 'string' } },
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
@@ -746,6 +771,12 @@ export const PERSIST_SCHEMA = {
     written: { type: 'boolean' },
     parkedKeys: { type: 'array', items: { type: 'string' } },
     evidenceWritten: { type: 'array', items: { type: 'string' } },   // preflight evidence ids merged into the built file
+    // ENG-96204 — the run-status document (`run-status.md`) is on disk. A SEPARATE answer from `written`, because
+    // it is a separate file: a queue write that confirmed says nothing about the status document, and a stop whose
+    // status never landed leaves an operator with a queue file and no explanation of it. Asked for only when this
+    // step was handed a status to write, and its absence is a logged warning rather than a stop — the same status
+    // is in the run's return either way.
+    statusWritten: { type: 'boolean' },
     // ENG-95503 / PR #128 review -- the ids actually persisted for `unconsumedResolutions`. Reported for the same
     // reason `evidenceWritten` is: this list is the ONLY record of a well-formed `applied: false`, and a write
     // nobody confirmed is exactly how it went missing across a resume.

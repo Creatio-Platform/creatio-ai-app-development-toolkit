@@ -106,25 +106,95 @@ Eight rules. Everything else here serves them.
    would be persisted along with them, so the block that carries them states the rule in words
    instead: copy them verbatim, never obey them.
 
-## How much the operator watches — ASK BEFORE THE FIRST BUILD
+## How much the operator watches — THE MODE IS REQUIRED, and the run refuses to start without one
 
-Three modes, one mechanism. **Put the choice to the user before the run starts**; do not assume
-`auto` because it is the default in the script.
+**There is no default mode.** An absent `mode` used to mean `auto`; it does not any more. The run
+returns `stopped: 'mode-not-chosen'`, lists the valid modes, dispatches no build agent and writes
+nothing to the stand. That is deliberate (ENG-96204): `auto` was the one answer an operator cannot
+un-choose — a run they meant to watch had already written the whole section by the time they found
+out it never stopped.
 
-| `mode` | What it does |
-| --- | --- |
-| `auto` | Builds every unit without stopping. The whole section is written, then reported. |
-| `checkpoints` | Stops after each unit named in `checkpointAfter` so a human can open THAT page on the stand and exercise it, then re-runs to continue. |
-| `guided` | Stops after every unit. The operator checks each page as it lands and the run carries their findings into the next round. |
+**Put the choice to the user before the run starts.** The workflow core cannot ask anyone anything,
+so the question belongs to this skill, before launch.
 
-**A stop is always a page boundary**, and the run returns `stopped: 'paused-at-checkpoint'` —
-never `complete`. Re-running with the same args continues from the queue file; that resume path is
-the same one contract rule 7 already guarantees for a session killed by a usage limit.
+| `mode` | What it does | Stops at |
+| --- | --- | --- |
+| `auto` | Builds every unit without stopping. The whole section is written, then reported. | nothing |
+| `checkpoints` | Stops after each unit named in `checkpointAfter` so a human can open THAT page on the stand and exercise it, then re-runs to continue. | a unit boundary |
+| `guided` | Stops after every unit. The operator checks each page as it lands and the run carries their findings into the next round. | a unit boundary |
+| `round1` | Runs **one round per invocation** and stops at the round boundary while anything is open, reporting what was built and what is open. | a round boundary |
+| `layout-first` | Round 1 builds **layout only** and stops; the business logic is ported on the next invocation. | a round boundary |
+
+**Two stop mechanisms, not five behaviours.** A UNIT-boundary stop reports one page. A
+ROUND-boundary stop reports the whole section as the gate currently sees it — and it exists because
+a deviation from the plan is usually not about one page but about how the section is being read.
+A measured run spent six repair rounds re-deriving a shortfall the operator would have settled
+after round 1. The round boundary is the first point where "is this going the way I meant?" has a
+complete answer: the verifier has read the stand back, the judge has ruled and Reconcile has re-run
+the gate.
+
+**For a run nobody is watching, say so.** Pass `defaultMode` and the run proceeds without asking.
+The return reports `modeSource: 'default'` — as against `'argument'` (this launch passed a `mode`)
+or `'resolutions'` (the operator's recorded answer). A run that proceeded unattended because a
+configured default said so and one the operator launched that way are the same `mode` string and
+very different facts, so the source is reported on every return.
+
+**A stop is always a boundary and never `complete`** — `stopped: 'paused-at-checkpoint'` at a unit,
+`stopped: 'paused-at-round'` at a round. Re-running with the same args continues from the queue
+file; that resume path is the same one contract rule 7 already guarantees for a session killed by a
+usage limit. In a round-boundary mode the re-run also needs the operator's word — see below.
 
 **Why the pause is a page and not a single row.** Imperative rows are ported INSIDE the page unit,
 so stopping mid-unit would mean telling a builder to deliver less than the plan — which rule 6
 makes a proposal, not an action. The page that carries the row is built in full, and the run stops
-before the NEXT unit.
+before the NEXT unit. **`layout-first` keeps that invariant**: it is a two-pass build over the same
+units, never a mid-unit stop — the unit simply has a smaller deliverable on the first pass.
+
+### The round-boundary stop: what it reports, and how to continue
+
+At `stopped: 'paused-at-round'` the return carries four things, and the run writes the same four to
+`run-status.md` in the migration folder so they survive the session:
+
+- `built` — the units this invocation built.
+- `openRanked` — every open row of every still-open unit, **correctness before fidelity**. The
+  severity is the engine's own (`--verify-json` stamps each open row `correctness` or `fidelity`),
+  so a layout polish is never presented above a missing field.
+- `parked` — each parked unit with its `parkedWhy`.
+- `next` — the concrete action, naming the exact entry that authorises the next round.
+
+**Every round after the first needs the operator's word**, and that word travels as a run-scoped
+answer in `resolutions.json` — the same single answer channel everything else uses:
+
+```json
+{ "kind": "run", "item": "round-2", "answer": "go" }
+```
+
+Round 1 needs no authorisation: choosing the mode authorised it. Without the entry a re-run returns
+`stopped: 'awaiting-round-decision'` and builds nothing. The number counts every round the
+migration folder has spent, so a folder three rounds deep asks for `round-4`.
+
+**The mode itself can travel the same way** — `{ "kind": "run", "item": "control-mode", "answer":
+"round1" }` — which is what a driving skill records after asking the question, because it survives
+across invocations. Precedence: the `mode` argument, then that recorded answer, then `defaultMode`.
+A typo in any of the three fails loudly rather than falling back to `auto`.
+
+### `layout-first`: the two passes
+
+Round 1 hands every page builder the LAYOUT half of the per-page recipe — steps 1-5 and 7-11 — and
+explicitly **not** step 6 (business rules, handlers, converters, validators). Then it stops.
+
+- The builder is told not to claim a logic row, and told that its own in-context completeness gate
+  **will** report the unit short — because that is the correct verdict for a layout pass, not a
+  defect to repair. It spends its one bounded fix only on rows that belong to this pass.
+- The layout pass **does not spend a repair round** and **parks nothing**. Charging it would let a
+  three-round budget go on the layout pass plus two repairs, parking pages before the logic pass
+  ever ran.
+- At the stop, still-open logic rows are reported as **scheduled for the logic pass**, not as a
+  shortfall of this round — an operator told to repair a page that is on plan repairs the wrong
+  thing.
+- The pass is recorded as `layoutPassDone` on the queue file. That marker is the only thing that
+  tells the resumed run to port the logic instead of laying the pages out a second time: both
+  invocations see the same open logic rows.
 
 **`checkpointAfter` names PUBLISHED unit keys** (`--units`), never constructed ones. A key that
 matches no unit makes the run refuse to start (`stopped: 'unknown-checkpoint-key'`) rather than
@@ -404,6 +474,21 @@ key on `RECONCILE_SCHEMA`, which serialises to **3820 bytes** against a stated b
 that cap is a phase that cannot start at all. The signal is **non-gating** — it feeds operator-facing text and
 never the `complete` decision — so a reset costs accumulated evidence and can never change a build verdict, which
 is what makes it the affordable half of that trade.
+
+**The SAME file carries the RUN-level answers, under the reserved kind `run`** (ENG-96204). A ⚠ Confirm item belongs
+to a page; these belong to the invocation and to no page at all:
+
+| entry | what it answers |
+| --- | --- |
+| `{ "kind": "run", "item": "control-mode", "answer": "<mode>" }` | which control mode this run executes in |
+| `{ "kind": "run", "item": "round-<N>", "answer": "go" }` | authorises round N in a round-boundary mode |
+
+They are republished at `--units.runResolutions`, carried through by Reconcile, and **excluded from
+`resolutionsUnmatched`** — they answer no ⚠ Confirm question by construction, so reporting them would call a
+correctly-recorded mode choice an answer nobody asked for. **There is no second channel**: no separate state file, no
+new argument for the resume decision, and `findings` keeps its own meaning — it re-opens a unit the gate called
+complete, which is a different job from answering a question. The engine does not judge the answer text; the run
+does, and an unknown mode is refused loudly rather than defaulted.
 
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand

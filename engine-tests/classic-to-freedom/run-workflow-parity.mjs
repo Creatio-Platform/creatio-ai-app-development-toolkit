@@ -23,6 +23,14 @@
 // the working tree, because a baseline refreshed from the thing under test proves nothing. When a behaviour change
 // is intended, the diff is reviewed and the baseline is replaced deliberately, in its own commit.
 //
+// WHAT THE `freedom-build-executor` BASELINE IS, as of ENG-96204: the PREVIOUSLY SHIPPED script, frozen. It began
+// life as the hand-written original the generator replaced, and it was replaced when the control-mode work (a
+// deliberate change to the return shape and to the Reconcile prompt) made every prompt and return diverge on
+// purpose. It therefore says nothing about the change that replaced it — that change's own coverage is the
+// executed suites in `run-infra.mjs` and `run-workflow-core.mjs` — and everything about the NEXT one: the whole
+// prompt text and return shape of the current behaviour is now pinned byte for byte. The value of this file is
+// always forward-looking, which is why replacing it is a reviewed act and not a build step.
+//
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -238,9 +246,16 @@ function behaviourScenarios() {
 // park, and the two mid-run failures (verifier / reconcile).
 // ---------------------------------------------------------------------------
 function buildScenarios() {
+  // ENG-96204 — `mode: "auto"` IS NOW PART OF THESE ARGS, and it is stated rather than omitted. It used to be
+  // omittable and default to `auto`; the run now refuses to start until a mode is resolved (AC 1). Both sides of
+  // this comparison behave identically under an EXPLICIT `auto` — the baseline never read the field it did not
+  // have — so declaring it here keeps every scenario below exercising the behaviour it was written for instead of
+  // collapsing all of them onto the one new refusal. The refusal has its own coverage: executed end to end in
+  // `run-workflow-core.mjs` and through the real prologue in `run-infra.mjs`.
   const ARGS = {
     manifest: "/mig/manifest.json", environment: "dev", outDir: "/mig", planFile: "/mig/plan.md",
     engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "DealSection",
+    mode: "auto",
   };
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
   // ENG-95930 — the per-page `buildComplete` is REQUIRED by `RECONCILE_SHAPE.verify` and checked on arrival, so a

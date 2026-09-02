@@ -483,9 +483,9 @@ export function planGapNext(planGaps, tail = 'then re-run this build') {
   // the return to learn them. The unclassified branch above always quoted the text; this one threw it away.
   return `${kinds.join(' · ')} — ${parts.join('; ')}. The engine reported: ${reported}. ${replan}`
 }
-// THE THREE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode
-// THROWS instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the
-// failure the mode exists to prevent — the operator asked to be stopped and would not have been.
+// THE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode THROWS
+// instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the failure
+// the mode exists to prevent — the operator asked to be stopped and would not have been.
 // Declared as a hoisted `function` (not an arrow const) because the constants near the head of the file call it —
 // and for the same reason it must reference NOTHING declared outside itself. The mode list lived here as a
 // module-level `const` and shipped broken: the function hoists, the const does not, so `buildMode('checkpoints')`
@@ -493,24 +493,202 @@ export function planGapNext(planGaps, tail = 'then re-run this build') {
 // mode failed before a single agent ran. Only the default path survived, because it returns before the reference.
 // The unit tests could not see it — the suite slices this block into its own module, where the const is
 // initialised first — so the list lives INSIDE the function now and `run-infra` pins the ordering rule directly.
+//
+// ENG-96204 — AN ABSENT MODE IS NO LONGER `auto`. THIS IS A DELIBERATE BREAKING CHANGE. It used to default, and the
+// default was the one answer nobody can un-choose: a run the operator meant to watch had already written the whole
+// section by the time they found out it never stopped. So the mode is now gated the way `buildVerificationSurface`
+// below is — absent yields `null`, the run REFUSES TO START, and the stop names the valid modes. An unattended run
+// says so explicitly through `defaultMode` (see `resolveControlMode`), which is a choice on file rather than a
+// choice nobody made. An unrecognised NON-EMPTY value still throws, exactly as before.
+//
+// FIVE MODES ON TWO MECHANISMS. `checkpoints` and `guided` stop at a UNIT boundary (`shouldPauseAfter`); `round1`
+// and `layout-first` stop at a ROUND boundary (`stopsAtRoundBoundary`); `auto` stops at neither. Adding a sixth
+// costs one entry in this list plus one entry in whichever predicate it belongs to — and nothing else, which is
+// what makes the set extensible rather than three hard-coded branches (ENG-96204, AC on Modes A/B/C).
+// THE MODE LIST ITSELF, as a hoisted FUNCTION DECLARATION and never a module-level `const` — which is the whole
+// point of the temporal-dead-zone note above, and a function satisfies it exactly the way `buildMode` does while
+// still keeping ONE copy of the set. The stop that has to list the valid modes calls this; `buildMode` binds it to
+// a local `const` inside its own body, which is where the shipped defect was.
+export function buildModes() {
+  return ['auto', 'checkpoints', 'guided', 'round1', 'layout-first']
+}
 export function buildMode(raw) {
-  const BUILD_MODES = ['auto', 'checkpoints', 'guided']
-  if (raw === undefined || raw === null || raw === '') return 'auto'
+  const BUILD_MODES = buildModes()
+  if (raw === undefined || raw === null || raw === '') return null
   const m = String(raw).trim().toLowerCase()
   if (!BUILD_MODES.includes(m)) {
     throw new Error(`freedom-build-executor: unknown mode ${JSON.stringify(raw)}. Use one of: ${BUILD_MODES.join(', ')}. ` +
-      '`auto` builds every unit without stopping · `checkpoints` stops after each unit named in `checkpointAfter` so the operator can check it on the stand · `guided` stops after every unit.')
+      '`auto` builds every unit without stopping · `checkpoints` stops after each unit named in `checkpointAfter` so the operator can check it on the stand · `guided` stops after every unit · ' +
+      '`round1` runs ONE round per invocation and stops at the round boundary while anything is open · `layout-first` builds layout only in round 1, stops, and ports the business logic on the next invocation.')
   }
   return m
+}
+// WHAT EACH MODE DOES, one line each — the text the refuse-to-start stop puts in front of the operator, so the
+// answer to "which of these do I want" travels WITH the question instead of living only in a SKILL.md nobody is
+// reading at that moment. Driven off `buildModes()` rather than off a second list, so a mode added there and left
+// undescribed here renders as exactly that, loudly, instead of vanishing from the menu the operator chooses from.
+export function buildModeMenu() {
+  const WHAT = {
+    auto: 'build every unit without stopping (unattended)',
+    checkpoints: 'stop after each unit named in `checkpointAfter` so the operator can check it on the stand',
+    guided: 'stop after EVERY unit',
+    round1: 'run ONE round per invocation and stop at the round boundary while anything is open',
+    'layout-first': 'round 1 builds LAYOUT only and stops; the business logic is ported on the next invocation',
+  }
+  return buildModes().map((m) => `\`${m}\` — ${WHAT[m] || '(NO DESCRIPTION — this mode was added to `buildModes` and not described in `buildModeMenu`)'}`)
+}
+// THE RUN-LEVEL QUESTION ITEMS in `resolutions.json` (engine kind `run`). Two of them, and they are the ONLY
+// channel the operator's run-level answers travel through — the ticket forbids a second one, and `findings` keeps
+// its own meaning (re-open a unit the gate called complete).
+export const CONTROL_MODE_ITEM = 'control-mode'
+export const roundDecisionItem = (roundNo) => `round-${roundNo}`
+// One run-scoped answer, read off `--units.runResolutions`. Matched on the normalised item the engine publishes;
+// a blank answer is NOT an answer (same rule the resolutions index applies to a ⚠ Confirm entry).
+export function runResolutionAnswer(runResolutions, item) {
+  const want = String(item ?? '').trim().toLowerCase()
+  if (!want) return null
+  const hit = (Array.isArray(runResolutions) ? runResolutions : [])
+    .find((r) => String(r?.item ?? '').trim().toLowerCase() === want)
+  const answer = String(hit?.answer ?? '').trim()
+  return answer || null
+}
+// THE CONTROL MODE, and WHERE IT CAME FROM. Three inputs, in falling order of how specifically they speak about
+// THIS invocation:
+//   `mode`         — this launch's own argument. The most recent and most specific statement there is.
+//   resolutions    — the operator's standing answer for this run, recorded in the ONE answer channel
+//                    (`{"kind":"run","item":"control-mode","answer":"…"}`). This is what a driving skill writes
+//                    after asking the question, and it survives across invocations, which is the point.
+//   `defaultMode`  — the configured fallback for a NON-INTERACTIVE run. Nobody is there to be asked, so a run that
+//                    carries one proceeds; a run that carries none refuses to start.
+// `source` is REPORTED, not merely used: an operator reading a run that proceeded needs to know whether the mode
+// they think they chose is the mode that ran (ENG-96204, AC 5). `{ mode: null, source: null }` is the refusal.
+export function resolveControlMode(ctx = {}) {
+  const explicit = buildMode(ctx.mode)
+  if (explicit) return { mode: explicit, source: 'argument' }
+  // `buildMode` still THROWS on a typo'd recorded answer, deliberately: a mode misspelled in the answer file is
+  // the same defect as one misspelled on the command line, and the operator who wrote it must hear about it.
+  const answered = buildMode(runResolutionAnswer(ctx.runResolutions, CONTROL_MODE_ITEM))
+  if (answered) return { mode: answered, source: 'resolutions' }
+  const configured = buildMode(ctx.defaultMode)
+  if (configured) return { mode: configured, source: 'default' }
+  return { mode: null, source: null }
+}
+// Does the run stop at the end of a ROUND in this mode? The second of the two stop mechanisms, and a separate
+// predicate from `shouldPauseAfter` because it answers a different question at a different place: that one asks
+// "stop after THIS UNIT", this one asks "stop after THIS ROUND". Hoisted and self-contained for the same
+// temporal-dead-zone reason `buildMode` is.
+export function stopsAtRoundBoundary(mode) {
+  const ROUND_BOUNDARY_MODES = ['round1', 'layout-first']
+  return ROUND_BOUNDARY_MODES.includes(mode)
+}
+// Is round 1 a LAYOUT-ONLY pass in this mode? Its own predicate rather than an inline `=== 'layout-first'` at each
+// of the three call sites (the unit prompt, the repair-budget exemption, the stop's verdict wording), so a further
+// two-pass mode is one entry here instead of three literals to find.
+export function isLayoutPassMode(mode) {
+  return mode === 'layout-first'
+}
+// THE PASS SCOPE, as prompt text (ENG-96204, Mode C). In `layout-first` the FIRST invocation builds the page's
+// layout and stops before the business logic; the next one ports it. This block is what makes that a scoped
+// instruction rather than a hope: it names the per-page recipe steps this pass owns, names the one step it does
+// not, and — most importantly — tells the builder how its OWN in-context gate will read. That gate WILL report the
+// unit short (its logic rows are open), and a builder reading its own honest verdict as a failure would spend its
+// one bounded fix inventing the very rows this pass exists not to build.
+//
+// PAGE UNITS ONLY. The `app` unit and the reachability units have no layout/logic split to make: their deliverable
+// is a package or a configuration record, and a "layout only" version of either is not a thing. Splitting the
+// run's pass at the UNIT boundary is also what preserves the invariant this whole mode rests on — no builder is
+// ever stopped in the middle of a unit; a unit simply has a smaller deliverable this pass.
+//
+// PURE, and here rather than in `core.mjs`, so the build-prompt render harness slices the SHIPPED text in instead
+// of stubbing it: a stub would let the render pass while shipping nothing.
+export function passScopeText(mode, layoutPassDone, unitKind) {
+  if (unitKind !== 'page' || !isLayoutPassMode(mode)) return ''
+  if (layoutPassDone) {
+    return `
+THIS IS THE LOGIC PASS of a \`layout-first\` build. A previous invocation built this page's LAYOUT — the template, the containers, the fields, the related lists and the localizable bindings are already on the page, and the queue file records that pass as done. YOUR deliverable this pass is STEP 6 of the per-page recipe: the BUSINESS RULES, and the handlers/converters/validators for the imperative rows, each ported against the ACCEPTANCE CRITERIA on its own card — never from a method NAME. Do NOT rebuild the layout: \`get-page\` it, confirm what is there, and add only what is missing. If a LAYOUT row is still open it IS yours to fix this pass: the layout pass is over, so nothing is scheduled for later any more.
+`
+  }
+  return `
+THIS IS THE LAYOUT PASS of a \`layout-first\` build — the operator asked to settle the layout before any behaviour is ported, so this pass DELIBERATELY delivers less than the whole unit. That is the plan, not a shortfall.
+- YOU OWN steps 1-5 and 7-11 of the per-page recipe: the template and the re-bind, the \`creatio-ui-guidelines\` pass before authoring, the layout containers and tabs, the fields, the related lists and standard features, the localizable bindings, the render check, the guidelines review, the in-context gate and the worklog.
+- YOU DO NOT OWN STEP 6 — the business rules and the handlers/converters/validators. Build NONE of them this pass. They are SCHEDULED for the next invocation, not dropped: the operator asked to settle the layout first precisely so that behaviour is ported onto a layout nobody is about to change.
+- DO NOT CLAIM A LOGIC ROW. Leave every \`Business rules\` and \`Handler — …\` row out of \`claimedBuilt\`, and file no evidence for one. A claimed row nobody built is the one failure the gate cannot catch.
+- YOUR OWN IN-CONTEXT GATE (step 10) WILL REPORT THIS UNIT SHORT, and that is the CORRECT verdict, not a defect to repair. Run it, and report \`selfCheck\` honestly with the logic rows still open. Spend your one bounded fix ONLY on a row that belongs to THIS pass — a field, a container, a component, the package, the entity binding. **Do NOT "fix" a business-rule or handler row, and do NOT report the unit blocked because of one**: this run knows those rows are scheduled, does not charge this pass a repair round for them, and will not park the unit over them.
+- If something about the LAYOUT itself cannot be built, that is an ordinary \`blocked\` entry exactly as it always was.
+`
+}
+// THE RUN-LEVEL ROUND COUNT, from the PER-UNIT counters the queue file keeps. There is no run-level round number on
+// file — `roundOf` is charged per unit, per dispatch — and the highest of them is the number of rounds this
+// migration folder has already spent, which is exactly what the round gate needs: the next round is that plus one.
+// `Math.max` over the file, never a count this process holds: a resumed run must inherit the rounds its
+// predecessor spent, or the operator authorises `round-2` forever while the run keeps calling it round 1.
+export function roundsOnFile(roundOf) {
+  const counts = Object.values(roundOf || {}).filter((n) => Number.isInteger(n) && n > 0)
+  return counts.length ? Math.max(...counts) : 0
+}
+// EVERY CORRECTNESS ITEM BEFORE ANY FIDELITY ONE, and the engine's own order kept inside each band (ENG-96204,
+// AC 2). A STABLE sort, so two rows of one severity stay in table order and the ranked list still reads as the
+// table an operator has in front of them. The severity itself is the engine's (`rowSeverity`), never re-derived
+// here — and an item with no severity ranks as correctness, the same fail-loud default the engine applies.
+export function rankOpenItems(items) {
+  const band = (it) => (it?.severity === 'fidelity' ? 1 : 0)
+  return (items || []).map((it, i) => ({ it, i }))
+    .sort((a, b) => band(a.it) - band(b.it) || a.i - b.i)
+    .map((x) => x.it)
+}
+// ONE OPEN ITEM for the stop payload: the engine's own three cells, plus the unit it belongs to and the two axes
+// the engine already decided (who closes it, and whether it is worth closing first). Composed rather than passed
+// through whole so the payload carries no field a caller might mistake for a verdict of its own.
+export function openItemsFor(unitKey, openRows) {
+  return (openRows || []).map((r) => ({
+    unit: unitKey,
+    deliverable: r.deliverable,
+    status: r.status,
+    evidence: r.evidence,
+    severity: r.severity === 'fidelity' ? 'fidelity' : 'correctness',
+    owner: r.owner === 'verifier' ? 'verifier' : 'builder',
+    ...(r.id ? { id: r.id } : {}),
+  }))
+}
+// THE STATUS DOCUMENT (ENG-96204, AC 5). A stop's payload is a return value, and a return value reaches whoever
+// launched the run and nobody else: the operator who comes back to the migration folder an hour later — or the
+// next session, on the other route — has only the files. So the same four facts the stop reports are also written
+// down: what was built, what is open (RANKED), what is parked and why, and the one next step.
+//
+// COMPOSED HERE, as a pure function over the payload, and handed to the persistence agent as literal text to
+// write. Not left for an agent to assemble: a status document an agent writes in its own words is a paraphrase of
+// the verdict, and the whole reason this run computes rather than asserts is that paraphrases of verdicts drift.
+export function runStatusDoc(status = {}) {
+  const L = []
+  const list = (items, render, empty) => (items?.length ? items.map(render) : [`- ${empty}`])
+  L.push('# Build run status', '')
+  L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)
+  L.push(`- **Stopped at:** ${status.stopped || '(not stopped)'}${Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''}`)
+  if (status.pausedAfter) L.push(`- **Paused after unit:** \`${status.pausedAfter}\``)
+  L.push('', '## Built this round', '')
+  L.push(...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'))
+  L.push('', '## Open, ranked — every correctness item before any fidelity one', '')
+  L.push(...list(status.openRanked,
+    (it) => `- [${it.severity}] \`${it.unit}\` — ${it.deliverable} — ${it.status} — ${it.evidence}`,
+    'nothing is open'))
+  L.push('', '## Parked, and why', '')
+  L.push(...list(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${p.parkedWhy}`, 'nothing is parked'))
+  L.push('', '## Still open (units)', '')
+  L.push(...list(status.remainingOpen, (k) => `- \`${k}\``, 'no unit is still open'))
+  L.push('', '## Next step', '', status.next || '(none recorded)', '')
+  return L.join('\n')
 }
 
 // THE VERIFICATION SURFACE the migration skill's preflight resolved for this section BEFORE the first stand
 // write (ENG-95855) — `automatic:2` (headless Playwright), `automatic:3` (real Chrome), or `manual` (no
-// automatic surface; `--verify` alone). Unlike `buildMode`, an ABSENT value is never guessed into one of the
-// three: a caller that omits it gets `null`, and the per-page recipe's render check treats `null` as "not told,
-// ask" rather than silently assuming a tier nobody resolved. An unrecognised NON-EMPTY value still throws, for
-// the same reason a typo'd mode must not fall back to a default — a mistyped tier is exactly the "preference
-// silently drifted from what was resolved" failure this ticket exists to close.
+// automatic surface; `--verify` alone). An ABSENT value is never guessed into one of the three: a caller that
+// omits it gets `null`, and the per-page recipe's render check treats `null` as "not told, ask" rather than
+// silently assuming a tier nobody resolved. An unrecognised NON-EMPTY value still throws, for the same reason a
+// typo'd mode must not fall back to a default — a mistyped tier is exactly the "preference silently drifted from
+// what was resolved" failure this ticket exists to close.
+// THIS FUNCTION WAS THE PRECEDENT `buildMode` was rewritten against in ENG-96204: a value that must be resolved
+// deliberately returns `null` when it was not, and the caller refuses to start rather than choosing for the
+// operator. The two now behave alike, which is why this comment no longer contrasts them.
 export function buildVerificationSurface(raw) {
   const SURFACES = ['automatic:2', 'automatic:3', 'manual']
   if (raw === undefined || raw === null || raw === '') return null
@@ -1029,13 +1207,17 @@ export const GUIDELINES_RETURN = `
 // an unknown working directory and a relative path resolves against nothing. A relative default would be a silent
 // write to the wrong file; an omitting caller instead renders `undefined`, which the suite's no-`undefined` assertion
 // over every composed prompt catches.
-export function composeBuildPrompt({ rules, behaviour, worklogPath, sharedWorklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '', gate = '' }) {
+// `pass` (ENG-96204) is the PASS SCOPE — the layout-only / logic-only half of a `layout-first` build. It sits
+// directly under the unit's own kind block and ABOVE the mandatory-while-building list, because it NARROWS that
+// list: a builder that read "build the plan EXACTLY" before being told which half of the plan this pass owns has
+// already been told the wrong thing. Empty on every other mode, which is every run before this one.
+export function composeBuildPrompt({ rules, behaviour, worklogPath, sharedWorklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '', gate = '', pass = '' }) {
   return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
 
 ${rules}
 
 ${kindBlock}
-${repair}
+${pass}${repair}
 ${behaviour}
 
 MANDATORY WHILE BUILDING:
