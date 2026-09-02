@@ -304,7 +304,7 @@ therefore measures nothing about the cap.
 
 **The fix is to get the schema under the cap** — there is one remedy, not two.
 `engine-tests/classic-to-freedom/run-infra.mjs` asserts every agent schema of every shipped workflow
-against it, with `RECONCILE_SCHEMA` held tighter (3500 bytes) as the run's first agent. When a schema
+against it, with `RECONCILE_SCHEMA` held tighter (3600 bytes) as the run's first agent. When a schema
 has to shrink, loosen the DESCRIPTION of its nested objects — never drop a property the core computes
 on — and move that inner contract into `RECONCILE_SHAPE`, which the script checks when the answer
 arrives.

@@ -26,7 +26,7 @@
 // `RECONCILE_SHAPE` now carries.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
-// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3500 —
+// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3600 —
 // it is the run's first agent, so its refusal costs the whole run.
 //
 // Nested objects are therefore declared as a bare `object` / `array of object`. Every property and the `required`
