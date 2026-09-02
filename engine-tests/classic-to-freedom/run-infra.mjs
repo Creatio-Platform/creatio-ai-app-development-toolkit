@@ -20,8 +20,11 @@ import { spawnSync } from "node:child_process";
 // could otherwise shadow it (Sonar S4036). These are the stock install locations on the CI
 // runners and on a developer machine; when none of them exists the check below reports that
 // rather than quietly passing.
+// Written with forward slashes and normalized rather than spelled with escaped backslashes: the escaped form
+// is three `String.raw` findings (S7780), and `path.normalize` turns these into the native separators on the
+// only platform that reads them.
 const GIT_CANDIDATES = process.platform === "win32"
-  ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe", "C:\\Program Files (x86)\\Git\\cmd\\git.exe"]
+  ? ["C:/Program Files/Git/cmd/git.exe", "C:/Program Files/Git/bin/git.exe", "C:/Program Files (x86)/Git/cmd/git.exe"].map((c) => path.normalize(c))
   : ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
 const resolveGitExecutable = () => GIT_CANDIDATES.find((c) => existsSync(c)) || null;
 
