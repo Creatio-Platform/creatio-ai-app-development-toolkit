@@ -1815,6 +1815,24 @@ const describeValue = (v) => {
   return typeof v
 }
 
+// THE WIRE'S OWN BYTES, not the raw string's. What the host receives is the `.ascii.json` form the submission
+// protocol's encoder produces: every UTF-16 code unit outside printable ASCII becomes a six-character `\uXXXX`
+// escape (an astral pair becomes two of them). Measuring raw UTF-8 undercounts that by 3-6x on the Cyrillic/CJK
+// captions and `·`/`—`/`✅` a real migration answer is full of — an answer under a raw ceiling could still overflow
+// the host's ~20 KB tool-input cap once encoded, reproducing mode B with an intermittent, localized-content-only
+// signature. Per code UNIT (`charCodeAt`), deliberately matching the encoder's own per-unit `[^ -~]` replacement.
+// Module scope, like every pure helper here (Sonar S7721). Not `TextEncoder`/`Buffer`: neither is an ECMAScript
+// built-in, and this module is inlined into a workflow script whose sandbox promises only those.
+const encodedAsciiBytes = (s) => {
+  if (typeof s !== 'string') return 0
+  let n = 0
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i)
+    n += (c >= 0x20 && c <= 0x7e) ? 1 : 6
+  }
+  return n
+}
+
 // THE VOCABULARY IS CLOSED, both axes. A `types` or `kind` token outside these sets is a TYPO IN THE TABLE, and
 // the only enforcement left after the schema stopped declaring nested types is this table — so an unrecognised token
 // must fault loudly rather than accept every value, which is how a mistyped `'bool'` would silently disable a field's
@@ -1900,6 +1918,11 @@ function shapeValueErrors(where, value, spec, out) {
 // to shrink, which the shape-fault retry then hands to the agent. `maxItems` on the schema bounds COUNT and
 // `additionalProperties.maxLength` bounds each string, but neither bounds their PRODUCT: 400 items of 400-character
 // strings is schema-valid and ~500 KB. Only a total-size check speaks to the actual invariant.
+// THE CEILING IS STATED IN ENCODED WIRE BYTES — the `.ascii.json` form the submission protocol sends, where every
+// non-ASCII code unit is a six-character escape — because that is the size the host's cap actually sees. The prompt
+// tells the agent the same number: the encoder prints its output size, and a print over this ceiling means do not
+// submit, shrink first. The engine warns at the same number when the verify summary alone approaches it.
+// Exported: the prompt's pre-submit gate interpolates this number, so retuning it retunes the agent's own gate too.
 const RECONCILE_ANSWER_MAX_BYTES = 16000
 
 // WHAT IS WRONG WITH THIS ANSWER'S NESTED SHAPES, as a list of named fields — empty means it is usable.
@@ -1913,25 +1936,7 @@ function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxByt
     return [`the answer is not an object (got ${describeValue(state)})`]
   }
   const out = []
-  // UTF-8 BYTES, not `String.length`. The ceiling below is stated in bytes and compared against a byte transport
-// limit, but `.length` counts UTF-16 code units: a Cyrillic page title, or the `·`/`—`/`✅` this codebase uses
-// freely, is 2-3 bytes on the wire and one unit here. Measuring the wrong one lets a 16,000-unit answer weigh ~30 KB
-// and sail past a check whose whole purpose is to stay under ~20 KB. Not `TextEncoder`/`Buffer`: neither is an
-// ECMAScript built-in, and this module is inlined verbatim into a workflow script whose sandbox promises only those.
-const utf8ByteWidth = (c) => {
-  if (c < 0x80) return 1
-  if (c < 0x800) return 2
-  if (c < 0x10000) return 3
-  return 4
-}
-const utf8Bytes = (s) => {
-  if (typeof s !== 'string') return 0
-  let n = 0
-  for (const ch of s) n += utf8ByteWidth(ch.codePointAt(0))
-  return n
-}
-
-// SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
+  // SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
   // agent guessing which field to cut, and an uninformed retry re-sends the same oversized answer.
   // THE EMPTY-PREFIX PAIR MUST AGREE — its wire form is `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`,
   // and a `true` flag beside a NON-EMPTY prefix is a contradiction no per-field table row can express. Silently
@@ -1941,13 +1946,13 @@ const utf8Bytes = (s) => {
   if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
     out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
   }
-  const size = utf8Bytes(JSON.stringify(state))
+  const size = encodedAsciiBytes(JSON.stringify(state))
   if (size > maxBytes) {
     const worst = Object.keys(state)
-      .map((k) => [k, utf8Bytes(JSON.stringify(state[k]))])
+      .map((k) => [k, encodedAsciiBytes(JSON.stringify(state[k]))])
       .sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([k, n]) => `${k} (${n} B)`).join(', ')
-    out.push(`the answer serializes to ${size} bytes, over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
+    out.push(`the answer encodes to ${size} ASCII bytes on the wire (the \\uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
   }
   for (const [key, spec] of Object.entries(shape)) {
     if (state[key] === undefined) continue
@@ -3360,7 +3365,7 @@ HOW TO SUBMIT THE ANSWER. The host has rejected this answer — the run's larges
 - Write the COMPLETE answer object — raw characters, no manual escaping — to \`${input.outDir}/reconcile-answer-${fileStem}-1.json\`. The trailing number counts YOUR OWN submissions: recomposing after a rejection writes the NEXT number, and a rejected attempt's files are never overwritten or deleted — they are the only record of the exact bytes the host refused.
 - Write this helper VERBATIM to \`${input.outDir}/encode-answer.mjs\` — OVERWRITE any existing copy, every time: a file left by an earlier run may predate this prompt's helper and silently diverge from it. Then run \`node <that helper> <raw file> <raw file with .json replaced by .ascii.json>\`:
 ${ANSWER_ENCODER_SOURCE}
-It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected.
+It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected. THE SIZE IT PRINTS IS THE WIRE SIZE, and it is your PRE-SUBMIT GATE: if it prints more than ${RECONCILE_ANSWER_MAX_BYTES} bytes, do NOT submit — the host's input cap would truncate the payload mid-flight and the whole attempt is lost. Shrink first, per the size rules above (counts, keys and ids in the answer; bulk stays on disk), re-compose, re-encode, and only then submit.
 - Read the \`.ascii.json\` file and submit EXACTLY its content as the structured answer, character for character.
 - If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave a REJECTED attempt's files in place: they are the evidence that failure needs.
 - Once the host ACCEPTS a submission, DELETE that attempt's raw and \`.ascii.json\` files. The accepted answer is already recorded by the host, and these copies carry the same live-stand text as this folder's other artifacts (\`verify.md\`, \`built.json\`) — a routine copy should not outlive its purpose. Only a rejected attempt's files stay — and the ENGINE enforces the bound regardless: every \`--units\` run sweeps capture files older than 14 days, so a capture this instruction misses is removed on the next run in this folder.`

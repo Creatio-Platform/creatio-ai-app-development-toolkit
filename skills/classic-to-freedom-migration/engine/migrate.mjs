@@ -77,7 +77,7 @@ import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
 import { GATE_KIND, gateForComponentType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, isTabOp, subPageNodes, buildResolutionIndex,
+  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 
@@ -2886,8 +2886,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
     }
     if (verifySummaryFile) {
-      try { fs.writeFileSync(verifySummaryFile, JSON.stringify(verifySummary(result, verifyRes), null, 2) + "\n"); }
+      const summary = verifySummary(result, verifyRes);
+      try { fs.writeFileSync(verifySummaryFile, JSON.stringify(summary, null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-summary '${verifySummaryFile}': ${e.message}`); }
+      // The summary is bounded PER PAGE but linear in page count, and the Reconcile agent transcribes it whole into
+      // an answer whose wire ceiling is 16000 bytes (the workflow's RECONCILE_ANSWER_MAX_BYTES; run-infra.mjs pins
+      // the two numbers equal). A plan large enough to approach that ceiling on counts alone cannot fit its verify
+      // verdict through the answer at all — SAY it here, at the producer, instead of letting the run discover it as
+      // a shape fault the retry cannot shrink. The unbounded-scale close (counts on disk, per-unit reads) is
+      // follow-up work, not this warning's job. Measured in ENCODED wire bytes, the form the ceiling is stated in:
+      // a raw `.length` undercounts localized page keys six-fold and would warn only after the ceiling is crossed.
+      const summaryBytes = encodedAsciiBytes(JSON.stringify(summary));
+      if (summaryBytes > 16000 * 0.75) process.stderr.write(`migrate.mjs: ⚠ the verify SUMMARY alone is ${summaryBytes} B against the Reconcile answer's 16000-byte wire ceiling (${Object.keys(summary.pages || {}).length} pages). A plan this size is at or past what the counts-only answer can carry; splitting the run (or the ENG-96071 answer-slimming) is needed before the ceiling, not after.\n`);
     }
     if (verifyDigestFile) {
       try { fs.writeFileSync(verifyDigestFile, JSON.stringify(verifyDigest(result, verifyRes), null, 2) + "\n"); }

@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS, verifySummary } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS, verifySummary, encodedAsciiBytes as engineEncodedAsciiBytes } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, GATE_KIND } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
@@ -155,7 +155,7 @@ const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked"
   "verifyFetchKeys", "fetchTableGroups", "fetchListEmptyLabel", "touchedKeys", "isRefiledForUntouchedUnit", "requeueSkipReason", "requeueDecisions", "verifierSchemaTable", "verifyFetchPlan",
   // ENG-95930 — the check that took over what the response schema stopped enforcing when it had to shrink under the
   // host's 4096-byte classifier cap. Asserted through the SHIPPED function, like every other helper here.
-  "reconcileShapeErrors", "shapeVocabularyErrors", "shapeFieldNames"];
+  "reconcileShapeErrors", "shapeVocabularyErrors", "shapeFieldNames", "encodedAsciiBytes"];
 // THE RESPONSE SCHEMAS THEMSELVES, DERIVED FROM THE SLICE rather than listed here: a hand-maintained list cannot
 // fail on a schema nobody added to it, which is the one case a cap check exists for. Every `const *_SCHEMA` the
 // shipped block declares is loaded and measured, so a new schema is covered the moment it is written.
@@ -1309,6 +1309,22 @@ const mgSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(imp
       && mgSrc.includes(`path.join(outDir, "${qBase}")`)
       && mgSrc.includes(`path.join(outDir, "${vBase}")`),
     () => ({ qBase, vBase, guardLine: (mgSrc.match(/if \(!fs\.existsSync[^\n]*/) || ["(no guard found)"])[0] }));
+  // The answer's wire CEILING is the third number crossing the same boundary (review round 14): the workflow owns
+  // `RECONCILE_ANSWER_MAX_BYTES`, and the engine's `--verify-summary` writer warns against a hard-coded copy of it —
+  // a re-tuned ceiling with a stale engine warning would alarm at the wrong scale in whichever direction it drifted.
+  // The number alone is not enough (the local review that caught this): a warning can speak the right ceiling and
+  // still measure the wrong thing, so the MEASURE is pinned too — the warning compares ENCODED wire bytes, and the
+  // prompt's pre-submit gate interpolates the constant rather than carrying a fourth hand-written copy of it.
+  const ceiling = (wfSrc.match(/RECONCILE_ANSWER_MAX_BYTES = (\d+)/) || [])[1];
+  check("ENG-95930 (review round 14): the Reconcile answer ceiling is ONE number — the engine's summary-scale warning speaks the workflow's `RECONCILE_ANSWER_MAX_BYTES`, both in its threshold (3/4 of the ceiling) and in the text shown to the operator, and the prompt's pre-submit gate INTERPOLATES the constant instead of hard-coding it",
+    !!ceiling
+      && mgSrc.includes(`summaryBytes > ${ceiling} * 0.75`)
+      && mgSrc.includes(`${ceiling}-byte wire ceiling`)
+      && wfSrc.includes("more than ${RECONCILE_ANSWER_MAX_BYTES} bytes, do NOT submit"),
+    () => ({ ceiling, warnLine: (mgSrc.match(/summaryBytes > [^\n]*/) || ["(no warning found)"])[0] }));
+  check("ENG-95930 (local review): the engine's summary-scale warning measures ENCODED wire bytes, not raw `.length` — measured raw, a localized plan's warning fires only AFTER the ceiling is already crossed (36 pages late on heavy Cyrillic keys), which is the mode-B blindness this round exists to remove",
+    mgSrc.includes("summaryBytes = encodedAsciiBytes(JSON.stringify(summary))"),
+    () => (mgSrc.match(/summaryBytes = [^\n]*/) || ["(no measure line found)"])[0]);
 }
 check("plan version: EVERY file-backed manifest input contributes its CONTENT, not its path — a `section` / `detailSchemas` / `profileSchemas` file could be rewritten with the version unchanged, so an old approval authorised a plan the user never saw",
   /typeof value\.file === "string" \|\| typeof value\.body === "string"/.test(mgSrc)
@@ -1726,6 +1742,38 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
       && summary.pages.main.buildComplete === false
       && wf.reconcileShapeErrors?.({ ...goodDigest, verify: summary }).length === 0,
     () => ({ summary, faults: wf.reconcileShapeErrors?.({ ...goodDigest, verify: summary }) }));
+  // ENG-95930 (review round 14, Major) — THE SAME JOIN AT SCALE, both sides of the ceiling. The summary is bounded
+  // PER PAGE but linear in PAGE COUNT, and pages are never dropped to fit: an absent entry reads as "nobody looked"
+  // downstream and would re-open settled units. So the honest contract is measured here with localized (Cyrillic)
+  // page keys, the expensive case on the wire: a large real plan fits with headroom, and a plan past the ceiling is
+  // CAUGHT by the size fault — named, retried, and stopped honestly — never silently truncated in flight.
+  const atScale = (count) => {
+    const pages = {};
+    for (let i = 1; i <= count; i += 1) {
+      // Complete pages carry openRows in the rich verdict too (rows closed late stay listed); the projection must
+      // strip rows from EVERY page, not only incomplete ones.
+      const done = i % 3 === 0;
+      pages[`child:Сторінка-${i}`] = { complete: done, buildComplete: done,
+        missing: done ? 0 : 2, unverified: 1, builderOpen: done ? 0 : 1,
+        openRows: [{ n: 1, deliverable: "Поле Сума", status: "❌ MISSING", evidence: "0/7 полів", outcome: "missing", owner: "builder" }] };
+    }
+    const s = verifySummary({}, { complete: false, missing: count, unverified: count, pages });
+    return { summary: s, answer: { ...goodDigest, verify: s } };
+  };
+  const eighty = atScale(80);
+  check("ENG-95930 (review round 14): 80 localized pages — complete ones included, all still carrying rows in the verdict — project to a rows-free summary with EVERY page kept, pass the checker, and the whole answer encodes under the 16000-byte wire ceiling (measured ~73% of it on these keys; heavier localized keys spend the rest)",
+    !JSON.stringify(eighty.summary).includes("openRows")
+      && Object.keys(eighty.summary.pages).length === 80
+      && eighty.summary.pages["child:Сторінка-3"].complete === true
+      && wf.reconcileShapeErrors?.(eighty.answer).length === 0
+      && wf.encodedAsciiBytes?.(JSON.stringify(eighty.answer)) < 16000,
+    () => `pages=${Object.keys(eighty.summary.pages).length} encoded=${wf.encodedAsciiBytes?.(JSON.stringify(eighty.answer))} B faults=${JSON.stringify(wf.reconcileShapeErrors?.(eighty.answer).slice(0, 1))}`);
+  const twoHundred = atScale(200);
+  check("ENG-95930 (review round 14): 200 localized pages push the SAME projection past the ceiling, and the checker FAULTS it by size naming `verify` — the linear growth is caught and spoken, not hidden by dropping pages (the engine warns at 3/4 of this number when writing the summary, and the slimming lives in ENG-96071)",
+    Object.keys(twoHundred.summary.pages).length === 200
+      && wf.encodedAsciiBytes?.(JSON.stringify(twoHundred.answer)) > 16000
+      && wf.reconcileShapeErrors?.(twoHundred.answer).some((f) => /encodes to \d+ ASCII bytes/.test(f) && /verify/.test(f)),
+    () => `pages=${Object.keys(twoHundred.summary.pages).length} encoded=${wf.encodedAsciiBytes?.(JSON.stringify(twoHundred.answer))} B -> ${JSON.stringify(wf.reconcileShapeErrors?.(twoHundred.answer).slice(0, 1))}`);
 }
 // ENG-95930 (review round 3) — THE WORST-CASE SIZE TEST. `maxItems` bounds the count and
 // `additionalProperties.maxLength` bounds one string, but not their product: a SCHEMA-VALID answer (400 items,
@@ -1738,16 +1786,46 @@ const schemaValidButHuge = (() => {
     preflightItems: Array.from({ length: 400 }, (_, i) => ({ id: `p${i}`, pageKey: "main", kind: "confirm", item: big })),
   };
 })();
-check("ENG-95930 (review): an answer that is SCHEMA-VALID under `maxItems`/`maxLength` but huge in their PRODUCT is still faulted on total serialized size, and the fault names the largest fields — the bound the two keywords cannot express on their own",
+check("ENG-95930 (review): an answer that is SCHEMA-VALID under `maxItems`/`maxLength` but huge in their PRODUCT is still faulted on total ENCODED WIRE size, and the fault names the largest fields — the bound the two keywords cannot express on their own",
   (() => {
     if (!wf.reconcileShapeErrors) return false;
     const faults = wf.reconcileShapeErrors(schemaValidButHuge);
-    return faults.some((f) => /serializes to \d+ bytes/.test(f) && /preflightItems/.test(f));
+    return faults.some((f) => /encodes to \d+ ASCII bytes/.test(f) && /preflightItems/.test(f));
   })(),
   () => `${JSON.stringify(schemaValidButHuge).length} B -> ${JSON.stringify(wf.reconcileShapeErrors ? wf.reconcileShapeErrors(schemaValidButHuge).slice(0, 1) : [])}`);
 check("ENG-95930 (review): the size ceiling does NOT fire on a normal answer — a check that faulted a healthy digest would burn every Reconcile attempt on every run",
-  wf.reconcileShapeErrors && !wf.reconcileShapeErrors(goodDigest).some((f) => /serializes to/.test(f)),
+  wf.reconcileShapeErrors && !wf.reconcileShapeErrors(goodDigest).some((f) => /encodes to/.test(f)),
   () => `${JSON.stringify(goodDigest).length} B`);
+// ENG-95930 (review round 14, Major) — THE MEASURE ITSELF, then the regression it exists to catch. The ceiling is
+// stated in ENCODED wire bytes: the `.ascii.json` submission form turns every UTF-16 code unit outside printable
+// ASCII into a six-character `\uXXXX` escape (an astral pair into two), and the host's tool-input cap sees THAT
+// size. Raw-length measures undercount localized content 3-6x, so a Cyrillic-heavy answer could pass the checker
+// and still be truncated in flight — mode B back, but only on localized stands.
+check("ENG-95930 (review round 14): `encodedAsciiBytes` measures the SUBMISSION form — 1 per printable-ASCII unit, 6 per escaped unit, 12 for an astral pair — the same arithmetic as the shipped encoder's per-unit `[^ -~]` replacement",
+  wf.encodedAsciiBytes?.("abc") === 3 && wf.encodedAsciiBytes?.("я") === 6
+    && wf.encodedAsciiBytes?.("—") === 6 && wf.encodedAsciiBytes?.("🙂") === 12
+    && wf.encodedAsciiBytes?.("a я") === 8 && wf.encodedAsciiBytes?.(42) === 0,
+  () => [wf.encodedAsciiBytes?.("abc"), wf.encodedAsciiBytes?.("я"), wf.encodedAsciiBytes?.("🙂")].join(","));
+// The ENGINE'S copy of the same measure, EXECUTED against the workflow's — not compared as source text. The two
+// live on opposite sides of a boundary no import can cross (the engine is not inlined into the workflow), so this
+// is the only place a drifted copy fails: the engine's `--verify-summary` warning and the workflow's answer ceiling
+// must count the same string to the same byte, or the producer warns at a different scale than the consumer faults.
+check("ENG-95930 (local review): the engine-side `encodedAsciiBytes` (designspec.mjs) and the workflow-side one agree byte-for-byte on ASCII, Cyrillic, punctuation, astral and mixed inputs — pinned by execution, because a source-text pin on the NUMBER let a wrong MEASURE through this very round",
+  ["abc", "я", "—", "✅", "🙂", "a я — 🙂 mix", "", "child:КонтрагентиДеталіЗамовлення-1"]
+    .every((s) => engineEncodedAsciiBytes(s) === wf.encodedAsciiBytes?.(s))
+    && engineEncodedAsciiBytes(42) === wf.encodedAsciiBytes?.(42),
+  () => ["abc", "я", "🙂"].map((s) => `${JSON.stringify(s)}: engine ${engineEncodedAsciiBytes(s)} vs wf ${wf.encodedAsciiBytes?.(s)}`).join(", "));
+check("ENG-95930 (review round 14): an answer UNDER the ceiling in raw characters but OVER it once encoded — 3000 Cyrillic characters, ~18000 wire bytes — IS faulted; measured raw, it sailed through and was truncated at the transport instead",
+  (() => {
+    if (!wf.reconcileShapeErrors) return false;
+    const localized = { ...goodDigest, notes: "я".repeat(3000) };
+    return JSON.stringify(localized).length < 16000
+      && wf.reconcileShapeErrors(localized).some((f) => /encodes to \d+ ASCII bytes/.test(f) && /notes/.test(f));
+  })(),
+  () => {
+    const localized = { ...goodDigest, notes: "я".repeat(3000) };
+    return `raw ${JSON.stringify(localized).length} B, encoded ${wf.encodedAsciiBytes?.(JSON.stringify(localized))} B -> ${JSON.stringify(wf.reconcileShapeErrors?.(localized).slice(0, 1))}`;
+  });
 // ENG-95930 (review round 3, Major 1) — the four claims the reviewer could not trace to labelled test blocks.
 // T2/T2b have their own labelled checks further down (`cliRepairCheck`, the PAGE repair prompt, the boundary
 // invariant); these two pin the GUARD-PRESERVATION half in the same labelled style, so each claim maps 1:1.
@@ -2650,7 +2728,7 @@ const sizeThenOk = await runWith({}, async (prompt) => {
 }).catch((e) => ({ threw: e.message }));
 check("ENG-95930 (review round 8) EXECUTES the size fault through the retry loop: an oversized-but-valid answer spends the attempt, the SECOND prompt names the byte fault and its largest field, and the second answer proceeds",
   !sizeThenOk.threw && sizeThenOk.stopped !== "reconcile-failed" && sizeFaultCalls === 2
-    && /serializes to \d+ bytes/.test(sizeFaultPrompts[1] || "") && /notes \(\d+ B\)/.test(sizeFaultPrompts[1] || ""),
+    && /encodes to \d+ ASCII bytes/.test(sizeFaultPrompts[1] || "") && /notes \(\d+ B\)/.test(sizeFaultPrompts[1] || ""),
   () => (sizeThenOk.threw ? `threw: ${sizeThenOk.threw}` : `calls=${sizeFaultCalls} stopped=${sizeThenOk.stopped} p2tail=${(sizeFaultPrompts[1] || "").slice(-260)}`));
 // M2 — the retry has to TELL the agent what was short, or a deterministically dropped field is dropped again for the
 // whole budget. `note` is work-item metadata and never reaches the model, so the fault list has to ride the PROMPT.

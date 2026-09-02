@@ -1200,6 +1200,24 @@ const describeValue = (v) => {
   return typeof v
 }
 
+// THE WIRE'S OWN BYTES, not the raw string's. What the host receives is the `.ascii.json` form the submission
+// protocol's encoder produces: every UTF-16 code unit outside printable ASCII becomes a six-character `\uXXXX`
+// escape (an astral pair becomes two of them). Measuring raw UTF-8 undercounts that by 3-6x on the Cyrillic/CJK
+// captions and `·`/`—`/`✅` a real migration answer is full of — an answer under a raw ceiling could still overflow
+// the host's ~20 KB tool-input cap once encoded, reproducing mode B with an intermittent, localized-content-only
+// signature. Per code UNIT (`charCodeAt`), deliberately matching the encoder's own per-unit `[^ -~]` replacement.
+// Module scope, like every pure helper here (Sonar S7721). Not `TextEncoder`/`Buffer`: neither is an ECMAScript
+// built-in, and this module is inlined into a workflow script whose sandbox promises only those.
+export const encodedAsciiBytes = (s) => {
+  if (typeof s !== 'string') return 0
+  let n = 0
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i)
+    n += (c >= 0x20 && c <= 0x7e) ? 1 : 6
+  }
+  return n
+}
+
 // THE VOCABULARY IS CLOSED, both axes. A `types` or `kind` token outside these sets is a TYPO IN THE TABLE, and
 // the only enforcement left after the schema stopped declaring nested types is this table — so an unrecognised token
 // must fault loudly rather than accept every value, which is how a mistyped `'bool'` would silently disable a field's
@@ -1285,7 +1303,12 @@ function shapeValueErrors(where, value, spec, out) {
 // to shrink, which the shape-fault retry then hands to the agent. `maxItems` on the schema bounds COUNT and
 // `additionalProperties.maxLength` bounds each string, but neither bounds their PRODUCT: 400 items of 400-character
 // strings is schema-valid and ~500 KB. Only a total-size check speaks to the actual invariant.
-const RECONCILE_ANSWER_MAX_BYTES = 16000
+// THE CEILING IS STATED IN ENCODED WIRE BYTES — the `.ascii.json` form the submission protocol sends, where every
+// non-ASCII code unit is a six-character escape — because that is the size the host's cap actually sees. The prompt
+// tells the agent the same number: the encoder prints its output size, and a print over this ceiling means do not
+// submit, shrink first. The engine warns at the same number when the verify summary alone approaches it.
+// Exported: the prompt's pre-submit gate interpolates this number, so retuning it retunes the agent's own gate too.
+export const RECONCILE_ANSWER_MAX_BYTES = 16000
 
 // WHAT IS WRONG WITH THIS ANSWER'S NESTED SHAPES, as a list of named fields — empty means it is usable.
 // ABSENCE OF A TOP-LEVEL PROPERTY IS NOT THIS FUNCTION'S BUSINESS: `RECONCILE_SCHEMA.required` carries that and the
@@ -1298,25 +1321,7 @@ export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12,
     return [`the answer is not an object (got ${describeValue(state)})`]
   }
   const out = []
-  // UTF-8 BYTES, not `String.length`. The ceiling below is stated in bytes and compared against a byte transport
-// limit, but `.length` counts UTF-16 code units: a Cyrillic page title, or the `·`/`—`/`✅` this codebase uses
-// freely, is 2-3 bytes on the wire and one unit here. Measuring the wrong one lets a 16,000-unit answer weigh ~30 KB
-// and sail past a check whose whole purpose is to stay under ~20 KB. Not `TextEncoder`/`Buffer`: neither is an
-// ECMAScript built-in, and this module is inlined verbatim into a workflow script whose sandbox promises only those.
-const utf8ByteWidth = (c) => {
-  if (c < 0x80) return 1
-  if (c < 0x800) return 2
-  if (c < 0x10000) return 3
-  return 4
-}
-const utf8Bytes = (s) => {
-  if (typeof s !== 'string') return 0
-  let n = 0
-  for (const ch of s) n += utf8ByteWidth(ch.codePointAt(0))
-  return n
-}
-
-// SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
+  // SIZE FIRST, and it names the worst offenders rather than just the total: a fault that says "too big" leaves the
   // agent guessing which field to cut, and an uninformed retry re-sends the same oversized answer.
   // THE EMPTY-PREFIX PAIR MUST AGREE — its wire form is `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`,
   // and a `true` flag beside a NON-EMPTY prefix is a contradiction no per-field table row can express. Silently
@@ -1326,13 +1331,13 @@ const utf8Bytes = (s) => {
   if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
     out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
   }
-  const size = utf8Bytes(JSON.stringify(state))
+  const size = encodedAsciiBytes(JSON.stringify(state))
   if (size > maxBytes) {
     const worst = Object.keys(state)
-      .map((k) => [k, utf8Bytes(JSON.stringify(state[k]))])
+      .map((k) => [k, encodedAsciiBytes(JSON.stringify(state[k]))])
       .sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([k, n]) => `${k} (${n} B)`).join(', ')
-    out.push(`the answer serializes to ${size} bytes, over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
+    out.push(`the answer encodes to ${size} ASCII bytes on the wire (the \\uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
   }
   for (const [key, spec] of Object.entries(shape)) {
     if (state[key] === undefined) continue

@@ -3657,10 +3657,31 @@ export function verifyDigest(result, v) {
 // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. The
 // counts here match the digest's by construction (the same per-page `complete`/`buildComplete`/`missing`/`unverified`/
 // `builderOpen` and the same top-level totals), so nothing that schedules on those numbers changes — only the bytes do.
+// BOUNDED PER PAGE, LINEAR IN PAGE COUNT: every page entry is fixed-shape booleans/integers — measured ~98 wire
+// bytes with an ASCII key and ~140-260 with a localized (Cyrillic) key, whose every character costs six bytes in
+// the \uXXXX submission form — but nothing here caps how many pages a plan publishes: a large-enough plan can
+// approach the answer's 16000-byte wire ceiling on counts alone. Pages are NOT dropped to fit (an absent entry
+// reads as "nobody looked" downstream and would re-open settled units); instead the `--verify-summary` writer warns
+// loudly as the ceiling nears, and the true close at scale is the answer-slimming follow-up, not a silent cut here.
 export function verifySummary(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
     pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, unverified: p?.unverified, builderOpen: p?.builderOpen };
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
+}
+
+// THE WIRE'S OWN BYTES — the size the summary costs once the Reconcile agent's answer is ASCII-encoded for
+// submission: 1 per printable-ASCII UTF-16 code unit, 6 per anything else (a \uXXXX escape; an astral pair is two).
+// A raw `.length` undercounts localized page keys six-fold, so a scale warning measured that way stays silent past
+// the very ceiling it guards. This is the engine-side copy of the workflow's own measure — the two cannot share a
+// module across that boundary, so run-infra pins them equal by executing both on the same inputs.
+export function encodedAsciiBytes(s) {
+  if (typeof s !== "string") return 0;
+  let n = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    n += (c >= 0x20 && c <= 0x7e) ? 1 : 6;
+  }
+  return n;
 }
