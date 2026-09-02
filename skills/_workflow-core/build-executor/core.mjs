@@ -9,7 +9,7 @@
 // WHY THE SHAPE IS THIS WAY. The core has no filesystem and no shell: it cannot read the queue file, cannot run
 // `migrate.mjs`, cannot call clio. An AGENT does each of those and returns STRUCTURED numbers; every decision here
 // — which units are open, whether a unit is parked, whether the run stops on a plan gap, whether the whole thing
-// is complete — is then arithmetic. `--verify --verify-json` PUBLISHES the verdict as JSON and `VERIFY_RESULT`
+// is complete — is then arithmetic. `--verify --verify-json` PUBLISHES the verdict as JSON and `RECONCILE_SHAPE`
 // mirrors that file field for field: the reconcile agent copies the file, it does not read a table and it does not
 // re-derive a number.
 //
@@ -37,10 +37,10 @@ import {
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planInvalidNextAll,
-  preflightToRun, repairBlock, requeueDecisions, resolutionAttribution, resolutionsBlockText, resolutionsForUnit,
-  resolvePackageState, roundsRun, scheduleUnits, sectionRouteFrom, selfCheckDiscrepancyText, selfCheckMismatches,
-  selfCheckStillShort, shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause,
-  unknownCheckpointKeys, verifyFetchPlan,
+  preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, repairBlock, requeueDecisions,
+  resolutionAttribution, resolutionsBlockText, resolutionsForUnit, resolvePackageState, roundsRun, scheduleUnits,
+  sectionRouteFrom, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort, shouldPauseAfter,
+  templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
 } from './helpers.mjs'
 import {
   BUILD_SCHEMAS, JUDGE_SCHEMA, PACKAGE_RECORD_SCHEMA, PERSIST_SCHEMA,
@@ -108,6 +108,22 @@ const RECONCILE_REQUIRES = BASE_REQUIRES
 // The verifier and the judge must be contexts that did not do the work they are ruling on.
 const INDEPENDENT_REQUIRES = [...BASE_REQUIRES, 'independentRoles']
 
+// The Reconcile answer's mechanical encoder, shipped INSIDE the prompt: the agent writes it to the migration folder
+// and runs it, so the \uXXXX escaping is computed, never hand-written — a hand-mistyped hex digit still parses and
+// silently changes a character the script computes on. No backslash, backtick or `${` appears in this source: it is
+// interpolated into a template literal and rendered into a prompt, and each of those layers would re-interpret one
+// (the backslash it does need is built at runtime from char code 92). The regex deliberately has no `u` flag — it
+// must match per UTF-16 code unit so a surrogate pair becomes two escapes, which is what JSON requires.
+// Exported so the offline suite executes the exact text the prompt carries.
+export const ANSWER_ENCODER_SOURCE = `import { readFileSync, writeFileSync } from 'node:fs'
+const [rawFile, outFile] = process.argv.slice(2)
+const answer = JSON.parse(readFileSync(rawFile, 'utf8'))
+const u = String.fromCharCode(92) + 'u'
+const ascii = JSON.stringify(answer).replace(/[^ -~]/g, (c) => u + c.charCodeAt(0).toString(16).padStart(4, '0'))
+JSON.parse(ascii)
+writeFileSync(outFile, ascii)
+console.log('OK ' + outFile + ' (' + ascii.length + ' bytes, ASCII-only)')`
+
 // MODULE-SCOPE PURE HELPERS (Sonar S7721): each reads only its own parameters, never the run's closure, so they
 // are hoisted out of `run()` rather than redefined on every call.
 
@@ -149,10 +165,10 @@ export function* run(rawInput, io = {}, opts = {}) {
     SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS,
     MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET, FINDINGS, FINDING_KEYS,
     VERIFICATION_SURFACE_NOTE,
-    QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST,
+    QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
     REFS_DIR, REFS_INDEX, RESOLUTIONS_FILE,
     CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
-    dataFence, openRowPrompt, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
+    dataFence, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
   } = ctx
   // A finding reopens its unit for ONE repair attempt, and this set is what makes that terminate. It is MUTABLE run
   // state (consumed at dispatch), which is why it lives here and not in the context: reading the constant
@@ -162,7 +178,7 @@ export function* run(rawInput, io = {}, opts = {}) {
   // baseline Reconcile below, and every one of these is only ever called after that.
   const paths = makePaths(ctx, () => state?.unitKeys)
   const { specFile, worklogFile, sharedWorklogFile, queueSliceFile, builtSliceFile,
-    selfBuiltFile, selfVerdictFile, cliSpec, cliSelfCheck } = paths
+    selfBuiltFile, selfVerdictFile, repairVerdictFile, cliSpec, cliSelfCheck, cliRepairCheck } = paths
 
   // The persistence step runs several times per round, so its work-item id has to distinguish the calls — by a
   // COUNTER, never a clock: a resumed run replays the journal by id and must ask for the same ids in the same
@@ -346,7 +362,12 @@ export function* run(rawInput, io = {}, opts = {}) {
   // NO `carry` parameter: Verify is the queue writer and is the phase that receives the carry block. Reconcile
   // PRESERVES the counters and reports them back, so handing it the carry would make it a second writer of the same
   // keys — and an unused parameter here reads as if it still were one.
-  function reconcilePrompt(round) {
+  // One capture file PER DISPATCH. The label already distinguishes the reconcile call-sites (baseline,
+  // after-preflight, each round tail) AND the workflow-level retries — and every retry is a fresh context that
+  // restarts the in-prompt counter at 1, so a round-only name had a later dispatch overwrite the exact bytes an
+  // earlier failure left behind.
+  const answerFileStem = (label) => label.replace(/^reconcile:/, '').replace(/[:.]/g, '-')
+  function reconcilePrompt(round, fileStem) {
     const first = round === 0
     return `You are the RECONCILE phase of a Freedom build run — round ${round + 1}. ${first
       ? 'This is the BASELINE: nothing has been built by this run yet, and part of your job is to find out what the stand already has.'
@@ -357,16 +378,16 @@ ${READ_ONLY_RULE} (The queue file and the built file are the exceptions — you 
 
 DO SIX THINGS, in order:
 
-1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\`, with the entry quoted verbatim and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
+1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\` as \`{ found, version, date, who, recordedIn, quote }\` — \`recordedIn\` the file you found it in, \`quote\` the entry VERBATIM, and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty string is a REAL answer and is not the same as \`null\`**: return \`""\` when this stand's prefix is empty (a common and correct configuration), and \`null\` ONLY when you could not read it at all. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` — the root-level \`--units.resolutionsUnmatched\`, verbatim: those are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks, and this run is the only thing that can tell the operator so.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty prefix is a REAL answer and is not the same as unreadable — but it must NOT travel as a bare empty string** (an empty-string value is the token that has been dropped in transit from this very answer, which then fails to parse). \`schemaNamePrefixEmpty\` is REQUIRED on EVERY answer: return \`true\` with \`schemaNamePrefix: null\` when this stand's prefix is EMPTY (a common and correct configuration), and \`false\` in every other case — beside the prefix VERBATIM when you read one, or beside \`schemaNamePrefix: null\` when you could not read the setting at all. A field that must always be sent cannot be silently dropped: an answer missing it is refused and retried, so an empty prefix can never quietly decode as unreadable. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` (each \`{ id, pageKey, kind, item, requires, resolution }\` — \`pageKey\` is the page the item belongs to and is REQUIRED on every item) and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` AND \`resolutionsConflicts\` — the root-level \`--units.resolutionsUnmatched\` / \`--units.resolutionsConflicts\`, verbatim, each entry \`{ id, kind, item }\` (identifiers only — no \`answer\` text, it is already in the operator's own file). Unmatched are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks; conflicts are questions answered TWICE through the two key forms. This run is the only thing that can tell the operator about either, so return BOTH as \`[]\` when there is nothing to report rather than omitting them.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that. **\`'exists'\` does not say WHOSE it is.** A package this migration created itself reads exactly like a stranger's from the stand, and the two need opposite handling under \`sectionHost: new-app\`; the only thing that tells them apart is the \`standWrites.packageCreated\` record in the queue file, which step 5 has you report as \`packageCreatedByRun\`. Report the state you actually read here, and let that record answer the ownership question.
 
 3. READ THE QUEUE FILE. From \`${QUEUE_FILE}\` (absent ⇒ every list below is empty and the run is starting fresh) return:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
-   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim.
+   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
 
 4. REFRESH THE BUILT FILE AND RUN THE GATE.
@@ -376,20 +397,31 @@ DO SIX THINGS, in order:
    - For a key with NO recorded schema: write NOTHING for it and say so in \`notes\` as "cannot verify, unknown schema". That is an explicit state, not a skip — the key stays unverified, the unit stays open, and the build agent that takes it will report the schema it resolves to.
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. **RETURN BOTH AS \`[]\` WHEN THERE IS NOTHING TO LIST — do not omit them.** Round 1 has nothing filed and nothing rejected, and that is the normal case, not a reason to leave the field out: both are REQUIRED, and the close row reads them to tell an id that is already earned from one that is merely unfiled. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer. Also return \`pagesRecorded\` — EVERY key whose \`pages\` entry already exists in the built file, whether that entry is a recorded object or \`false\`. That is what lets the verifier leave a page this round did not touch alone instead of re-reading the whole section every round; omit it and every page is fetched again, which is correct but wasteful.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
-   - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the machine verdict, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
-   - Return \`verify\` = the CONTENTS of ${VERIFY_DIGEST}, copied verbatim — the DIGEST, not ${VERIFY_JSON}. Same shape, minus the open rows of pages that are already complete (nothing reads those). ${VERIFY_JSON} is still written and is the audit copy; do not transcribe it, it is several times larger and the difference is rows no one consumes: \`complete\`/\`missing\`/\`unverified\`/\`planGaps\` and \`pages["<key>"] = { complete, missing, unverified, openRows }\`. Do NOT read the numbers off the table, do not re-add them, do not summarise \`openRows\` — its \`deliverable\`/\`status\`/\`evidence\` strings are handed to the next build round verbatim, and a paraphrase there sends an agent to repair something the gate did not say. Also return \`exitCode\` and \`verifyTablePath\`.
+   - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the full machine verdict, \`--verify-digest\` the same minus completed pages' rows, \`--verify-summary\` the COUNTS-ONLY verdict you copy below, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
+   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified }\`. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
 
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
    - \`⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete\` is NOT a plan gap. It is the repairable one. Do not put it in \`planGaps\`.
     - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` and \`continuations\` counters each unit already has. **Do NOT increment either one here.** A round is charged per ATTEMPT, and you are not the phase that attempts anything: incrementing for every open unit charges the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parks untouched pages. The counters are moved by the phase that runs straight after Build, for exactly the units it dispatched. Return \`roundOf\` = the rounds counter now on file for every key and \`continuationOf\` = the continuations counter now on file for every key. **KEEP the root \`standWrites\` key exactly as the file holds it** — it records stand writes an earlier run or the other route made, and it is not yours to recompute.
    - Return \`packageCreatedByRun\` — the file's \`standWrites.packageCreated\`, VERBATIM (\`{ package, appUnitComplete, planVersion, sectionPage }\`), or \`null\` when the file has no such record. This is the run's own memory of having created the target package, and it is the ONE thing that tells a package this migration made apart from a package somebody else owns: under \`sectionHost: new-app\` the second is a stop and the first is a resume. **Read it off the file; do NOT derive it from the stand.** \`find-app\`/\`list-packages\` can say a package EXISTS — no stand read can say WHO created it — so a record you infer would authorise building over somebody's application. No record ⇒ \`null\`: absence is the safe answer here, and the script stops on it.
-   - Return \`orphanedPagesOnFile\` — the file's \`standWrites.orphanedPages\` array, VERBATIM (\`[]\` when the file has none; REQUIRED to be present, never omitted). These are pages an EARLIER run or the other route left bound to no key after a re-bind. They are read back for one reason: the failure they come from was a LATER diagnosis fetching a dead page and concluding the build was short, so a list nobody reads is a list that helps nobody. Copy it; do not recompute it from the stand, and do not drop an entry because the page looks fine — an orphan is perfectly fetchable, which is the whole problem.
+   - Return \`orphanedPagesOnFile\` — the file's \`standWrites.orphanedPages\` array, VERBATIM, each entry \`{ schema, orphanedBy, at }\` (\`orphanedBy\` the run or unit that left it, \`at\` when — copy both, \`null\` included) (\`[]\` when the file has none; REQUIRED to be present, never omitted). These are pages an EARLIER run or the other route left bound to no key after a re-bind. They are read back for one reason: the failure they come from was a LATER diagnosis fetching a dead page and concluding the build was short, so a list nobody reads is a list that helps nobody. Copy it; do not recompute it from the stand, and do not drop an entry because the page looks fine — an orphan is perfectly fetchable, which is the whole problem.
    - Return \`sectionRouteByRun\` — the file's \`standWrites.sectionRoute\`, VERBATIM (\`{ route, schemaName, sectionHost, planVersion }\`), or \`null\` when the file has no such record. This is the run's own memory of the navigation route the section it built actually opens at — the ONE thing that stops a later reader (an orienting agent, the per-page render check) from composing a \`#Section/<guess>\` URL and mistaking a wrong route's \`Script error\` for a genuine page defect (D10, ST_2 run: that exact guess cost a database flush and a compile on a shared stand). **Read it off the file; do NOT compose it, and do NOT reconstruct it from a schema-naming convention** — a route this script did not itself write is not a fact this run can vouch for. No record ⇒ \`null\`.
 
 6. REPORT QUEUE DRIFT. \`staleQueueKeys\` = keys in the queue file that \`--units\` no longer publishes (the plan was regenerated — they gate nothing now). \`newKeys\` = keys \`--units\` publishes that the queue did not have. Report both; never silently trust either.
 
-Return the schema. Numbers only — this script does the judging.`
+Return the schema. Numbers only — this script does the judging.
+
+THE SCHEMA NAMES THE FIELDS; THIS SCRIPT CHECKS WHAT IS INSIDE THEM. Its nested objects are declared loosely (a plain object, an array of objects) because the host rejects a schema larger than 4096 serialized bytes — so every nested field named above is verified when your answer arrives. An answer short of one is NOT accepted with a hole in it: you are re-asked, with the offending fields listed, and the run stops if the last attempt is still short. Copy each nested object's fields exactly as this prompt lists them.
+
+HOW TO SUBMIT THE ANSWER. The host has rejected this answer — the run's largest, dense with verbatim-copied text — as unparseable JSON when it was improvised in place, so it is composed on disk and submitted from there:
+- Write the COMPLETE answer object — raw characters, no manual escaping — to \`${input.outDir}/reconcile-answer-${fileStem}-1.json\`. The trailing number counts YOUR OWN submissions: recomposing after a rejection writes the NEXT number, and a rejected attempt's files are never overwritten or deleted — they are the only record of the exact bytes the host refused.
+- Write this helper VERBATIM to \`${input.outDir}/encode-answer.mjs\` — OVERWRITE any existing copy, every time: a file left by an earlier run may predate this prompt's helper and silently diverge from it. Then run \`node <that helper> <raw file> <raw file with .json replaced by .ascii.json>\`:
+${ANSWER_ENCODER_SOURCE}
+It validates the raw file and writes an equivalent ASCII-only encoding — every non-ASCII character becomes a \\uXXXX escape, which parses back to the identical character, so every VERBATIM rule above still holds after decoding. If its parse fails, fix the RAW file and re-run it; never submit an answer the helper rejected. THE SIZE IT PRINTS IS THE WIRE SIZE, and it is your PRE-SUBMIT GATE: if it prints more than ${RECONCILE_ANSWER_MAX_BYTES} bytes, do NOT submit — the host's input cap would truncate the payload mid-flight and the whole attempt is lost. Shrink first, per the size rules above (counts, keys and ids in the answer; bulk stays on disk), re-compose, re-encode, and only then submit.
+- Read the \`.ascii.json\` file and submit EXACTLY its content as the structured answer, character for character.
+- If the host rejects the submission as unparseable anyway, submit again from the SAME \`.ascii.json\` — and leave a REJECTED attempt's files in place: they are the evidence that failure needs.
+- Once the host ACCEPTS a submission, DELETE that attempt's raw and \`.ascii.json\` files. The accepted answer is already recorded by the host, and these copies carry the same live-stand text as this folder's other artifacts (\`verify.md\`, \`built.json\`) — a routine copy should not outlive its purpose. Only a rejected attempt's files stay — and the ENGINE enforces the bound regardless: every \`--units\` run sweeps capture files older than 14 days, so a capture this instruction misses is removed on the next run in this folder.`
   }
 
   phase('Reconcile')
@@ -433,40 +465,154 @@ Return the schema. Numbers only — this script does the judging.`
   const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas,
     dispatched: [...dispatched], continuations, preflightEvidence, standWrites })
 
-  // ENG-95850 (A3) — RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later
-  // phase depends on it, so a transient failure there costs the whole run: measured on the Applicant baseline, two
-  // consecutive Workflow launches were rejected at this exact call in 9 ms with 0 writes ("output schema too large to
-  // classify safely"), a LATER identical launch passed — and in between, the flake read as a hard block and pushed the
-  // run onto the Agent route, which is where the divergent state of A2 came from. Retrying is what turns that from a
-  // route switch into a hiccup. The attempts are consecutive dispatches, not spaced ones — the core yields work and
-  // never holds a clock, so this budget only covers a rejection that does not outlast the attempts themselves.
+  // RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later phase depends on
+  // it, so a failure here costs the whole run. The budget covers three failures a second dispatch can clear: a host
+  // that answered nothing, a host that REJECTED the item (the driver throws a single-item step's rejection into the
+  // core, so it arrives HERE as a thrown error, never as null — the StructuredOutput retry-cap exhaustion is this
+  // path), and an answer that came back short of the shape (which the retry is told about).
+  // IT DOES NOT COVER THE SCHEMA-SIZE REFUSAL — that one is deterministic, and no number of attempts changes the
+  // bytes. The attempts are consecutive dispatches, not spaced ones: the core yields work and never holds a clock.
   // Bounded and never silent: each attempt is logged, and exhausting them is still the honest `reconcile-failed`
   // stop, not a run that proceeds on a state nobody produced.
   const RECONCILE_ATTEMPTS = 3
+  // `reconcileAgent` returns `null` for three different failures — the host never answered, the host rejected the
+  // item, or it answered and every answer was short of the shape this script computes on — and the operator's next
+  // move differs between them, so the last attempt's fault list and rejection are held for the failure text to name.
+  let lastShapeFaults = []
+  let lastHostRejection = ''
+  // ONE WRITER for the attempt-failure pair: both fields move together, so no branch can set one and leave the
+  // other stale — the far readers (the stop texts, the round-tail log) key on whichever is set last.
+  function recordAttemptFailure(faults, rejection) {
+    lastShapeFaults = faults
+    lastHostRejection = rejection
+  }
   function* reconcileAgent(roundNo, id, label, note) {
+    recordAttemptFailure([], '')
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
-      // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
-      // round's own `dispatchUnit` loop, which is sequential for the same reason).
-      const answer = yield* dispatch(attempt === 1 ? id : `${id}.retry-${attempt - 1}`, reconcilePrompt(roundNo), {
-        schema: RECONCILE_SCHEMA, phase: 'Reconcile', requires: RECONCILE_REQUIRES, note,
-        label: attempt === 1 ? label : `${label}:retry-${attempt - 1}`,
-      })
+      // Sequential by definition: attempt 2 exists only because attempt 1 failed (same shape as the round's own
+      // `dispatchUnit` loop, which is sequential for the same reason).
+      const answer = yield* reconcileAttempt(roundNo, id, label, note, attempt)
       if (answer) return answer
-      if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; a rejection here has been transient before, and switching routes over it is what split the state file`)
     }
     return null
   }
-  // The one wording for both Reconcile failures, and it names the recovery the Applicant run got wrong: re-run THIS
+  // ONE ATTEMPT: build the (fault-informed) prompt, dispatch, classify what came back. Split from the loop so each
+  // decision axis reads on its own and the pair stays under Sonar's cognitive-complexity ceiling (rule S3776); a
+  // usable answer is returned, every failure updates the module state and returns null so the loop spends the next
+  // attempt on it.
+  function* reconcileAttempt(roundNo, id, label, note, attempt) {
+    const willRetry = attempt < RECONCILE_ATTEMPTS
+    const attemptId = attempt === 1 ? id : `${id}.retry-${attempt - 1}`
+    const attemptLabel = attempt === 1 ? label : `${label}:retry-${attempt - 1}`
+    // A RETRY AFTER A SHAPE FAULT CARRIES THE FAULT. `note` is work-item metadata and never reaches the model, so
+    // an uninformed retry re-sends byte-identical input and a deterministically dropped field is dropped again for
+    // the whole budget. The fault list is appended to the PROMPT instead, which is the one channel the agent reads.
+    const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
+    const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
+    let prompt = base
+    if (lastShapeFaults.length) {
+      prompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
+    } else if (lastHostRejection) {
+      // THE HOST'S REJECTION REACHES THE NEXT ATTEMPT. A workflow-level retry is a FRESH context: recomposing blind,
+      // it would most likely re-send the same bytes and spend the budget on nothing. The shape-fault branch above
+      // already threads its faults through; this is the same rule for the other failure kind.
+      prompt = `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.`
+    }
+    let answer
+    try {
+      answer = yield* dispatch(attemptId, prompt, {
+        schema: RECONCILE_SCHEMA, phase: 'Reconcile', requires: RECONCILE_REQUIRES, note,
+        label: attemptLabel,
+      })
+    } catch (e) {
+      // THE THIRD FAILURE THE BUDGET COVERS. A rejected single-item step reaches the core as a throw, so only a
+      // catch HERE can spend an attempt on it — without one the raw host error aborts the entire run and the
+      // honest `reconcile-failed` stop below never runs.
+      // ONLY A DELIVERED OUTCOME SPENDS THE BUDGET: the driver marks what it revives from a recorded work-item
+      // outcome (`workItemOutcome`), so a local throw — a genuine bug in this dispatch path — surfaces immediately
+      // with its own stack instead of burning three attempts under a "REJECTED by the host" label.
+      if (!e?.workItemOutcome) throw e
+      recordAttemptFailure([], String(e?.message || e))
+      logReconcileAttemptFailure(willRetry,
+        `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`,
+        `Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
+      return null
+    }
+    if (!answer) {
+      // THE FAULT LIST IS THIS ATTEMPT'S, NOT THE RUN'S. A host that refuses attempt 2 after attempt 1 answered
+      // short must report the REFUSAL: keeping the earlier faults told the operator the agent "answered on all
+      // attempts, the host is not blocking anything" while the host blocked the rest, which is the misdiagnosis
+      // this whole ticket corrects.
+      recordAttemptFailure([], '')
+      logReconcileAttemptFailure(willRetry,
+        `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; the host answered nothing, which a re-run can clear unless the reason it prints is the schema-size refusal`,
+        `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built; read the host's own reason before re-running, since the schema-size refusal is deterministic`)
+      return null
+    }
+    // THE SHAPE CHECK THE HOST DOES NOT DO. `RECONCILE_SCHEMA` declares these properties without their insides,
+    // so the fields are verified here. A schema-valid answer missing `verify.pages[*].buildComplete`, or carrying
+    // a string where the arithmetic reads a boolean, spends an attempt and is named in the log — never merged
+    // into the state, where it would reach the park/close arithmetic as `undefined` and settle a page on a fact
+    // nobody established.
+    const faults = reconcileShapeErrors(answer)
+    if (!faults.length) {
+      // The EMPTY prefix travels as `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }` — a bare `""`
+      // value is the token observed dropped from large submissions of this answer — and is decoded back to `''`
+      // here, in the one place every accepted answer passes, so every consumer keeps the string contract.
+      if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
+      return answer
+    }
+    recordAttemptFailure(faults, '')
+    // "on this attempt", NOT "on all N": an earlier attempt may have returned NOTHING (the host refused it), and
+    // `lastShapeFaults` is reset on that path, so claiming every attempt answered would tell the operator the host
+    // is fine when it may have blocked half the budget.
+    logReconcileAttemptFailure(willRetry,
+      `Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`,
+      `Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} and is STILL short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
+    return null
+  }
+  // THE LOG MUST NOT PROMISE A RETRY THE LOOP WILL NOT RUN: a line ending in "retrying" on the final attempt would
+  // tell the operator a re-dispatch is coming when the call is being abandoned — the misdiagnosis class this ticket
+  // exists to close. One chooser for all three failure kinds, so none can drift from the rule.
+  function logReconcileAttemptFailure(willRetry, retryLine, giveUpLine) {
+    log(willRetry ? retryLine : giveUpLine)
+  }
+  // The wording for the Reconcile failures, and it names the recovery the Applicant run got wrong: re-run THIS
   // route. A rejection at the first agent is not evidence the route is unavailable, and a route switch mid-folder is
   // how two routes ended up with two views of one stand.
-  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running; verify the reported cause before acting on it'
-  const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent is transient more often than not (a rejected structured answer, a classifier hiccup): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
+  // `blocked by safety classifier: output schema too large to classify safely` is NOT one of the transient cases.
+  // It is a host rule: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs,
+  // in `auto`-permission sessions. Neither a re-run nor this retry budget can clear it — the schema has to get
+  // smaller, or the session has to not be in `auto` mode.
+  const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host\'s own reason: `blocked by safety classifier: output schema too large to classify safely` is deterministic (a serialized agent schema over 4096 bytes, in an `auto`-permission session) and no number of attempts clears it; `StructuredOutput was called with input that could not be parsed as JSON` repeating on every attempt means the answer keeps reaching the host as invalid JSON — the `reconcile-answer-*` files in the migration folder hold the exact bytes of every submission, and they are the evidence to attach. They can carry live-stand data: delete them once the investigation is done (the engine also purges any capture older than 14 days on the next run in this folder)'
+  const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent may be transient (a rejected structured answer, a dropped connection): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
+  // TWO DIFFERENT FAILURES, each with its own next move. A host REJECTION carries the host's own error verbatim —
+  // that message, not this script's paraphrase, is what the operator triages on. A shape shortfall means the host
+  // answered every time, so the route is fine and re-running the same call is the reasonable move: what failed is
+  // the transcription, and the named fields are what to look at.
+  const reconcileFailedNext = () => {
+    if (lastHostRejection) {
+      return `the host REJECTED the Reconcile agent's answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}) — re-run this build on the SAME route. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
+    }
+    if (lastShapeFaults.length) {
+      return `the Reconcile agent answered on all ${RECONCILE_ATTEMPTS} attempts and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host is not blocking anything, so re-run this build on the SAME route. If the same field is missing every time, the prompt's list of that object's fields and \`RECONCILE_SHAPE\` disagree about it, which is a defect in this script rather than in the run. Nothing was built`
+    }
+    return RECONCILE_FAILED_NEXT
+  }
+  // The same three-way attribution for the ROUND-TAIL reconcile's stop, as a named clause rather than a nested
+  // ternary in the return: the lead-in differs there (the verdict on disk is this round's), so only the failure
+  // clause is shared vocabulary.
+  const reconcileRoundFailureClause = () => {
+    if (lastHostRejection) return `The host REJECTED the answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}). ${REPEATED_REJECTION_TRIAGE}`
+    if (lastShapeFaults.length) return `Every one of the ${RECONCILE_ATTEMPTS} attempts ANSWERED and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host blocked nothing, the transcription is what failed.`
+    return `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`
+  }
 
   let state = yield* reconcileAgent(round, 'reconcile.baseline', 'reconcile:baseline',
     'the baseline: `--units` + `--verify --verify-json`, the queue file, and the round counters')
 
   if (!state) {
-    return runReturn({ stopped: 'reconcile-failed', next: RECONCILE_FAILED_NEXT })
+    return runReturn({ stopped: 'reconcile-failed', next: reconcileFailedNext() })
   }
   // THE PACKAGE PROVENANCE EVERY PACKAGE GATE GOES BY (ENG-95850). This process's own record wins over the reported
   // one: the queue write that carries it to a later Reconcile happens AFTER the app unit, so within the round that
@@ -837,29 +983,26 @@ Return the schema. Nothing else.`
   const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
     isUnitOpenWithFindings(u, state.verify, state.reachabilityState, findingsPending, packageState))
 
-  // One open row, rendered as the engine wrote it — Deliverable, Status, Evidence. The evidence cell IS the repair
-  // instruction ("missing: Amount", "built in `X` but the plan targets `Y`", "filed but NOT judged"), so it travels
-  // whole from `--verify-json` to the build agent without anyone restating it.
-  const openRowLine = (r) => `${r.deliverable} — ${r.status} — ${r.evidence}`
   const unitOf = (key) => schedule.find((u) => u.key === key) || { key, kind: 'page' }
 
   // WHY a unit was parked. A park is how this run asks the user a question, and a park with no reason is a
-  // question nobody can answer — so the reason is composed HERE, where the park is decided, out of the
-  // engine's own open rows for that unit. Never blank, never invented after the fact.
+  // question nobody can answer — so the reason is composed HERE, where the park is decided. ENG-95930 (mode B): the
+  // central verify is COUNTS-ONLY now, so the reason carries the counts and a pointer to the on-disk table, never the
+  // open rows themselves — those live in `verify.md`/`verify-digest.json`, one hop away for a human. Never blank.
   function parkWhy(key, rounds) {
     const st = pageStateOf(state.verify, key)
-    const rows = (st?.openRows || []).map(openRowLine)
     const head = `still short after ${rounds} round(s)`
-    if (rows.length) return `${head} — the engine's open rows: ${rows.join(' · ')}`
     const u = unitOf(key)
     if (u.kind === 'reach') return `${head} — ${u.what || 'the on-stand wiring this key names'} was not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
     if (!st) return `${head} — the machine verdict carries no entry for this unit, so nothing confirmed it closed; the usual cause is that no Freedom schema is recorded for the key, which leaves nothing for the verifier to fetch`
-    return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit`
+    return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
   }
   function parkRecord(key, why, rounds) {
     const n = typeof rounds === 'number' ? rounds : roundsRun(state.roundOf, localRounds, key)
     const reason = typeof why === 'string' && why.trim() ? why.trim() : parkWhy(key, n)
-    return { key, kind: unitOf(key).kind || 'page', rounds: n, parkedWhy: reason, shortRows: (pageStateOf(state.verify, key)?.openRows || []).map(openRowLine) }
+    // No inline rows on the record (ENG-95930): the counts-only verify carries none, and the reason already points at
+    // `verify.md`. Kept as a field for shape stability; it is never read back for the queue or the return.
+    return { key, kind: unitOf(key).kind || 'page', rounds: n, parkedWhy: reason, shortRows: [] }
   }
   // Parks come from two places and both must land before the next dispatch: the queue file (a previous
   // session already gave up on the unit) and this round's budget arithmetic. Running it BEFORE the first
@@ -1203,7 +1346,7 @@ IN-CONTEXT COMPLETENESS GATE — RUN IT BEFORE YOU REPORT THIS UNIT COMPLETE (EN
 1b. CHECK YOUR OWN READ IS NOT STALE (ENG-95850 / B3). If the bundle's \`fetchedAt\` is OLDER than the page's \`modifiedOn\`, you were handed a cached response describing an earlier state — re-fetch ONCE before you write the file. A stale read makes a page you just built look short, and it would spend your one bounded fix attempt re-doing work that is already there. If it still disagrees, say so in \`notes\` and report \`selfCheck.ran: false\` with that as \`notRunWhy\` rather than gating on a read you cannot trust.
 2. Run the scoped gate, exactly: \`${cliSelfCheck(unit.key)}\`. It reconciles what YOUR slice declared against what you built, for THIS page only, and writes the single-unit verdict to \`${selfVerdictFile(unit.key)}\` — \`{ pageKey, complete, buildComplete, missing, unverified, openRows }\`. \`buildComplete\` is YOUR axis — it is exit-code-gated and true only when NO open row is yours to close, while rows a separate read-only verifier/judge files (evidence, judge verdict, reachability) may still sit unfiled. A non-zero exit (2) means your build is short — an unfiled-evidence-only page exits 0.
 3. If \`buildComplete\` is NOT true, you get EXACTLY ONE bounded fix attempt, here in this context: read \`openRows\` and act on every row whose \`owner\` is \`"builder"\` — each such row's Evidence cell IS the repair (a field absent by name, only some of the expected fields present, a grid with no bound datasource, a partial component count, a component not on the page, a rule the slot does not carry). Fix those, get-page again, refresh \`${selfBuiltFile(unit.key)}\`, and re-run the gate ONCE more. Do NOT loop: one fix, one re-check. NEVER attempt to "fix" a row whose \`owner\` is \`"verifier"\` — the evidence record, the judge verdict and the reachability rows are filed by a separate agent; they are not yours to close, and \`buildComplete\` does not require them. Read \`owner\`, not the \`missing\`/\`unverified\` status: a partially-built page reads \`unverified\` and is still entirely your work.
-4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and \`stillShortRows\` = the verdict's \`openRows\` AFTER the fix. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with your open rows as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
+4. Report \`selfCheck\` copying the verdict VERBATIM: \`ran\` (true unless you genuinely could not get-page your page — then \`ran: false\` with \`notRunWhy\`), \`buildComplete\`, \`complete\`, \`missing\`, \`unverified\`, \`fixAttempted\` (did you make the one fix?), and — only when still short — a CAPPED park summary of the verdict's \`openRows\` AFTER the fix: \`stillShortRows\` = AT MOST 3 rows, each with \`deliverable\`/\`status\`/\`evidence\` TRUNCATED to 80 characters (plus \`outcome\`/\`owner\`), and \`remainingRowCount\` = this page's TOTAL open rows minus the number you put in \`stillShortRows\` (0 when they all fit). Do NOT return more than 3 rows and do NOT paste the whole verdict — it stays in \`${selfVerdictFile(unit.key)}\` on disk, and returning all of it is exactly the oversized-answer failure this cap exists to stop. If \`buildComplete\` is STILL not true after the one attempt, report it honestly — the run PARKS this unit with that capped summary as the reason (per \`${REF_POLICY}\`, distinct from the ${MAX_ROUNDS}-round post-hoc park); it does NOT loop you, and a fabricated green is unrecoverable.`
   }
 
   // THE PREREQUISITE UNIT. It owns `create-app` precisely because that call also mints the starter pages that
@@ -1282,9 +1425,15 @@ IF YOU RE-BIND, SAY WHAT YOU RE-BOUND AWAY FROM (ENG-95850 / B4). \`create-app\`
 RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this page key now resolves to — the page a later \`get-page\` must be handed. Return it whether you created the page or found it already there. \`--units\` cannot publish it (its \`schema\` field is the CLASSIC source, and it is \`null\` for \`main\` and for an unfolded child) and the queue file is its only home. Omit it and nothing can verify this unit, in this session or any later one.`
   }
 
-  function buildPrompt(unit, st, roundNo) {
-    const shortRows = (st?.openRows || []).map((r) => `  - ${openRowPrompt(r)}`).join('\n')
-    const repair = repairBlock(roundNo, shortRows, MAX_ROUNDS, VERIFY_TABLE)
+  function buildPrompt(unit, roundNo) {
+    // ENG-95930 (mode B) — the repair rows are NOT interpolated here. For a PAGE unit `repairBlock` tells the builder
+    // to read its own open rows, in its own context, from a scoped `--verify --page` gate over `built-N.json`; the
+    // verbose rows never cross the Workflow-JS boundary. The gate is page-only (`built-N.json` is numbered by page
+    // position, so `cliRepairCheck`/`repairVerdictFile` throw for the app/reach units that hold no such slice), so a
+    // non-page repair round carries only the round marker and a pointer to the on-disk table.
+    let repair = ''
+    if (unit.kind === 'page') repair = repairBlock(roundNo, MAX_ROUNDS, cliRepairCheck(unit.key, roundNo), repairVerdictFile(unit.key, roundNo), unit.key)
+    else if (roundNo > 1) repair = `\nTHIS IS REPAIR ROUND ${roundNo} of ${MAX_ROUNDS} for this unit. The gate already ran and this unit is NOT closed — re-read ${VERIFY_TABLE} for what remains, redo exactly that, and do not rebuild what is already ✅.\n`
     const known = pageSchemas[unit.key]
     const continuationBudget = continuationBudgetBlock(BUILD_TURN_BUDGET)
     let kindBlock
@@ -1625,7 +1774,6 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
   // ONE UNIT'S DISPATCH — the prompt, the work item, and everything recorded off its answer. Out of the round loop so
   // that loop carries only the round's own control flow, and none of these branches at its nesting depth (Sonar S3776).
   function* dispatchUnit(unit, r) {
-    const st = unit.kind === 'page' ? pageStateOf(state.verify, unit.key) : null
     const nth = Math.max(state.roundOf?.[unit.key] ?? 0, (localRounds[unit.key] ?? 0) + 1)
     // THE WORK-ITEM ID HAS TO BE UNIQUE, and `nth` alone is not (ENG-95474). A granted continuation deliberately
     // charges NO repair round — neither `localRounds` nor `dispatched` moves, so the next Reconcile does not bump
@@ -1634,7 +1782,7 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     // this unit are the discriminator, and a unit that has never continued keeps exactly the id it always had.
     const continuationsSpent = continuations[unit.key] ?? 0
     const itemId = continuationsSpent ? `build.${unit.key}.r${nth}.c${continuationsSpent}` : `build.${unit.key}.r${nth}`
-    const res = yield* dispatch(itemId, buildPrompt(unit, st, nth), {
+    const res = yield* dispatch(itemId, buildPrompt(unit, nth), {
       phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
       // THE ONE STEP THAT WRITES TO THE STAND, and it is dispatched one unit at a time by construction — the
       // stand is a shared mutable resource, so this step is never part of a parallel batch.
@@ -1872,7 +2020,10 @@ Return every verdict you wrote.`,
       } else {
         // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
         // have closed. Said out loud rather than retried — the round loop reconciles at its own tail either way.
-        log('the post-preflight Reconcile returned nothing — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built')
+        let refreshFailure = 'returned nothing'
+        if (lastHostRejection) refreshFailure = `was REJECTED by the host (${lastHostRejection})`
+        else if (lastShapeFaults.length) refreshFailure = `returned nothing — every attempt answered but was short of the shape this script computes on (${lastShapeFaults.join(' · ')})`
+        log(`the post-preflight Reconcile ${refreshFailure} — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built`)
       }
     }
     return null
@@ -1884,12 +2035,17 @@ Return every verdict you wrote.`,
   // return value rather than a branch in the middle of the run.
   function dryRunReport() {
       const openNowUnits = openNow()
-      const wouldBuild = openNowUnits.map((u) => ({
-        key: u.key,
-        kind: u.kind,
-        schema: pageSchemas[u.key] || null,
-        openRows: (state.verify?.pages?.[u.key]?.openRows || []).map((r) => r.deliverable).slice(0, 8),
-      }))
+      // ENG-95930 (mode B) — COUNTS, not rows. The central verify is counts-only, so the preview reports each unit's
+      // open-row COUNT and points at `verify.md` for the rows themselves, instead of dumping per-row prose.
+      const wouldBuild = openNowUnits.map((u) => {
+        const st = state.verify?.pages?.[u.key]
+        return {
+          key: u.key,
+          kind: u.kind,
+          schema: pageSchemas[u.key] || null,
+          openRowCount: st ? (st.missing ?? 0) + (st.unverified ?? 0) : null,
+        }
+      })
       log(`DRY RUN — nothing was written to the stand. ${wouldBuild.length} unit(s) would build now: ${wouldBuild.map((u) => u.key).join(', ') || '(none — the gate is already green)'}`)
       return runReturn({
         dryRun: true,
@@ -1897,6 +2053,7 @@ Return every verdict you wrote.`,
         rounds: 0,
         verdict: verdictOf(state.verify),
         wouldBuild,
+        verifyTable: VERIFY_TABLE,   // the open rows themselves live here on disk (ENG-95930: the preview carries counts, not prose)
         buildOrder: state.buildOrder || [],
         planGaps: state.planGaps || [],
         unresolvedPreflight,
@@ -2214,7 +2371,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       if (!next) {
         // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
         // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.
-        log(`reconcile after round ${round} did not answer — stopping; the verdict is this round's, the queue state is not refreshed`)
+        const roundTailFailure = lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'
+        log(`reconcile after round ${round} ${roundTailFailure} — stopping; the verdict is this round's, the queue state is not refreshed`)
         yield* persistPending('stopping on a failed reconcile')
         return runReturn({
           stopped: 'reconcile-failed',
@@ -2224,7 +2382,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
           planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
           discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
           staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-          next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. A failure at Reconcile is transient more often than not (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`,
+          next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. ${reconcileRoundFailureClause()}`,
         })
       }
       const stopAfterRound = yield* acceptReconciled(next, `round ${round}'s Reconcile`)
