@@ -19,6 +19,11 @@
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
+// ENG-96327: the Freedom LIST page is ALWAYS this template on current platforms, so the engine emits it as a fixed
+// value rather than a `planMeta.listTemplate` FILL the agent chooses (a source of wrong picks — e.g. the `BaseDataView`
+// view type mistaken for a template). One constant feeds the Main-scope row, the list-page template verify row, and
+// the deduped `templateNames` the executor resolves against the stand.
+const LIST_PAGE_TEMPLATE = "ListPageV3Template";
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -398,17 +403,30 @@ function listColumnLine(section) {
     return `- **List columns:** ⚠ NOT resolved — the section chain declared none and no on-stand read was supplied${why}, so the Classic column set is unknown (Classic also keeps each user's visible set as per-user list/profile data). Record a \`get-classic-list-columns\` response under \`manifest.section.listColumns\`, or bundle the \`*Section\` chain into \`manifest.section\`, then confirm which columns the Freedom list should show`;
   }
   if (!cols.length) return `- **List columns:** ⚠ no default column set was resolved${why} — confirm which columns the Freedom list should show`;
-  const rendered = cols.map(esc).join(" · ");
+  // ENG-96327: the column NAMES are listed once, in the `List columns (in order)` table below — not duplicated here.
+  // This line keeps only the SOURCE / confirm caveat.
   if (section.listColumnSource === "entity-default") {
-    return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
+    return `- **List columns:** ⚠ the Classic section declares NO list columns — the single fallback column listed below is NOT the set the Classic list was configured with${why}; confirm which columns the Freedom list should show`;
   }
   // ENG-95850 (D) — say WHERE a profile-sourced set came from. It is the set the list actually renders (which is why
   // the engine takes it over the static declaration), and it is also profile data that can be scoped — the reader
   // has to know which of the two they are confirming.
   if (section.listColumnSource === "profile") {
-    return `- **List columns:** ${rendered}${why} — read from the saved grid PROFILE the Classic list actually renders (Classic keeps each user's visible set as per-user list/profile data), NOT from the section's static declaration, which usually names fewer columns; a profile can be scoped, so confirm this is the set every user should get in Freedom`;
+    return `- **List columns:** these are the columns the Classic list currently shows for the calling user — a personal view that may differ from other users', so confirm this is the set every user should get in Freedom${why}`;
   }
-  return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
+  return `- **List columns:** the Classic list shows the columns listed below; confirm this set is kept in Freedom${why}`;
+}
+// ENG-96327 — the command-bar buttons as a SHOWN summary line (like `Add record` / `List columns`), NOT a ⚠ Confirm:
+// a shown fact is not something to ask the operator to confirm. State plainly what was found; the resolution METHOD
+// (`getSectionActions()` vs the view `diff`) is not the operator's concern. When nothing resolved, a builder-only
+// comment (invisible to the reader) keeps the blind-spot note so the agent still verifies on-stand — the deliberate
+// "must not pass silently" intent, moved off the operator's plan and onto the builder who acts on it.
+function listButtonsLine(section, lcs) {
+  const actions = lcs?.commandBarActions || [];
+  const unresolved = [...(section?.sectionActionUnresolved || []), ...(section?.sectionActionNotFollowed || [])];
+  const maybeIncomplete = unresolved.length ? " (some section actions could not be resolved, so the list may be incomplete — verify on-stand)" : "";
+  if (actions.length) return `- **List buttons:** ${actions.map((a) => esc(a.name)).join(" · ")}${maybeIncomplete}`;
+  return `- **List buttons:** none found${maybeIncomplete}\n<!-- builder: only getSectionActions() items are read; buttons a section adds via its view diff (or DataGridActiveRow row actions) are not captured here — verify the Classic section has none on-stand. -->`;
 }
 // The list page's own LAYOUT tables — the positioned contents of `result.listChangeSet`. Same STATUS as the form's
 // Layout table (a machine artifact, presented verbatim), different SHAPE: a grid has no regions to fill, so it
@@ -418,15 +436,10 @@ function listColumnLine(section) {
 // The TYPE cell states the resolved `dataValueType` or says it is unresolved — never a guessed enum.
 function listColumnsTable(columns) {
   if (!columns.length) return [];
-  const L = ["", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |"];
-  columns.forEach((c, i) => {
-    const ref = c.ref ? ` → ${esc(c.ref)}` : "";
-    const type = c.dataValueType == null
-      ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
-      : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
-    const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
-    L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
-  });
+  // ENG-96327: end-user view — only the column name and its order. The grid-column code, PDS source and
+  // dataValueType are builder detail, carried machine-readably in `--units` (`expect` / `vk.columns`), not here.
+  const L = ["", "#### List columns (in order)", "| # | Column |", "| --- | --- |"];
+  columns.forEach((c, i) => L.push(`| ${i + 1} | ${esc(c.name)} |`));
   return L;
 }
 // A filter's row is its PLACEMENT: which element, which container, at which index, on which column, as which control.
@@ -489,7 +502,8 @@ function renderListLayoutTables(lcs) {
 function renderListBuildNotes(lcs) {
   const L = [];
   if (lcs.columnIdsAssignedByBuilder) {
-    L.push("", "> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.");
+    // ENG-96327: builder-only note — hidden from the human plan (an HTML comment; the building agent still reads it in the raw file).
+    L.push("", "<!-- **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column. -->");
   }
   if (lcs.quickFilterConfigCompletedByBuilder) {
     L.push("", "> **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its container and index, the filtered column and the control — the engine's resolvable facts. `crt.QuickFilter` also needs its own nested filter config and value binding, and it is `compositeOnly` with no published composite recipe, so complete it from that component's documentation (`get-component-info crt.QuickFilter`) rather than treating these `values` as the whole body.");
@@ -510,6 +524,7 @@ function renderListPageBlock(result, section, opts = {}) {
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
     L.push(listColumnLine(section));
+    L.push(listButtonsLine(section, result.listChangeSet));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
@@ -1430,21 +1445,26 @@ function renderChildMappings(childs) {
 // progress-bar template steer. Own fn for Sonar CC 15. Returns the lines to push.
 function renderTemplateBanner(result, entity, typed, someBindOnly, formTpl) {
   const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  // ENG-96327: the template steer is builder/agent-facing, not something the approver acts on, so it is HIDDEN from
+  // the human-facing plan — wrapped in an HTML comment (invisible when rendered) yet still readable in the raw file
+  // by the building agent. Every interpolation here is a Creatio schema/template identifier (never a free-text
+  // caption), so no literal `--` can occur to close the comment early.
+  const forBuilder = (lines) => lines.map((l) => `<!-- ${l.replace(/^> /, "")} -->`);
   if (typed.length) {
     const tplBase = formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template";
     const dcmBit = dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : "";
     let sharedBit;
     if (someBindOnly) sharedBit = `The **shared base \`${esc(entity)}\` form IS rendered below** ("Shared form (base)") because ${typed.filter((t) => t.bindOnly).length} type(s) are bind-only and reuse it; own-fold types (if any) render under Typed page mappings.`;
     else sharedBit = `The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`;
-    return [
+    return forBuilder([
       `> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`,
       `> **Template:** build every per-type form on ${tplBase}${dcmBit}. ${sharedBit}`,
-    ];
+    ]);
   }
   if (dcmPresent) {
     const usesProgressBar = formTpl && /ProgressBar/i.test(formTpl);
     const tplWarn = formTpl && !usesProgressBar ? ` ⚠ The selected form template \`${esc(formTpl)}\` has no progress bar — reconsider it against the DCM case (or plan the MainContainer fallback explicitly).` : "";
-    return [`> **Template — DCM case present:** the form page must ship a stage **progress bar**. Build it on **\`PageWithTabsAndProgressBarTemplate\`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity; hand-adding \`crt.EntityStageProgressBar\` into a plain template's MainContainer is the FALLBACK.${tplWarn}`];
+    return forBuilder([`> **Template — DCM case present:** the form page must ship a stage **progress bar**. Build it on **\`PageWithTabsAndProgressBarTemplate\`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity.${tplWarn}`]);
   }
   return [];
 }
@@ -1501,7 +1521,7 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
   const someBindOnly = typed.some((t) => t.bindOnly);
   const formTpl = pm.formTemplate || opts.template || null;
-  const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
+  const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${LIST_PAGE_TEMPLATE} | ${mainCall} |`];
   if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
@@ -1560,7 +1580,7 @@ function buildChildScopeRows(childs) {
     } else if (c.editPage === false) {
       // Only a recorded "no *Page exists" is a Reuse — `editable:false` does NOT reach this arm. The scope table
       // must never claim a row is settled while the gate blocks on it, nor the reverse (same rule as `cyclic`).
-      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
+      target = "— no separate page (read/attach-only)"; call = "No page"; label = esc(c.entity);
     } else {
       target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
     }
@@ -1607,31 +1627,21 @@ export function renderPlan(result, opts = {}) {
   // when EVERY type has its OWN fold. `someBindOnly` gates that below.
   const someBindOnly = typed.some((t) => t.bindOnly);
   const sizeLine = buildSizeLine(typed, cs, fields);
-  // THE PLAN VERSION, printed into the artifact the operator approves. `plan.md` is engine-WRITTEN and presented
-  // verbatim, so a version hand-typed into it would be erased by the next `--plan` run — and the delegated build
-  // HARD-STOPS unless the recorded approval names a version that matches what the engine publishes. `--units`
-  // publishes the same string as `planVersion`. Rendered only when the engine actually computed one, so a
-  // hand-built `result` (the golden runners construct several) does not get a `Plan version: undefined` line.
+  // THE PLAN VERSION. Emitted byte-identical to before, but WRAPPED IN AN HTML COMMENT (ENG-96327) so it renders
+  // invisibly to the human reading the plan while staying exactly what the agent records and the build gate reads:
+  // it is agent↔build plumbing — the agent copies the `**Plan version:**` string into the `decisions.md` approval
+  // entry and the delegated build HARD-STOPS unless that recorded version matches what `--units` publishes as
+  // `planVersion` (the build reads the value from `--units`, never by parsing this line). Keeping the token inside
+  // the comment leaves every doc/hint/gate that quotes `**Plan version:**` accurate and UNCHANGED. `plan.md` is
+  // engine-WRITTEN and presented verbatim; rendered only when the engine computed a version, so a hand-built
+  // `result` (the golden runners construct several) gets no marker line.
   const planVersion = typeof result.planVersion === "string" && result.planVersion.trim() ? esc(result.planVersion.trim()) : "";
-  // ENG-95683 (item 1) — the PROVENANCE MIRROR of the resolved component gate set. The full machine-readable copy is
-  // the `--resolved-gates` artifact; this one compact line puts the same fact in the operator-facing plan so a reader
-  // sees WHICH gated composites this run resolved (and against which registry) without opening the JSON. Rendered
-  // only when the run gates a type — a run with no gated types has nothing to mirror (its artifact is `[]`).
-  const resolvedGates = Array.isArray(result.resolvedGates) ? result.resolvedGates : [];
-  // One gate's rendered fragment, built with intermediate variables instead of a nested template literal (Sonar
-  // S4624): the optional `+ feature` segment is computed on its own line, so adding a future gate field stays a
-  // one-line change here rather than a deeper nesting at the call site.
-  const gateFragment = (g) => {
-    const feature = g.feature ? ` + feature \`${esc(g.feature)}\`` : "";
-    return `\`${esc(g.componentType)}\` → \`${esc(g.id)}\`${feature} (${esc(g.source)})`;
-  };
-  const gateMirror = resolvedGates.length
-    ? [`**Resolved component gates:** ${resolvedGates.map(gateFragment).join("; ")} — machine-readable copy in the \`--resolved-gates\` artifact.`, ""]
-    : [];
+  // ENG-96327 — the resolved-component-gate PROVENANCE MIRROR is no longer rendered into the human-facing plan. It
+  // was operator-facing jargon a reader never acted on; the durable machine-readable copy stays the `--resolved-gates`
+  // artifact (written from `result.resolvedGates` in migrate.mjs), which is what any consumer reads.
   P.push(
     "### Overview",
-    ...(planVersion ? [`**Plan version:** \`${planVersion}\` — record THIS string in the \`decisions.md\` approval entry; the build compares it and refuses to run on a mismatch.`, ""] : []),
-    ...gateMirror,
+    ...(planVersion ? [`<!-- **Plan version:** \`${planVersion}\` — record THIS string in the \`decisions.md\` approval entry; the build compares it and refuses to run on a mismatch. -->`, ""] : []),
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
     `**Environment:** ${fill(pm.environment, "<FILL: environment name>")} ·`,
     `**Package:** ${fill(pm.package, "<FILL: owning package(s) + lock state → target package>")}`,
@@ -1694,14 +1704,15 @@ export function renderPlan(result, opts = {}) {
   // on each typed row so the template mandate is not lost (it used to live only on the suppressed base row).
   const formTpl = pm.formTemplate || opts.template || null;
   const scopeRows = buildScopeRows(pm, opts, entity, typed, fill);
-  P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
+  P.push("### Main scope", "| Classic | Freedom target | Migration approach |", "| --- | --- | --- |", ...scopeRows);
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `" + RECONCILE_REFERENCE + "`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
   P.push(...buildChildScopeRows(childs), "");
-  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped). **`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
+  // ENG-96327: the Call-value legend was removed from the human-facing plan (decluttered per user decision). The
+  // Migration-approach values are read against the table itself; the build reads structure from `--units`, not this prose.
   // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
   // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
   // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
@@ -1825,7 +1836,7 @@ function buildCoverageRows(cs, pm, result) {
 // the whole `List page` group, not this one), so without the split every sub-page inherited a `<FILL: list
 // template>` row it can never satisfy. Its own fn so `buildPageRows` gains no branch (Sonar CC 15).
 function listPageRows(pm, fill, isMain) {
-  return isMain ? [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }] : [];
+  return isMain ? [{ label: `List page → ${LIST_PAGE_TEMPLATE}` }] : [];
 }
 // The `Form page` label. A SUB-page whose template is not a plan choice (`childTemplateChoice` returned `null`, so
 // D2 emits no `template` vk and publishes no `expectedTemplate`) used to render `Form page → <FILL: form template>`
@@ -1973,8 +1984,8 @@ function buildListItems(pm, section, result, isMain) {
   // resolved for the list page must stay UNGATED (ENG-95218 — withholding a page nobody builds must not publish an
   // unclosable `list` unit), and adding a template-only vk here would flip that decision by itself. This row lives
   // in `listRows`, gated on `LIST_PAGE_KEY`, so `ctx.page` resolves to `built.pages["list"]`, never `main`'s.
-  if (pm.listTemplate && items.some((r) => r.vk)) {
-    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\``, vk: { type: "template", exp: pm.listTemplate } });
+  if (items.some((r) => r.vk)) {
+    items.unshift({ label: `List template → \`${LIST_PAGE_TEMPLATE}\``, vk: { type: "template", exp: LIST_PAGE_TEMPLATE } });
   }
   return items;
 }
@@ -2509,7 +2520,7 @@ export function templateNamesOf(pages, opts = {}) {
   const out = new Set();
   const add = (v) => { if (typeof v === "string" && v.trim()) out.add(v.trim()); };
   for (const p of pages || []) add(p?.expectedTemplate);
-  add(opts.planMeta?.listTemplate);
+  if (opts.planMeta?.sectionSchema) add(LIST_PAGE_TEMPLATE); // ENG-96327: the list page's fixed template — asserted only when this plan has a section (hence a list page)
   return [...out].sort((a, b) => a.localeCompare(b));
 }
 // The five REACHABILITY keys, each with its applicability decided HERE: `appliesWhen: true` iff this run actually

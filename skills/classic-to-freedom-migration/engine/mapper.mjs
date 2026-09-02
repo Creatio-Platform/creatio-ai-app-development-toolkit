@@ -2361,17 +2361,12 @@ function listColumnsDecision(section, columns) {
     return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
       reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
   }
-  // ENG-95850 (D) — A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
-  // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
-  // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
-  // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
-  // profile can be SCOPED, so adopting one silently would migrate whatever scope happened to be read as the
-  // section's default for everyone. So: use it, and ask once. Fixed literal `item`, same reason as the fallback
-  // branch — it is half the key an operator's recorded answer matches on, so it must not move with the columns.
-  if (section?.listColumnSource === "profile") {
-    return { kind: LIST_DECISION_KIND.columns, item: "profile-sourced list column set",
-      reason: "these columns come from the saved grid PROFILE the Classic list actually renders, not from the section's static declaration — a profile can be scoped, so confirm this is the set every user should get in Freedom" };
-  }
+  // ENG-96327 — A PROFILE-SOURCED SET NO LONGER RAISES A ⚠ CONFIRM (reverses ENG-95850's "use it, and ask once").
+  // Classic keeps a section's visible columns as saved grid-profile data, so `source: "profile"` is the set the list
+  // renders — and, like the `schema-default` set above, it is SHOWN (the columns table) with a prose caveat noting the
+  // personal-profile scope risk. A separate blocking confirm over an already-shown list is over-gating: the reader
+  // sees the set and objects if it is wrong, the same way they would for any other shown plan item. `schema-default`
+  // and `profile` therefore behave identically here — both shown, neither gated.
   return null;
 }
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
@@ -2403,24 +2398,11 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
     out.push({ kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
       reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` });
   }
-  // ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
-  // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
-  if (section) {
-    const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
-    // Two further ways the list can be short, each stated as what it is. `unresolved` = the method is defined
-    // nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
-    // claiming nobody defines it would be false.
-    const tick = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
-    const gapClause = (names, why) => {
-      if (!names.length) return "";
-      const behind = names.length > 1 ? "them" : "it";
-      return `; and ${names.map(tick).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
-    };
-    const helperGap = gapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
-      + gapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
-    out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
-      reason: `only \`getSectionActions()\` items are read; a button the section adds through its view \`diff\` (and a \`DataGridActiveRow…\` row action) is not folded at all, so neither reaches this ChangeSet${helperGap} — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar` });
-  }
+  // ENG-96327 — the command bar no longer raises a ⚠ Confirm. What was found (or that nothing was) is a SHOWN fact:
+  // the design spec's `**List buttons:**` summary line states it, and a shown fact is not something to ask the operator
+  // to confirm. The deliberate "a section whose buttons live only in its view `diff` must not pass silently" intent is
+  // preserved there as a builder-only note (invisible to the reader), and the `sectionActionUnresolved`/`NotFollowed`
+  // completeness caveat rides that same line — so nothing is lost, it just stops gating a page the operator can see.
   for (const ra of rowActions) {
     const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
     out.push({ kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,

@@ -1086,9 +1086,10 @@ const resolvedColumnsRun = runMigration({ entity: "Applicant",
 check("ENG-95229: enriched section manifest consumes resolved entity-default columns",
   resolvedColumnsRun.section?.listColumnSource === "entity-default"
   && (resolvedColumnsRun.section?.listColumns || []).join(",") === "Name"
-  && /\*\*List columns:\*\* ⚠ Name/.test(resolvedColumnsRun.designSpec));
+  && /\*\*List columns:\*\* ⚠ the Classic section declares NO list columns/.test(resolvedColumnsRun.designSpec)
+  && /\| 1 \| Name \|/.test(resolvedColumnsRun.designSpec));
 check("ENG-95229: an entity-default plan qualifies the fallback, carries the resolver's note and keeps the question",
-  () => /\*\*List columns:\*\* ⚠ Name — the Classic section declares NO list columns/.test(resolvedColumnsRun.designSpec)
+  () => /\*\*List columns:\*\* ⚠ the Classic section declares NO list columns/.test(resolvedColumnsRun.designSpec)
     && /\(entity fallback\)/.test(resolvedColumnsRun.designSpec)
     && /confirm which columns the Freedom list should show/.test(resolvedColumnsRun.designSpec),
   () => resolvedColumnsRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
@@ -1104,7 +1105,8 @@ const resolvedSchemaDefaultRun = runMigration({ entity: "Applicant",
 check("ENG-95229: enriched schema-default columns are consumed, deduped and rendered with the NARROWED question",
   () => resolvedSchemaDefaultRun.section?.listColumnSource === "schema-default"
     && (resolvedSchemaDefaultRun.section?.listColumns || []).join(",") === "Name,Stage.Name"
-    && /\*\*List columns:\*\* Name · Stage\.Name — the Classic list shows these columns; confirm this set is kept in Freedom/.test(resolvedSchemaDefaultRun.designSpec)
+    && /\*\*List columns:\*\* the Classic list shows the columns listed below; confirm this set is kept in Freedom/.test(resolvedSchemaDefaultRun.designSpec)
+    && /\| 1 \| Name \|/.test(resolvedSchemaDefaultRun.designSpec) && /\| 2 \| Stage\.Name \|/.test(resolvedSchemaDefaultRun.designSpec)
     && !/\*\*List columns:\*\* ⚠/.test(resolvedSchemaDefaultRun.designSpec),
   () => resolvedSchemaDefaultRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
 check("ENG-95229: provenance is compared the way clio resolves it (trim + case-insensitive), not byte-for-byte",
@@ -1160,10 +1162,10 @@ check("ENG-95850 (D): a profile-sourced read is NOT gated any more — it is the
   () => profileRun.structure?.issues);
 check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the design spec says they came from the profile rather than the static declaration",
   () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
-    && /read from the saved grid PROFILE/.test(profileRun.designSpec),
+    && /the columns the Classic list currently shows for the calling user/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
-check("ENG-95850 (D): a profile-sourced set still raises ONE ⚠ Confirm decision — a profile can be scoped, so it is used but not silently adopted for every user",
-  () => /profile-sourced list column set/.test(profileRun.designSpec)
+check("ENG-95850 (D) / ENG-96327: a profile-sourced set no longer raises a ⚠ Confirm — the columns are SHOWN (table), so the profile-scope risk is a prose caveat, not a blocking gate (identical to a schema-default set)",
+  () => !/profile-sourced list column set/.test(profileRun.designSpec)
     && /confirm this is the set every user should get/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
@@ -1220,7 +1222,7 @@ check("ENG-95229: object-shaped column entries are accepted and rendered",
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
       source: "schema-default", columns: [{ name: "Name" }, { name: "Stage.Name" }] } } }, { baseDir: FIX });
-    return /\*\*List columns:\*\* Name · Stage\.Name — the Classic list shows these columns/.test(r.designSpec); },
+    return /\*\*List columns:\*\* the Classic list shows the columns listed below/.test(r.designSpec) && /\| 1 \| Name \|/.test(r.designSpec) && /\| 2 \| Stage\.Name \|/.test(r.designSpec); },
   () => "see rendered List columns line");
 check("ENG-95229: a column entry carrying no `name` is gated as a SHAPE defect, not as an unusable path",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
@@ -1273,7 +1275,7 @@ check("ENG-95229: an entity-default fallback does not replace a chain parse that
       // statement about the set actually shown.
       && (r.section?.listColumnNotes || []).every((n) => !/does not define static list columns/.test(n) || n.startsWith("the on-stand read reported: "))
       && !/declares NO list columns/.test(r.designSpec)
-      && /\*\*List columns:\*\* Name · Stage/.test(r.designSpec)
+      && /\| 1 \| Name \|/.test(r.designSpec) && /\| 2 \| Stage \|/.test(r.designSpec)
       && /the on-stand read reported: The section schema does not define static list columns/.test(r.designSpec)
       // Producers own their own punctuation, so the join must not emit `.; `.
       && !/\.; /.test(r.designSpec); },
@@ -1292,7 +1294,7 @@ check("ENG-95229: a schema-default on-stand read wins over a differing chain par
       && (r.section?.listColumnNotes || []).some((n) => /the on-stand read resolved Name, Priority \(source: schema-default\) while the section schema chain declares Name, Stage — the on-stand set is shown/.test(n))
       // The winning side's own notes are carried plainly, without the losing-side attribution prefix.
       && (r.section?.listColumnNotes || []).includes("Resolved from the section schema hierarchy.")
-      && /\*\*List columns:\*\* Name · Priority/.test(r.designSpec)
+      && /\| 1 \| Name \|/.test(r.designSpec) && /\| 2 \| Priority \|/.test(r.designSpec)
       && /Name, Stage/.test(r.designSpec); },
   () => "see section.listColumnNotes / the rendered List columns line");
 // `sameColumns` compares element-by-element, so a reordered but identical set counts as a disagreement. That is
@@ -1326,7 +1328,8 @@ check("ENG-95229: bare section array remains the accepted legacy manifest shape"
 // The DOMINANT path: every pre-existing manifest is a bare array whose columns come from the static parse. The
 // rendered wording changed on it, and `plan.md` is the verbatim deliverable — assert the text, not just the field.
 check("ENG-95229: the legacy bare-array path renders the narrowed question, not just the internal source field",
-  () => /\*\*List columns:\*\* Name · Stage — the Classic list shows these columns; confirm this set is kept in Freedom/.test(secRun.designSpec)
+  () => /\*\*List columns:\*\* the Classic list shows the columns listed below; confirm this set is kept in Freedom/.test(secRun.designSpec)
+    && /\| 1 \| Name \|/.test(secRun.designSpec) && /\| 2 \| Stage \|/.test(secRun.designSpec)
     && !/\*\*List columns:\*\* ⚠/.test(secRun.designSpec),
   () => secRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
 // Loosening `analyzeSectionChain`'s guard makes `section` non-null for a resolved-only manifest, and `buildListItems`
@@ -1352,7 +1355,8 @@ check("ENG-95229: resolved columns do not mask a missing section schema chain",
       && r.structure?.complete === false          // the load-bearing half: a missing chain BLOCKS, it isn't cosmetic
       && r.gate?.blocked === true
       && /Section schema not gathered/.test(r.designSpec)
-      && /\*\*List columns:\*\* ⚠ Name/.test(r.designSpec);
+      && /\*\*List columns:\*\* ⚠ the Classic section declares NO list columns/.test(r.designSpec)
+      && /\| 1 \| Name \|/.test(r.designSpec);
   });
 // A REJECTED on-stand read + a GATHERED chain is the state every gate golden above missed: `listColumnGateRun`
 // defaults `section.schemas` to `[]`, so `analyzeSectionChain` returned null and no List-columns line rendered at
@@ -1375,7 +1379,8 @@ const rejectedChainWithColumns = listColumnGateRun({ success: false, error: "sta
 check("ENG-95229: a rejected read is disclosed, not silently discarded, when the chain parse did find columns",
   () => (rejectedChainWithColumns.section?.listColumns || []).join(",") === "Name,Stage"
     && (rejectedChainWithColumns.section?.listColumnNotes || []).some((n) => /an on-stand list-column read was supplied but could not be used/.test(n))
-    && /\*\*List columns:\*\* Name · Stage \(an on-stand list-column read was supplied but could not be used/.test(rejectedChainWithColumns.designSpec),
+    && /\*\*List columns:\*\* the Classic list shows the columns listed below; confirm this set is kept in Freedom \(an on-stand list-column read was supplied but could not be used/.test(rejectedChainWithColumns.designSpec)
+    && /\| 1 \| Name \|/.test(rejectedChainWithColumns.designSpec) && /\| 2 \| Stage \|/.test(rejectedChainWithColumns.designSpec),
   () => rejectedChainWithColumns.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
 // The third arm of the same guard: with NO chain either, `analyzeSectionChain` used to return null and the plan
 // rendered no List-columns line whatsoever — the rejection erased entirely. A rejected read is evidence, so the
@@ -1454,18 +1459,16 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
         && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
-check("ENG-95218: the command-bar set does NOT claim to be complete — ONE decision per run (never per action, so a section whose buttons live only in its view `diff` still raises it) names the buttons found and reaches the plan through the shared ⚠ Confirm section, not a prose aside",
+check("ENG-95218 / ENG-96327: the command bar is a SHOWN `List buttons` line, not a ⚠ Confirm — it names the buttons found and raises no operator question (a shown fact is not confirmed)",
   () => lcs.commandBarActions.length === 1 && lcs.commandBarActions[0].source === "getSectionActions"
-    && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 1
-    && /runBulkAssign/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").item)
-    && /not folded at all/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").reason)
-    && /#### ⚠ Confirm before I build/.test(lpRun.designSpec)
-    && /\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
-  () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
+    && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 0
+    && /- \*\*List buttons:\*\* runBulkAssign/.test(lpRun.designSpec)
+    && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
+  () => ({ actions: lcs.commandBarActions, listButtons: lpRun.designSpec.split("\n").find((l) => /List buttons/.test(l)) }));
 check("ENG-95218: the design spec renders the list page as POSITIONED tables (columns in order, filters with container+index, actions) instead of the old prose bullets",
   () => /#### List columns \(in order\)/.test(lpRun.designSpec) && /#### Quick filters/.test(lpRun.designSpec)
     && /#### Command-bar actions/.test(lpRun.designSpec)
-    && /\| 1 \| Name \| `PDS_Name` \| PDS\.Name \| Text \(`dataValueType` 1\) \|/.test(lpRun.designSpec)
+    && /\| 1 \| Name \|/.test(lpRun.designSpec)
     && /`LeftFilterContainerInner` · index 1/.test(lpRun.designSpec)
     && !/- \*\*Quick filters:\*\*/.test(lpRun.designSpec) && !/- \*\*Section actions:\*\*/.test(lpRun.designSpec),
   () => lpRun.designSpec.split("\n").filter((l) => /List columns|Quick filter|Command-bar|Section actions/.test(l)).slice(0, 12));
@@ -1478,9 +1481,9 @@ const lpList = lpUnits.pages.find((p) => p.key === "list");
  * target stand before the first write. This is the plan-side half of the gate: without a published set, the build
  * side has nothing to check, and `ListPageV2FreedomTemplate` is exactly what reached a real build unchecked.
  */
-check("ENG-95468: `--units` publishes `templateNames` — the deduped, sorted set of page templates this plan asserts, INCLUDING `planMeta.listTemplate` (whose own checklist row is CONDITIONAL, so the name must not depend on that row being emitted)",
+check("ENG-95468 / ENG-96327: `--units` publishes `templateNames` — the deduped, sorted set of page templates this plan asserts, INCLUDING the fixed list template `ListPageV3Template` (whose own checklist row is CONDITIONAL, so the name must not depend on that row being emitted)",
   () => { const t = lpUnits.templateNames;
-    return Array.isArray(t) && t.includes("ListFreedomTemplate") && t.includes("FormPageTemplate")
+    return Array.isArray(t) && t.includes("ListPageV3Template") && t.includes("FormPageTemplate")
       && t.length === new Set(t).size && [...t].sort((a, b) => a.localeCompare(b)).join(",") === t.join(","); },
   () => ({ templateNames: lpUnits.templateNames,
     expected: lpUnits.pages.map((p) => [p.key, p.expectedTemplate]), listTemplate: lpOpts.planMeta?.listTemplate }));
@@ -1507,10 +1510,10 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
     const byKind = Object.fromEntries(rows.filter((r) => r.list).map((r) => [r.list.kind + ":" + r.list.item, r.vk.type]));
     // 4 deliverable rows (columns · 2 filters · 1 action) + the per-page `creatio-ui-guidelines` quality gate, which
     // applies to a list page's layout like any other page's — a published key must carry exactly one of those.
-    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4
-    // ⚠ Confirm items + the page's TWO quality-gate rows (ENG-95859: "design pass ran" and "independently judged"
+    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 3
+    // ⚠ Confirm items (ENG-96327: command-bar is now a shown `List buttons` line, not a confirm) + the page's TWO quality-gate rows (ENG-95859: "design pass ran" and "independently judged"
     // are different facts, reported as two rows sharing the ONE `list#quality-gates` id below)
-    return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 4
+    return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 3
       && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 2
       && byKind["columns:set"] === "listcolumns"
       && byKind["filter:QuickFilterByDueDate"] === "listfilter" && byKind["filter:QuickFilterByStage"] === "listfilter"
@@ -1519,7 +1522,7 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
       // page's quality gate, and its ⚠ Confirm items — never a column or a filter
       && ids.filter((i) => i.startsWith("list#listpage:")).length === 1
       && ids.includes("list#listpage:action:runBulkAssign") && ids.includes("list#quality-gates")
-      && ids.some((i) => i.startsWith("list#confirm:list-command-bar:")); },
+      && ids.some((i) => i.startsWith("list#confirm:list-filter-attributes:")); },
   () => ({ ids: lpUnits.evidenceRows.filter((e) => e.pageKey === "list"), rows: checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label) }));
 check("ENG-95218: `list` appears in the BUILD ORDER (a leaf — `create-app-section` mints it before the form page) and carries a parent edge like every other published key",
   () => lpUnits.buildOrder.includes("list") && lpUnits.buildOrder.indexOf("list") < lpUnits.buildOrder.indexOf("main")
@@ -1602,18 +1605,18 @@ const lpBuiltOnTemplate = (tpl) => ({ pages: { list: { viewConfig: { items: [
   { name: "DataTable", type: "crt.DataGrid", columns: LP_ALL_COLS.map((code) => ({ code, caption: "#ResourceString(" + code + ")#" })) },
   ...LP_FILTERS,
 ] }, parentSchemaName: tpl } } });
-check("ENG-95470: a list page built on the PLANNED template (`ListFreedomTemplate`) closes the new List-template row ✅ Done — a machine row, not just judge prose (no open row for it, and it costs the page no MISSING)",
-  () => { const v = lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"));
+check("ENG-95470 / ENG-96327: a list page built on the PLANNED (now fixed) template `ListPageV3Template` closes the new List-template row ✅ Done — a machine row, not just judge prose (no open row for it, and it costs the page no MISSING)",
+  () => { const v = lpVerify(lpBuiltOnTemplate("ListPageV3Template"));
     return lpListTally(v).missing === 0
       && !(lpListTally(v).openRows || []).some((r) => /List template/.test(r.deliverable)); },
-  () => lpListTally(lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"))));
-check("ENG-95470: a list page built on a DIFFERENT template than the plan recommended (measured: `ListPageV3Template` vs the planned `ListFreedomTemplate`) is its own machine-checked ⚠ row naming BOTH templates — not only free text inside a judge rejection",
-  () => { const v = lpVerify(lpBuiltOnTemplate("ListPageV3Template"));
+  () => lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV3Template"))));
+check("ENG-95470 / ENG-96327: a list page built on a DIFFERENT template than the plan's fixed one (measured: `ListFreedomTemplate` built vs the planned `ListPageV3Template`) is its own machine-checked ⚠ row naming BOTH templates — not only free text inside a judge rejection",
+  () => { const v = lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"));
     const row = (lpListTally(v).openRows || []).find((r) => /List template/.test(r.deliverable));
     return lpListTally(v).missing === 0 && row?.outcome === "unverified"
       && row.evidence.includes("ListPageV3Template") && row.evidence.includes("ListFreedomTemplate")
       && /built on .*but the plan recommended/.test(row.evidence); },
-  () => (lpListTally(lpVerify(lpBuiltOnTemplate("ListPageV3Template"))).openRows || []).find((r) => /List template/.test(r.deliverable)));
+  () => (lpListTally(lpVerify(lpBuiltOnTemplate("ListFreedomTemplate"))).openRows || []).find((r) => /List template/.test(r.deliverable)));
 check("ENG-95470: with NO `parentSchemaName` reported for the list page, the template row is ⚠ not-checkable (D6) — never a false MISSING for a page nobody looked at",
   () => { const v = lpVerify(LP_BUILT(LP_ALL_COLS, LP_FILTERS));   // LP_BUILT reports no parentSchemaName at all
     return lpListTally(v).missing === 0 && lpListTally(v).unverified >= 1
@@ -1694,9 +1697,9 @@ check("ENG-95470 (defect 3, guard): a plan with NOTHING else resolved for the li
 // `pages[].expectedTemplate` names the list template NOWHERE — yet the plan still asserts it, and the build still
 // puts a page on it. The pre-build set must ask the stand about it anyway. The two checks are complementary: the row
 // asks the BUILT page afterwards, this set asks the STAND before the first write.
-check("ENG-95468: on the same ungated-list fixture — no `list` unit, no template row — `templateNames` STILL carries `planMeta.listTemplate`, so the name the plan asserts is resolved against the stand even where nothing gates the built page",
+check("ENG-95468 / ENG-96327: on the same ungated-list fixture — no `list` unit, no template row — `templateNames` STILL carries the fixed list template `ListPageV3Template`, so the name the plan asserts is resolved against the stand even where nothing gates the built page",
   () => { const t = pageUnits(lpEmptySection, lpOpts).templateNames;
-    return t.includes("ListFreedomTemplate")
+    return t.includes("ListPageV3Template")
       && !pageUnits(lpEmptySection, lpOpts).pages.some((p) => p.key === "list"); },
   () => ({ templateNames: pageUnits(lpEmptySection, lpOpts).templateNames,
     keys: pageUnits(lpEmptySection, lpOpts).pages.map((p) => p.key) }));
@@ -1704,7 +1707,7 @@ check("ENG-95218: with NOTHING gated for the list page (empty section, no `list`
   () => { const u = pageUnits(lpEmptySection, lpOpts);
     const rows = checklistGroups(lpEmptySection, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm?.kind.startsWith("list-"));
     return !u.pages.some((p) => p.key === "list")
-      && rows.length >= 2 && rows.every((r) => r.pageKey === "main" && r.vk?.type === "evidence")
+      && rows.length >= 1 && rows.every((r) => r.pageKey === "main" && r.vk?.type === "evidence")
       && rows.every((r) => r.vk.id.startsWith("main#confirm:list-"))
       && u.preflight.filter((p) => p.kind.startsWith("list-")).length === rows.length; },
   () => ({ keys: pageUnits(lpEmptySection, lpOpts).pages.map((p) => p.key),
@@ -2393,9 +2396,9 @@ check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
 check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
   /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
-check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
+check("child pages (recursion): custom details → result.childPages + a row per child inside the Main-scope (Pages) table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
-  && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
+  && cli.childPages.every((c) => cli.plan.includes("| " + c.entity)) && !/### Child pages to migrate/.test(cli.plan));
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
 // resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
 // (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
@@ -2492,7 +2495,7 @@ const pmRun = runMigration({ entity: "Applicant",
   planMeta: { scope: "single-section", environment: "workbuild103", package: "HR (locked) → UsrApplicantPoC", approach: "Parallel rebuild", whatItDoes: "Candidate register.", sectionSchema: "Applicant1Section", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" } }, { baseDir: FIX });
 check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeholders resolved)",
   /\*\*Scope:\*\* single-section ·/.test(pmRun.plan) && /\*\*Environment:\*\* workbuild103 ·/.test(pmRun.plan)
-  && /Applicant1Section \(list page\) \| ListPageV3 \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
+  && /Applicant1Section \(list page\) \| ListPageV3Template \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
   && !/<FILL: single-section/.test(pmRun.plan) && !/<FILL: environment/.test(pmRun.plan));
 // reconcile-aware Main-scope: the default (no Freedom counterpart) is Rebuild; `freedomExists:true` flips the
 // Call to Update (reconcile) + a note pointing at the reconcile procedure (read via get-page → diff → update-page).
@@ -3384,8 +3387,11 @@ check("ENG-95021: `editable:false` PAIRED with `editPage:false` resolves the chi
   roPaired.childPages.some((c) => c.entity === "VoEntity" && c.editPage === false)
   && !roPaired.structure.issues.some((i) => /VoEntity/.test(i)),
   () => ({ children: roPaired.childPages.map((c) => c.entity), issues: roPaired.structure.issues }));
-check("ENG-95021: a child with `editPage:false` recorded IS still `Reuse` in the Main-scope row",
-  /\| VoEntity[^|]*\|[^|]*\| Reuse \|/.test(roPaired.plan),
+check("ENG-95021 / ENG-96327: a child with `editPage:false` renders as `No page`; the Main-scope header is `Migration approach` (not `Call`) and the old Call-value legend is gone",
+  /\| VoEntity[^|]*\|[^|]*\| No page \|/.test(roPaired.plan)
+  && /\| Classic \| Freedom target \| Migration approach \|/.test(roPaired.plan)
+  && !/\| Call \|/.test(roPaired.plan)
+  && !/read\/attach-only related list, no separate child page/.test(roPaired.plan),
   () => (roPaired.plan.match(/^\| VoEntity .*$/m) || [])[0]);
 
 // (3) The blocking message is the contract an agent follows, so it must enumerate every answer the gate honours —
@@ -3553,8 +3559,8 @@ check("ENG-95861: the child section states the boundary and that NOTHING is buil
 check("ENG-95861: it also states how to REVERSE the decision — a scope decision, not a defect",
   /drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
   && /reversible by re-planning, never a defect of this plan/.test(xsBoundary.plan));
-check("ENG-95861: the Main-scope LEGEND enumerates the fourth call (a 3-call legend under a 4-call table is a gap)",
-  /\*\*`Reuse \(Classic\)`\*\* = a cross-section boundary the user approved/.test(xsBoundary.plan));
+check("ENG-95861 / ENG-96327: the cross-section boundary renders as a `Reuse (Classic)` row in the Main-scope table (the Call-value legend was removed)",
+  /\| InternalRequest[^|]*\|[^|]*\| Reuse \(Classic\) \|/.test(xsBoundary.plan));
 check("ENG-95861: the plan never claims the child page was mapped, and prints no `Rebuild (child)` for it",
   !/\| InternalRequest[^|]*\| Rebuild \(child\) \|/.test(xsBoundary.plan));
 
@@ -3700,9 +3706,9 @@ check("STRUCTURE: detail supplied but child page UNVERIFIED → structure.comple
 //      (the resolved reality) instead of a contradictory 'Rebuild (child)'.
 const stVerifiedNone = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }],
   detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } } }, { baseDir: FIX });
-check("STRUCTURE: detail with editPage:false (verified no page) → complete=true + Main scope 'Reuse', no banner",
+check("STRUCTURE: detail with editPage:false (verified no page) → complete=true + Main scope 'No page', no banner",
   stVerifiedNone.structure.complete === true && !/STRUCTURE INCOMPLETE/.test(stVerifiedNone.plan)
-  && /\| Reuse \|/.test(stVerifiedNone.plan));
+  && /\| No page \|/.test(stVerifiedNone.plan));
 // (c3) a NON-typed top-level Rebuild form that folds to 0 FIELDS is a HOLLOW page (the section / its edit page
 // didn't resolve) → hard BLOCK, not a silent 0-field plan. This is the Employee-section miss: 0 fields + details,
 // yet the agent produced a plan + fabricated signals. 0 fields blocks even WITH details (details ≠ form fields).
@@ -4771,9 +4777,11 @@ check("ENG-95254: the metadata reaches the ChangeSet — a command-bar action ca
   (secActLcs?.commandBarActions || []).some((a) => a.name === "openSyncSettings" && a.caption === "SyncContactsCaption"
     && a.condition === "isSingleSelected" && a.package === "CrtUIv2" && a.source === "getSectionActions"),
   () => secActLcs?.commandBarActions);
-check("ENG-95254: exactly ONE list-command-bar decision survives the metadata change — ENG-95218's contract is per-run, never per action",
-  (secActLcs?.needsDecision || []).filter((d) => d.kind === "list-command-bar").length === 1,
-  () => (secActLcs?.needsDecision || []).filter((d) => d.kind === "list-command-bar"));
+check("ENG-95254 / ENG-96327: the command bar raises NO ⚠ Confirm — the buttons found are shown in the `List buttons` line instead (never a per-action or per-run decision)",
+  (secActLcs?.needsDecision || []).filter((d) => d.kind === "list-command-bar").length === 0
+    && /- \*\*List buttons:\*\*/.test(secActChain.designSpec),
+  () => ({ nd: (secActLcs?.needsDecision || []).filter((d) => d.kind === "list-command-bar"),
+    listButtons: secActChain.designSpec.split("\n").find((l) => /List buttons/.test(l)) }));
 check("ENG-95254: the design spec's Command-bar actions table publishes the caption / icon / condition / menu-position / package columns",
   /#### Command-bar actions/.test(secActChain.designSpec)
   && /\| Action \| Caption \| Icon \| Condition \| Menu position \| Source package \| Source \| Freedom target \|/.test(secActChain.designSpec)
@@ -4785,11 +4793,11 @@ const secActGap = runMigration({ entity: "X",
   section: [{ pkg: "Exchange", body: secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
     + `this.setSyncSectionActions(a);a.addItem(this.getButtonMenuItem({Click:{bindTo:"doThing"}}));return a;}`) }],
 }, { baseDir: FIX });
-check("ENG-95254: a helper NO layer defines is named in the command-bar completeness reason, alongside the `diff` gap",
-  (() => { const d = (secActGap.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar");
-    return !!d && /setSyncSectionActions/.test(d.reason) && /not folded at all/.test(d.reason)
-      && /no layer in this chain defines/.test(d.reason) && /NOT in the list above/.test(d.reason); })(),
-  () => (secActGap.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
+check("ENG-95254 / ENG-96327: an unresolved section-action helper no longer raises a ⚠ Confirm — the `List buttons` line shows what WAS found and flags the list may be incomplete (the specific helper name is method detail, dropped per ENG-96327)",
+  (() => { const line = secActGap.designSpec.split("\n").find((l) => /List buttons/.test(l)) || "";
+    return (secActGap.listChangeSet?.needsDecision || []).every((x) => x.kind !== "list-command-bar")
+      && /doThing/.test(line) && /the list may be incomplete/.test(line); })(),
+  () => secActGap.designSpec.split("\n").find((l) => /List buttons/.test(l)));
 check("ENG-95254: the resolvable item on that same section is still extracted — an unresolved helper does not poison the layer",
   (secActGap.section?.sectionActions || []).some((a) => a.name === "doThing"),
   () => secActGap.section?.sectionActions);
@@ -4800,7 +4808,7 @@ const secActHopRun = runMigration({ entity: "X",
     + `this.addFirst(a);return a;},addFirst:function(items){this.addSecond(items);},`
     + `addSecond:function(items){items.addItem(this.getButtonMenuItem({Click:{bindTo:"deepAction"}}));}`) }],
 }, { baseDir: FIX });
-check("ENG-95254: a not-followed helper reaches the command-bar reason and is NOT described as undefined",
+check("ENG-95254 / ENG-96327: a not-followed section-action helper raises no ⚠ Confirm — the `List buttons` line reports none found and flags the list may be incomplete",
   (() => { const d = (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar");
 
 // Comments and string literals are PROSE, not code. A menu item or helper call written in either used to be
@@ -4853,9 +4861,10 @@ check("ENG-95254: `mergeSectionActions` still lets a FULL top-layer override rep
     { name: "setOwner", condition: "isAnySelected", icon: "IconB", package: "Top", order: 0, group: 0 }])[0];
     return m.condition === "isAnySelected" && m.icon === "IconB"; })());
 
-    return !!d && /addSecond/.test(d.reason) && /saw but did not read/.test(d.reason)
-      && !/`addSecond` .{0,40}no layer in this chain defines/.test(d.reason); })(),
-  () => (secActHopRun.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
+    return (secActHopRun.listChangeSet?.needsDecision || []).every((x) => x.kind !== "list-command-bar")
+      && /- \*\*List buttons:\*\* none found/.test(secActHopRun.designSpec)
+      && /the list may be incomplete/.test(secActHopRun.designSpec); })(),
+  () => secActHopRun.designSpec.split("\n").find((l) => /List buttons/.test(l)));
 
 const docPlanMeta = { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "ListPageV3Template", formTemplate: "PageWithTabsFreedomTemplate" };
 const typedBundle = (nm, field) => ({ schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});` }], seed: CLEAN_SEED });
@@ -4882,7 +4891,7 @@ check("plan: List page shows the Quick filters + Command-bar actions TABLES, Mai
   && /#### Command-bar actions/.test(docSecRun.plan) && /createRegistry/.test(docSecRun.plan)
   && /XICPage .*typed form.*Rebuild \(per-type\)/.test(docSecRun.plan)
   && !/\| X form page \|/.test(docSecRun.plan)   // base form is NOT a separate deliverable for a typed entity
-  && /Typed entity — 2 per-type/.test(docSecRun.plan),
+  && /<!-- ⚠ \*\*Typed entity — 2 per-type/.test(docSecRun.plan),   // ENG-96327: the typed banner is now a builder-only HTML comment (hidden from the human plan)
   () => docSecRun.plan.split("\n").filter((l) => /filter|action|typed|per-type|form page/i.test(l)).slice(0, 10));
 check("typed-page FOLD: supplied typedPageSchemas → each per-type form's FULL spec is embedded + structure complete",
   docSecRun.structure.complete === true
@@ -6305,19 +6314,20 @@ const ntDcm = runMigration({
   planMeta: { ...docPlanMeta, formTemplate: "FormPageTemplate" }, // a plain, non-progress-bar template
   signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
-check("non-typed DCM: the plan recommends PageWithTabsAndProgressBarTemplate AND flags the non-progress-bar template chosen",
-  /\*\*Template — DCM case present:\*\*/.test(ntDcm.plan)
+check("non-typed DCM: the builder-only (HTML-commented) steer recommends PageWithTabsAndProgressBarTemplate, flags the non-progress-bar template, and no longer offers the hand-add FALLBACK (ENG-96327)",
+  /<!-- \*\*Template — DCM case present:\*\*/.test(ntDcm.plan)
   && /PageWithTabsAndProgressBarTemplate/.test(ntDcm.plan)
-  && /`FormPageTemplate` has no progress bar/.test(ntDcm.plan),
-  () => ntDcm.plan.split("\n").filter((l) => /Template — DCM|ProgressBar|no progress bar/.test(l)));
+  && /`FormPageTemplate` has no progress bar/.test(ntDcm.plan)
+  && !/is the FALLBACK/.test(ntDcm.plan),
+  () => ntDcm.plan.split("\n").filter((l) => /Template — DCM|ProgressBar|no progress bar|FALLBACK/.test(l)));
 const ntDcmOk = runMigration({
   entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
   planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsAndProgressBarTemplate" },
   signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 });
-check("non-typed DCM: no template-mismatch ⚠ when a progress-bar template is already chosen",
-  /\*\*Template — DCM case present:\*\*/.test(ntDcmOk.plan) && !/has no progress bar/.test(ntDcmOk.plan));
+check("non-typed DCM: no template-mismatch ⚠ when a progress-bar template is already chosen (steer is builder-only, HTML-commented)",
+  /<!-- \*\*Template — DCM case present:\*\*/.test(ntDcmOk.plan) && !/has no progress bar/.test(ntDcmOk.plan));
 const ntNoDcm = runMigration({
   entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
@@ -7529,11 +7539,11 @@ check("ENG-94975 Y1: the unreadable entry's sentinel is DETERMINISTIC (same mani
 // The two artifacts must agree — the operator records what `--plan` printed, the gate reads what `--units` published.
 check("ENG-94975 Y1: `--units` publishes the version as `planVersion`, and it is the engine's",
   pgUnits.planVersion === pvA, () => ({ units: pgUnits.planVersion, engine: pvA }));
-check("ENG-94975 Y1: the `--plan` artifact PRINTS the same version the queue publishes (one string, two artifacts)",
-  pgRun.plan.includes(`**Plan version:** \`${pgUnits.planVersion}\``),
+check("ENG-94975 Y1 / ENG-96327: the `--plan` artifact CARRIES the version the queue publishes, WRAPPED IN AN HTML COMMENT so it stays out of the human-facing summary (one string, two artifacts)",
+  pgRun.plan.includes("<!-- **Plan version:** ") && pgRun.plan.includes(pgUnits.planVersion),
   () => ({ published: pgUnits.planVersion, planHead: pgRun.plan.split("\n").slice(0, 14).join(" ⏎ ") }));
 // A hand-built result (which the golden runners construct, and so may any caller) must NOT get a bogus line or id.
-check("ENG-94975 Y1: a result with no engine-computed version renders NO version line and publishes `planVersion: null` — never the string 'undefined'",
+check("ENG-94975 Y1: a result with no engine-computed version renders NO version marker and publishes `planVersion: null` — never the string 'undefined'",
   !renderPlan({ entity: "X", changeSet: {} }, {}).includes("Plan version")
   && pageUnits({ entity: "X", changeSet: {} }, {}).planVersion === null);
 
@@ -9192,11 +9202,9 @@ try {
     && gatedRun.resolvedGates[0].feature === "CommonCommunicationsBehavior"
     && gatedRun.resolvedGates[0].source === "stand-export",
     () => gatedRun.resolvedGates);
-  check("ENG-95683 (item 1/R2): plan.md carries the provenance MIRROR line naming the resolved gate (component type, package, feature) and pointing at the --resolved-gates artifact",
-    /\*\*Resolved component gates:\*\*/.test(gatedRun.plan)
-    && /crt\.CommunicationOptions/.test(gatedRun.plan) && /CrtCustomer360App/.test(gatedRun.plan)
-    && /CommonCommunicationsBehavior/.test(gatedRun.plan) && /--resolved-gates/.test(gatedRun.plan),
-    () => gatedRun.plan.split("\n").filter((l) => /Resolved component gates/.test(l)));
+  check("ENG-96327: the resolved-component-gate provenance MIRROR is NO LONGER rendered into plan.md (the durable machine-readable copy stays the --resolved-gates artifact / result.resolvedGates)",
+    !/Resolved component gates/.test(gatedRun.plan),
+    () => gatedRun.plan.split("\n").filter((l) => /gate/i.test(l)));
   // Negative control: a run that gates NO type has an EMPTY resolvedGates set and NO mirror line — the empty-artifact
   // case the `--resolved-gates` output must still write verbatim as `[]`.
   const ungatedRun = gmRun("");
@@ -9211,34 +9219,17 @@ try {
   // empty by default (the false negative two reviewers caught). `source` is `vendored-union` here, not `stand-export`.
   // Gathering only from the findings loop (the pre-fix behavior) makes this EMPTY and fails here.
   const vendoredGatedRun = gmRun(compOnlyDetail, compOnlyDetails); // NO componentRegistry → vendored index
-  check("ENG-95683 (item 1/R2): on the DEFAULT vendored path (no manifest.componentRegistry), resolvedGates STILL carries the run's gated composite — {componentType,kind,id,feature,source:'vendored-union'} — and the plan mirror renders",
+  check("ENG-95683 (item 1/R2): on the DEFAULT vendored path (no manifest.componentRegistry), resolvedGates STILL carries the run's gated composite — {componentType,kind,id,feature,source:'vendored-union'} (ENG-96327: data field only; no plan mirror)",
     Array.isArray(vendoredGatedRun.resolvedGates) && vendoredGatedRun.resolvedGates.length === 1
     && vendoredGatedRun.resolvedGates[0].componentType === "crt.CommunicationOptions"
     && vendoredGatedRun.resolvedGates[0].id === "CrtCustomer360App"
     && vendoredGatedRun.resolvedGates[0].feature === "CommonCommunicationsBehavior"
     && vendoredGatedRun.resolvedGates[0].source === "vendored-union"
-    && /\*\*Resolved component gates:\*\*/.test(vendoredGatedRun.plan)
-    && /crt\.CommunicationOptions/.test(vendoredGatedRun.plan) && /CrtCustomer360App/.test(vendoredGatedRun.plan),
+    && !/Resolved component gates/.test(vendoredGatedRun.plan),
     () => ({ resolvedGates: vendoredGatedRun.resolvedGates, mirror: /Resolved component gates/.test(vendoredGatedRun.plan) }));
 
-  // ENG-95683 (item 1/R2): the plan.md gate MIRROR with MULTIPLE resolved gates — the `; ` join, the order, and the
-  // per-gate OPTIONAL `feature` segment (present on one, absent on the other). The single-gate run above never
-  // exercises `resolvedGates.map(...).join("; ")`. renderPlan is deterministic and the mirror reads only
-  // `result.resolvedGates`, so a minimal hand-built result drives it directly (the golden runners build several).
-  const twoGatePlan = renderPlan({
-    entity: "X", changeSet: { viewConfigDiff: [], needsDecision: [] },
-    resolvedGates: [
-      { componentType: "crt.CommunicationOptions", kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior", source: "stand-export" },
-      { componentType: "crt.SecondGate", kind: GATE_KIND.COMPOSITE, id: "CrtSecondApp", source: "vendored-pinned" },
-    ],
-  }, {});
-  const gateLine = twoGatePlan.split("\n").find((l) => /\*\*Resolved component gates:\*\*/.test(l)) || "";
-  check("ENG-95683 (item 1/R2): the plan gate mirror renders TWO resolved gates joined by `; `, in order, with the optional `feature` segment present for the first and ABSENT for the second",
-    /`CrtCustomer360App` \+ feature `CommonCommunicationsBehavior` \(stand-export\)/.test(gateLine)
-    && /`CrtSecondApp` \(vendored-pinned\)/.test(gateLine)
-    && /CrtCustomer360App`.*; `crt\.SecondGate`/.test(gateLine)   // `; ` join, first before second
-    && !/CrtSecondApp` \+ feature/.test(gateLine),                 // the second gate carries no feature segment
-    () => gateLine);
+  // ENG-96327: the multi-gate plan.md MIRROR rendering test (the `; ` join / per-gate `feature` segment) was removed
+  // with the mirror itself. The resolved-gate DATA and the `--resolved-gates` artifact stay covered above and below.
 
   // ---- ENG-95683 (item 1, R2): the `--resolved-gates <file>` CLI output, end-to-end -----------------------
   // The write happens on the `--plan`/`--units` path (a PLAN/RUN-time fact, not a `--verify` verdict), is registered
