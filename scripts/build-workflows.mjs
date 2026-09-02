@@ -62,8 +62,15 @@ const TARGETS = [
       'capabilities.mjs',
       'run-state.mjs',
       'driver.mjs',
-      'build-executor/helpers.mjs',
+      // SCHEMAS BEFORE HELPERS (round 17b). The schemas module is the LEAF — it imports nothing — and it
+      // declares the shared contract literals (`CARRY_TEXT_CAP`, the `shows` vocabulary, the two
+      // unconsumed-source tags) that `helpers` functions read. In ONE inlined scope a `const` is NOT hoisted,
+      // so declaring them after the functions that read them is a temporal-dead-zone THROW the moment one is
+      // called — which is exactly what the constants-prologue check caught when the literals moved here to
+      // break the `helpers <-> schemas` import cycle. `helpers` reads `RECONCILE_SHAPE` from the schemas only
+      // as a DEFAULT PARAMETER, evaluated at call time, so this order satisfies both directions at once.
       'build-executor/schemas.mjs',
+      'build-executor/helpers.mjs',
       'build-executor/context.mjs',
       'build-executor/core.mjs',
       'adapters/claude-workflow.mjs',
@@ -122,6 +129,171 @@ function topLevelNames(text) {
   return names
 }
 
+// COMMENTS DO NOT SHIP (ENG-95930 / PR #128 round 17b). Half of the generated artifact was comment prose — 291,704
+// of 568,703 bytes — and the file has a HARD ceiling that has nothing to do with how well it is documented: the
+// `Workflow` permission handler inlines a `scriptPath` file into the `script` field so the approval dialog can show
+// it, and that field's `maxLength` is 524288. Over the line the workflow fails schema validation before a single
+// agent runs, exactly like the CR case above it, with nothing in the script to point at. Two PRs each fitting on
+// their own merged to 571,395 bytes, which is how this arrived.
+//
+// The prose is not lost and is not the thing being economised: it stays in `skills/_workflow-core/**`, which is what
+// a maintainer reads, what review rounds annotate, and what the offline suite reads for the pins that assert a
+// stated invariant. The ARTIFACT is generated, is read by the host rather than by a person, and now carries only
+// what it executes.
+//
+// TOKENISED, NOT PATTERN-MATCHED, and that distinction is load-bearing: this file is mostly PROMPTS, and a line of
+// prompt text inside a template literal can legitimately begin with `//` (a URL, a path, a quoted snippet). A regex
+// that ate those would silently corrupt the instructions the agents run on — the failure would surface as an agent
+// misbehaving, not as a build error. So the scanner tracks single quotes, double quotes, template literals
+// (including nested `${...}`, which can itself contain any of these again) and regex literals, and only removes a
+// comment it is certain is code.
+//
+// TWO KINDS OF COMMENT ARE MACHINE-MEANINGFUL AND SURVIVE.
+// 1. `// ---8<--- PURE DECISION HELPERS ---8<---` and its END twin: the offline suite slices the pure block out
+//    of the SHIPPED artifact between them and imports it, so eating them takes the whole helper surface down.
+// 2. The GENERATED-FILE HEADER (`GENERATED FILE — DO NOT EDIT BY HAND` and the two `build-workflows.mjs`
+//    command lines under it). That block is the only thing standing between a reader of the shipped file and a
+//    hand edit this generator silently overwrites — the artifact is 3,700 lines with no other clue that it is
+//    generated. A suite check asserts it is present for exactly that reason, and stripping it made that check
+//    red, which is the check doing its job rather than being in the way.
+// Everything else is prose for a maintainer, and a maintainer reads `_workflow-core/**`.
+// THE SENTINELS SURVIVE. `// ---8<--- PURE DECISION HELPERS ---8<---` and its END twin are comments, and the offline
+// suite slices the pure block out of the SHIPPED artifact between them and imports it. Eating them takes the whole
+// helper surface down at once.
+// The header block, kept verbatim: the DO-NOT-EDIT line, the blank continuation lines that make it a block, and
+// the two command lines that tell a reader how to regenerate. Anything else in that comment is prose and goes.
+// Kept verbatim: the DO-NOT-EDIT header and the two regenerate commands, and the REGION MARKERS the offline
+// suite slices on. A marker is not prose — something READS it — which is the same reason the `---8<---`
+// sentinels survive. `OPERATOR FINDINGS from an earlier checkpoint` bounds the `buildPrompt` slice the render
+// harness compiles, and it deliberately stops PART WAY through that function (the tail reaches for paths the
+// harness does not stub). Adding a marker here is a deliberate act, exactly like raising a budget.
+const KEEP_COMMENT = /GENERATED FILE|build-workflows\.mjs|OPERATOR FINDINGS from an earlier checkpoint/
+function stripComments(src) {
+  let out = ''
+  let i = 0
+  const n = src.length
+  // `${` inside a template literal opens a code context that can contain another template literal, so the state is
+  // a STACK rather than a flag. `depth` counts braces inside the current interpolation so the matching `}` is the
+  // one that closes it.
+  const stack = []
+  let mode = 'code'
+  let depth = 0
+  // Whether a `/` starts a regex literal or is division: decided by the last significant token, which is the
+  // standard heuristic. `prev` is the last non-space character emitted in code context.
+  let prev = ''
+
+  const regexAllowedAfter = (c) => c === '' || '=(,:[!&|?{};+-*%~^<>'.includes(c) || c === '\n'
+
+  while (i < n) {
+    const c = src[i]
+    const c2 = src[i + 1]
+
+    if (mode === 'code') {
+      // ---- line comment
+      if (c === '/' && c2 === '/') {
+        let j = src.indexOf('\n', i)
+        if (j === -1) j = n
+        const text = src.slice(i, j)
+        if (text.includes('---8<---') || KEEP_COMMENT.test(text)) {   // machine-meaningful: see the note above
+          out += text
+        } else {
+          // Drop the comment. If the line is now only whitespace, drop the line's indentation and its newline too,
+          // so a stripped file has no ragged blank lines where prose used to be.
+          const lineStart = out.lastIndexOf('\n') + 1
+          if (out.slice(lineStart).trim() === '') {
+            out = out.slice(0, lineStart)
+            i = j + 1                            // consume the newline as well
+            continue
+          }
+          // A trailing comment after code: drop it, keep the code and the newline.
+          out = out.replace(/[ \t]+$/, '')
+        }
+        i = j
+        continue
+      }
+      // ---- block comment
+      if (c === '/' && c2 === '*') {
+        const j = src.indexOf('*/', i + 2)
+        const end = j === -1 ? n : j + 2
+        const text = src.slice(i, end)
+        if (text.includes('---8<---') || text.includes('@INLINE@')) {
+          out += text
+        } else {
+          const lineStart = out.lastIndexOf('\n') + 1
+          const wasAlone = out.slice(lineStart).trim() === ''
+          // A block comment that occupied whole lines: take its trailing newline with it.
+          let k = end
+          if (wasAlone) {
+            while (k < n && (src[k] === ' ' || src[k] === '\t')) k += 1
+            if (src[k] === '\n') k += 1
+            out = out.slice(0, lineStart)
+            i = k
+            continue
+          }
+          out = out.replace(/[ \t]+$/, '')
+        }
+        i = end
+        continue
+      }
+      // ---- string / template starts
+      if (c === "'" || c === '"') { mode = c; out += c; i += 1; continue }
+      if (c === '`') { stack.push({ mode, depth }); mode = '`'; out += c; i += 1; continue }
+      // ---- regex literal
+      if (c === '/' && regexAllowedAfter(prev)) { mode = '/'; out += c; i += 1; continue }
+      // ---- closing an interpolation
+      if (c === '{' && stack.length) { depth += 1 }
+      if (c === '}' && stack.length && depth === 0) {
+        const s = stack.pop()
+        mode = s.mode; depth = s.depth
+        out += c; i += 1; continue
+      }
+      if (c === '}' && stack.length) { depth -= 1 }
+      out += c
+      if (!/\s/.test(c)) prev = c
+      i += 1
+      continue
+    }
+
+    // ---- inside a single- or double-quoted string
+    if (mode === "'" || mode === '"') {
+      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
+      out += c
+      if (c === mode) { mode = 'code'; prev = c }
+      i += 1
+      continue
+    }
+
+    // ---- inside a template literal
+    if (mode === '`') {
+      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
+      if (c === '`') { const s = stack.pop(); mode = s.mode; depth = s.depth; prev = c; out += c; i += 1; continue }
+      if (c === '$' && c2 === '{') { stack.push({ mode: '`', depth }); mode = 'code'; depth = 0; out += '${'; i += 2; continue }
+      out += c
+      i += 1
+      continue
+    }
+
+    // ---- inside a regex literal
+    if (mode === '/') {
+      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
+      if (c === '[') { mode = '/['; out += c; i += 1; continue }
+      if (c === '/') { mode = 'code'; prev = c; out += c; i += 1; continue }
+      out += c
+      i += 1
+      continue
+    }
+    // ---- inside a regex character class, where `/` is literal
+    if (mode === '/[') {
+      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
+      if (c === ']') { mode = '/' }
+      out += c
+      i += 1
+      continue
+    }
+  }
+  return out
+}
+
 function build(target) {
   // Same reason as `inlineOne`: the template is concatenated with the inlined block and scanned for sentinels.
   const template = readFileSync(path.join(CORE, target.template), 'utf8').replace(/\r\n/g, '\n')
@@ -158,7 +330,11 @@ function build(target) {
   // whole-file diff that hides the actual change. The normalisation that MAKES the artifact checkout-independent
   // is now at READ (see `inlineOne`); this one is belt-and-braces for anything a template could reintroduce, and
   // is kept deliberately rather than removed.
-  return text.replace(/\r\n/g, '\n')
+  // Comments are removed HERE, at the end of assembly, so every module and the template are covered by one
+  // pass and the sentinels are the only ones that survive (see `stripComments`). `--check` compares the
+  // shipped file against this same output, so the stripping is part of the contract rather than a
+  // post-processing step something could skip.
+  return stripComments(text).replace(/\r\n/g, '\n')
 }
 
 const check = process.argv.includes('--check')

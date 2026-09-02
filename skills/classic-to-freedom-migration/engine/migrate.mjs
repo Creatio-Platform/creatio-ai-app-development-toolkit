@@ -77,7 +77,7 @@ import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
 import { GATE_KIND, gateForComponentType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes, buildResolutionIndex,
+  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 
@@ -2496,7 +2496,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page", "--resolutions", "--slices", "--resolved-gates"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--verify-summary", "--page", "--resolutions", "--slices", "--resolved-gates"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -2641,6 +2641,41 @@ function writePageSlices(dir, prefix, units, sliceOf, fail) {
   return written;
 }
 
+// RETENTION FOR THE RECONCILE ANSWER CAPTURES (`reconcile-answer-*.json` beside the queue file). The submission
+// protocol writes the agent's full answer to disk — the evidence a rejected submission needs — and instructs the
+// agent to delete an ACCEPTED attempt's copies; an instruction to an agent is probabilistic, and a REJECTED
+// attempt's files would otherwise persist forever. This sweep is the code-enforced bound: every `--units --slices`
+// run (the form the executor's CLI always uses, at the head of every Reconcile) removes captures older than the
+// window. Two weeks keeps a failure investigable across a vacation; a sweep problem is never allowed to fail the
+// run — the captures are diagnostics, not deliverables.
+const ANSWER_CAPTURE_RETENTION_DAYS = 14;
+function sweepAnswerCaptures(outDir) {
+  // ONLY IN A FOLDER THAT IS DEMONSTRABLY A MIGRATION FOLDER. The directory is inferred (the parent of `--slices`,
+  // which the production context always shapes as `<outDir>/slices`), not one this run created — and every other
+  // destructive path in this engine stays inside a directory it owns. A run artifact is the proof: any folder with
+  // leftover captures has a queue file (the reconcile step writes it before any submission) or a verify table.
+  // `--slices .` therefore sweeps nothing in the parent of an arbitrary cwd. The two basenames are the workflow's
+  // own `QUEUE_FILE`/`VERIFY_TABLE` names; `run-infra.mjs` pins the engine literals to them, the same way the
+  // retention window itself is pinned, so a rename cannot silently turn this sweep into a no-op. The skip is SAID,
+  // not silent — an operator must be able to tell "nothing to sweep" from "the sweep never engaged".
+  if (!fs.existsSync(path.join(outDir, "build-queue.json")) && !fs.existsSync(path.join(outDir, "verify.md"))) {
+    process.stderr.write(`migrate.mjs: capture retention sweep SKIPPED — no run artifact (build-queue.json / verify.md) in ${outDir}, so nothing proves it is a migration folder.\n`);
+    return;
+  }
+  let removed = 0;
+  try {
+    const cutoff = Date.now() - ANSWER_CAPTURE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const f of fs.readdirSync(outDir)) {
+      if (!/^reconcile-answer-.*\.json$/.test(f)) continue;
+      const p = path.join(outDir, f);
+      try {
+        if (fs.statSync(p).mtimeMs < cutoff) { fs.rmSync(p, { force: true }); removed += 1; }
+      } catch { /* a vanished or locked capture is not this sweep's problem */ }
+    }
+  } catch { return; /* an unreadable folder means nothing to sweep — never a dead run over diagnostics */ }
+  if (removed > 0) process.stderr.write(`migrate.mjs: retention sweep removed ${removed} reconcile-answer capture file(s) older than ${ANSWER_CAPTURE_RETENTION_DAYS} day(s) from ${outDir}.\n`);
+}
+
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
 // stdout = the result JSON (parseable); diagnostics go to stderr. Bad input exits 1 with a clear message
 // (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
@@ -2675,6 +2710,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifyDigestFile = valueFlagArg(argv, "--verify-digest", "--verify-digest verify-digest.json", fail);
   if (verifyDigestFile && !verifyMode)
     fail("`--verify-digest <file>` only applies to `--verify` — it writes THAT run's scheduling digest. Add `--verify --built <file>`, or drop `--verify-digest`.");
+  // `--verify-summary <file>` — the COUNTS-ONLY verdict (ENG-95930, mode B): the same totals and per-page tallies as
+  // `--verify-digest`, minus `openRows` on EVERY page, so the file is bounded in size regardless of how many rows are
+  // open. It is what the executor's Reconcile agent transcribes now — on a fresh stand the digest still carries every
+  // open row of every open page (21 KB), which truncated the run's first agent's structured answer at the host cap.
+  // `--verify` only, exactly like `--verify-digest`: no verdict exists to summarise in any other mode.
+  const verifySummaryFile = valueFlagArg(argv, "--verify-summary", "--verify-summary verify-summary.json", fail);
+  if (verifySummaryFile && !verifyMode)
+    fail("`--verify-summary <file>` only applies to `--verify` — it writes THAT run's counts-only verdict. Add `--verify --built <file>`, or drop `--verify-summary`.");
   // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
   // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
   // still needs a filed evidence record and a judge verdict.
@@ -2776,7 +2819,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
     const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
-    if (slicesDir) writePageSlices(slicesDir, "queue", units, (k) => pageUnitsSlice(units, k), fail);
+    if (slicesDir) {
+      writePageSlices(slicesDir, "queue", units, (k) => pageUnitsSlice(units, k), fail);
+      sweepAnswerCaptures(path.dirname(path.resolve(slicesDir)));
+    }
     output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
@@ -2838,6 +2884,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (verifyJsonFile) {
       try { fs.writeFileSync(verifyJsonFile, JSON.stringify(verifyReport(result, verifyRes), null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
+    }
+    if (verifySummaryFile) {
+      const summary = verifySummary(result, verifyRes);
+      try { fs.writeFileSync(verifySummaryFile, JSON.stringify(summary, null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --verify-summary '${verifySummaryFile}': ${e.message}`); }
+      // The summary is bounded PER PAGE but linear in page count, and the Reconcile agent transcribes it whole into
+      // an answer whose wire ceiling is 16000 bytes (the workflow's RECONCILE_ANSWER_MAX_BYTES; run-infra.mjs pins
+      // the two numbers equal). A plan large enough to approach that ceiling on counts alone cannot fit its verify
+      // verdict through the answer at all — SAY it here, at the producer, instead of letting the run discover it as
+      // a shape fault the retry cannot shrink. The unbounded-scale close (counts on disk, per-unit reads) is
+      // follow-up work, not this warning's job. Measured in ENCODED wire bytes, the form the ceiling is stated in:
+      // a raw `.length` undercounts localized page keys six-fold and would warn only after the ceiling is crossed.
+      const summaryBytes = encodedAsciiBytes(JSON.stringify(summary));
+      if (summaryBytes > 16000 * 0.75) process.stderr.write(`migrate.mjs: ⚠ the verify SUMMARY alone is ${summaryBytes} B against the Reconcile answer's 16000-byte wire ceiling (${Object.keys(summary.pages || {}).length} pages). A plan this size is at or past what the counts-only answer can carry; splitting the run (or the ENG-96071 answer-slimming) is needed before the ceiling, not after.\n`);
     }
     if (verifyDigestFile) {
       try { fs.writeFileSync(verifyDigestFile, JSON.stringify(verifyDigest(result, verifyRes), null, 2) + "\n"); }
