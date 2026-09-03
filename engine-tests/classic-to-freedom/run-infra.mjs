@@ -5292,11 +5292,7 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
      exists to fix. A generated file grows one prompt sentence at a time, so this is the check that has to notice.
      Two thresholds, matching the schema convention: the HOST's hard limit, and a working budget under it. */
   const WORKFLOW_SCRIPT_INLINE_CAP = 524288;
-  /* ENG-96147 raised this 480000 -> 500000. The budget was already spent before this ticket: the base branch
-     shipped 478177 B, i.e. 1823 B of room, so the next feature that documents itself at all was going to fail
-     here whatever it was. Shrinking 8.6 KB of the prompt text this ticket adds would delete the route-recording
-     instructions the feature IS. 500000 keeps 24288 B under the hard cap and leaves the check doing its job. */
-  const WORKFLOW_SCRIPT_BUDGET = 500000;
+  const WORKFLOW_SCRIPT_BUDGET = 480000;
   for (const file of wfFiles) {
     const bytes = statSync(file).size;
     check(`workflow script ${path.basename(file)} fits the host's ${WORKFLOW_SCRIPT_INLINE_CAP}-byte \`script\` field — the approval handler inlines this file into it, so an oversized file is rejected before the run starts`,
