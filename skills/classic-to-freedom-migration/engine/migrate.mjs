@@ -25,7 +25,7 @@
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). The LIST template is FIXED (ListPageV3Template — ENG-96327), not a planMeta field.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
-//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
+//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Custom methods / ⚠ Other declared logic rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
@@ -34,7 +34,7 @@
 // else (never wall-clock, never random, never a filesystem path; see computePlanVersion for what is NOT covered),
 // so the same manifest always yields the same version. It is what the
 // approval entry in decisions.md names and what the delegated build compares that entry against.
-// `--stubs` = the step-5.1 handoff digest: the ⚠ Imperative logic rows per scope (method, traced trigger, externalRef,
+// `--stubs` = the step-5.1 handoff digest: the ⚠ Custom methods rows per scope (method, traced trigger, externalRef,
 // line span) plus the standard-method names the worklist excluded — the payload a behaviour-analysis run indexes
 // its cards against. Pair it with `manifest.behaviourIndex` to fold that run's answers back into the plan.
 // `--units` = the per-page BUILD QUEUE (JSON, honours `--out`): one entry per page key (`main` · `child:<Entity>`
@@ -976,7 +976,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.ruleCount = (res.changeSet?.pageBusinessRules || []).length + (res.changeSet?.entityBusinessRules || []).length;
     t.ruleSources = res.changeSet?.ruleSourceCount || 0;
     // A typed page is a FIRST-CLASS scope of the surface (step 5.1: "every record page including typed variants"): it
-    // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
+    // renders its own ⚠ Custom methods table, so its rows must ride the handoff like a child page's.
     t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
     t.childStubScopes = (res.stubIndex || []).slice(1); // drop the nested run's own main-page scope (captured above)
     // …and its own page-scoped checklist rows. The expected template is whatever the manifest declared for THIS
@@ -1171,7 +1171,7 @@ const diagTag = (pkg, role) => (role === "section" ? `section::${pkg}` : String(
 // `profile:<name>` and section layers all reach the plan. Previously this took `schemas` alone, so four of the five
 // layer kinds stayed console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
 // `diff.<n>` path back to its element name; a layer that is not in the map still routes by `diff[<n>]`.
-// AC22: the owning member's OWN row must say the value could not be read. The `⚠ Imperative members` table prints
+// AC22: the owning member's OWN row must say the value could not be read. The `⚠ Other declared logic` table prints
 // `needsDecision[].detail` (designspec `imperativeMemberRows` filters `needsDecision`, so the ledger's `SOURCES`
 // detail closures are NOT what feeds that cell — worth stating, because it is the obvious wrong place to look).
 // Without this the reader saw an EMPTY Detail cell, which reads as "no default", while the correction sat in a
@@ -2156,7 +2156,7 @@ export function runMigration(manifest, opts = {}) {
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
   });
   attachDetailAddModes(changeSet, detailSchemas);
-  // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
+  // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Custom methods` table
   // carries them. Hand-appending them to the plan's `Adjustments` did not survive a re-run: `--plan --out` rewrites
   // the file, so the only link from a worklist row to the behaviour that describes it was lost on every regenerate.
   // A sub-run inherits the root manifest's answers (one report covers the whole surface) and may override them.

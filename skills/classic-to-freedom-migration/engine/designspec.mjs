@@ -373,7 +373,7 @@ function renderLogicSection(cs) {
     ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
       ...logic.map((row) => `| ${row.join(" | ")} |`)]
     : ["> No declarative business rules or lookup filters on this page."];
-  // ENG-96327: no "see ⚠ Imperative logic below" pointer — that section's own header (with its count) is right
+  // ENG-96327: no "see ⚠ Custom methods below" pointer — that section's own header (with its count) is right
   // below, so the pointer only repeated it. The empty-state line above still states the absence when there are no rules.
   return ["#### Business rules", ...table, ""];
 }
@@ -661,7 +661,7 @@ function headerTemplateRecommendation(cs, opts) {
 }
 
 // Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
-// ⚠ Imperative logic worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
+// ⚠ Custom methods worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
 // checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
 // appears in the Business rules table: it does not. Removing it from this Set puts every method in two worklists at once.
 // ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
@@ -690,15 +690,15 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
 const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
-  // Imperative MEMBERS have their own worklist (⚠ Imperative members), for the same reason methods do: they are work
+  // Imperative MEMBERS have their own worklist (⚠ Other declared logic), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
   ...IMPERATIVE_MEMBER_KINDS,
-  // `attribute-dependency` is normally the trigger of a handler method, and that method already has an ⚠ Imperative
-  // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Imperative members
+  // `attribute-dependency` is normally the trigger of a handler method, and that method already has an ⚠ Custom methods
+  // row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Other declared logic
   // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
   "attribute-dependency"]);
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
-// or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
+// or the ⚠ Custom methods worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
 function renderConfirmWorklist(cs) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -706,7 +706,7 @@ function renderConfirmWorklist(cs) {
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
-  // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
+  // no `described in` and no card tally — those belong to the ⚠ Other declared logic / ⚠ Custom methods worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
   const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));

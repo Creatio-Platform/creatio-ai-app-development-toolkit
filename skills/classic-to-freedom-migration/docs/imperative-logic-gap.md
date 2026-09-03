@@ -9,7 +9,7 @@ engine files (`engine.mjs`, `mapper.mjs`, `designspec.mjs`, `migrate.mjs`) and
 pass over, specifically the behaviour that lives inside `methods`.
 
 > **Status: the findings below were fixed in the same change that added this file.** The analysis
-> is kept because it is the rationale for the `coverage` gate and the `⚠ Imperative logic`
+> is kept because it is the rationale for the `coverage` gate and the `⚠ Custom methods`
 > worklist — a future reader needs to know what those exist to prevent, and the "Demonstrated"
 > section is the before-state measurement. **Every `file:line` reference points at the code as it
 > was BEFORE the fix**; see "What was implemented" at the end for the after-state.
@@ -339,7 +339,7 @@ test (hardening it against false positives is only half the job):
    coverage did not, so a `Rebuild (child)` page with entirely unaccounted members produced a parent
    run at `complete: true` and exit 0. Child, typed and mini pages now carry their ledger up.
 
-**Rendering (`designspec.mjs`).** A `#### ⚠ Imperative logic` worklist (one row per method: source
+**Rendering (`designspec.mjs`).** A `#### ⚠ Custom methods` worklist (one row per method: source
 span, trigger, what the body does, reads → writes, proposed Freedom target) and a
 `#### Member ledger` section. `SKILL.md` Contract rule 3 now names three gates, rule 7 defines the
 `⚠` worklist as **both** lists, and step 8's Plan-vs-Done requires a row per imperative-logic entry
@@ -373,6 +373,6 @@ a "until it is available, read it yourself" fallback — `SKILL.md` step **5.1**
 present (`handlerStubs[].triggers` empty · `handlerStubs[].externalRef` · a `message` decision · a
 `mixin` decision), one invocation per surface, its report written to the migration folder and indexed
 into the plan's `Adjustments` list. Two boundaries the wiring deliberately keeps: the cards feed the
-`⚠ Imperative logic` *ported / dropped / blocked* marking, **not** `manifest.memberDispositions`
+`⚠ Custom methods` *ported / dropped / blocked* marking, **not** `manifest.memberDispositions`
 (which stays scoped to `unaccounted` members); and the sub-agent is never asked for a Freedom target,
 because its own contract forbids target-platform advice.

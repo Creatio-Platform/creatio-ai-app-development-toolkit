@@ -1051,13 +1051,13 @@ const a6Row = spec.split("\n").find(l => /\| Activities \| Related list \|/.test
 check("#6: the Activities plan row is a plain related list and carries NO 'Timeline' text (the caveat lives in classic-to-freedom-mapping.md)",
   !!a6 && a6.uiShape === "list" && !a6.builderNote && !/Timeline/i.test(a6Row) && !/Timeline/i.test(a6?.note || ""),
   () => ({ note: a6?.note, builderNote: a6?.builderNote, row: a6Row }));
-// A method belongs to the ⚠ Imperative logic worklist ONLY — never repeated as a Logic row.
+// A method belongs to the ⚠ Custom methods worklist ONLY — never repeated as a Logic row.
 const dsLogicBlock = (spec.split("#### Business rules")[1] || "").split("####")[0];
-check("design-spec: the Business rules table does NOT list the handler (methods live in ⚠ Imperative logic only)",
+check("design-spec: the Business rules table does NOT list the handler (methods live in ⚠ Custom methods only)",
   /#### Business rules/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
-check("design-spec: the Business rules section carries NO 'see ⚠ Imperative logic below' pointer — the section's own header below already names the count (ENG-96327)",
+check("design-spec: the Business rules section carries NO 'see ⚠ Custom methods below' pointer — the section's own header below already names the count (ENG-96327)",
   !/custom method\(s\) — see/.test(dsLogicBlock), () => dsLogicBlock);
-check("design-spec: the handler is still accounted for — it carries its own ⚠ Imperative logic row",
+check("design-spec: the handler is still accounted for — it carries its own ⚠ Custom methods row",
   /#### ⚠ Custom methods/.test(spec) && /\| onContactChanged \|/.test(spec));
 // Section ORDER, by offset. Every other assertion here is either presence or a block-scoped absence
 // (`split("#### Business rules")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
@@ -3191,14 +3191,14 @@ check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's R
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
-// #3 — NO method reaches the Business rules table. Helper folding is done from the CALL GRAPH in the ⚠ Imperative logic
+// #3 — NO method reaches the Business rules table. Helper folding is done from the CALL GRAPH in the ⚠ Custom methods
 // worklist (`↳`, covered below), never from a naming convention. Completeness is #3b's job: the worklist carries a
 // row for EVERY method, helpers included — `set<Lookup>Info`/`clear<Lookup>Info` silently disappearing is the
 // documented Known Trap (a companion field loaded by such a helper gets dropped, leaving a lone-field island).
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 const foldLogicTable = (foldCs.designSpec.split("#### Business rules")[1] || "").split("####")[0];
-check("#3 Logic: NO method row reaches the Business rules table — methods are the ⚠ Imperative logic worklist's alone",
+check("#3 Logic: NO method row reaches the Business rules table — methods are the ⚠ Custom methods worklist's alone",
   /#### Business rules/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
   && !["onContactChange", "setContactInfo", "clearContactInfo"].some((m) => foldLogicTable.includes(m)),
   () => foldLogicTable);
@@ -4324,7 +4324,7 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
   () => procSpec.split("\n").find((l) => /Section process/.test(l)));
 
 // Major — a HANDLER method name with a pipe/backtick must be escaped at its rendering sink (no raw pipe breaks the
-// table). That sink is the ⚠ Imperative logic worklist alone; the Business rules table renders no method at all.
+// table). That sink is the ⚠ Custom methods worklist alone; the Business rules table renders no method at all.
 const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
   { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
 const impLines = logicSpec.split("\n").filter((l) => /onFo|setFo/.test(l));
@@ -5349,17 +5349,17 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       return !titles.includes("Form — Logic") && titles.includes("Form — Custom methods")
         && (methods?.rows || []).some((r) => /^Handler — /.test(r.label)); },
     () => checklistGroups(impRun, {}).map((g) => g.title));
-  check("⚠ Imperative members table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
+  check("⚠ Other declared logic table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
     () => /^\| Owner \| attribute-lookup-filter \| 1 filter\(s\), keys: ownerFilter on Contact \|/m.test(impPlan)
       && /^\| CanEdit \| attribute-virtual \| \(dataValueType 12\) · default false \|/m.test(impPlan)
       && /^\| Computed \| attribute-imperative \| function key\(s\): value \|/m.test(impPlan)
       && /^\| ConfigurationConstants, VisaHelper \| module-dep \| — \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Owner|CanEdit|Computed|ConfigurationConstants/.test(l)));
-  check("⚠ Imperative members table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
+  check("⚠ Other declared logic table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
     () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Amount ← Quantity, Price|attribute-dependency/.test(l)));
   // Section ORDER including the new worklist. The order is documented as prose in SKILL.md, AGENTS.md and three
-  // reference templates; without this, moving ⚠ Imperative members below ⚠ Confirm would contradict every one of
+  // reference templates; without this, moving ⚠ Other declared logic below ⚠ Confirm would contradict every one of
   // them and no assertion would notice — the older order check (above) predates the section and omits it.
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
@@ -5379,7 +5379,7 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     schemas: [{ pkg: "P", body: `define("XPage",["CasesEstimateLabel","css!CasesEstimateLabel"],function(){return{entitySchemaName:"X",
       diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
   const refPlan = renderPlan(refRun, {});
-  check("⚠ Imperative members: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
+  check("⚠ Other declared logic: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
     () => /^\| CasesEstimateLabel \| referenced-module \|/m.test(refPlan)
       && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || [])
         .some((r) => r.label === "[referenced-module] CasesEstimateLabel"),
@@ -5387,7 +5387,7 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || []).map((r) => r.label) }));
   // Every kind the members table can render must also be requested in the step-5.1 digest, or its row prints a
   // `⚠ not described` cell no run can fill. Pinned as a set relation so a new kind cannot satisfy one and not the other.
-  check("⚠ Imperative members: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
+  check("⚠ Other declared logic: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
     () => [...IMPERATIVE_MEMBER_KINDS].every((k) => HANDOFF_MEMBER_KINDS.has(k)),
     () => ({ renderable: [...IMPERATIVE_MEMBER_KINDS], handoff: [...HANDOFF_MEMBER_KINDS] }));
 }
@@ -5398,7 +5398,7 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       attributes:{Amount:{dependencies:[{columns:["Quantity","Price"],methodName:"missingHandler"}]}},
       diff:[{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Amount"}}]};});` }] }, { baseDir: FIX });
   const orphanPlan = renderPlan(orphanDepRun, {});
-  check("⚠ Imperative members table: an attribute-dependency with no parsed handler row is visible in the approval plan",
+  check("⚠ Other declared logic table: an attribute-dependency with no parsed handler row is visible in the approval plan",
     () => orphanDepRun.changeSet.handlerStubs.length === 0
       && orphanDepRun.changeSet.needsDecision.some((n) => n.kind === "attribute-dependency" && n.item === "Amount ← Quantity, Price")
       && /^\| Amount ← Quantity, Price \| attribute-dependency \| — \| ⚠ not described \|$/m.test(orphanPlan),
@@ -5600,7 +5600,7 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
 // The empty state is prose the criteria name explicitly, and prose is exactly what a refactor drops silently. The
 // probe page has methods and no rules, so the Business rules section states the absence and the methods live below.
 // (ENG-96327 removed the worklist-mechanics preamble — those semantics live in the build-executor references.)
-check("empty state: a page with methods but no rules says so; the methods live in the ⚠ Imperative logic section below (no redundant pointer)",
+check("empty state: a page with methods but no rules says so; the methods live in the ⚠ Custom methods section below (no redundant pointer)",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
   && /#### ⚠ Custom methods/.test(evPlan)
   && !/custom method\(s\) — see/.test(evPlan),
@@ -5626,13 +5626,13 @@ check("method evidence: filter construction / system-setting read / data refresh
 check("method evidence: `new Terrasoft.EntitySchemaQuery(…)` (a NewExpression) is recognised as an ESQ query",
   idiomStub("queryIt").evidence.kinds.includes("esq") && idiomStub("queryIt").category === "query/filter");
 
-// ---- the ⚠ Imperative logic worklist: EVERY method reaches a binding list ----
+// ---- the ⚠ Custom methods worklist: EVERY method reaches a binding list ----
 const impSpecSection = (impRun.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0];
-check("⚠ Imperative logic: EVERY client method has a row — the defect was methods reaching NO binding worklist",
+check("⚠ Custom methods: EVERY client method has a row — the defect was methods reaching NO binding worklist",
   /#### ⚠ Custom methods/.test(impRun.designSpec)
   && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(String.raw`\| ` + m + String.raw` \|`).test(impSpecSection)),
   () => impSpecSection);
-check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
+check("⚠ Custom methods: an unresolved trigger is stated as unresolved, never guessed from the name",
   /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
 check("member ledger: kept on --spec (per-kind dispositions + counted zeros) but NOT in the human approval plan (ENG-96327)",
   /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec)
@@ -6082,7 +6082,7 @@ const ck = ckRun.checklist || "";
 {
   const logicBlock = (ckRun.plan.split("#### Business rules")[1] || "").split(/\n#### /)[0];
   const lines = logicBlock.split("\n").filter((l) => l.trim());
-  check("Logic (canonical): the rules table comes first and the section carries NO method-count pointer (ENG-96327 — methods live in ⚠ Imperative logic below)",
+  check("Logic (canonical): the rules table comes first and the section carries NO method-count pointer (ENG-96327 — methods live in ⚠ Custom methods below)",
     /#### Business rules/.test(ckRun.plan)
     && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
@@ -6091,7 +6091,7 @@ const ck = ckRun.checklist || "";
     () => lines);
 }
 // The invariant is that the checklist SECTION is not rendered into the approval plan — asserted on its heading and
-// on its table rows. The plan may still NAME it (the ⚠ Imperative logic preamble points the reader at the row where
+// on its table rows. The plan may still NAME it (the ⚠ Custom methods preamble points the reader at the row where
 // a method's ported / dropped / blocked mark is recorded), so a bare mention is not the failure this guards.
 check("Plan-vs-Done checklist: produced as a SEPARATE artifact (result.checklist), NOT part of the approval plan",
   /### ✅ Plan-vs-Done checklist/.test(ck) && !/### ✅ Plan-vs-Done checklist/.test(ckRun.plan)
@@ -6764,7 +6764,7 @@ check("handoff BACK: a key matching no row anywhere is reported, never swallowed
 
 // The plan is the artifact that has to CARRY the reference — an Adjustments section did not survive a re-run.
 const hoPlan = renderPlan(hoBack, {});
-check("handoff BACK: the generated ⚠ Imperative logic table carries a `Described in` cell per row",
+check("handoff BACK: the generated ⚠ Custom methods table carries a `Described in` cell per row",
   /\| Method \| Source \| Trigger \| Body does \| Reads → writes \| Freedom target \| Described in \|/.test(hoPlan) &&
   /C01 AC-1, AC-2/.test(hoPlan));
 check("handoff BACK: undescribed rows surface as a warning ('could not identify and describe … method(s)')",
@@ -7049,7 +7049,7 @@ check("handoff BACK: a member described ONLY by a body card still counts as desc
 const hoBodyPlan = renderPlan(hoBody, {});
 check("handoff BACK: the plan prints BOTH cards, so the guards in the body card are named",
   /C01 AC-1 · body shared\/C09 AC-51, AC-53/.test(hoBodyPlan));
-check("handoff BACK: an ⚠ Imperative members row described ONLY by a body card cites it instead of reading ⚠ not described",
+check("handoff BACK: an ⚠ Other declared logic row described ONLY by a body card cites it instead of reading ⚠ not described",
   () => /^\| RefreshThing \| message \|.*\| body shared\/C09 AC-56 \|$/m.test(hoBodyPlan),
   () => hoBodyPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
 
@@ -7152,17 +7152,17 @@ check("handoff OUT: a TYPED page gets its own scope in stubIndex (it renders its
 check("handoff BACK: a `<typedSchema>::<method>` key that matched inside the typed fold is NOT reported unmatched",
   !hoTyped.behaviourIndex.unmatched.includes("DealTypedPage::typedHelper"));
 
-// ⚠ Imperative members carries the same visible-gap rule as the method table: an undescribed member is not a blank.
+// ⚠ Other declared logic carries the same visible-gap rule as the method table: an undescribed member is not a blank.
 // Members live there, NOT in ⚠ Confirm: they are work to port, not questions needing an on-stand answer.
 const hoConfirm = renderPlan(ho, {});
-check("⚠ Imperative members: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
+check("⚠ Other declared logic: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
   () => /^\| \S+ \| (message|mixin) \|.*\| ⚠ not described \|$/m.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /^\| \S+ \| (message|mixin) \|/.test(l)));
-check("⚠ Imperative members: the header renders and undescribed members surface as a warning",
+check("⚠ Other declared logic: the header renders and undescribed members surface as a warning",
   () => /#### ⚠ Other declared logic — account for EVERY row \(\d+\)/.test(hoConfirm)
     && /could not identify and describe the logic of \d+ of \d+ member/.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /Imperative members|could not identify/.test(l)));
-check("⚠ Imperative members: a described member row names its card + AC",
+check("⚠ Other declared logic: a described member row names its card + AC",
   () => /^\| \S+ \| message \|.*\| .*C02 AC-1.*\|$/m.test(renderPlan(hoBack, {})),
   () => renderPlan(hoBack, {}).split("\n").filter((l) => /^\| \S+ \| message \|/.test(l)));
 // The members must NOT also appear as ⚠ Confirm bullets — that double-listing is what moving them fixed.

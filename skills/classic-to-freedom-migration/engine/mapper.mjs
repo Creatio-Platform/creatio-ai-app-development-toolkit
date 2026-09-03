@@ -1338,7 +1338,7 @@ function virtualAttributeDecision(a) {
   const def = a.value == null ? "" : `, default ${JSON.stringify(a.value)}`;
   const coll = a.isCollection ? ", a COLLECTION" : "";
   return { kind: "attribute-virtual", item: a.name,
-    // `detail` = what differs BETWEEN rows of this kind. The ⚠ Imperative members table prints it per row and states
+    // `detail` = what differs BETWEEN rows of this kind. The ⚠ Other declared logic table prints it per row and states
     // the shared explanation once, so the same paragraph is not repeated on every row of the kind.
     detail: [dvt.trim(), def.replace(/^, /, ""), coll.replace(/^, /, "")].filter(Boolean).join(" · ") || null,
     reason: `virtual view-model attribute '${a.name}'${dvt}${def}${coll} — declared on the classic view model with NO entity column behind it, so no field insert carries it. It is page UI state (an editability/mode flag, a collection backing a menu or list): create it as a Freedom view-model attribute (with its default) and re-wire whatever read it — a binding, a business rule condition, or a handler. Confirm what reads it before deciding it is unused` };
@@ -1445,7 +1445,7 @@ function mapImperativeMembers(eff, cols) {
 // portable logic, so suppressing it silently drops a real client override. (The broader question — how to treat a
 // client override of ANY boxed base method faithfully — is out of this tool's scope and tracked as its own task.)
 // Framework/scaffolding method names that carry no page-specific business behaviour. Excluded from the Logic table,
-// the ⚠ Imperative logic worklist and the `method` decisions — and EXPORTED because the member ledger must still
+// the ⚠ Custom methods worklist and the `method` decisions — and EXPORTED because the member ledger must still
 // count them: it resolves a name in this set to `context` (excluded by design, counted), never `unaccounted`.
 // A STANDARD NAME IS NOT A STANDARD METHOD. `init`, `onSaved`, `onEntityInitialized`, `onSaveButtonClick` and the
 // rest are scaffolding when a schema merely re-declares them — and are DOMAIN LOGIC when a customer overrode one
@@ -1563,7 +1563,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   // states what a method does instead of labelling every one of them "review". `category` is derived from that same
   // evidence and never from the method's name.
   // STANDARD framework/scaffolding methods are excluded first: only CUSTOM business methods reach
-  // the ⚠ Imperative logic worklist and the `method` decisions, so the plan stops listing init/onSaved/validator
+  // the ⚠ Custom methods worklist and the `method` decisions, so the plan stops listing init/onSaved/validator
   // config as "imperative → review" on every page. They remain MEMBERS — the coverage ledger counts them as
   // `context` via `STANDARD_CLASSIC_METHODS` (same treatment as an inert module dep), never as a silent drop.
   const customMethods = payloadMethods.filter(m => !isScaffoldingMethod(m));
