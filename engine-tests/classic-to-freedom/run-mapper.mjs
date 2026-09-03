@@ -2548,6 +2548,34 @@ try {
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
+  // ENG-96458 D3 — THE ACCEPTANCE MECHANISM, THROUGH THE CLI. Both bugs these two checks pin were invisible to the
+  // `renderVerify` unit tests above and were found by running the command end-to-end on a real manifest:
+  //   (1) `--resolutions` was REFUSED alongside `--verify` ("only applies to `--units`"), so an operator could not
+  //       reach the feature at all from the one interface anybody uses;
+  //   (2) once accepted, the CLI hands `opts.resolutions` as an already-BUILT index while a direct API caller hands
+  //       the raw array — and building an index over an index yielded a silently EMPTY one, so the acceptance
+  //       matched nothing and reported no error anywhere.
+  // Hence: assert through `spawnSync`, on the exit code and the rendered row, not on the exported function.
+  const accPath = path.join(os.tmpdir(), `c2f_acc_${process.pid}.json`);
+  try {
+    // The empty built page's first MISSING row is the form page itself; accept it by its row key and the count drops.
+    const vRows = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--verify-json", accPath + ".vj"], { input: verifyManifest, encoding: "utf8" });
+    const firstMissing = Object.values(JSON.parse(fs.readFileSync(accPath + ".vj", "utf8")).pages)
+      .flatMap((p) => p.openRows || []).find((r) => r.outcome === "missing");
+    check("ENG-96458 D3: every open row published by `--verify-json` carries a `rowKey` — an acceptance cannot be addressed to a row that has no name",
+      !!firstMissing?.rowKey && vRows.status === 2, () => firstMissing);
+    fs.writeFileSync(accPath, JSON.stringify({ resolutions: [{ kind: "accepted", row: firstMissing.rowKey, answer: "out of scope by decision", decidedBy: "tester", date: "2026-09-03" }] }));
+    const vAcc = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--resolutions", accPath, "--verify-json", accPath + ".vj2"], { input: verifyManifest, encoding: "utf8" });
+    const before = JSON.parse(fs.readFileSync(accPath + ".vj", "utf8"));
+    const after = JSON.parse(fs.readFileSync(accPath + ".vj2", "utf8"));
+    check("ENG-96458 D3: `--verify --resolutions` is ACCEPTED by the CLI (not refused as units-only) and the accepted row renders ☑ accepted with the decider — reachable from the command line, which is the only interface an operator has",
+      vAcc.status !== 1 && !/only applies to `--units`/.test(vAcc.stderr || "")
+      && /☑ accepted \| ACCEPTED BY DECISION \(tester, 2026-09-03\)/.test(vAcc.stdout || ""),
+      () => ({ status: vAcc.status, stderr: (vAcc.stderr || "").slice(0, 200), row: (vAcc.stdout || "").split("\n").filter((l) => /accepted/.test(l))[0] }));
+    check("ENG-96458 D3: the acceptance actually MOVES the arithmetic through the CLI — one fewer `missing`, one `accepted` — and does not merely print a different mark",
+      after.missing === before.missing - 1 && after.accepted === 1,
+      () => ({ before: { missing: before.missing, accepted: before.accepted }, after: { missing: after.missing, accepted: after.accepted } }));
+  } finally { for (const f of [accPath, accPath + ".vj", accPath + ".vj2"]) { try { fs.unlinkSync(f); } catch { /* best effort */ } } }
   // (c-D12) ENG-94975 (contract v2 D12) — exit 2 is TWO conditions with OPPOSITE responses, and until this line
   // existed `--verify` exited 2 in silence, so an executor could not tell "my build is short" (repair on-stand and
   // re-verify) from "the PLAN is short" (stop, return to the caller — no amount of building clears it). This SU
@@ -2640,7 +2668,7 @@ try {
         main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
         list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
       },
-      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] }, noOrphanScaffold: true },
     }));
     const vScoped = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
     const scopedVerdict = JSON.parse(fs.readFileSync(bareUnitVerdictPath, "utf8"));
@@ -2663,7 +2691,7 @@ try {
         main: { viewConfig: { items: [] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
         list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
       },
-      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] }, noOrphanScaffold: true },
     }));
     try {
       const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
@@ -3597,8 +3625,8 @@ check("ENG-95861: the boundary RESOLVES the structure gate, exactly as the other
   xsBoundary.structure.complete && !xsBoundary.structure.issues.some((i) => /InternalRequest/.test(i)),
   () => xsBoundary.structure.issues);
 check("ENG-95861: the plan is APPROVABLE — no plan-level gap at all (gate + structure + coverage)",
-  verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pages: {} }).planGaps.length === 0,
-  () => verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pages: {} }).planGaps);
+  verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pending: 0, pages: {} }).planGaps.length === 0,
+  () => verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pending: 0, pages: {} }).planGaps);
 
 // (2) ZERO DELIVERABLES. The 6 MISSING rows of the measured run were all `child:InternalRequest`; under the boundary
 //     that key does not exist, so there is nothing to report MISSING — in `--units`, `--checklist` or `--verify`.
@@ -6265,13 +6293,17 @@ const vOk = renderVerify(vResult, {}, {
     // ENG-95859: Approvals is TWO required components — the module ABOVE the island (`crt.Approval`) AND the
     // list (`crt.ApprovalList`). A page with "all deliverables present" must build both, or this fixture is no
     // longer testing what its name says.
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" },
+    // ENG-96458 D1: the card-action row closes on IDENTITY now, so "all deliverables present" means a button
+    // NAMED for the planned `SecurityCheckProcess` action — a generically-named `Btn` was only ever ✅ because the
+    // resolver passed on any `crt.Button`, which is the false positive this ticket removes.
+    { name: "SecurityCheckProcessButton", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
   // (ENG-94975: `reachabilityValue` still reads these root-level booleans when `reachability` says nothing about
   // the key, so the existing literal stays valid; `reachability.<k> === false` would override them, `true` never does.)
-  miniPageWired: true, sectionRegistered: { workplaces: 1, names: ["Recruiting"] },
+  miniPageWired: true, sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true,
   ...QG_EVIDENCE, // D7: the page-DESIGN pass is an evidence row now — record + independent judge, or NOT complete
 });
 check("verify: a built page with all deliverables present AND on-stand wiring evidence supplied → complete",
@@ -6334,7 +6366,11 @@ const vTypes = renderVerify(
   { ops: [
       { name: "DueDate", type: "crt.DateTimePicker" }, { name: "Name", type: "crt.Input" },
       // BUILT side deliberately reports the LEGACY spelling — `BUILT_TYPES.tabs` accepts it on purpose.
-      { name: "TabsCtr", type: "crt.TabContainer" }, { name: "T1", type: "crt.Tab" }, { name: "T2", type: "crt.Tab" },
+      // The enclosing PANEL is `crt.TabPanel`, which is what a real page reports and what it must be here: typed
+      // `crt.TabContainer` it was counted as a THIRD tab, and the row only read ✅ because the old rule passed on
+      // `built >= expected`. Under the ENG-96458 equality rule that fixture would report a +1 surplus that no page
+      // actually has, so the legacy-spelling case is now exercised on a coherent built side: 2 tabs, 2 expected.
+      { name: "TabsCtr", type: "crt.TabPanel" }, { name: "T1", type: "crt.Tab" }, { name: "T2", type: "crt.Tab" },
     ], parentSchemaName: "FormPageTemplate", miniPageBuilt: null, ...QG_EVIDENCE });
 check("verify: correctly-built page with a date field (crt.DateTimePicker) + 2 tabs → complete — incl. a built page still reporting the LEGACY crt.Tab spelling against crt.TabContainer expectations (no false 'fewer than expected' / tab miss)",
   vTypes.complete === true && vTypes.missing === 0 && vTypes.unverified === 0,
@@ -7544,8 +7580,13 @@ try {
         broken: { st: broken.status, err: (broken.stderr || "").slice(0, 160) },
         noAnswer: { st: noAnswer.status, err: (noAnswer.stderr || "").slice(0, 160) } }));
     const wrongMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--checklist", RES_FLAG, resPath], { encoding: "utf8" });
-    check("ENG-95503: `--resolutions` outside `--units` is refused rather than ignored — in any other mode there is no queue item to attach an answer to, and silently accepting it would leave a caller believing answers had been applied",
-      wrongMode.status === 1 && /only applies to `--units`/.test(wrongMode.stderr || ""),
+    // ENG-96458 D3 widened the accepting modes from one to two — `--units` (answers attach to queue items) and
+    // `--verify` (`kind: "accepted"` decisions close verify rows). The REFUSAL is unchanged for everything else,
+    // which is what this check is about: `--checklist` has neither a queue item nor a verify row to attach to, so
+    // accepting the flag there would still leave a caller believing answers had been applied. The message now
+    // names both valid modes, so the assertion reads them rather than the old single-mode phrase.
+    check("ENG-95503 / ENG-96458: `--resolutions` outside `--units` and `--verify` is refused rather than ignored — `--checklist` has nothing to attach an answer to, and the error names both modes that do",
+      wrongMode.status === 1 && /applies to `--units`/.test(wrongMode.stderr || "") && /and to `--verify`/.test(wrongMode.stderr || ""),
       () => ({ status: wrongMode.status, err: (wrongMode.stderr || "").slice(0, 200) }));
   } finally {
     fs.rmSync(resPath, { force: true });
@@ -7907,7 +7948,7 @@ const rcPages = { main: { viewConfig: { items: [] }, parentSchemaName: "T" } };
 const SECTION_RE = /Navigable section registered/;
 const WIRED_RE = /Mini page wired to/;
 const rcNothing = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: {} });
-const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } } });
+const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true } });
 check("ENG-94975 P2 reachability: a key in `built.reachability` CLOSES its row — the canonical home is read, not just the legacy root-level booleans (control: the same payload with an empty `reachability` leaves it ⚠)",
   allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /bound to exactly 1 workplace/.test(rcSection.markdown)
   && allEq(marksFor(rcNothing.markdown, SECTION_RE), "⚠ verify"),
@@ -7995,7 +8036,7 @@ check("ENG-95850 (B2): the OTHER wiring keys are untouched — `miniPageWired: t
 // …and the fallback is still a fallback: a NON-EMPTY `reachability` that simply says nothing about a key leaves
 // the root-level boolean in charge (this is the leg that the opposite mutation — reading only `reachability` —
 // would break, and the legacy payloads in the suite would not notice because they carry no `reachability` at all).
-const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, miniPageWired: true });
+const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true }, miniPageWired: true });
 check("ENG-94975 P2 reachability: a key ABSENT from a non-empty `reachability` object still resolves from the payload root — the canonical map takes precedence over the legacy shape without abolishing it",
   allEq(marksFor(rcFallback.markdown, WIRED_RE), "✅ Done") && allEq(marksFor(rcFallback.markdown, SECTION_RE), "✅ Done"),
   () => ({ wired: marksFor(rcFallback.markdown, WIRED_RE), section: marksFor(rcFallback.markdown, SECTION_RE) }));
@@ -8174,7 +8215,7 @@ for (const e of pageUnits(m12Run, m12Opts).evidenceRows) {
   m12Evidence[e.id] = { referencePage: "SomeExistingFreedomPage", components: ["crt.Input"] };
   m12Judge[e.id] = { convincing: true, why: "the record names the page and the components built on it" };
 }
-const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, evidence: m12Evidence, judge: m12Judge });
+const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true }, evidence: m12Evidence, judge: m12Judge });
 // `entitySchemaName` matches this fixture's own entity (`X`): the migration invariant is that the Freedom page
 // sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
 const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
@@ -10024,7 +10065,7 @@ const N2_NO_SUCH_KEY = "child:NotAPage";
   const listIds = lpUnits.evidenceRows.filter((r) => r.pageKey === "list").map((r) => r.id);
   const builtAll = {
     pages: { main: { viewConfig: { items: ["main-body"] }, schemaUId: "u-main" }, list: false },
-    reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } },
+    reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true },
     evidence: Object.fromEntries([...mainIds.map((id) => [id, { referencePage: "AccountPage", components: ["crt.Input"] }]),
       ...listIds.map((id) => [id, { referencePage: "ContactPage", components: ["crt.DataGrid"] }])]),
     judge: Object.fromEntries(listIds.map((id) => [id, { convincing: false, why: "no prop diff" }])),
@@ -10436,8 +10477,12 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     const [mark, , outcome] = resolveVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, ruleCtx);
     check("T4 (R3): resolveVk routes a `rule` vk to resolveRuleVk (same ✅/ok verdict as calling it directly)",
       mark === "✅ Done" && outcome === "ok");
-    check("T4 (R3): resolveVk still returns `skip` for a vk-LESS row — the dispatch change did not disturb the ☐ default",
-      resolveVk(undefined, ruleCtx)[2] === "skip");
+    // ENG-96458 D4 — the ☐ default is now `pending`, not `skip`. The row still renders exactly as before and is
+    // still not machine-gated; what changed is that it is COUNTED, so five Layout rows handed to a human can no
+    // longer print and then vanish from the verdict. `skip` survives for a row that is not a deliverable at all
+    // (`naRow`), which is the state it was always meant to name.
+    check("ENG-96458 D4: resolveVk returns `pending` for a vk-LESS row — the ☐ default is tallied, not dropped",
+      resolveVk(undefined, ruleCtx)[2] === "pending" && resolveVk(undefined, ruleCtx)[0] === "☐ confirm on-stand");
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
@@ -10774,6 +10819,162 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
+}
+
+// ============================================================================================================
+// ENG-96458 — the `BusinessRule1Section` acceptance criteria, one check per bullet of the ticket.
+//
+// PROVENANCE, and it matters for how much these prove: the two runs' own `verify.md` tables are committed at
+// `fixtures/businessrule/` and every assertion below cites the row it comes from. The migration folders are gone,
+// so the `--built` payloads and manifests of those runs are NOT recoverable and this fixture is RECONSTRUCTED to
+// reproduce those rows — it is not a replay. Read `fixtures/businessrule/README.md` before extending it.
+//
+// The page: 21 fields, one tab, Print and Process both **Not migrated** (`ProcessInModules` → 0,
+// `SysModuleReport` → 0, both checked on-stand), section registered in one workplace.
+{
+  const brFields = ["PDS_Name", "PDS_STRING", "PDS_FLOAT", "PDS_BOOLEAN", "PDS_INTEGER", "PDS_DATE1"];
+  const brDiff = brFields.map((n) => ({ name: n, parentName: "T1", values: { control: `$${n}`, type: "crt.Input" } }));
+  brDiff.push({ name: "T1", values: { type: "crt.TabContainer", caption: "#ResourceString(Tab733e368eTabLabel)#" } });
+  // `cardActions` names both buttons exactly as the Classic page carries them; the SIGNALS are what say whether
+  // either is a deliverable — the same two `result.signals` the plan renders its **Not migrated** note from.
+  const brResult = (signals) => ({
+    entity: "BusinessRule",
+    changeSet: { viewConfigDiff: brDiff, images: [], standardFeatures: [], details: [],
+      cardActions: ["PrintButton", "ProcessButton"], pageBusinessRules: [], entityBusinessRules: [], needsDecision: [] },
+    signals,
+  });
+  const NOT_MIGRATED = { processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+  // The section-level rows (`Navigable section registered`, `No scaffold left behind`) exist only for a SECTION
+  // migration, which is what this one is: `BusinessRule1Section` → the Freedom section.
+  const brOpts = (extra = {}) => ({ planMeta: { sectionSchema: "BusinessRule1Section", formTemplate: "PageWithTopAreaAndTabsFreedomTemplate" }, ...extra });
+  const brBuilt = (ops, extra = {}) => ({
+    pages: { main: { viewConfig: { items: ops }, parentSchemaName: "PageWithTopAreaAndTabsFreedomTemplate",
+      entitySchemaName: "BusinessRule", packageName: "UsrBusinessRuleFreedom" } },
+    reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] }, noOrphanScaffold: true },
+    // The UI-guidelines rows are their own deliverable and are not what these checks are about; supplying the
+    // record + verdict keeps them out of the tally, so a ⚠ here would be about the row under test and nothing else.
+    ...QG_EVIDENCE,
+    ...extra,
+  });
+  // The seven template-supplied buttons the ENG-96445 page actually carried. NOT one of them is a Print or a
+  // Process action, which is exactly why rows 18/19 reading ✅ was a false positive.
+  const TEMPLATE_BUTTONS = ["BackButton", "SaveButton", "CancelButton", "CloseButton", "SetRecordRightsButton", "RequeueQueueItemButton", "PostponeQueueItemButton"]
+    .map((n) => ({ name: n, type: "crt.Button" }));
+  const oneTab = [...brFields.map((n) => ({ name: n, type: "crt.Input" })), { name: "T1", type: "crt.TabContainer" }, ...TEMPLATE_BUTTONS];
+
+  // ── AC1 — rows 18/19 are ABSENT, not ✅ ────────────────────────────────────────────────────────────────────
+  const brNotMigrated = renderVerify(brResult(NOT_MIGRATED), brOpts(), brBuilt(oneTab));
+  check("ENG-96458 AC1: the plan says Print/Process are NOT migrated → NO card-action row is emitted at all (ENG-96445 rows 18/19 read `✅ Done · a crt.Button is present` on a page whose only buttons were the template's)",
+    !/Card action — Print/.test(brNotMigrated.markdown) && !/Card action — Process/.test(brNotMigrated.markdown),
+    () => brNotMigrated.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  // The other half of AC1: an action the plan DOES expect is ✅ only when a component is bound to it.
+  const MIGRATED = { processes: { resolved: true, present: true, names: ["Approval routing"] }, printables: { resolved: true, present: true, names: ["Invoice"] } };
+  const brUnbound = renderVerify(brResult(MIGRATED), brOpts(), brBuilt(oneTab));
+  check("ENG-96458 AC1: a MIGRATED card action on a page carrying only template buttons is ⚠ naming the action — never ✅ on `a crt.Button is present`",
+    /Card action — Print \| ⚠ verify/.test(brUnbound.markdown) && /no built component names the Print action/.test(brUnbound.markdown)
+    && !/a crt\.Button is present/.test(brUnbound.markdown),
+    () => brUnbound.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  // A FIELD whose name merely CONTAINS the action word must not close the row. `ProcessListeners` is a real
+  // read-only field on the very ENG-96445 page this defect came from — `"processlisteners".includes("process")` is
+  // true — so a name-only match would have replaced one false ✅ with another. Only a clickable component counts.
+  const brFieldLookAlike = renderVerify(brResult(MIGRATED), brOpts(), brBuilt([...oneTab, { name: "ProcessListeners", type: "crt.Input" }]));
+  check("ENG-96458 AC1: a FIELD whose name contains the action word (`ProcessListeners`, a real field on that page) does NOT close the Process row — a card action is something a user clicks, never an input",
+    /Card action — Process \| ⚠ verify/.test(brFieldLookAlike.markdown),
+    () => brFieldLookAlike.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  // A ⋮ MENU ITEM does count — ENG-95470 measured `crt.MenuItem MenuItem_RunSecurityCheck` performing exactly the
+  // role a record had claimed for a `crt.Button`, and rejecting it would be literal-type matching all over again.
+  const brMenuItem = renderVerify(brResult(MIGRATED), brOpts(), brBuilt([...oneTab, { name: "MenuItem_PrintInvoice", type: "crt.MenuItem" }]));
+  check("ENG-96458 AC1: a `crt.MenuItem` bound to the action DOES close the row — the gate matches the role, not one literal component type",
+    /Card action — Print \| ✅ Done \| ˋMenuItem_PrintInvoiceˋ on the built page is bound to the Print action/.test(brMenuItem.markdown),
+    () => brMenuItem.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  const brBound = renderVerify(brResult(MIGRATED), brOpts(), brBuilt([...oneTab, { name: "PrintInvoiceButton", type: "crt.Button" }, { name: "RunProcessButton_Approval routing", type: "crt.Button" }]));
+  check("ENG-96458 AC1: a button whose NAME carries the planned action (or the reported printable/process) closes the row, and the evidence says which component did it",
+    /Card action — Print \| ✅ Done \| ˋPrintInvoiceButtonˋ on the built page is bound to the Print action/.test(brBound.markdown),
+    () => brBound.markdown.split("\n").filter((l) => /Card action/.test(l)));
+
+  // ── AC2 — row 17 reports the surplus ──────────────────────────────────────────────────────────────────────
+  // ENG-96444's row 17 verbatim: "Tabs — 1 expected | ✅ Done | 2 crt.TabContainer built".
+  const brTwoTabs = renderVerify(brResult(NOT_MIGRATED), brOpts(), brBuilt([...oneTab, { name: "Feed", type: "crt.TabContainer" }]));
+  check("ENG-96458 AC2: 1 tab expected and 2 built reads `1 expected, 2 built (+1: Feed)` with a ⚠ — not the ✅ ENG-96444 printed, and the surplus is NAMED",
+    /Tabs — 1 expected \| ⚠ verify \| 1 expected, 2 built \(\+1: Feed\)/.test(brTwoTabs.markdown)
+    && brTwoTabs.complete === false,
+    () => brTwoTabs.markdown.split("\n").filter((l) => /Tabs/.test(l)));
+  check("ENG-96458 AC2: the EQUAL case is still ✅ — the equality rule removes a false pass, it does not make the row unreachable",
+    /Tabs — 1 expected \| ✅ Done \| 1 crt.TabContainer built/.test(brNotMigrated.markdown),
+    () => brNotMigrated.markdown.split("\n").filter((l) => /Tabs/.test(l)));
+
+  // ── AC3 — an `accepted` resolution turns the ENG-96444 verdict green ───────────────────────────────────────
+  // ENG-96444's single ❌: the section sits in `UCworkplace` AND `My applications`, because `create-app` always
+  // registers into the latter, and the operator chose to keep both (D6).
+  const brTwoWorkplaces = brBuilt(oneTab);
+  brTwoWorkplaces.reachability.sectionRegistered = { workplaces: 2, names: ["UCworkplace", "My applications"], source: "verified" };
+  const brRed = renderVerify(brResult(NOT_MIGRATED), brOpts(), brTwoWorkplaces);
+  check("ENG-96458 AC3: without a recorded decision the two-workplace row stays ❌ — an acceptance is an operator's answer, never the gate's own leniency",
+    brRed.missing === 1 && /Navigable section registered[^|]*\| ❌ MISSING/.test(brRed.markdown),
+    () => ({ missing: brRed.missing, row: brRed.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  const D6 = { resolutions: [{ kind: "accepted", row: "sectionRegistered",
+    answer: "both workplaces are kept on purpose: `create-app` always registers into `My applications` and the section is also wanted in `UCworkplace`",
+    decidedBy: "Alex Kravchuk", date: "2026-09-02" }] };
+  const brAccepted = renderVerify(brResult(NOT_MIGRATED), brOpts(D6), brTwoWorkplaces);
+  check("ENG-96458 AC3: recording `{ kind: \"accepted\", row: \"sectionRegistered\", answer, decidedBy, date }` turns the ENG-96444 verdict green — the row renders ☑ accepted, names who decided, and leaves `missing`",
+    brAccepted.missing === 0 && brAccepted.accepted === 1 && brAccepted.complete === true
+    && /☑ accepted \| ACCEPTED BY DECISION \(Alex Kravchuk, 2026-09-02\)/.test(brAccepted.markdown),
+    () => ({ missing: brAccepted.missing, accepted: brAccepted.accepted, row: brAccepted.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  // `item` is the same key written the ordinary way — the `row` alias is a convenience, not a second dialect.
+  const brItemForm = renderVerify(brResult(NOT_MIGRATED), brOpts({ resolutions: [{ kind: "accepted", item: "sectionRegistered", answer: "kept by D6" }] }), brTwoWorkplaces);
+  check("ENG-96458 AC3: `item` and `row` are the SAME key — an acceptance written either way matches, and neither creates a second index",
+    brItemForm.missing === 0 && brItemForm.accepted === 1);
+  // An acceptance is not a blanket pass: it can only ever override an OPEN row.
+  const brStaleAccept = renderVerify(brResult(NOT_MIGRATED), brOpts(D6), brBuilt(oneTab));
+  check("ENG-96458 AC3: an acceptance on a row that is already ✅ changes nothing — a stale entry cannot mask a later regression on that row",
+    brStaleAccept.accepted === 0 && /Navigable section registered[^|]*\| ✅ Done/.test(brStaleAccept.markdown),
+    () => brStaleAccept.markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+
+  // ── AC4 — the ☐ rows become a counted worklist ─────────────────────────────────────────────────────────────
+  // ENG-96445 rows 1, 12, 13, 14, 20 were `☐ confirm on-stand`; row 13 (`Header … Feed (ESN)`) is the one that
+  // actually failed a human check, on a page whose every machine row was green.
+  check("ENG-96458 AC4: the ☐ rows are COUNTED and carried as a worklist — each with the row key an answer is recorded against — instead of being printed and dropped",
+    brNotMigrated.pending > 0
+    && brNotMigrated.pages.main.pendingRows.length === brNotMigrated.pages.main.pending
+    && brNotMigrated.pages.main.pendingRows.every((r) => typeof r.rowKey === "string" && r.rowKey && typeof r.deliverable === "string"),
+    () => ({ pending: brNotMigrated.pending, rows: brNotMigrated.pages.main.pendingRows }));
+  check("ENG-96458 AC4: the verdict SAYS how many confirmations are open — `complete pending N` rather than a ✅ with a footnote",
+    new RegExp(`COMPLETE PENDING ${brNotMigrated.pending} CONFIRMATION\\(S\\)`).test(brNotMigrated.markdown),
+    () => brNotMigrated.markdown.split("\n").filter((l) => /Verdict/.test(l)));
+  check("ENG-96458 AC4: a ☐ row is NOT a build gap — it leaves `missing`/`unverified`/`builderOpen` alone, so the builder's own gate is never asked to repair something only a human can answer",
+    brNotMigrated.missing === 0 && brNotMigrated.unverified === 0
+    && brNotMigrated.pages.main.builderOpen === 0 && brNotMigrated.pages.main.buildComplete === true,
+    () => brNotMigrated.pages.main);
+  // The counts-only summary is where the close report reads the worklist from, so it must survive the projection.
+  const brSummary = verifySummary(brResult(NOT_MIGRATED), brNotMigrated);
+  check("ENG-96458 AC4: the counts-only `--verify-summary` carries the count AND up to five named rows per page — the close report cannot name a worklist it never receives",
+    brSummary.pending === brNotMigrated.pending && brSummary.pages.main.pendingRows.length > 0
+    && brSummary.pages.main.pendingRows.every((r) => r.rowKey && r.deliverable && !("status" in r)),
+    () => brSummary.pages.main);
+  // The top level is the OPPOSITE rule to the per-page one, and the difference is load-bearing: `pending` is a
+  // REQUIRED key of the reconcile answer, so a clean run whose summary omitted it would have its answer rejected
+  // and retried three times before the run died. Per-page zeros are omitted for size; the top-level count never is.
+  check("ENG-96458 AC4: the top-level `pending` is ALWAYS present, `0` included — the reconcile schema requires it, so a clean run must not be the one that omits it",
+    (() => { const z = verifySummary({}, { complete: true, missing: 0, unverified: 0, pending: 0, accepted: 0, pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pendingRows: [] } } });
+      return "pending" in z && z.pending === 0 && "accepted" in z; })(),
+    () => verifySummary({}, { complete: true, missing: 0, unverified: 0, pending: 0, accepted: 0, pages: {} }));
+  check("ENG-96458 AC4: a page with NOTHING pending carries none of the four fields — they are omitted, not zero-filled, because this summary is linear in page count against a 16000-byte wire ceiling",
+    !("pending" in (verifySummary(brResult(NOT_MIGRATED), { pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pendingRows: [] } } }).pages.main)),
+    () => verifySummary(brResult(NOT_MIGRATED), { pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pendingRows: [] } } }).pages.main);
+
+  // ── AC6 — the scaffold row ────────────────────────────────────────────────────────────────────────────────
+  // ENG-96445 shipped an orphan `UsrBusinessRule_FormPage`, a stub entity `UsrBusinessRuleFreedom` and an unused
+  // `UsrBusinessRule_Detail`; ENG-96444 also left a look-alike section one bracket from the real one.
+  const brDirty = brBuilt(oneTab);
+  brDirty.reachability.noOrphanScaffold = false;
+  const brScaffold = renderVerify(brResult(NOT_MIGRATED), brOpts(), brDirty);
+  check("ENG-96458 AC6: the run's own scaffold left on the stand is a HARD ❌ — `create-app`'s starter page and stub entity are the run's to remove, not a customer artefact it may leave behind",
+    brScaffold.missing === 1 && /No scaffold left behind[^|]*\| ❌ MISSING/.test(brScaffold.markdown),
+    () => brScaffold.markdown.split("\n").filter((l) => /No scaffold/.test(l)));
+  const brUnchecked = brBuilt(oneTab);
+  delete brUnchecked.reachability.noOrphanScaffold;
+  check("ENG-96458 AC6: NOT looking is ⚠, never ✅ — the row keeps D6's tri-state, so a run that skipped the `list-pages` read cannot exit 0 on it",
+    renderVerify(brResult(NOT_MIGRATED), brOpts(), brUnchecked).unverified === 1);
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

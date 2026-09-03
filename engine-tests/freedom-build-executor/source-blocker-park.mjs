@@ -41,14 +41,17 @@ const reconcileWith = (blocker) => ({
   pageSchemas: { main: "MainPage", list: "ListPage" }, parents: {}, reachability: [], reachabilityState: {},
   preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
   evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
+  // Required since the merge with the stage-2 line (ENG-95683): the empty-prefix flag must be PRESENT, so an
+  // answer that omits it is refused. This fixture reads a real prefix, hence `false`.
+  schemaNamePrefixEmpty: false,
   parkedUnits: [], proposals: [], blocked: [blocker], discrepancies: [], staleQueueKeys: [], newKeys: [],
   verify: {
-    complete: false, missing: 1, unverified: 0, planGaps: [],
+    complete: false, missing: 1, unverified: 0, pending: 0, planGaps: [],
     pages: {
-      main: { complete: true },
+      main: { complete: true, buildComplete: true },
       // `list` is genuinely BUILD-open (a MISSING deliverable), so absent the source park it WOULD be dispatched
       // for a build — which is exactly what makes the contrast meaningful: the source park must stop that build.
-      list: { complete: false, missing: 1, unverified: 0, openRows: [{ deliverable: "Field `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage" }] },
+      list: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [{ deliverable: "Field `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage" }] },
     },
   },
   exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",

@@ -298,12 +298,17 @@ export const RECONCILE_SHAPE = {
   // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. Per
   // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
   // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
-  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
+  // ENG-96458 D4 — `pending` is REQUIRED for the same reason `evidenceIds` and `buildComplete` are: it is what the
+  // close reads to decide whether the RUN may call itself done, and an answer that omitted it would leave the hold
+  // inert — the gate silently off on exactly the run that needs it. Per-page `pending`/`pendingRows`/`pendingMore`
+  // are typed but not required: the top-level count is what holds the run, the per-page rows are what NAME it, and
+  // a page entry that predates this field must not fail an otherwise honest answer.
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pending', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', planGaps: 'string[]' },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', pending: 'integer', accepted: 'integer', planGaps: 'string[]' },
     map: { pages: { required: ['complete', 'buildComplete'],
-      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer', pending: 'integer', accepted: 'integer', pendingMore: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {
@@ -490,6 +495,12 @@ export const BUILD_SCHEMA_APP = {
     appName: { type: 'string' },
     starterFormPage: { type: 'string' },   // `main`'s deliverable, created as a side effect of `create-app`
     starterListPage: { type: 'string' },
+    // ENG-96458 D6 — EVERYTHING THIS CALL MINTED, removed or not: `{ stubSection, stubEntity, starterPages[],
+    // details[], removed[], couldNotRemove[{what, why}] }`. It is the record that tells the run's OWN debris from a
+    // page somebody else owns, and that difference is what decides whether anything may be deleted: a later unit
+    // removes what is on this list and touches nothing that is not. Nested shapes stay loose here for the same
+    // reason every other nested object does — the serialized schema has a 4096-byte ceiling.
+    appScaffold: { type: 'object' },
   },
 }
 // Keyed by what `buildSchemaKind` returns, so the dispatch site holds a lookup rather than a chain of ternaries.
@@ -547,7 +558,15 @@ export const JUDGE_SCHEMA = {
       items: {
         type: 'object',
         required: ['id', 'convincing', 'why'],
-        properties: { id: { type: 'string' }, convincing: { type: 'boolean' }, why: { type: 'string' } },
+        // ENG-96458 D5 — `convincing` and `pageDefect` are TWO axes, not one. A judge that reads the built page to
+        // rule on a record often finds a REAL gap in the page while doing it, and with one axis its only exit was
+        // `convincing: false` — an evidence-formatting rejection. Measured: the judge wrote that the built grid
+        // "has no selectionState, _selectionOptions, bulkActions or layoutConfig" — an actual parity defect it had
+        // discovered — and filed it as "the diff was column-scoped", so the run spent two rounds re-writing a
+        // record and never once built the missing props. `pageDefect` is `{ unit, what }`: the unit whose page
+        // carries the gap and what is missing, in the judge's own words. It opens a build row.
+        properties: { id: { type: 'string' }, convincing: { type: 'boolean' }, why: { type: 'string' },
+          pageDefect: { type: 'object', additionalProperties: { maxLength: 400 } } },
       },
     },
     // Preflight evidence ids this agent MERGED into the built file. Judging is not filing: without this the workflow

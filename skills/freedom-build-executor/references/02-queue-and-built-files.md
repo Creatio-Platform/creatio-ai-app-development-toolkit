@@ -108,6 +108,20 @@ Rules that make it trustworthy:
 - `nonPageUnits` keys are the reachability keys from `--units.reachability[]` whose
   `appliesWhen` is `true`. A key with `appliesWhen: false` is not an obligation of this run and
   gets no entry.
+- **`standWrites.appScaffold` is what THIS RUN minted, and the only thing that licenses a deletion (ENG-96458 / D6).**
+  `create-app` mints a stub entity and starter pages bound to it; `create-app-section` adds a starter form page on
+  its default template. Once the real page is built and bound, each of those is dead — and two measured runs shipped
+  them: a `*_FormPage` bound to nothing, a stub entity `UsrBusinessRuleFreedom`, an unused `*_Detail`, and a
+  look-alike section "Business rules Freedom" sitting in the menu one bracket from the real "Business rules
+  (Freedom)". A user cannot tell those apart, and a later diagnosis read the dead page as the live one. The app unit
+  returns `appScaffold` = `{ stubSection, stubEntity, starterPages[], details[], removed[], couldNotRemove[{what,
+  why}] }` — everything it created, removed or not — and it is recorded here MERGED, never replaced, so a unit that
+  reports twice does not lose the first report's `removed` list.
+  **This is the line between the run's own debris and somebody else's property**: a later unit may remove what is
+  named here and nothing that is not. A page you cannot tie to this record is an `orphanedPages` entry — reported
+  for a human, never deleted. The verify row `noOrphanScaffold` is the gate: `list-pages` on the target package
+  returns no starter page bound to nothing, and the menu shows one section for the entity.
+
 - **`standWrites.orphanedPages` are pages a RE-BIND left pointing at nothing (ENG-95850 / B4).** `create-app` seeds
   start pages (`<Code>_FormPage`, `_ListPage`, `_Detail`); a builder that builds the real page as a NEW schema on a
   different template and re-points the section at it leaves the seeded one on the stand, bound to no key. It is

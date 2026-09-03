@@ -231,7 +231,7 @@ function buildScenarios() {
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
   // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
   // and a realistic fixture should look like the real answer, not because the checker demands it.
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [], pages, ...extra });
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, pending: 0, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -254,7 +254,7 @@ function buildScenarios() {
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
+    verify: { complete: true, missing: 0, unverified: 0, pending: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({
