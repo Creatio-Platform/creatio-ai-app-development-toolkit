@@ -552,6 +552,41 @@ export function runResolutionAnswer(runResolutions, item) {
   const answer = String(hit?.answer ?? '').trim()
   return answer || null
 }
+// THE ROUND ANSWER, AS A CHECKED VALUE AND NOT A PRESENCE TEST (ENG-96204, PR review F1). `runResolutionAnswer`
+// above answers "is there an answer at all", which is the right question for the MODE — an unrecognised mode is
+// then refused by `buildMode`, loudly — and the wrong one for a ROUND AUTHORISATION. The only privileged path in
+// this whole change is a Build against a live customer stand, and the natural way for a driving agent to record
+// the operator's decline is to record the decline: read on presence alone, `{"item":"round-2","answer":"no"}`
+// opened the gate, so the recorded refusal authorised the very round it was withholding.
+//
+// SO THE ANSWER IS A VOCABULARY, and the default is NOT authorisation. Three verdicts:
+//   `authorised`   — a recognised affirmative. The round proceeds.
+//   `refused`      — a recognised negative. The run stops, and the stop NAMES the answer it read, so an operator
+//                    who declined sees their own word quoted back rather than a generic "not authorised".
+//   `unrecognised` — anything else. FAIL CLOSED, exactly the way `buildMode` refuses an unknown mode instead of
+//                    guessing at it: "maybe later", "after the demo" and a typo are all not-yet, and the one
+//                    reading of them that must never happen is "go".
+// The words live INSIDE the function for the same temporal-dead-zone reason `buildMode`'s mode list does, and
+// `roundAnswerVocabulary` is EXPORTED because the stop text and the executor SKILL.md entry the doc test pins
+// both have to state what the operator may type — a fail-closed vocabulary nobody publishes is a guessing game.
+export function roundAnswerVocabulary() {
+  return {
+    affirmative: ['go', 'yes', 'y', 'ok', 'okay', 'continue', 'proceed', 'approved', 'authorised', 'authorized'],
+    negative: ['no', 'n', 'stop', 'halt', 'hold', 'hold off', 'not yet', 'wait', 'cancel', 'abort', 'later'],
+  }
+}
+export function roundAuthorised(answer) {
+  const { affirmative, negative } = roundAnswerVocabulary()
+  // Trailing punctuation only: an operator types `go.` or `yes!` and neither is a different decision. Nothing
+  // else is normalised away, and in particular nothing is matched on a SUBSTRING — an answer that merely
+  // contains an affirmative ("do not go yet") is deliberately `unrecognised`, because substring matching is
+  // exactly how "not yet" becomes "yes".
+  const a = String(answer ?? '').trim().toLowerCase().replace(/[.!?]+$/, '').trim()
+  if (!a) return { verdict: 'absent', answer: null }
+  if (affirmative.includes(a)) return { verdict: 'authorised', answer: a }
+  if (negative.includes(a)) return { verdict: 'refused', answer: a }
+  return { verdict: 'unrecognised', answer: a }
+}
 // THE CONTROL MODE, and WHERE IT CAME FROM. Three inputs, in falling order of how specifically they speak about
 // THIS invocation:
 //   `mode`         — this launch's own argument. The most recent and most specific statement there is.
@@ -562,13 +597,26 @@ export function runResolutionAnswer(runResolutions, item) {
 //                    carries one proceeds; a run that carries none refuses to start.
 // `source` is REPORTED, not merely used: an operator reading a run that proceeded needs to know whether the mode
 // they think they chose is the mode that ran (ENG-96204, AC 5). `{ mode: null, source: null }` is the refusal.
+// A TYPO'D RECORDED ANSWER IS A STOP, NOT A CRASH (PR review, `helpers.mjs:463`). The two LAUNCH inputs are
+// validated when the context is built, before any agent runs, so a mode misspelled on the command line still
+// throws at launch — the right place for it. The recorded ANSWER is different in exactly one way that matters:
+// it is first seen HERE, inside `baselineGates`, after the baseline Reconcile has already spent an agent. A raw
+// throw there is an uncaught exception mid-run, and it is asymmetric with the sibling case in the most
+// embarrassing way possible — an ABSENT mode gets the structured `mode-not-chosen` stop that LISTS the valid
+// modes, while `round-1` for `round1` got a stack trace, right next to a feature whose entire purpose is
+// replacing crash-prone failure with a refusal the operator can read and act on. So an unrecognised recorded
+// answer is reported as data: `{ mode: null, source: 'resolutions', invalidAnswer: '<what they wrote>' }`, and
+// the caller renders `mode-invalid` naming the value and the valid set. It is NOT softer than the command line
+// — nothing falls back to `auto`, the run refuses to start either way — it just says so instead of throwing.
 export function resolveControlMode(ctx = {}) {
   const explicit = buildMode(ctx.mode)
   if (explicit) return { mode: explicit, source: 'argument' }
-  // `buildMode` still THROWS on a typo'd recorded answer, deliberately: a mode misspelled in the answer file is
-  // the same defect as one misspelled on the command line, and the operator who wrote it must hear about it.
-  const answered = buildMode(runResolutionAnswer(ctx.runResolutions, CONTROL_MODE_ITEM))
-  if (answered) return { mode: answered, source: 'resolutions' }
+  const recorded = runResolutionAnswer(ctx.runResolutions, CONTROL_MODE_ITEM)
+  if (recorded) {
+    const known = buildModes().includes(String(recorded).trim().toLowerCase())
+    if (!known) return { mode: null, source: 'resolutions', invalidAnswer: recorded }
+    return { mode: buildMode(recorded), source: 'resolutions' }
+  }
   const configured = buildMode(ctx.defaultMode)
   if (configured) return { mode: configured, source: 'default' }
   return { mode: null, source: null }
@@ -626,6 +674,24 @@ export function roundsOnFile(roundOf) {
   const counts = Object.values(roundOf || {}).filter((n) => Number.isInteger(n) && n > 0)
   return counts.length ? Math.max(...counts) : 0
 }
+// THE ROUNDS THIS FOLDER HAS SPENT, over BOTH records (ENG-96204, PR review F2/F4). `roundsOnFile` above reads
+// the per-unit REPAIR counters, and those are the wrong and only record the round gate used to have: the layout
+// pass of a `layout-first` run deliberately charges no repair round (a part-delivery this run asked for is not a
+// failed attempt), so it increments NO per-unit counter, the carry emits no ROUND COUNTERS block, and the queue
+// file comes back with `roundOf: {}` — which the gate then read as "no round has ever run here" and waved the
+// LOGIC pass through with no operator authorisation at all. The counters answer "how much budget has this unit
+// spent"; they were never an answer to "how many rounds has this folder been through".
+//
+// So the run now writes that second number down as its own root key, `roundsSpent`, in the SAME persist step
+// that writes the queue file — a round is on record because it happened, not because it happened to be charged.
+// The MAX of the two, for the same reason `roundsRun` takes a max: a folder written before this key existed has
+// only the counters, a lagging write must never walk the count backwards, and one answer must authorise exactly
+// one round. ONE function, called by both the stop that ASKS for the authorisation and the gate that CHECKS it —
+// two formulas for one number is how the stop came to advertise `round-3` while the gate looked for `round-2`.
+export function roundsSpentOnFile(state) {
+  const declared = Number.isInteger(state?.roundsSpent) && state.roundsSpent > 0 ? state.roundsSpent : 0
+  return Math.max(declared, roundsOnFile(state?.roundOf))
+}
 // EVERY CORRECTNESS ITEM BEFORE ANY FIDELITY ONE, and the engine's own order kept inside each band (ENG-96204,
 // AC 2). A STABLE sort, so two rows of one severity stay in table order and the ranked list still reads as the
 // table an operator has in front of them. The severity itself is the engine's (`rowSeverity`), never re-derived
@@ -658,8 +724,35 @@ export function openItemsFor(unitKey, openRows) {
 // COMPOSED HERE, as a pure function over the payload, and handed to the persistence agent as literal text to
 // write. Not left for an agent to assemble: a status document an agent writes in its own words is a paraphrase of
 // the verdict, and the whole reason this run computes rather than asserts is that paraphrases of verdicts drift.
+//
+// AND IT IS CAPPED (PR review F8). Every byte of this document is INLINED into the persistence agent's prompt for
+// verbatim transcription, so an uncapped open-row corpus is paid twice — once in the prompt and once in the
+// answer — at the one moment in the run when the context is already fullest, and the failure mode is not a slow
+// stop but a truncated transcription of the operator's own record. The caps follow the two the run already
+// applies to agent-facing text (`dryRunReport` takes `openRows.slice(0, 8)` per unit; `cap()` below truncates a
+// note at `NOTE_CAP` with an ellipsis): a bounded number of rows, each cell bounded, and a computed "+K more"
+// line pointing at the engine-written verify table that holds all of them. Nothing is LOST by this — the full
+// uncapped `openRanked` still travels in the stop's own return payload, where no agent has to retype it, and
+// every row is already on disk in `verify.md`. What is genuinely new here — the ranking, what was built, the
+// park reasons and the next step — is never elided.
 export function runStatusDoc(status = {}) {
   const L = []
+  // Declared inside the function, like every other self-contained decision in this file. `ROW_CAP` is generous
+  // enough that an ordinary stop shows its whole open list and only a pathological one is trimmed.
+  const ROW_CAP = 24
+  const CELL_CAP = 300
+  const cell = (s) => {
+    const flat = String(s ?? '').replace(/\s+/g, ' ').trim()
+    return flat.length <= CELL_CAP ? flat : flat.slice(0, CELL_CAP - 1).trimEnd() + '…'
+  }
+  // The capped variant of `list`: renders at most `ROW_CAP` entries and, when it elided any, closes with the
+  // COUNT it elided and where the full set is. A silent truncation would read as a shorter open list.
+  const cappedList = (items, render, empty, more) => {
+    if (!items?.length) return [`- ${empty}`]
+    const shown = items.slice(0, ROW_CAP).map(render)
+    if (items.length > ROW_CAP) shown.push(`- +${items.length - ROW_CAP} more ${more}`)
+    return shown
+  }
   const list = (items, render, empty) => (items?.length ? items.map(render) : [`- ${empty}`])
   L.push('# Build run status', '')
   L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)
@@ -668,11 +761,21 @@ export function runStatusDoc(status = {}) {
   L.push('', '## Built this round', '')
   L.push(...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'))
   L.push('', '## Open, ranked — every correctness item before any fidelity one', '')
-  L.push(...list(status.openRanked,
-    (it) => `- [${it.severity}] \`${it.unit}\` — ${it.deliverable} — ${it.status} — ${it.evidence}`,
-    'nothing is open'))
+  // THE TWO SECTIONS MUST NOT DISAGREE (PR review F6). `openRanked` is built from the per-page open rows, so a
+  // stop whose remaining open unit is NOT a page (the app unit, a reachability key) used to print "nothing is
+  // open" three lines above a "Still open (units)" list naming it — the run stopped BECAUSE something is open,
+  // and its own record said otherwise. The empty text is therefore conditional on there being nothing open at
+  // all; when rows are missing for units that ARE open, the document says exactly that instead.
+  const noRowsText = status.remainingOpen?.length
+    ? 'no ranked row was published for the open unit(s) below — they are open on their own state (a package or a '
+      + 'configuration record, not a verified page row), so read `Still open (units)` for what remains'
+    : 'nothing is open'
+  L.push(...cappedList(status.openRanked,
+    (it) => `- [${it.severity}] \`${it.unit}\` — ${cell(it.deliverable)} — ${cell(it.status)} — ${cell(it.evidence)}`,
+    noRowsText, `open row(s) — the full list is in the engine-written verify table (\`${status.verifyTable || 'verify.md'}\`)`))
   L.push('', '## Parked, and why', '')
-  L.push(...list(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${p.parkedWhy}`, 'nothing is parked'))
+  L.push(...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
+    'nothing is parked', 'parked unit(s) — the full list is in the queue file'))
   L.push('', '## Still open (units)', '')
   L.push(...list(status.remainingOpen, (k) => `- \`${k}\``, 'no unit is still open'))
   L.push('', '## Next step', '', status.next || '(none recorded)', '')

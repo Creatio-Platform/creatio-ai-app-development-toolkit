@@ -125,6 +125,15 @@ so the question belongs to this skill, before launch.
 | `round1` | Runs **one round per invocation** and stops at the round boundary while anything is open, reporting what was built and what is open. | a round boundary |
 | `layout-first` | Round 1 builds **layout only** and stops; the business logic is ported on the next invocation. | a round boundary |
 
+**What a round boundary costs, next to the choice that buys it.** A round-boundary mode pays the
+run's fixed read-only startup — the baseline Reconcile (`--units` plus the stand reads), the Refs
+cache and the gate — **once per invocation, and therefore once per round**, including on an
+invocation that refuses to build because the next round is not authorised. `layout-first` also
+dispatches every page unit **twice** (layout, then logic). That is the price of the answer, and it
+is usually the cheaper side of the trade — a measured run spent six repair rounds re-deriving a
+shortfall the operator would have settled after round 1 — but it is a real cost and it belongs
+here, next to the decision, rather than being discovered on the third invocation.
+
 **Two stop mechanisms, not five behaviours.** A UNIT-boundary stop reports one page. A
 ROUND-boundary stop reports the whole section as the gate currently sees it — and it exists because
 a deviation from the plan is usually not about one page but about how the section is being read.
@@ -171,7 +180,27 @@ answer in `resolutions.json` — the same single answer channel everything else 
 
 Round 1 needs no authorisation: choosing the mode authorised it. Without the entry a re-run returns
 `stopped: 'awaiting-round-decision'` and builds nothing. The number counts every round the
-migration folder has spent, so a folder three rounds deep asks for `round-4`.
+migration folder has spent — recorded as the queue file's own root `roundsSpent`, which the
+`layout-first` layout pass writes even though it charges no repair round — so a folder three rounds
+deep asks for `round-4`, and the number the stop asks for is the number the gate checks.
+
+**The answer is a CHECKED VALUE, not a presence test, and its default is not consent.** The round
+that entry authorises writes to a live stand, so the gate reads a small vocabulary and refuses
+everything else:
+
+| the recorded `answer` | what the run does |
+| --- | --- |
+| `go`, `yes`, `y`, `ok`, `okay`, `continue`, `proceed`, `approved`, `authorised`, `authorized` | builds the round |
+| `no`, `n`, `stop`, `halt`, `hold`, `hold off`, `not yet`, `wait`, `cancel`, `abort`, `later` | stops — an explicit DECLINE, reported as `roundAnswerVerdict: 'refused'` with the answer quoted back |
+| anything else, including a typo or `maybe after the demo` | stops — `roundAnswerVerdict: 'unrecognised'`. An answer the gate cannot read is NOT authorisation |
+| nothing on file | stops — `roundAnswerVerdict: 'absent'` |
+
+Case, surrounding whitespace and a trailing full stop are ignored (`  GO. ` authorises). Nothing is
+matched on a substring, so `do not go yet` is `unrecognised` rather than a `go`. This is the same
+fail-closed rule `buildMode` applies to an unknown mode: the run refuses loudly instead of guessing,
+because the guess it would make is a stand-writing round nobody asked for. **If you are a driving
+agent recording a human's answer, record it verbatim** — do not translate a decline into an
+omission, and do not normalise anything into `go`.
 
 **The mode itself can travel the same way** — `{ "kind": "run", "item": "control-mode", "answer":
 "round1" }` — which is what a driving skill records after asking the question, because it survives
@@ -623,6 +652,7 @@ Read the file that matches what you are doing. Do not read them all up front.
 | starting, resuming, or reconciling the queue against a re-planned manifest | `./references/02-queue-and-built-files.md` |
 | deciding whether to repair, park, or stop | `./references/03-failure-and-park-policy.md` |
 | building one page | `./references/04-per-page-build-recipe.md` |
+| why this workflow's agent-facing contract changed, and what a caller must do about it | `./references/05-decision-records.md` |
 | mapping a Classic construct to a Freedom one | `../classic-to-freedom-migration/references/classic-to-freedom-mapping.md` |
 
 ## How to run it — the three routes, in preference order

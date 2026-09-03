@@ -90,6 +90,16 @@ export const RECONCILE_SCHEMA = {
     // `unconsumedResolutions` is REQUIRED (round 17) — the one field whose omission is DESTRUCTIVE rather than
     // merely lossy, because its carry block is the one written EVEN WHEN EMPTY: an omitted key seeds `[]` and the
     // next close persists that `[]` OVER the stored rows.
+    // ENG-96204 (PR review F7) — `runResolutions` is REQUIRED, not merely declared. This file's own convention,
+    // stated on `buildComplete` above, is that a DECLARED-but-optional property does not force an LLM to
+    // populate it and only `required` does; and this field's own comment below says an omitted field here is
+    // "an operator's recorded answer that silently did nothing, which is the single failure mode this whole
+    // channel exists to remove". Both statements were already written down and the field was optional anyway: a
+    // Reconcile that dropped it was schema-valid, and the run then resolved no mode from the answer file and
+    // read every round as unauthorised. The prompt already instructs `[]` when the engine published none, so
+    // nothing regresses by demanding it — `[]` and "field absent" were the two states that had to stop being
+    // indistinguishable, exactly as they did for `evidenceFiled`.
+    'runResolutions',
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
     // The empty-prefix flag is REQUIRED so it can never be silently dropped: `{ schemaNamePrefix: null }` alone is
     // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
@@ -264,6 +274,14 @@ export const RECONCILE_SCHEMA = {
     // NOT REQUIRED: absent/`false` means no layout pass is on record, which is the correct reading for a fresh run
     // and for every folder written before this field existed.
     layoutPassDone: { type: 'boolean' },
+    // ENG-96204 (PR review F2/F4) — how many build rounds this migration FOLDER has been through, off the queue
+    // file's own root key. The per-unit `roundOf` counters below are the REPAIR budget and answer a different
+    // question: a `layout-first` layout pass deliberately charges none of them, so a folder one full round deep
+    // legitimately shows `rounds: 0` on every unit — and the resume gate, keyed on those counters, read that as
+    // a folder nobody had built in and authorised itself. This is the number the gate reads now.
+    // NOT REQUIRED, deliberately: `0`/absent is the correct reading for a fresh folder and for every folder
+    // written before this key existed, and `roundsSpentOnFile` falls back to the per-unit counters for those.
+    roundsSpent: { type: 'integer' },
     evidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the

@@ -1117,6 +1117,12 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       // them is refused by the schema exactly as a live agent would be. `[]` is the honest first-run value for all
       // three: no answer has gone unconsumed, and no repair grant has been spent.
       unconsumedResolutions: [], resolutionsReopened: [], resolutionsPending: [],
+      // `runResolutions: []` is REQUIRED of a Reconcile answer as of the ENG-96204 PR review (F7): it is the one
+      // channel the mode choice and every round authorisation travel through, and `[]` versus "field omitted"
+      // had to stop being indistinguishable. This fixture is also the CLI's proof that the requirement is really
+      // enforced on the submit path — drop the key and the submit is REJECTED against the item's responseSchema,
+      // which is exactly what an agent-mediated Reconcile used to be allowed to get away with silently.
+      runResolutions: [],
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       schemaNamePrefixEmpty: false,

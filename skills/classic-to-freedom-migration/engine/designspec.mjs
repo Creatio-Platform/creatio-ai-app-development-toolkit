@@ -3450,8 +3450,12 @@ export function rowSeverity(vk) {
 }
 // EVERY correctness item before ANY fidelity one, and the engine's own row order kept INSIDE each band — a stable
 // sort, so two rows of one severity stay in table order and the ranked list is still readable as the table.
-// Pure, exported and used by the executor's checkpoint stop: the ranking is DATA the engine publishes, not prose an
-// agent composes about it (ENG-96204, AC 2).
+// Pure and exported for DOWNSTREAM consumers of this engine (anything that renders the design-spec's own open rows
+// outside a build run) — this is NOT what the executor's checkpoint stop calls. That stop runs its own in-memory
+// item shape through `rankOpenItems` in `skills/_workflow-core/build-executor/helpers.mjs`, a second copy of this
+// exact same correctness-before-fidelity/stable-sort invariant (ENG-96204, AC 2). The two exist because the two
+// callers see different row shapes; if the invariant ever changes, change it in BOTH places — this function's own
+// tests live in `engine-tests/classic-to-freedom/run-mapper.mjs`, not in the executor's suite.
 export function rankOpenRows(rows) {
   const band = (r) => (r?.severity === SEVERITY.FIDELITY ? 1 : 0);
   return (rows || []).map((r, i) => ({ r, i })).sort((a, b) => band(a.r) - band(b.r) || a.i - b.i).map((x) => x.r);

@@ -33,12 +33,18 @@ MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
 EXECUTOR_SKILL = ROOT / "skills/freedom-build-executor/SKILL.md"
 BUILD_RECIPE = ROOT / "skills/freedom-build-executor/references/04-per-page-build-recipe.md"
 MIGRATION_DOCS = ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md"
+# The shipped bundle: the generated file the executor actually loads at run time, carrying its own
+# copy of `buildModes()`. This is what `test_mode_list_matches_the_shipped_buildModes` reads to prove
+# the pin below, rather than trusting the comment.
+WORKFLOW_BUNDLE = ROOT / "skills/freedom-build-executor/freedom-build-executor.workflow.js"
 
 PINNED = (MIGRATION_SKILL, EXECUTOR_SKILL, BUILD_RECIPE, MIGRATION_DOCS)
 
 # The modes, as the operator types them. `buildModes()` in the workflow core is the source of truth;
-# this list is the DOC side of the same contract, and the point of the check is that the two agree —
-# every mode the run accepts has to be offered somewhere a human can read it.
+# this list is the DOC side of the same contract. The agreement is ENFORCED, not just asserted in this
+# comment: `test_mode_list_matches_the_shipped_buildModes` below reads `WORKFLOW_BUNDLE`, extracts the
+# array literal out of the shipped `buildModes()`, and fails the suite if it and this tuple diverge —
+# so a sixth mode added to the engine and never mentioned here is a red test, not a silent gap.
 MODES = ("auto", "checkpoints", "guided", "round1", "layout-first")
 
 
@@ -47,7 +53,18 @@ def read_text(path):
 
 
 def flat(text):
-    """Collapse whitespace runs so a pin survives a Markdown re-wrap."""
+    """Collapse whitespace runs so a pin survives a Markdown re-wrap.
+
+    A Markdown re-wrap is free to move where a `> ` blockquote line starts — the prose is the same,
+    only the wrap width changed, and a `> ` at the start of the new line is a wrap artifact, not
+    content. Strip that prefix BEFORE collapsing whitespace, or a pin that happens to have been
+    hand-copied with the original wrap point baked in (marker text containing `\n> `) would stop
+    matching text that re-wrapped one word earlier — the exact failure this function exists to
+    prevent. Markers themselves must stay plain single-line text with no embedded `> `; the stripping
+    happens on both sides of the comparison in `missing_markers`, so nothing forces a marker to fake
+    the blockquote syntax it is trying to survive.
+    """
+    text = re.sub(r"(?m)^\s*>\s?", " ", text)
     return re.sub(r"\s+", " ", text)
 
 
@@ -61,6 +78,44 @@ class ControlModeDocTests(unittest.TestCase):
         # The negative pins below pass vacuously on empty text, so they rest on this guard.
         for path in PINNED:
             self.assertTrue(read_text(path).strip(), f"{path} is empty")
+
+    def test_mode_list_matches_the_shipped_buildModes(self):
+        # `MODES` above is a hand-copy of the engine's `buildModes()`, kept as a plain tuple because every
+        # other test in this file needs to iterate it. A hand-copy drifts silently unless something reads
+        # the ACTUAL shipped source and compares — that is this test, not the comment next to `MODES`.
+        bundle_text = read_text(WORKFLOW_BUNDLE)
+        # Tolerant of however the array literal happens to be wrapped (one line, one entry per line, extra
+        # trailing comma) — the shipped bundle is generated output and its exact formatting is not the
+        # contract. What IS the contract is that `buildModes` returns exactly this array of string literals.
+        match = re.search(
+            r"function\s+buildModes\s*\(\s*\)\s*\{\s*return\s*\[(?P<items>[^\]]*)\]\s*\}",
+            bundle_text,
+        )
+        self.assertIsNotNone(
+            match,
+            "could not find `function buildModes() { return [...] }` in the shipped bundle "
+            f"({WORKFLOW_BUNDLE}) — the extraction regex and the generated source have drifted, "
+            "and this must fail loudly rather than let the pin below pass vacuously",
+        )
+        item_pattern = re.compile(r"""['"]([^'"]+)['"]""")
+        shipped_modes = tuple(item_pattern.findall(match.group("items")))
+        self.assertTrue(
+            shipped_modes,
+            f"`buildModes()` matched but no string literals were extracted from it: {match.group('items')!r}",
+        )
+        self.assertEqual(
+            set(shipped_modes),
+            set(MODES),
+            "the DOC-side MODES tuple and the engine's own buildModes() have diverged — a mode added to "
+            "one and not the other is unreachable from one side of the contract",
+        )
+        # Every mode the engine ships has to be reachable from the one place a human can read about it.
+        launcher_text = flat(read_text(MIGRATION_SKILL))
+        missing = [mode for mode in shipped_modes if f"`{mode}`" not in launcher_text]
+        self.assertFalse(
+            missing,
+            f"buildModes() ships a mode the launcher skill never offers as `mode`; missing {missing}",
+        )
 
     def test_launcher_presents_the_mode_as_required(self):
         content = read_text(MIGRATION_SKILL)
@@ -134,11 +189,57 @@ class ControlModeDocTests(unittest.TestCase):
                 'under the reserved kind `run`',
                 '`{ "kind": "run", "item": "control-mode", "answer": "<mode>" }`',
                 "`--units.runResolutions`",
-                "excluded from\n`resolutionsUnmatched`",
+                "excluded from `resolutionsUnmatched`",
                 "There is no second channel",
             ],
         )
         self.assertFalse(missing, f"the one-channel rule must be stated where the build contract lives; missing {missing}")
+
+    def test_executor_contract_publishes_the_round_answer_vocabulary(self):
+        """PR review F1 — the round gate is fail-closed, so the words it accepts must be readable.
+
+        The gate stopped treating any non-blank answer as consent: a recorded ``no`` used to
+        authorise the very round it was declining, and the round it authorises writes to a live
+        stand. A fail-closed gate whose accepted vocabulary lives only in ``helpers.mjs`` is a
+        guessing game for the driving agent that has to record a human's answer — so the words,
+        all three verdicts, and the "record it verbatim" instruction are pinned in the contract
+        the build runs under, where that agent reads.
+        """
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "The answer is a CHECKED VALUE, not a presence test",
+                # The affirmative and the negative sides both have to be listed: an agent that
+                # knows only "go works" cannot tell a decline from an unreadable answer.
+                "`go`, `yes`, `y`, `ok`, `okay`, `continue`, `proceed`",
+                "`no`, `n`, `stop`, `halt`, `hold`, `hold off`, `not yet`",
+                # And the default has to be stated, or "unrecognised" reads as "probably fine".
+                "An answer the gate cannot read is NOT authorisation",
+                "roundAnswerVerdict: 'refused'",
+                # The instruction to the RELAYER, which is where the original defect entered:
+                # the natural way to record a decline is to record the decline.
+                "record it verbatim",
+            ],
+        )
+        self.assertFalse(missing, f"the fail-closed round vocabulary must be published where a driving agent reads it; missing {missing}")
+
+    def test_executor_contract_states_what_a_round_boundary_costs(self):
+        """PR review F13 — the cost note belongs next to the decision that buys it.
+
+        A round-boundary mode pays the fixed read-only startup once per ROUND rather than once
+        per migration, and ``layout-first`` dispatches every page unit twice. The cores already
+        carry that arithmetic; the operator choosing the mode did not see it anywhere.
+        """
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "once per invocation, and therefore once per round",
+                "dispatches every page unit **twice**",
+            ],
+        )
+        self.assertFalse(missing, f"the cost of a round boundary must be stated where the mode is chosen; missing {missing}")
 
     def test_build_recipe_carries_the_two_pass_split(self):
         content = read_text(BUILD_RECIPE)
@@ -150,9 +251,9 @@ class ControlModeDocTests(unittest.TestCase):
                 "SCHEDULED for the next invocation, not dropped",
                 # The gate WILL read short on a layout pass; without this the builder repairs rows
                 # nobody asked it to build.
-                "will report the unit short, and that is the\n> correct verdict",
+                "will report the unit short, and that is the correct verdict",
                 # And a single-pass unit must not read the block as applying to it.
-                "if\n> it says nothing about a pass, this is an ordinary single-pass unit",
+                "if it says nothing about a pass, this is an ordinary single-pass unit",
             ],
         )
         self.assertFalse(missing, f"a fresh-context builder reads only this file; missing {missing}")

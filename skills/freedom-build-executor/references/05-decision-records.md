@@ -1,0 +1,118 @@
+# Decision records — the agent-facing contract of this workflow
+
+This workflow is invoked over an API-first boundary: other agents and harnesses call the
+`freedom-build-executor` Workflow tool and read its return value. A change to what it *requires* or
+what it *returns* is a change to a contract someone else depends on, so the deliberate ones are
+recorded here rather than left in a PR body. One entry per decision: what changed, what was
+rejected, and what a caller has to do.
+
+Behaviour that is merely *documented* belongs in `../SKILL.md`. This file is only for decisions
+where the previous behaviour was also defensible and a caller could be broken by the new one.
+
+---
+
+## DR-1 (ENG-96204) — an omitted `mode` no longer means `auto`; the run refuses to start
+
+**Status:** accepted, shipped in ENG-96204.
+
+**The change.** `buildMode()` used to return `'auto'` when no mode was given. It now returns
+`null`, and the run stops before its first stand write with `stopped: 'mode-not-chosen'`, reporting
+`validModes` and a one-line description of each. Launching without a resolvable mode is therefore a
+refusal rather than an unattended build. `mode` is still not a required *argument* — a
+`{ "kind": "run", "item": "control-mode", "answer": "<mode>" }` entry in `resolutions.json` or a
+`defaultMode` argument both resolve it, and `modeSource` reports which one did.
+
+**Why.** `auto` was the one answer an operator cannot un-choose. A run they meant to watch had
+already written the whole section by the time they discovered it never stopped, and no later
+correction reaches a page that is already on the stand. A default that can only be wrong in the
+expensive direction is not a safe default.
+
+**What was rejected, and why.**
+
+- *Keep `auto` as the default and let the operator opt out.* This is the compatible option and it
+  was rejected on the same ground the change exists for: the failure is silent and irreversible, so
+  the cost of the wrong default is not symmetric with the cost of an extra required decision. An
+  opt-out also has to be *known about* to be exercised, which is exactly what the incident showed
+  was not the case.
+- *Default to the most conservative mode (`guided`) instead.* Rejected as a different silent
+  choice: it would stop a genuinely unattended run after every unit, and a caller that wanted
+  `auto` would discover the change as a run that never finished rather than as a refusal that says
+  what to do.
+- *Make `mode` a required argument.* Rejected because the answer legitimately arrives from three
+  places with different lifetimes — this launch's argument, the operator's standing answer in
+  `resolutions.json`, and a configured non-interactive default. A required argument would force a
+  driving agent to re-ask a question the answer file already holds.
+
+**Migration path for a caller.** Do one of three things, in falling order of preference:
+
+1. Pass `mode` on the launch (`round1`, `layout-first`, `checkpoints`, `guided`, `auto`).
+2. Record `{ "kind": "run", "item": "control-mode", "answer": "<mode>" }` in the migration folder's
+   `resolutions.json` — this is what a driving skill does after asking a human, and it survives
+   across invocations.
+3. For a run nobody is watching, pass `defaultMode: "auto"`. This reproduces the OLD behaviour
+   exactly, as a choice on file rather than a choice nobody made, and the run reports
+   `modeSource: 'default'` so the log says why it never stopped.
+
+A caller that does none of these gets `stopped: 'mode-not-chosen'` with `validModes` and builds
+nothing — a stop that names its own fix, not a crash.
+
+**Compatibility evidence, and its limit.** No in-repo caller launches this workflow with a
+constructed argument list: the only launcher is the migration skill (`../../
+classic-to-freedom-migration/SKILL.md`), which is agent-driven and now presents the mode as
+required, and the engine tests pass `mode` explicitly. **External callers were not verified from
+this repository** — `creatio-adaclio-testing` (the E2E harness that drives CAADT through a coding
+agent) is a separate repository and is not part of this checkout, so "no external caller launches
+without a mode" is an expectation here and not a measurement. If such a caller exists, option 3
+above is a one-line, behaviour-preserving fix on its side.
+
+---
+
+## DR-2 (ENG-96204 PR review) — a mistyped RECORDED control-mode answer is a stop, not an exception
+
+**Status:** accepted, shipped in the ENG-96204 review round.
+
+**The change.** `resolveControlMode` used to hand a recorded answer straight to `buildMode`, which
+throws on an unrecognised value. A misspelled `resolutions.json` answer therefore raised an
+uncaught exception *inside* the run — after the baseline Reconcile had already spent an agent. It
+now returns `{ mode: null, source: 'resolutions', invalidAnswer: '<what was written>' }`, and the
+run stops with `stopped: 'mode-invalid'`, reporting `invalidMode` and `validModes`.
+
+**Why.** The two launch inputs (`mode`, `defaultMode`) are validated when the context is built,
+before any agent runs, and they still throw there — that is the right place for a bad argument. The
+recorded answer is the one value first seen mid-run, and it was the only control-mode input whose
+failure mode was a stack trace, sitting next to a feature whose entire purpose is replacing
+crash-prone failure with a refusal an operator can act on: an *absent* mode got a structured stop
+listing the five modes, while `round-1` for `round1` got an exception.
+
+**What was rejected.** *Correcting the answer to the nearest valid mode.* An answer this script
+rewrote would be the operator's decision silently replaced by its own guess — the same objection
+that removed the `auto` default in DR-1. Nothing is normalised beyond case and surrounding
+whitespace.
+
+**Migration path.** None for a correct caller: a valid answer behaves exactly as before. A caller
+that was catching the exception should read `stopped === 'mode-invalid'` instead; nothing is built
+in either case.
+
+---
+
+## DR-3 (ENG-96204 PR review) — the round authorisation is a checked vocabulary, not a non-blank string
+
+**Status:** accepted, shipped in the ENG-96204 review round.
+
+**The change.** The resume gate used to treat any non-blank `round-<N>` answer as authorisation. It
+now reads a small affirmative vocabulary, treats a recognised negative as an explicit refusal, and
+fails closed on anything it does not recognise. The stop reports `roundAnswerVerdict`
+(`absent` / `refused` / `unrecognised`) and `roundAnswer`. The vocabulary is published in
+`../SKILL.md` and in the stop's own `next`.
+
+**Why.** A recorded `"no"` authorised the round it was declining. That is not an adversarial case:
+the launcher instructs a driving agent to record the operator's answer, and the natural way to
+record a decline is to record the decline. The round it authorised writes to a live customer stand.
+
+**What was rejected.** *Matching an affirmative anywhere in the answer.* `do not go yet` contains
+`go`; substring matching is how "not yet" becomes "yes". A multi-word answer that is not exactly a
+listed word is `unrecognised`, which stops.
+
+**Migration path.** A caller or driving skill that records `"go"` — which is what every document
+and every stop has always prescribed — is unaffected. One that recorded free text must now record
+one of the listed words; the stop names them.
