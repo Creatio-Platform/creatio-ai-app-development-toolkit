@@ -2685,9 +2685,21 @@ check("ENG-95503 wiring: the VERIFIER is asked for `resolutionChecks` and the ro
     && /resolutionContradictions\(claims, lastVerifier\?\.resolutionChecks\)/.test(wfSrc)
     // ROUND 21 (Major 1): the row's `kind` is the SHARED constant now, not a re-typed literal — the dedup, the row
     // and any reader must match on one string. Both halves are pinned, so moving the value without moving the
-    // definition (or re-typing the literal back at the row) reddens this.
+    // definition (or re-typing the literal back at the row) reddens this. `const ` prefix on the definition half:
+    // unanchored, a decoy `X_RESOLUTION_NOT_APPLIED = 'resolution-not-applied'` satisfied it while the row's
+    // constant held something else (round 21 review, finding 1).
     && /kind: RESOLUTION_NOT_APPLIED/.test(wfSrc)
-    && /RESOLUTION_NOT_APPLIED = 'resolution-not-applied'/.test(wfSrc));
+    && /const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'/.test(wfSrc)
+    // THE SITE, NOT ONLY THE HELPER (round 21 review, finding 1). The two executed checks below build their rows
+    // from a local factory, so they prove `upsertResolutionDiscrepancy` in isolation — both of the things that make
+    // it REACH production were asserted by nothing. Measured, not assumed: deleting `id: c.id` from the row left the
+    // suite at 839/839 with `--check` clean (and collapsed EVERY refutation on a unit into one row, since
+    // `idKey(undefined)` is `''` on both sides), and reverting the call to `[...discrepancies, notApplied]` undid
+    // round 21 in full, equally green. Same blind spot as the round-19 defect this round exists to fix: the pin
+    // that stood here matched a string that was still present and still correct. A regex is the right instrument —
+    // the row construction lives OUTSIDE the sliceable helper block, the case RC-15 below already established.
+    && /const notApplied = \{ round, unit: c\.unit, id: c\.id, kind: RESOLUTION_NOT_APPLIED,/.test(wfSrc)
+    && /discrepancies = upsertResolutionDiscrepancy\(discrepancies, notApplied\)/.test(wfSrc));
 // PR #128 review (RC-6a) — THE TWO LINES THAT TURN A CONTRADICTION INTO A GATE. The pin above asserts only that
 // `resolutionContradictions` is CALLED. Delete the `unconsumed` append and the re-open beside it and the entire
 // suite stayed green: the helper's own unit tests still passed, the `resolution-not-applied` discrepancy still
@@ -3549,6 +3561,92 @@ check("PR #128 review (round 21, Major 1): the dedup separates DIFFERENT answers
       && wf.upsertResolutionDiscrepancy(rows, { ...r21Row(2, "w"), unit: ` ${R21_UNIT} `, id: ` ${R21_ID} ` }).length === 4;
   },
   () => "one verifier row + three distinct answers, and a padded rehydrated key refreshes in place");
+/* ROUND 21 REVIEW, FINDING 3 — THE EMPTY IDENTITY, AND THE `kind` GUARD, WHICH BOTH HAD NO COVERAGE.
+   The check above is titled for the id-less case and does not test it: its seed row carries
+   `kind: "component-mismatch"`, so it is spared by the KIND term while every incoming row carries a real `id` —
+   so neither the `kind` guard nor the blank-`id` boundary was exercised. Measured: deleting
+   `d.kind === RESOLUTION_NOT_APPLIED` from the predicate left the whole suite at 839/839, `--check` clean.
+   The blank `id` is reachable rather than hypothetical — `RECONCILE_SHAPE.preflightItems` requires `id` only to be
+   PRESENT and a string, so `id: ''` clears the gate and rides `resolutionsForUnit` -> `resolutionClaimRows` ->
+   `resolutionContradictions` to the row builder. Before the guard, such a refutation keyed on the unit alone and
+   OVERWROTE the first id-less `resolution-not-applied` row on it.
+   THE TWO TERMS NEED TWO DIFFERENT ROWS, and the first cut of this check got that wrong — worth recording, because
+   the mistake is the same one it was written to catch. Seeding an id-less row whose kind DOES match does not
+   exercise the `kind` guard: the empty-identity guard returns -1 BEFORE `findIndex` runs, so deleting the `kind`
+   conjunct left this check green (measured: 842/842). The guard's load-bearing row is a FOREIGN-KIND row on the
+   SAME `(unit, id)` — and that row became contract-legal in this same change, since `id` is now a declared field of
+   `RECONCILE_SHAPE.discrepancies` and `absorbVerifier` spreads the verifier's rows in unfiltered. So the second
+   check below is the one that holds `kind`, and each term is now asserted by a row the OTHER term cannot spare. */
+check("PR #128 review (round 21, finding 3): an EMPTY identity matches nothing — a blank-`id` refutation APPENDS instead of overwriting an id-less `resolution-not-applied` row on the same unit, and two blank-id refutations stay two rows",
+  () => {
+    // The row only the `kind` guard used to exclude, and the row only the `id` term used to exclude.
+    const idless = { round: 1, unit: R21_UNIT, kind: wf.RESOLUTION_NOT_APPLIED, claim: "a rehydrated row that lost its id", found: "round 1" };
+    const foreign = { round: 1, unit: R21_UNIT, kind: "component-mismatch", claim: "a verifier row", found: "no id on it" };
+    let rows = [foreign, idless];
+    rows = wf.upsertResolutionDiscrepancy(rows, { ...r21Row(2, "blank id"), id: "" });
+    // Nothing was clobbered, and the blank-id row is its own row.
+    if (rows.length !== 3 || rows[0] !== foreign || rows[1] !== idless) return false;
+    // A SECOND blank-id refutation does not fold into the first either: `''` is not an identity, so it cannot match.
+    rows = wf.upsertResolutionDiscrepancy(rows, { ...r21Row(2, "another blank id"), id: "   " });
+    if (rows.length !== 4) return false;
+    // And the guard is not a blanket "never match": the same unit with a REAL id still refreshes in place.
+    const real = wf.upsertResolutionDiscrepancy(rows, r21Row(3, "real id"));
+    return real.length === 5 && wf.upsertResolutionDiscrepancy(real, r21Row(4, "again")).length === 5;
+  },
+  () => "two id-less rows survive two blank-id refutations, and a real id still refreshes");
+check("PR #128 review (round 21, finding 3): the `kind` guard is what keeps this dedup off rows it did not create — a FOREIGN-KIND discrepancy on the SAME `(unit, id)` is left alone and the refutation appends beside it, which matters now that `id` is a declared field of the contract and the verifier's rows are spread in unfiltered",
+  () => {
+    // A row `absorbVerifier` could legitimately hand over: same unit, SAME id, a kind this site never files.
+    const foreignOnSamePair = { round: 1, unit: R21_UNIT, id: R21_ID, kind: "component-mismatch",
+      claim: "the verifier's own row for this pair", found: "crt.ComboBox where the plan said crt.RadioGroup" };
+    let rows = [foreignOnSamePair];
+    rows = wf.upsertResolutionDiscrepancy(rows, r21Row(2, "the refutation for the same pair"));
+    // Two rows: the foreign-kind row is untouched, the refutation is its own row.
+    if (rows.length !== 2 || rows[0] !== foreignOnSamePair || rows[1].kind !== wf.RESOLUTION_NOT_APPLIED) return false;
+    // And the refutation still dedups against ITSELF on the next round — the guard narrows, it does not disable.
+    const again = wf.upsertResolutionDiscrepancy(rows, r21Row(3, "re-worded"));
+    return again.length === 2 && again[0] === foreignOnSamePair && again[1].round === 3;
+  },
+  () => "a foreign-kind row on the same pair survives the refutation, which still dedups against itself");
+
+/* ROUND 21 REVIEW, FINDING 2 — THE IDENTITY MUST SURVIVE THE RESUME, WHICH MEANS SURVIVING AN AGENT.
+   `discrepancies` is re-seeded from what the RECONCILE AGENT transcribes (`core.mjs`: `state.discrepancies`), not
+   from the file directly, and `schemas.mjs` states the governing rule: an agent reproduces the fields it is told
+   about and drops the rest, so a field in `RECONCILE_SHAPE` must also be named in `reconcilePrompt`. Round 21
+   shipped the `(unit, id)` key while the prompt still enumerated the row as `{ unit, claim, found, round }` — which
+   bounded the growth for ONE PROCESS and left the resume axis untouched, and the resume axis is the unbounded one
+   (in-session repeats stop at `DEFAULT_MAX_ROUNDS`; operator-driven resumes do not stop).
+   BY NAME ON BOTH SIDES, not by count — the round-20 lesson, and here it is forced: the tokenised prompt/shape gate
+   above CANNOT see this one, because `id` and `kind` are already prompt tokens from `unconsumedResolutions`. */
+// BY NAME, as two literals here rather than a list imported from the block: a shipped constant nothing in the run
+// reads would be dead surface, and a list the test shares with the code under test cannot catch a rename of it.
+const R21_IDENTITY = ["id", "kind"];
+const r21PromptRow = () => /\\`discrepancies\\` as \\`\{ ([^}]+) \}\\`/.exec(wfSrc)?.[1];
+check("ENG-95503 / round 21 review (finding 2): `id` and `kind` are TYPED in `RECONCILE_SHAPE.discrepancies` and NAMED in the Reconcile prompt's row enumeration — the identity the dedup keys on has to survive an agent transcription, and the tokenised gate cannot see these two names",
+  () => {
+    const typed = wf.RECONCILE_SHAPE?.discrepancies?.types || {};
+    const enumerated = r21PromptRow()?.split(",").map((s) => s.trim());
+    return R21_IDENTITY.every((f) => typed[f] === "string" && enumerated?.includes(f))
+      // NOT required — the verifier's own rows and the self-check mismatches carry no identity, and rejecting a
+      // whole answer over them would be worse than the duplicate row this is here to prevent.
+      && !(wf.RECONCILE_SHAPE.discrepancies.required || []).some((f) => R21_IDENTITY.includes(f));
+  },
+  () => `typed=${JSON.stringify(Object.keys(wf.RECONCILE_SHAPE?.discrepancies?.types || {}))} · prompt row=${JSON.stringify(r21PromptRow() || "(not found)")}`);
+check("ENG-95503 / round 21 review (finding 2): a refuted-answer row STRIPPED TO THE FIELDS THE CONTRACT DECLARES still carries its identity, so a resumed run REFRESHES it instead of appending a second ~900-byte row for the same disagreement",
+  () => {
+    const declared = new Set([...Object.keys(wf.RECONCILE_SHAPE.discrepancies.types || {}),
+      ...(wf.RECONCILE_SHAPE.discrepancies.required || [])]);
+    // What a well-behaved agent hands back: the row, reduced to exactly the fields it was told the row holds.
+    const transcribe = (r) => Object.fromEntries(Object.entries(r).filter(([k]) => declared.has(k)));
+    const persisted = wf.upsertResolutionDiscrepancy([], r21Row(1, "first session"));
+    const reseeded = persisted.map(transcribe);
+    // The shape gate must accept the transcription, or the run never gets this far.
+    if (wf.reconcileShapeErrors({ discrepancies: reseeded }).length) return false;
+    const afterResume = wf.upsertResolutionDiscrepancy(reseeded, r21Row(2, "second session, re-worded"));
+    return reseeded[0].id === R21_ID && reseeded[0].kind === wf.RESOLUTION_NOT_APPLIED
+      && afterResume.length === 1 && afterResume[0].round === 2 && /re-worded/.test(afterResume[0].claim);
+  },
+  () => "one row across a session boundary, with the identity intact through the declared field set");
 
 check("PR #128 review (round 21, Minor): the dispatch-sourced exclusion is proven through the REAL producer — `unconsumedResolutions` is what stamps `source`, and a rule-shaped dispatch row survives a reasoned `unknown` that WOULD release a verifier-sourced one",
   () => {

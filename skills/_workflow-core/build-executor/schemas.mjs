@@ -345,8 +345,16 @@ export const RECONCILE_SHAPE = {
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
   blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
+  // `id`/`kind` are TYPED BUT NOT REQUIRED, and the asymmetry is the whole point (round 21 review, finding 2).
+  // They are the identity `upsertResolutionDiscrepancy` dedups a refuted-answer row on, so a resume that arrives
+  // without them re-files the row the previous session already refreshed — ~900 bytes per resume into a list
+  // nothing prunes, rendered whole into every close prompt. Typing them puts them in the field set this table
+  // binds, which is what obliges `reconcilePrompt` to name them (see the rule stated at the top of this file).
+  // NOT required, because two of the three sites that append to `discrepancies` legitimately carry neither: the
+  // verifier's own rows (`absorbVerifier`) and the self-check mismatches (`foldSelfCheckMismatches`) are keyed on
+  // `unit` alone. Requiring them would reject a well-formed answer over rows that never had an identity to lose.
   discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
-    types: { unit: 'string', claim: 'string', found: 'string', round: 'integer' } },
+    types: { unit: 'string', id: 'string', kind: 'string', claim: 'string', found: 'string', round: 'integer' } },
   // ENG-95503 — the answers channel's three round-trip fields. Their insides moved here with everyone else's when
   // ENG-95930 compacted the schema; the required keys and types are unchanged.
   // WHAT THIS TABLE CANNOT CARRY, stated rather than lost: `source` used to be a JSON Schema `enum` of the two
