@@ -1123,6 +1123,9 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       // enforced on the submit path — drop the key and the submit is REJECTED against the item's responseSchema,
       // which is exactly what an agent-mediated Reconcile used to be allowed to get away with silently.
       runResolutions: [],
+      // `consumedRoundAnswers: []` is REQUIRED for the same reason (ENG-96474): it is the record of which of those
+      // round answers are already spent, and an omitted list would read every spent `go` as live.
+      consumedRoundAnswers: [],
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       schemaNamePrefixEmpty: false,

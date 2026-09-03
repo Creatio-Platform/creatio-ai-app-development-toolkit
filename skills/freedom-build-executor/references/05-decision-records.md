@@ -162,3 +162,50 @@ the only thing that crosses; the rows still do not).
 **Migration path.** A caller reading `openRanked` reads `openCounts` instead: `openCounts.open` for
 the total, `openCounts.units` for the per-unit numbers, and `verify.json` for the rows. `built`,
 `parked`, `remainingOpen`, `next` and `runStatusFile` are unchanged.
+
+---
+
+## DR-5 (ENG-96204, folding in ENG-96474) — a spent round answer is recorded in the queue file, never in `resolutions.json`
+
+**Status:** accepted, shipped in ENG-96204.
+
+**The change.** When the resume gate authorises round N off a `round-N` answer, the run records the
+item in the queue file's root key `consumedRoundAnswers` (`["round-2", …]`), in the same write that
+advances `roundsSpent`. On every later invocation the gate refuses a listed item **by record** —
+`roundAnswerVerdict: 'consumed'`, the item named in the stop, nothing built — before it reads the
+answer's text and independently of the `roundsSpent` arithmetic. The list is a union across
+invocations, is part of the carry fingerprint (so a no-op persist cannot drop it — the F10 lesson),
+is REQUIRED on the Reconcile answer (`[]` on a fresh folder), is reported on every return, and is
+listed in `run-status.md` as *spent* against the item currently *awaited*.
+
+**Why.** One answer must authorise one round. `roundsSpent` already makes that true by arithmetic,
+but a count is a thing a hand edit or a restored copy of the queue file can lower, and when it is
+lowered the same `go` reads as consent for a round that has already been built against a live
+stand. A record of *which answers were spent* is a fact the count cannot lower. Answers therefore
+ACCUMULATE in the operator's file — `round-2`, `round-3`, `round-4` — and consumption lives beside
+the count it protects.
+
+**What was rejected, and why.**
+
+- *Stamping `consumedAt` (or deleting the entry) into `resolutions.json`.* Rejected because that
+  file is the one a human writes FOR the machine — the single answer channel every decision in this
+  run travels on — and the moment the run writes into it the boundary between the operator's input
+  and the machine's state is gone: a driving agent can no longer tell an entry the human recorded
+  from one the run annotated, a hand-restored copy of the file silently un-spends an answer, and the
+  operator's own record of what they decided is edited under them. The machine-owned queue file
+  already holds every other durable decision of the run (`roundsSpent`, `layoutPassDone`, the
+  parks), so the record belongs with them.
+- *Folding the consumed record into `roundsSpent` (treating a consumed `round-N` as N rounds
+  spent).* Rejected because it would silently repair a walked-back count instead of refusing on it,
+  and the by-record refusal would become unreachable — the point is that the two records are
+  independent, so lowering one cannot defeat the other.
+- *Accepting the answer once more and advancing to the first unconsumed round.* Same objection: a
+  gate that guesses which round the operator meant is the gate DR-3 removed.
+
+**Migration path for a caller.** None for a correct one: a fresh folder reports
+`consumedRoundAnswers: []` and behaves exactly as before. A driving agent that re-records the same
+`round-N` entry after a refusal should read `roundAnswerVerdict === 'consumed'` and follow the
+stop's `next` (restore `roundsSpent` in the queue file; leave the entry alone) rather than
+re-asking the operator for an answer that is already on file. A Reconcile answer that omits
+`consumedRoundAnswers` is refused by the host and retried, exactly as one that omits
+`runResolutions` is.

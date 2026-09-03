@@ -100,6 +100,10 @@ export const RECONCILE_SCHEMA = {
     // nothing regresses by demanding it — `[]` and "field absent" were the two states that had to stop being
     // indistinguishable, exactly as they did for `evidenceFiled`.
     'runResolutions',
+    // ENG-96204 (ENG-96474) — `consumedRoundAnswers` is REQUIRED by the same rule: `[]` and "field absent" must
+    // not be indistinguishable on the list that decides whether a recorded `go` is still live. An answer that
+    // dropped it would read every spent answer as unspent, which is the one failure the list exists to remove.
+    'consumedRoundAnswers',
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
     // The empty-prefix flag is REQUIRED so it can never be silently dropped: `{ schemaNamePrefix: null }` alone is
     // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
@@ -282,6 +286,12 @@ export const RECONCILE_SCHEMA = {
     // NOT REQUIRED, deliberately: `0`/absent is the correct reading for a fresh folder and for every folder
     // written before this key existed, and `roundsSpentOnFile` falls back to the per-unit counters for those.
     roundsSpent: { type: 'integer' },
+    // ENG-96204 (ENG-96474) — the `round-<N>` items whose answer has ALREADY authorised the round it names, off the
+    // queue file's own root key. The resume gate refuses one of these by RECORD, whatever `roundsSpent` says, so
+    // one recorded answer authorises exactly one round even against a hand-lowered count. A plain string array —
+    // fully host-typed, so it needs no `RECONCILE_SHAPE` entry (that table carries only what the schema stopped
+    // describing, and `evidenceIds` / `unitKeys` set the precedent). REQUIRED (see above); `[]` on a fresh folder.
+    consumedRoundAnswers: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     evidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the

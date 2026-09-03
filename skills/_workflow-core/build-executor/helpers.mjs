@@ -692,6 +692,18 @@ export function roundsSpentOnFile(state) {
   const declared = Number.isInteger(state?.roundsSpent) && state.roundsSpent > 0 ? state.roundsSpent : 0
   return Math.max(declared, roundsOnFile(state?.roundOf))
 }
+// THE SPENT ROUND ANSWERS AS A UNION (ENG-96204 / ENG-96474). Strings only, deduplicated, insertion order kept,
+// anything that is not a non-blank string dropped: the list is copied by an agent out of the queue file and back,
+// so it is defended the way `roundsSpentOnFile` defends its integer. A union and never a replacement — an entry is
+// never un-spent, whichever of the file and the process learned of it first.
+export function mergeConsumed(current, incoming) {
+  const out = []
+  for (const x of [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const s = typeof x === 'string' ? x.trim().toLowerCase() : ''
+    if (s && !out.includes(s)) out.push(s)
+  }
+  return out
+}
 // THE OPEN SET AS COUNTS (ENG-96204, reworked onto ENG-95930's pattern). This replaces `rankOpenItems` +
 // `openItemsFor`, a per-ROW payload the stop carried whole and inlined into `run-status.md`.
 //
@@ -799,6 +811,15 @@ export function runStatusDoc(status = {}) {
       + `${counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''}`)
     L.push(`- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
       + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.')
+  }
+  // ENG-96204 (ENG-96474) — WHICH ANSWERS ARE USED UP, AND WHICH ONE IS WAITED FOR. The operator's `resolutions.json`
+  // is append-only input the run never writes into, so this is the one place they SEE consumption: an entry listed
+  // as spent authorised its round already and will be refused if the count is ever walked back to it.
+  if (status.awaitingRound || (status.consumedRoundAnswers || []).length) {
+    L.push('', '## Round answers', '')
+    L.push(...list(status.consumedRoundAnswers, (a) => `- spent: \`${a}\` — authorised its round already; recorded in the queue file, never in your answer file`,
+      'nothing spent yet — no round after the first has been authorised in this folder'))
+    if (status.awaitingRound) L.push(`- awaiting: \`${status.awaitingRound}\` — the entry to record next (its answer is checked, and a spent entry is never read as consent)`)
   }
   L.push('', '## Parked, and why', '')
   L.push(...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,

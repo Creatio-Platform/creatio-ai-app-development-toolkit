@@ -84,10 +84,19 @@ construction, so reporting them would call a correctly-recorded mode choice an a
 channel, no exceptions:** there is no second state file for either decision, and `findings` is not it — `findings`
 re-opens a unit the gate called complete, which is a different job.
 
+**Round answers accumulate, and `resolutions.json` is append-only input the run never writes into.** Each
+`round-<N>` entry authorises exactly one round; the operator adds the next one when the next stop asks for it and
+never edits or removes an earlier one. **Consumption is recorded in the queue file** (`build-queue.json`, root key
+`consumedRoundAnswers`, e.g. `["round-2"]`), written by the run beside `roundsSpent` the moment the answer authorises
+its round — and an item listed there is refused by record on any later invocation, whatever `roundsSpent` reads, so a
+walked-back count cannot re-spend a `go`. The operator's file stays theirs; the machine's record stays in the
+machine's file (DR-5 in the executor's decision records).
+
 **`run-status.md` is ENGINE-WRITTEN, and it is the only one of these documents that is.** A round-boundary stop
 writes it: what was built, the open COUNTS per unit with the severity tally, the parked units with their reasons,
-the one next step, and a pointer to the verify artifacts — every line computed from the gate's own numbers, never
-composed by an agent. **It carries no open rows.** Those are in `verify.md` (the table) and `verify.json`, where
+the round answers already SPENT against the one currently AWAITED (so consumption is visible without opening the
+queue file), the one next step, and a pointer to the verify artifacts — every line computed from the gate's own
+numbers, never composed by an agent. **It carries no open rows.** Those are in `verify.md` (the table) and `verify.json`, where
 every open row is stamped `rowSeverity` correctness-first; the stop reports how many are open and sends you there,
 because per-row prose cannot cross the capped Reconcile boundary the build's own numbers travel on. It is the CURRENT status
 and is overwritten at each stop; the history stays in `worklog.md`. Do not hand-edit it, and do not treat its

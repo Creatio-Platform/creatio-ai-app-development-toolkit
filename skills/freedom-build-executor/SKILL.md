@@ -208,6 +208,7 @@ everything else:
 | `no`, `n`, `stop`, `halt`, `hold`, `hold off`, `not yet`, `wait`, `cancel`, `abort`, `later` | stops — an explicit DECLINE, reported as `roundAnswerVerdict: 'refused'` with the answer quoted back |
 | anything else, including a typo or `maybe after the demo` | stops — `roundAnswerVerdict: 'unrecognised'`. An answer the gate cannot read is NOT authorisation |
 | nothing on file | stops — `roundAnswerVerdict: 'absent'` |
+| an affirmative whose item is already SPENT (see below) | stops — `roundAnswerVerdict: 'consumed'`, naming the item; nothing is built |
 
 Case, surrounding whitespace and a trailing full stop are ignored (`  GO. ` authorises). Nothing is
 matched on a substring, so `do not go yet` is `unrecognised` rather than a `go`. This is the same
@@ -215,6 +216,20 @@ fail-closed rule `buildMode` applies to an unknown mode: the run refuses loudly 
 because the guess it would make is a stand-writing round nobody asked for. **If you are a driving
 agent recording a human's answer, record it verbatim** — do not translate a decline into an
 omission, and do not normalise anything into `go`.
+
+**One answer authorises exactly one round, and the record of it having done so is the run's, not
+yours.** Answers ACCUMULATE in `resolutions.json`: `round-2`, then `round-3`, then `round-4` — the
+operator's file is **append-only input** that the run never writes into, so nothing there is ever
+edited, stamped or removed to mark it used. **Consumption is recorded in the queue file** instead:
+the moment a `round-<N>` answer authorises its round, the run adds the item to the queue file's own
+root key `consumedRoundAnswers` (`["round-2", …]`), in the same write that advances `roundsSpent`.
+The gate then refuses a listed item **by record**, whatever the round arithmetic says — so a
+`roundsSpent` lowered by hand or restored from an older copy of the queue file cannot make one `go`
+build two rounds. That refusal is `roundAnswerVerdict: 'consumed'`, and its `next` names the repair
+(restore `roundsSpent` to at least the consumed round; do not touch the entry). `run-status.md`
+lists the spent answers against the one currently awaited, so the operator sees consumption without
+opening the queue file, and `consumedRoundAnswers` is reported on every return. The decision to keep
+the record out of `resolutions.json` is DR-5 in `references/05-decision-records.md`.
 
 **The mode itself can travel the same way** — `{ "kind": "run", "item": "control-mode", "answer":
 "round1" }` — which is what a driving skill records after asking the question, because it survives

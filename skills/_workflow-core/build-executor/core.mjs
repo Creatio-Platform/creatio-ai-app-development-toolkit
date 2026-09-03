@@ -57,6 +57,7 @@ import {
   isLayoutPassMode, openCountsOf, passScopeText, resolveControlMode, roundDecisionItem,
   roundsOnFile, runResolutionAnswer, runStatusDoc, stopsAtRoundBoundary,
   roundAnswerVocabulary, roundAuthorised, roundsSpentOnFile,
+  mergeConsumed,
 } from './helpers.mjs'
 import {
   BUILD_SCHEMAS, JUDGE_SCHEMA, PACKAGE_RECORD_SCHEMA, PERSIST_SCHEMA,
@@ -246,6 +247,15 @@ export function* run(rawInput, io = {}, opts = {}) {
   // resumed run never re-asks a question the operator has already answered — and one answer never authorises two
   // different rounds.
   let roundsBefore = 0
+  // ENG-96204 (ENG-96474) — THE ROUND ANSWERS THIS FOLDER HAS ALREADY SPENT, as the `round-<N>` items they were
+  // recorded under. A run-scoped answer authorises exactly ONE round, and the record of it having done so lives
+  // HERE — in the machine-owned queue file, as the root key `consumedRoundAnswers` — and never in
+  // `resolutions.json`: that file is the one a human writes FOR the machine, and the moment the run writes into it
+  // the boundary between "the operator's input" and "the machine's state" is gone (DR-5). The gate below refuses
+  // an item on this list by RECORD, independent of the `roundsSpent` arithmetic, so a hand-lowered round count
+  // cannot make one `go` build two rounds. Declared here, with `roundsBefore`, because `carryNow()` reads it and
+  // the baseline Reconcile calls that before the run state further down exists.
+  let consumedRoundAnswers = []
   let standWrites = {}
   // ENG-95850 (B4/C3) — pages a re-bind left pointing at nothing. Its own binding as well as a `standWrites` member,
   // because `applyReboundOrphan` appends to it and the carry persists whatever it holds; declared here for the same
@@ -352,6 +362,9 @@ let resolutionCheckTally = new Map()
       // remember to opt in.
       roundsOnFile: roundsBefore,
       layoutPassDone,
+      // ENG-96204 (ENG-96474) — the round answers already spent, on EVERY return for the same reason `roundsOnFile`
+      // is: an operator reading why a re-run refused has to see which entries in their file are already used up.
+      consumedRoundAnswers: [...consumedRoundAnswers],
       findings: FINDINGS,
       // The prerequisite the run used to be silent about. On every return, so a caller never has to guess whether
       // the package question was even asked.
@@ -476,6 +489,13 @@ let resolutionCheckTally = new Map()
     if (carry.roundsSpent > 0) {
       out.push(`\nROUNDS SPENT — set the ROOT key \`roundsSpent\` to \`${carry.roundsSpent}\` (create it if absent), UNLESS the file already records a HIGHER number, in which case leave the higher one. It is the count of build rounds this migration folder has been through, it only ever goes up, and it is what tells the next invocation whether the operator still has to authorise a round. Drop it and the next run reads this folder as untouched and builds another round against the stand without asking.`)
     }
+    // ENG-96204 (ENG-96474) — THE SPENT ROUND ANSWERS, in the SAME block and the same write as `roundsSpent`: the two
+    // are one fact seen from two sides (a round happened; the answer that authorised it is used up), and a write
+    // that records one without the other is what lets a `go` be read twice. A UNION, never a replacement — an
+    // entry here is never un-spent — and emitted only when there is one, like every other section.
+    if ((carry.consumedRoundAnswers || []).length) {
+      out.push(`\nCONSUMED ROUND ANSWERS — set the ROOT key \`consumedRoundAnswers\` to the UNION of what the file already holds and this list, copying each item EXACTLY: ${j(carry.consumedRoundAnswers)}\nEach item names a \`round-<N>\` answer in ${RESOLUTIONS_FILE} that has ALREADY authorised the one round it was recorded for. The next invocation refuses to build on an item listed here whatever else the file says, so this is what stops one recorded \`go\` from authorising a second round against the stand. NEVER remove an item, and do NOT write anything into ${RESOLUTIONS_FILE} — that file is the operator's input and this key is the run's own record of having used it.`)
+    }
     if (carry.layoutPassDone) {
       out.push(`\nLAYOUT PASS — set the ROOT key \`layoutPassDone\` to \`true\` (create it if absent). This run's \`layout-first\` LAYOUT pass is complete: the next invocation reads this and ports the business logic instead of laying the pages out a second time. Both invocations see the same open logic rows, so this key is the ONLY thing that tells them apart — drop it and the next run rebuilds the layout and never ports the behaviour.`)
     }
@@ -573,6 +593,7 @@ DO SIX THINGS, in order:
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`roundsSpent\` — the file's ROOT \`roundsSpent\` number, verbatim (\`0\` when the file has no such key, which is the normal first run and every folder written before the key existed). It is how many build rounds this migration folder has been through, and it is what decides whether the next round needs the operator's authorisation. Report what the file says: do NOT add up the per-unit \`rounds\` counters and do NOT infer it from the built pages — the per-unit counters are the REPAIR budget and a \`layout-first\` layout pass deliberately increments none of them, so a folder one full round deep can legitimately show \`rounds: 0\` on every unit.
+   - \`consumedRoundAnswers\` — the file's ROOT \`consumedRoundAnswers\` array, verbatim (\`[]\` when the file has no such key, which is the normal first run). Each entry is a \`round-<N>\` item whose answer in ${RESOLUTIONS_FILE} has ALREADY authorised the round it names; this script refuses to build on one of them again, whatever \`roundsSpent\` says. Copy the strings exactly and never infer, add or drop one — REQUIRED, so return the empty array rather than omitting it.
    - \`layoutPassDone\` — the file's ROOT \`layoutPassDone\` flag, verbatim (\`false\` when the file has no such key, which is the normal first run). It records that a \`layout-first\` run has already done its LAYOUT-ONLY pass, and it is the ONLY thing that tells "round 1 of a layout-first run" from "the logic pass of one" — both see the same open logic rows. Report what the file says; do NOT infer it from the built pages.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
 
@@ -667,7 +688,9 @@ const resolutionsReopened = new Set()
     // authorised itself. `roundsBefore + round` is what THIS invocation knows first-hand — the count it
     // inherited plus the rounds it actually ran — and it is a plain monotonic number, so the writer's
     // instruction can be "never lower it" and a lagging write cannot walk the authorisation backwards.
-    roundsSpent: roundsBefore + round })
+    roundsSpent: roundsBefore + round,
+    // ENG-96204 (ENG-96474) — the spent answers travel beside `roundsSpent`, always: see the carry block.
+    consumedRoundAnswers: [...consumedRoundAnswers] })
 
   // RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later phase depends on
   // it, so a failure here costs the whole run. The budget covers three failures a second dispatch can clear: a host
@@ -1282,6 +1305,7 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // before this marker existed must read as "no layout pass on record", which is the correct answer for it.
   layoutPassDone = state.layoutPassDone === true
   roundsBefore = roundsOnFile(state.roundOf)
+  consumedRoundAnswers = mergeConsumed([], state.consumedRoundAnswers)
   if (isLayoutPassMode(mode)) {
     log(layoutPassDone
       ? 'mode `layout-first`: the queue file records the layout pass as DONE — this invocation is the LOGIC pass'
@@ -1488,7 +1512,10 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // the worst case there is: a layout round that happened to CLOSE every open row skips the boundary stop (there
   // is nothing left to gate), falls through to the closing `persistPending`, and the no-op guard then dropped
   // the marker and the round count — so the folder recorded a completed layout pass as never having happened.
-  const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending], layoutPassDone, roundsBefore + round])
+  // ENG-96204 (ENG-96474) — `consumedRoundAnswers` IS PART OF THE FINGERPRINT, by the same F10 lesson: it is in the
+  // carry, so it is a thing the queue file must hold, and a fact outside the "is there anything unwritten?"
+  // question is a fact a no-op persist is allowed to drop.
+  const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending], layoutPassDone, roundsBefore + round, consumedRoundAnswers])
   let carryPersisted = carryFingerprint()
   // THE STATUS DOCUMENT, as literal text for the agent to write (ENG-96204). The content is composed by
   // `runStatusDoc` — a pure function over the stop's own payload — and handed over as bytes, not as a brief. An
@@ -2850,6 +2877,9 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     // item's text out from under a recorded answer, so the set can change after the run has started.
     logUnmatchedResolutions(whereFrom)
     pageSchemas = { ...state.pageSchemas, ...pageSchemas }   // this process is authoritative for what it learned
+    // ENG-96204 (ENG-96474) — a UNION, like the orphan list below and for the same reason: an answer spent in an
+    // earlier session is still spent, and the one this process just spent is not in the file yet.
+    consumedRoundAnswers = mergeConsumed(consumedRoundAnswers, state.consumedRoundAnswers)
     // ENG-95850 (B4/C3) — the orphan list is a UNION, deliberately NOT the `pageSchemas` precedence rule above. An
     // orphan an earlier session recorded is still an orphan, so "this process wins" would silently drop it; and a
     // page this process orphaned is not in the file yet. Keyed on the schema name, first record kept.
@@ -3353,6 +3383,9 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const status = {
       mode, modeSource, stopped: 'paused-at-round', rounds: round,
       built: builtThisRound, openCounts, parked: parkedStatus(),
+      // ENG-96204 (ENG-96474) — the answers already spent and the one this stop now waits for, so the operator
+      // sees consumption in the status document without the run writing into their answer file.
+      consumedRoundAnswers: [...consumedRoundAnswers], awaitingRound: roundDecisionItem(askFor),
       verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     log(`PAUSED AT ROUND ${round} (mode \`${mode}\`) — ${openCounts.unitsOpen} unit(s) still open, ${openCounts.open} open row(s) (${openCounts.correctness} correctness, ${openCounts.fidelity} fidelity, ${openCounts.unstamped} with their severity stamped per row in ${VERIFY_JSON}). Read run-status.md, then authorise round ${askFor} to continue.`)
@@ -3484,9 +3517,21 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const stillOpen = openNow()
     if (!stillOpen.length) return null
     const nextRound = nextRoundNo()
-    const decision = roundAuthorised(runResolutionAnswer(state.runResolutions, roundDecisionItem(nextRound)))
+    const item = roundDecisionItem(nextRound)
+    const recorded = runResolutionAnswer(state.runResolutions, item)
+    // ENG-96204 (ENG-96474) — REFUSED BY RECORD FIRST. An item already in `consumedRoundAnswers` has authorised its
+    // round, and it does not matter what the answer says or what the arithmetic above worked out: the arithmetic
+    // is a count that a hand-edited or restored queue file can lower, and this list is the fact it cannot lower.
+    // One answer, one round — by record, not only by counting. Fail closed: the stop names the item and says it
+    // was spent, and nothing is built.
+    const decision = consumedRoundAnswers.includes(item)
+      ? { verdict: 'consumed', answer: recorded }
+      : roundAuthorised(recorded)
     if (decision.verdict === 'authorised') {
-      log(`round ${nextRound} is authorised by the run-scoped answer \`${roundDecisionItem(nextRound)}\` = ${JSON.stringify(decision.answer)} — continuing in mode \`${mode}\``)
+      // SPENT THE MOMENT IT AUTHORISES, in this process — and written by the round's own queue-file write, beside
+      // the `roundsSpent` that round advances, so the two records land together or not at all.
+      consumedRoundAnswers = mergeConsumed(consumedRoundAnswers, [item])
+      log(`round ${nextRound} is authorised by the run-scoped answer \`${item}\` = ${JSON.stringify(decision.answer)} — continuing in mode \`${mode}\`; the answer is now SPENT and is recorded as consumed in the queue file with this round`)
       return null
     }
     const openCounts = openCountsNow(stillOpen)
@@ -3495,15 +3540,24 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     // anyway — so the KEY stays `awaiting-round-decision` (one thing for the launcher docs to teach) and the
     // three cases are told apart by `roundAnswer` / `roundAnswerVerdict` in the payload and by the text below.
     const reason = {
-      refused: `the recorded answer for \`${roundDecisionItem(nextRound)}\` is ${JSON.stringify(decision.answer)} — an explicit DECLINE, so nothing was built`,
-      unrecognised: `the recorded answer for \`${roundDecisionItem(nextRound)}\` is ${JSON.stringify(decision.answer)}, which is not one of the answers this gate accepts — an answer it cannot read is NOT authorisation, so nothing was built`,
+      refused: `the recorded answer for \`${item}\` is ${JSON.stringify(decision.answer)} — an explicit DECLINE, so nothing was built`,
+      unrecognised: `the recorded answer for \`${item}\` is ${JSON.stringify(decision.answer)}, which is not one of the answers this gate accepts — an answer it cannot read is NOT authorisation, so nothing was built`,
       absent: `round ${nextRound} is NOT authorised — no answer is on file. Nothing was built.`,
+      consumed: `the answer for \`${item}\` was ALREADY SPENT — the queue file's \`consumedRoundAnswers\` records that an earlier invocation built the round it authorised, so the same entry cannot authorise a second one. Nothing was built.`,
     }[decision.verdict]
     log(`STOP — mode \`${mode}\` and ${spent} round(s) already on file: ${reason}`)
-    const next = roundStopNext(nextRound, layoutPassNow())
+    // THE CONSUMED CASE NAMES ITS OWN REPAIR. The standard `next` would ask for exactly the entry this stop just
+    // refused, because the folder's round count sits BELOW a round the record says was built — the count was
+    // lowered by hand or restored from an older copy. The record is the authoritative one, so the operator restores
+    // the count; the run then asks for the round after it, on the ordinary path.
+    const consumedNext = decision.verdict === 'consumed'
+      ? `the queue file (${QUEUE_FILE}) lists \`${item}\` under \`consumedRoundAnswers\` — that round was ALREADY built on an earlier invocation — yet its \`roundsSpent\` reads ${spent}, below that round; the count was lowered by hand or restored from an older copy, and a spent answer is never read as consent again. Set \`roundsSpent\` in ${QUEUE_FILE} to at least ${nextRound} (the consumed record is the authoritative one; do NOT edit or remove the entry in ${RESOLUTIONS_FILE}, which is append-only input) and re-run: the run will then ask for \`${roundDecisionItem(nextRound + 1)}\`. In general, `
+      : ''
+    const next = consumedNext + roundStopNext(nextRound, layoutPassNow())
     const status = {
       mode, modeSource, stopped: 'awaiting-round-decision', rounds: 0,
       built: [], openCounts, parked: parkedStatus(),
+      consumedRoundAnswers: [...consumedRoundAnswers], awaitingRound: item,
       verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     const written = yield* persistPending('stopping before an unauthorised round', status)
@@ -3511,10 +3565,12 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       stopped: 'awaiting-round-decision',
       rounds: 0,
       roundsOnFile: spent,
-      // The three ways an unauthorised round happens, as data: `absent` (nobody answered), `refused` (the
-      // operator said no) and `unrecognised` (something is written there that this gate will not read as
-      // consent). A driving agent re-asking the question needs to know which — re-prompting an operator who
-      // already declined is not the same act as prompting one who never saw the question.
+      // The four ways an unauthorised round happens, as data: `absent` (nobody answered), `refused` (the
+      // operator said no), `unrecognised` (something is written there that this gate will not read as
+      // consent) and `consumed` (ENG-96474: the answer is on file and was already spent on the round it named).
+      // A driving agent re-asking the question needs to know which — re-prompting an operator who already
+      // declined is not the same act as prompting one who never saw the question, and asking them to re-record
+      // a spent answer is asking for the one thing that will be refused again.
       roundAnswerVerdict: decision.verdict,
       roundAnswer: decision.answer,
       openCounts,

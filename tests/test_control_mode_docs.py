@@ -240,6 +240,51 @@ class ControlModeDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"the one-channel rule must be stated where the build contract lives; missing {missing}")
 
+    def test_executor_contract_states_that_answers_accumulate_and_consumption_is_the_runs_record(self):
+        """ENG-96204 / ENG-96474 — one answer, one round, and the record of it is in the QUEUE file.
+
+        A driving agent that reads the contract has to learn three things or it will do the wrong
+        one: the operator's file is append-only input (so it must not edit or remove an entry to
+        mark it used), the run records consumption in its own file (so a refusal is not a bug to
+        work around by re-recording the same entry), and the refusal has its own verdict.
+        """
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "One answer authorises exactly one round",
+                "Answers ACCUMULATE in `resolutions.json`",
+                "append-only input",
+                "Consumption is recorded in the queue file",
+                "`consumedRoundAnswers`",
+                "`roundAnswerVerdict: 'consumed'`",
+                "lists the spent answers against the one currently awaited",
+                "DR-5",
+            ],
+        )
+        self.assertFalse(missing, f"the consumption record and its ownership must be stated where the build contract lives; missing {missing}")
+
+    def test_documentation_reference_states_the_answer_file_is_append_only_and_where_consumption_lives(self):
+        content = read_text(MIGRATION_DOCS)
+        missing = missing_markers(
+            content,
+            [
+                "Round answers accumulate, and `resolutions.json` is append-only input the run never writes into",
+                "Consumption is recorded in the queue file",
+                "`consumedRoundAnswers`",
+                "the round answers already SPENT against the one currently AWAITED",
+            ],
+        )
+        self.assertFalse(missing, f"the folder contract must say where consumption is recorded; missing {missing}")
+
+    def test_no_doc_tells_the_run_to_write_into_the_answer_file(self):
+        # The rejected alternative (DR-5): stamping the operator's file. If a doc ever says the run
+        # marks an entry as used there, a driving agent will start doing it by hand.
+        for path in PINNED:
+            content = flat(read_text(path))
+            self.assertNotIn("consumedAt", content, str(path))
+            self.assertNotIn("removes the entry from `resolutions.json`", content, str(path))
+
     def test_executor_contract_publishes_the_round_answer_vocabulary(self):
         """PR review F1 — the round gate is fail-closed, so the words it accepts must be readable.
 

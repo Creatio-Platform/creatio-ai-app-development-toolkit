@@ -177,7 +177,9 @@ const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByPa
 // engine's own verify artifacts.
 const H_CONTROL_MODE = ["buildModes", "buildModeMenu", "resolveControlMode", "runResolutionAnswer", "roundDecisionItem",
   "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "openCountsOf",
-  "runStatusDoc", "passScopeText"];
+  "runStatusDoc", "passScopeText",
+  // ENG-96204 (ENG-96474) — the spent-answer union the queue-file record and the resume gate are built on.
+  "mergeConsumed"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
@@ -2133,6 +2135,37 @@ check("ENG-96204 (PR review F9): RECONCILE_SCHEMA declares `layoutPassDone: bool
   wf.RECONCILE_SCHEMA?.properties?.layoutPassDone?.type === 'boolean'
     && wf.RECONCILE_SCHEMA?.properties?.roundsSpent?.type === 'integer',
   () => ({ layoutPassDone: wf.RECONCILE_SCHEMA?.properties?.layoutPassDone, roundsSpent: wf.RECONCILE_SCHEMA?.properties?.roundsSpent }));
+// ENG-96204 (ENG-96474) — THE CONSUMPTION RECORD IS DECLARED, REQUIRED AND ASKED FOR. It is a plain string array, so
+// the host types it fully and `RECONCILE_SHAPE` (which by its own contract carries only what the schema stopped
+// describing) needs no entry — which also means the derived "every shape-bound name is in the prompt" check below
+// does NOT cover it, so the prompt naming is pinned here explicitly.
+check("ENG-96204 (ENG-96474): RECONCILE_SCHEMA declares `consumedRoundAnswers` as a string array under the standing `maxItems` cap AND lists it in `required` — `[]` and 'field absent' must not be indistinguishable on the list that says which recorded `go` is already used up",
+  wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers?.type === 'array'
+    && wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers?.items?.type === 'string'
+    && Number.isInteger(wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers?.maxItems)
+    && (wf.RECONCILE_SCHEMA?.required || []).includes('consumedRoundAnswers'),
+  () => ({ prop: wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers, required: wf.RECONCILE_SCHEMA?.required }));
+check("ENG-96204 (ENG-96474): the Reconcile prompt asks for `consumedRoundAnswers` verbatim off the queue file's ROOT key, with `[]` when the key is absent — the normal first run — and forbids inferring, adding or dropping an entry",
+  wfSrc.includes(String.raw`\`consumedRoundAnswers\` — the file's ROOT \`consumedRoundAnswers\` array, verbatim (\`[]\` when the file has no such key`)
+    && /never infer, add or drop one — REQUIRED, so return the empty array rather than omitting it/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("`consumedRoundAnswers` — the file's ROOT"), wfSrc.indexOf("`consumedRoundAnswers` — the file's ROOT") + 300));
+check("ENG-96204 (ENG-96474): `mergeConsumed` is a UNION — deduplicated, order kept, non-strings and blanks dropped, and NOTHING is ever removed — so a spent answer stays spent whichever of the file and the process learned of it first",
+  () => JSON.stringify(wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "])) === JSON.stringify(["round-2", "round-3", "round-4"])
+    && JSON.stringify(wf.mergeConsumed(undefined, undefined)) === "[]"
+    && JSON.stringify(wf.mergeConsumed(["round-2"], undefined)) === JSON.stringify(["round-2"]),
+  () => wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "]));
+check("ENG-96204 (ENG-96474): the carry fingerprint includes `consumedRoundAnswers` — the F10 lesson: a fact in the carry but outside the 'is there anything unwritten?' question is a fact a no-op persist may drop",
+  /const carryFingerprint = \(\) => JSON\.stringify\(\[.*roundsBefore \+ round, consumedRoundAnswers\]\)/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("const carryFingerprint ="), wfSrc.indexOf("const carryFingerprint =") + 260));
+check("ENG-96204 (ENG-96474): the status document lists the SPENT answers against the one AWAITED — the operator's answer file is append-only input the run never writes into, so this section is where they see consumption",
+  () => { const doc = wf.runStatusDoc({ mode: "round1", stopped: "awaiting-round-decision", rounds: 0, consumedRoundAnswers: ["round-2"], awaitingRound: "round-3", next: "x" });
+    const fresh = wf.runStatusDoc({ mode: "round1", stopped: "paused-at-round", rounds: 1, consumedRoundAnswers: [], awaitingRound: "round-2", next: "x" });
+    const none = wf.runStatusDoc({ mode: "checkpoints", stopped: "paused-at-checkpoint", next: "x" });
+    return /## Round answers/.test(doc) && /- spent: `round-2` — authorised its round already; recorded in the queue file, never in your answer file/.test(doc)
+      && /- awaiting: `round-3`/.test(doc)
+      && /## Round answers/.test(fresh) && /nothing spent yet/.test(fresh) && /- awaiting: `round-2`/.test(fresh)
+      && !/## Round answers/.test(none); },
+  () => wf.runStatusDoc({ mode: "round1", consumedRoundAnswers: ["round-2"], awaitingRound: "round-3", next: "x" }));
 
 const reconcileSchemaBytes = wf.RECONCILE_SCHEMA ? JSON.stringify(wf.RECONCILE_SCHEMA).length : -1;
 // The Reconcile schema is the one the host actually rejected, and it is the run's FIRST agent, so it carries a
@@ -2163,8 +2196,8 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
 // `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
 // `resolutions*` keys are the reopen bookkeeping that must survive a resume.
-check("ENG-95930: the loosened Reconcile schema still declares all 49 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions`, `layoutPassDone` and `roundsSpent`) and its 19-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 49 && (wf.RECONCILE_SCHEMA?.required || []).length === 19
+check("ENG-95930: the loosened Reconcile schema still declares all 50 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions`, `layoutPassDone`, `roundsSpent` and `consumedRoundAnswers`) and its 20-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 50 && (wf.RECONCILE_SCHEMA?.required || []).length === 20
     && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
@@ -4993,6 +5026,75 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     /pages\["<key>"\] = \{ complete, buildComplete, builderOpen, missing, unverified, openCorrectness, openFidelity \}/.test(wfSrc),
     () => wfSrc.slice(wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY"), wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY") + 400));
 
+  /* --- ENG-96474 (folded into ENG-96204): ONE ANSWER AUTHORISES ONE ROUND — BY RECORD, not only by arithmetic.
+     The record of a spent `round-<N>` answer lives in the MACHINE-OWNED queue file (`consumedRoundAnswers`), never
+     in `resolutions.json` (DR-5): that file is what the operator writes for the machine. Each scenario below drives
+     the real generated script through the scripted host and FAILS on the code before the record existed. ------- */
+  const lastPersistPrompt = (calls) => { const ps = calls.filter((c) => c.phase === "Close" && c.label === "persist:carry"); return ps.length ? ps[ps.length - 1].prompt : ""; };
+  // INVOCATION 1: `round-2` is on file and unspent; the folder is one round deep. The round builds, and its own
+  // queue-file write records the answer as consumed beside the advanced `roundsSpent`.
+  const spend1 = await scriptRun({ mode: "round1" },
+    [ROUND_ANSWERED("go"), RECONCILE_R({ roundOf: { main: 2 }, roundsSpent: 2, consumedRoundAnswers: ["round-2"], runResolutions: [{ item: "round-2", answer: "go" }] })]);
+  const spend1Persist = persistPrompt(spend1.calls);
+  check("ENG-96474: the invocation that SPENDS `round-2` builds exactly one round and writes the answer into the queue file's `consumedRoundAnswers` in the SAME carry block as `roundsSpent` — one write, two sides of one fact — and reports the spent list on its return",
+    !spend1.res.threw && buildCalls(spend1.calls).length === 1 && spend1.res.stopped === "paused-at-round"
+      && /CONSUMED ROUND ANSWERS — set the ROOT key `consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(spend1Persist)
+      && /ROUNDS SPENT — set the ROOT key `roundsSpent`/.test(spend1Persist)
+      && JSON.stringify(spend1.res.consumedRoundAnswers) === JSON.stringify(["round-2"])
+      && /round-3/.test(spend1.res.next || ""),
+    () => (spend1.res.threw ? `threw: ${spend1.res.threw}` : { builds: buildCalls(spend1.calls).length, consumed: spend1.res.consumedRoundAnswers, carry: spend1Persist.split("\n").filter((l) => /CONSUMED|ROUNDS SPENT/.test(l)).map((l) => l.slice(0, 120)) }));
+  check("ENG-96474: and the carry block tells the writer the list is a UNION it must never shrink, and that `resolutions.json` is NOT written — the boundary between the operator's input and the machine's record is stated where the write happens",
+    /UNION of what the file already holds/.test(spend1Persist) && /NEVER remove an item/.test(spend1Persist)
+      && /do NOT write anything into \S*resolutions\.json/.test(spend1Persist),
+    () => spend1Persist.split("\n").filter((l) => /CONSUMED ROUND ANSWERS/.test(l)).map((l) => l.slice(0, 600)));
+  // INVOCATION 2: the file the first one left behind — `round-2` consumed, `roundsSpent` advanced — and the operator's
+  // `round-2` entry still sitting in their append-only file. The re-run must refuse and tell them which answer is
+  // used up and which one it now waits for.
+  const spend2 = await scriptRun({ mode: "round1" },
+    [RECONCILE_R({ roundOf: { main: 2 }, roundsSpent: 2, consumedRoundAnswers: ["round-2"], runResolutions: [{ item: "round-2", answer: "go" }] })]);
+  const spend2Status = persistPrompt(spend2.calls);
+  check("ENG-96474: the SAME `round-2` answer replayed against the folder the first invocation left stops `awaiting-round-decision` with ZERO Build dispatches, reports `round-2` as consumed and asks for `round-3` — one answer, one round",
+    !spend2.res.threw && spend2.res.stopped === "awaiting-round-decision" && buildCalls(spend2.calls).length === 0
+      && JSON.stringify(spend2.res.consumedRoundAnswers) === JSON.stringify(["round-2"])
+      && /round-3/.test(spend2.res.next || "") && spend2.res.roundAnswerVerdict === "absent",
+    () => (spend2.res.threw ? `threw: ${spend2.res.threw}` : { stopped: spend2.res.stopped, builds: buildCalls(spend2.calls).length, consumed: spend2.res.consumedRoundAnswers, verdict: spend2.res.roundAnswerVerdict }));
+  check("ENG-96474: its `run-status.md` lists the spent answer against the awaited one — `spent: round-2`, `awaiting: round-3` — so the operator sees consumption without the run touching their file",
+    /## Round answers/.test(spend2Status) && /- spent: `round-2`/.test(spend2Status) && /- awaiting: `round-3`/.test(spend2Status),
+    () => spend2Status.split("\n").filter((l) => /Round answers|spent:|awaiting:/.test(l)).join(" | "));
+  // THE WALK-BACK: the record says `round-2` was spent, but `roundsSpent` reads 1 (lowered by hand, or restored from an
+  // older copy of the file). The arithmetic now asks for `round-2` again and finds a `go` on file — and the record
+  // must win. Before the record existed this built a second round on the same `go`.
+  const walkedBack = await scriptRun({ mode: "round1" },
+    [RECONCILE_R({ roundOf: {}, roundsSpent: 1, consumedRoundAnswers: ["round-2"], runResolutions: [{ item: "round-2", answer: "go" }] })]);
+  check("ENG-96474: a consumed answer plus a HAND-WALKED-BACK `roundsSpent` still cannot re-authorise — the gate refuses BY RECORD (`roundAnswerVerdict: 'consumed'`), builds nothing, and the stop names the item and says it was already spent",
+    !walkedBack.res.threw && walkedBack.res.stopped === "awaiting-round-decision" && buildCalls(walkedBack.calls).length === 0
+      && walkedBack.res.roundAnswerVerdict === "consumed" && walkedBack.res.roundAnswer === "go"
+      && /`round-2`/.test(walkedBack.res.next || "") && /ALREADY built/.test(walkedBack.res.next || "")
+      && /spent answer is never read as consent again/.test(walkedBack.res.next || ""),
+    () => (walkedBack.res.threw ? `threw: ${walkedBack.res.threw}` : { stopped: walkedBack.res.stopped, builds: buildCalls(walkedBack.calls).length, verdict: walkedBack.res.roundAnswerVerdict, next: (walkedBack.res.next || "").slice(0, 300) }));
+  check("ENG-96474: the consumed stop's `next` names the repair — restore `roundsSpent` in the QUEUE file to at least the consumed round, and leave `resolutions.json` alone — instead of asking for the very entry it just refused",
+    /Set `roundsSpent` in \S*build-queue\.json to at least 2/.test(walkedBack.res.next || "")
+      && /do NOT edit or remove the entry in \S*resolutions\.json/.test(walkedBack.res.next || "")
+      && /will then ask for `round-3`/.test(walkedBack.res.next || ""),
+    () => (walkedBack.res.next || "").slice(0, 700));
+  check("ENG-96474: the consumed list is a UNION with the file at EVERY Reconcile — the file's entry survives into the stop's status document even though this process spent nothing",
+    /- spent: `round-2`/.test(persistPrompt(walkedBack.calls)) && /- awaiting: `round-2`/.test(persistPrompt(walkedBack.calls)),
+    () => persistPrompt(walkedBack.calls).split("\n").filter((l) => /spent:|awaiting:/.test(l)).join(" | "));
+  // THE CLOSING PERSIST: an authorised round that CLOSES everything skips the boundary stop and falls through to the
+  // closing `persistPending`. The spent answer must be on the queue file by then — it travels in the round's own
+  // write and is part of the carry fingerprint (pinned at source above), so the close cannot drop it.
+  const spentAndClosed = await scriptRun({ mode: "round1" },
+    [ROUND_ANSWERED("go"), RECONCILE_R({ verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } }, roundOf: { main: 2 }, roundsSpent: 1, consumedRoundAnswers: [], runResolutions: [{ item: "round-2", answer: "go" }] })]);
+  check("ENG-96474: an authorised round that closes the run still records the spent answer — the LAST queue-file write of the run carries `consumedRoundAnswers: [\"round-2\"]` beside `roundsSpent`, and the closing return reports it",
+    !spentAndClosed.res.threw && spentAndClosed.res.complete === true && buildCalls(spentAndClosed.calls).length === 1
+      && /`consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(lastPersistPrompt(spentAndClosed.calls))
+      && /ROUNDS SPENT — set the ROOT key `roundsSpent` to `2`/.test(lastPersistPrompt(spentAndClosed.calls))
+      && JSON.stringify(spentAndClosed.res.consumedRoundAnswers) === JSON.stringify(["round-2"]),
+    () => (spentAndClosed.res.threw ? `threw: ${spentAndClosed.res.threw}` : { complete: spentAndClosed.res.complete, consumed: spentAndClosed.res.consumedRoundAnswers, last: lastPersistPrompt(spentAndClosed.calls).split("\n").filter((l) => /CONSUMED|ROUNDS SPENT/.test(l)).map((l) => l.slice(0, 120)) }));
+  check("ENG-96474: a fresh folder reports `consumedRoundAnswers: []` on every return and its `paused-at-round` status says nothing is spent yet — the list is present, empty, and never absent",
+    JSON.stringify(r1.res.consumedRoundAnswers) === "[]" && /nothing spent yet/.test(persistPrompt(r1.calls)) && /- awaiting: `round-2`/.test(persistPrompt(r1.calls)),
+    () => ({ consumed: r1.res.consumedRoundAnswers, status: persistPrompt(r1.calls).split("\n").filter((l) => /spent|awaiting/.test(l)).join(" | ") }));
+
   /* --- H1 (thread helpers.mjs:463): a mistyped RECORDED mode is a structured stop, not a crash mid-run -------- */
   const badRecordedMode = await scriptRun({ mode: undefined }, [RECONCILE_R({ runResolutions: [{ item: "control-mode", answer: "round-1" }] })]);
   check("PR review (thread helpers.mjs:463): a MISTYPED recorded control-mode answer stops the run with `mode-invalid`, naming the offending value and listing the valid modes — it used to throw an uncaught exception mid-run, after the baseline Reconcile had already spent an agent, while an ABSENT mode got a structured stop that lists them",
@@ -6504,7 +6606,8 @@ check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by 
     // so they are facts the queue file must hold; left out of "is there anything unwritten?", a round whose only
     // new fact was one of them wrote nothing at all, and a layout round that closed everything then recorded a
     // completed layout pass as never having happened.
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\], layoutPassDone, roundsBefore \+ round\]\)/.test(wfSrc)
+    // ENG-96474 — and `consumedRoundAnswers` joins them, for the same reason (see its own pin above).
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\], layoutPassDone, roundsBefore \+ round, consumedRoundAnswers\]\)/.test(wfSrc)
     && /markCarryPersisted\(\)/.test(wfSrc)
     && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",
