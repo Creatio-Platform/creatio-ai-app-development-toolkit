@@ -188,14 +188,17 @@ class VerificationSurfacePreflightDocTests(unittest.TestCase):
         # referenced elsewhere in this file. These two sites relay parked/blocked/plan-gap facts,
         # which is item 7's job; a stale "item 5" here sends a reader to the wrong paragraph.
         content = flat(read_text(MIGRATION_SKILL))
-        self.assertIn(
-            "That one comes back to you (step 7 item 7): fix the manifest, re-run `--plan`", content
-        )
+        # ENG-95857 reworded this sentence: the plan-level verdict has FOUR kinds, and the remedy is
+        # not "fix the manifest" for all of them (a blocked correctness gate is fixed in the stand or
+        # the input schemas). The INVARIANT this test exists for is unchanged and is what stays pinned
+        # — the plan-gap relay points at item 7. Pin the cross-reference, not the prose around it.
+        self.assertIn("They come back to you (step 7 item 7)", content)
         self.assertIn(
             "Four things are NOT in the table and you must surface them alongside it** "
             "(step 7 item 7)",
             content,
         )
+        self.assertNotIn("come back to you (step 7 item 5)", content)
         self.assertNotIn("(step 7 item 5): fix the manifest", content)
         self.assertNotIn("surface them alongside it** (step 7 item 5)", content)
 

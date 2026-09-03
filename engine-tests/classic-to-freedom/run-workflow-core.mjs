@@ -40,7 +40,7 @@ import * as bex from "../../skills/_workflow-core/build-executor/core.mjs";
 import { makeContext, makePaths } from "../../skills/_workflow-core/build-executor/context.mjs";
 import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
   packagePreconditionStop, selfCheckStillShort, inContextParkableKeys, selfCheckMismatches,
-  planInvalidNext, componentReplanClause, componentTypeMismatches,
+  planInvalidNext, componentReplanClause, componentTypeMismatches, planGapKinds, planGapNext,
 } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
 import { CLAUDE_HOST, makeExecute, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
@@ -1064,7 +1064,10 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       schemaNamePrefixEmpty: false,
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
-      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } },
+      // No `verify.planGaps`: the Reconcile prompt now names the fields to copy from the counts-only summary and
+      // that is not among them (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`). Keeping it here
+      // would make the suite's model answer describe a shape the contract no longer asks for.
+      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, pages: { main: { complete: true, buildComplete: true } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     };
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));
@@ -1077,6 +1080,76 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       () => JSON.stringify(done.result).slice(0, 400));
     check("build-executor cli: the return names the artifacts an operator has to read, on every exit",
       done.result.verifyTable === "/mig/verify.md" && done.result.queueFile === "/mig/build-queue.json" && done.result.mode === "auto");
+
+    /* ENG-95857 (T3) — HARD STOP 2 must fire from the ENGINE'S OWN ARTIFACT and from nothing else.
+       The answer below carries `planGaps` exactly as `--units.planGaps` published it: no plan-level stderr line
+       is quoted anywhere in it, `notes` is empty, and the verify summary's own `planGaps` is still `[]` (it is
+       the BUILD verdict and is not where plan completeness is decided). The stop must still happen, before the
+       first stand write, and must name WHICH check fired — until this change the reconcile agent was told to top
+       the set up from stderr lines it retyped, so omitting or paraphrasing one silently suppressed the stop. */
+    {
+      const gapRun = path.join(tmp, "plangap.json");
+      cli("start", gapRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      cli("next", gapRun);
+      const gapFile = path.join(tmp, "plangap-answer.json");
+      writeFileSync(gapFile, JSON.stringify({ ...green, notes: "",
+        planGaps: ["plan INCOMPLETE — on-stand signals not resolved (4): dcm, processes, printables, deduplication"] }));
+      const subGap = cli("submit", gapRun, "reconcile.baseline", gapFile);
+      check("build-executor T3: a Reconcile answer whose ONLY plan-level input is the engine's published set is accepted",
+        subGap.status === 0, () => subGap.stderr);
+      const gapDone = JSON.parse(cli("next", gapRun).stdout);
+      check("build-executor T3: the run STOPS on `plan-gap` with no plan-level stderr text anywhere in the answer — the stop is driven by the artifact, and a build that is otherwise green (verify complete, planGaps empty in the verify summary) does not proceed",
+        gapDone.status === "done" && gapDone.result.stopped === "plan-gap" && gapDone.result.rounds === 0,
+        () => JSON.stringify(gapDone.result).slice(0, 400));
+      // `result.planGaps` alone proves nothing here — it is the SUBMITTED answer echoed back through
+      // `planGaps: state.planGaps`, a line this change does not touch, so asserting it passes on the unfixed
+      // tree too. `result.next` is the field `planGapNext` actually produces, and it is what an operator reads.
+      check("build-executor T3: the stop's `next` REPORTS which plan-level check fired and sends the operator to the MANIFEST for a plan-completeness gap",
+        () => /plan INCOMPLETE/.test(gapDone.result.next || "") && /in the manifest/.test(gapDone.result.next)
+          && !/fixed in the stand/.test(gapDone.result.next),
+        () => gapDone.result.next);
+    }
+    // …and the OTHER remedy, which is the whole reason the kind is named: a BLOCKED correctness gate is a fact
+    // about the stand or the input schemas, and telling that operator to "fix the manifest" sends them to the
+    // wrong file. Until this fixture existed no test exercised the gate branch at all.
+    {
+      const gateRun = path.join(tmp, "plangap-gate.json");
+      cli("start", gateRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      cli("next", gateRun);
+      const gateFile = path.join(tmp, "plangap-gate-answer.json");
+      writeFileSync(gateFile, JSON.stringify({ ...green, notes: "",
+        planGaps: ["gate BLOCKED (2 correctness signal(s))"] }));
+      cli("submit", gateRun, "reconcile.baseline", gateFile);
+      const gateDone = JSON.parse(cli("next", gateRun).stdout);
+      check("build-executor T3: a BLOCKED correctness gate sends the operator to the STAND / input schemas, NOT the manifest — the per-kind remedy is the point of naming the kind",
+        () => gateDone.result.stopped === "plan-gap" && /gate BLOCKED/.test(gateDone.result.next || "")
+          && /fixed in the stand or the input schemas/.test(gateDone.result.next)
+          && !/answered in the manifest/.test(gateDone.result.next),
+        () => gateDone.result.next);
+    }
+    // The entry is MEANT to be `--units.planGaps` verbatim, but the field is typed only as `string[]` — nothing
+    // structurally stops a paraphrase or a pasted stderr line. A leading-token parse read `migrate.mjs: ⛔ GATE
+    // BLOCKED …` as the kind `migrate.mjs: ⛔` and routed a blocked gate to the manifest remedy: confidently
+    // wrong, which is worse than not classifying. These three shapes must all reach the STAND remedy, and an
+    // entry in no known vocabulary must fall back to naming both remedies rather than picking one.
+    check("build-executor T3: kind recognition survives a paraphrase — the uppercase stderr headline and a whole pasted stderr line both classify as `gate BLOCKED` and get the stand remedy",
+      () => ["GATE BLOCKED", "migrate.mjs: ⛔ GATE BLOCKED — do NOT build. Broken merge.", "gate BLOCKED (2 correctness signal(s))"]
+        .every((g) => planGapKinds([g]).join() === "gate BLOCKED" && /fixed in the stand/.test(planGapNext([g]))),
+      () => ["GATE BLOCKED", "migrate.mjs: ⛔ GATE BLOCKED — do NOT build."].map((g) => planGapKinds([g])));
+    check("build-executor T3: an entry in NO published vocabulary yields no kind and falls back to naming BOTH remedies with the engine's own text — never one half guessed",
+      () => { const n = planGapNext(["something the engine never published"]);
+        return planGapKinds(["something the engine never published"]).length === 0
+          && /could not classify/.test(n) && /something the engine never published/.test(n)
+          && /fixed in the stand or the input schemas/.test(n) && /in the manifest/.test(n) },
+      () => planGapNext(["something the engine never published"]));
+    // …and the prompt no longer asks for the transcription at all. This is the regression boundary: as long as the
+    // instruction to "add any PLAN-level stderr line" survives, the set the stop reads is partly hand-retyped
+    // prose, and the fourth kind — which has no stderr line in that enumeration — can never reach it.
+    check("build-executor T3: the Reconcile prompt sources `planGaps` from `--units.planGaps` VERBATIM and no longer instructs the agent to top it up from stderr lines",
+      next1.items[0].prompt.includes("`--units.planGaps`")
+        && !/add any PLAN-level stderr line/.test(next1.items[0].prompt)
+        && !/STRUCTURE INCOMPLETE`, `COVERAGE INCOMPLETE/.test(next1.items[0].prompt),
+      () => (next1.items[0].prompt.match(/^.*planGaps.*$/gm) || []).join("\n---\n").slice(0, 900));
 
     // A work-item id is not a filename. `build.child:Documents.r1` carries a colon, which Windows refuses — and
     // this suite runs on windows-latest.

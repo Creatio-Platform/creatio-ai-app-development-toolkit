@@ -392,6 +392,42 @@ export function approvalStop(app, planVersion, ctx = {}) {
   }
   return null
 }
+// --- HARD STOP 2's REPORT: which plan-level check fired, and where the operator goes (ENG-95857) -------------
+// The engine publishes FOUR plan-level kinds and this is the whole vocabulary. Recognition is by CONTAINMENT and
+// case-INSENSITIVE, not by reading the first two tokens: the entry is meant to be `--units.planGaps` copied
+// verbatim, but the field is typed only as `string[]`, so nothing structurally stops a paraphrase or a pasted
+// stderr line (`migrate.mjs: ⛔ GATE BLOCKED — do NOT build. …`) arriving here. A leading-token parse read that
+// line's kind as `migrate.mjs: ⛔` and sent a BLOCKED correctness gate to the manifest remedy — confidently
+// wrong, which is the exact misdirection this stop exists to remove. An unrecognised entry now yields NO kind,
+// and `planGapNext` falls back to a kind-agnostic instruction rather than guessing one.
+const PLAN_GAP_KINDS = ['gate BLOCKED', 'structure INCOMPLETE', 'coverage INCOMPLETE', 'plan INCOMPLETE']
+const gapKind = (g) => {
+  const u = String(g).toUpperCase()
+  return PLAN_GAP_KINDS.find((k) => u.includes(k.toUpperCase())) || null
+}
+export const planGapKinds = (planGaps) => [...new Set((planGaps || []).map(gapKind).filter(Boolean))]
+
+// The remedy differs by kind, and this stop used to give one answer for all four: "fix it in the manifest". That
+// is wrong for a blocked correctness GATE — a broken merge, or an effect the mapper cannot represent, is a fact
+// about the STAND or the input schemas that no manifest edit clears. Naming which fired is the difference between
+// an operator editing a file and an operator going to the stand — so when nothing classifies, say BOTH remedies
+// and hand back the engine's own text, never one half of the answer picked at random.
+const MANIFEST_REMEDY = 'in the manifest (\`planMeta\` / \`signals\`, after the read-only stand check / \`placement\`, or the structure/coverage inputs named)'
+const GATE_REMEDY = 'a BLOCKED gate is fixed in the stand or the input schemas, NOT the manifest — resolve what its reasons name'
+export function planGapNext(planGaps, tail = 'then re-run this build') {
+  const list = (planGaps || []).map(String).filter((s) => s.trim())
+  const kinds = planGapKinds(list)
+  const replan = `Then re-run \`--plan --out\`, get the NEW plan version approved, ${tail}`
+  if (!kinds.length)
+    return `${list.length} PLAN-level gap(s) this script could not classify — act on the engine's own text: ${list.join(' · ')} (a BLOCKED correctness gate is fixed in the stand or the input schemas; anything else ${MANIFEST_REMEDY}). ${replan}`
+  const parts = []
+  const gated = kinds.includes('gate BLOCKED')
+  if (gated) parts.push(GATE_REMEDY)
+  // `the rest` only when a gate clause precedes it: on a plan-completeness-only stop there is no "rest", and the
+  // phrase read as a reference to something the operator had not been told.
+  if (kinds.some((k) => k !== 'gate BLOCKED')) parts.push(`${gated ? 'the rest are' : 'answered'} ${MANIFEST_REMEDY}`)
+  return `${kinds.join(' · ')} — ${parts.join('; ')}. ${replan}`
+}
 // THE THREE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode
 // THROWS instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the
 // failure the mode exists to prevent — the operator asked to be stopped and would not have been.

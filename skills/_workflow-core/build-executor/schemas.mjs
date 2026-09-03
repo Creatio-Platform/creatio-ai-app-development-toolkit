@@ -233,8 +233,9 @@ export const RECONCILE_SCHEMA = {
     // `complete`, which folds in unfiled evidence a builder cannot clear.
     verify: { type: 'object' },
     exitCode: { type: 'integer' },
-    // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
-    // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
+    // D12 — the PLAN-level legs of exit 2: `--units.planGaps` copied VERBATIM (ENG-95857), all FOUR checks the
+    // engine performs. A machine verdict, NOT a set an agent assembled from stderr lines it retyped. Empty means
+    // the only problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
     planGaps: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
     continuationOf: { type: 'object', additionalProperties: { type: 'integer' } },
@@ -301,7 +302,7 @@ export const RECONCILE_SHAPE = {
   verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', planGaps: 'string[]' },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer' },
     map: { pages: { required: ['complete', 'buildComplete'],
       types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
 }

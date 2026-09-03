@@ -419,10 +419,18 @@ Details of the record shapes, the ids and the judge tri-state:
   track; asked once, with five named units and what each is missing, a caller can answer. A park is
   written to the queue file and **read back at the head of the next run**: a park is terminal, and a
   resumed run must not spend a stand-writing round on a unit its predecessor already gave up on.
-- A **plan-level** exit 2 (`GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE`)
-  **stops the run** — no repair round closes a plan gap, and re-running buys a guaranteed identical
-  answer. Only `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is repairable. (`⛔ PLAN INCOMPLETE`
-  is a `--plan`-mode line only; it cannot appear on a `--verify` run.)
+- A **plan-level gap** — all FOUR kinds: `gate BLOCKED` / `structure INCOMPLETE` /
+  `coverage INCOMPLETE` / `plan INCOMPLETE` (plan completeness: unfilled `planMeta`, unresolved
+  on-stand `signals`, unsettled `placement`) — **stops the run** before the first stand write. It is
+  read from the published `--units.planGaps` array, NOT from an exit code: the first three also exit 2
+  in every mode, while plan completeness exits 2 in `--plan` mode only and reaches this run purely as
+  a published gap. No
+  repair round closes a plan gap, and re-running buys a guaranteed identical answer. Only
+  `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is repairable. The stop names WHICH kind fired,
+  because the remedy differs: `GATE BLOCKED` is fixed in the stand or the input schemas, the other
+  three in the manifest. The set is `--units.planGaps` copied verbatim (ENG-95857) — the engine's
+  own machine-readable verdict, never stderr text an agent retyped, and never the narrower
+  `planGaps` in the `--verify` files, which are the BUILD verdict.
 - A **plan assertion untrue of the STAND**, caught at the BASELINE Reconcile **before the first build unit** and
   **re-applied at every in-run Reconcile** (via the shared acceptance path, `acceptReconciled`): a named component
   type that does not resolve on the target stand (Reconcile's read-only `get-component-info` sweep →

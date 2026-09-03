@@ -263,9 +263,14 @@ Read this file — never the table — for anything you compute on: which units 
 rounds are left, what a repair round is handed. The table has no per-page counts at all, and the
 `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages; `pages` here lists every one. Each
 `openRows` entry is the row exactly as the engine wrote it, so a repair prompt quotes it rather
-than restating it. `planGaps` is the plan-versus-build split (`03-failure-and-park-policy.md`),
-already classified, and it is independent of `complete`: a run with nothing left to build still
-stops when that array is non-empty.
+than restating it.
+
+`planGaps` in THIS file is the plan-versus-build split (`03-failure-and-park-policy.md`) as the
+BUILD verdict sees it, and it is deliberately narrower than the run's: a `--verify` run legitimately
+happens over a manifest with no `planMeta`, so plan COMPLETENESS is not reported here. **The set the
+run stops on is `--units.planGaps`** (ENG-95857) — all four plan-level kinds, machine-readable, read
+before the first stand write. Either way the array is independent of `complete`: a run with nothing
+left to build still stops when it is non-empty.
 
 The `Business rules × N` row appears in `openRows` like any other gated row — e.g.
 `{ "deliverable": "Business rules × 11", "status": "⚠ verify", "evidence": "business rules NOT checkable — this page entry carries no businessRules slot; run read-page-business-rules …", "outcome": "unverified" }`

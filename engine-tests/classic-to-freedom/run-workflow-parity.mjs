@@ -292,7 +292,11 @@ function buildScenarios() {
     { name: "no approval recorded — hard stop 1", args: ARGS, answer: host({ reconciles: [RECONCILE({ approval: { found: false } })] }) },
     { name: "approval names no version — hard stop 1", args: ARGS, answer: host({ reconciles: [RECONCILE({ approval: { found: true, version: "" } })] }) },
     { name: "approval version mismatch — hard stop 1", args: ARGS, answer: host({ reconciles: [RECONCILE({ approval: { ...APPROVED, version: "plan-old" } })] }) },
-    { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["COVERAGE INCOMPLETE"] })] }) },
+    // The gap strings are the engine's OWN published forms (`planGaps()` in designspec.mjs), not the uppercase
+    // stderr headlines: `planGapNext` classifies the KIND out of these, and a fixture in the wrong vocabulary meant
+    // the only blocked-gate scenario in this file silently took the MANIFEST remedy branch and nothing tested the
+    // stand one. Both sides share the fixture, so parity passed either way — the bug was invisible here by design.
+    { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["coverage INCOMPLETE (4 unaccounted member(s))"] })] }) },
     { name: "package state unknown — hard stop 3", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "unknown" })] }) },
     { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "not a component type" }] })] }) },
     { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "install CrtCustomer360App" }] })] }) },
@@ -328,7 +332,7 @@ function buildScenarios() {
     { name: "a park already in the queue file is carried over", args: ARGS, answer: host({ reconciles: [RECONCILE({ parkedUnits: [{ key: "child:Documents", parkedWhy: "gave up last session", rounds: 3 }] }), GREEN] }) },
     { name: "the app unit builds the package the plan targets", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), GREEN], build: (unit) => (unit === "app" ? { unit: "app", packageName: "DealPkg", appName: "Deals", starterFormPage: "DealFormPage", starterListPage: "DealListPage", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
     { name: "the app unit produces a DIFFERENT package — it stays open", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), RECONCILE({ packageState: "absent" })], build: (unit) => (unit === "app" ? { unit: "app", packageName: "OtherPkg", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
-    { name: "a plan gap that appears mid-run stops the run", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ planGaps: ["GATE BLOCKED"] })] }) },
+    { name: "a plan gap that appears mid-run stops the run", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ planGaps: ["gate BLOCKED (1 correctness signal(s))"] })] }) },
     { name: "a guidelines record that is not fileable is reported, not filed", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], build: (unit) => ({ ...BUILT(unit), guidelines: { evidenceId: `${unit}#quality-gates`, ran: true, referencePage: "", componentsDiffed: [] } }) }) },
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },
