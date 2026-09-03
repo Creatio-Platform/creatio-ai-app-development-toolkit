@@ -769,6 +769,16 @@ function signalUnresolved(k, signals) {
 //   { corrected }   the manifest's code would have produced a DIFFERENT package than this one
 //   { mismatch }    `prefix + code` cannot equal `targetPackage` at all — the target package name does not start
 //                   with the stand's prefix, so no `create-app` code can produce it (a decision, not a derivation)
+// The code stem `create-app` must be given so the package comes out as `target`: the target package minus the
+// stand's prefix. Own function, not a ternary chain: three cases, and the empty-prefix one is easy to misread.
+// With prefix `""` every string "starts with" it and `slice(0)` is a no-op — the correct behaviour anyway, since a
+// stand that prefixes nothing leaves the code as the package. No target recorded ⇒ nothing to derive FROM, so the
+// supplied code stands and the caller reports the package it makes.
+function appCodeStem(target, prefix, supplied) {
+  if (!target) return supplied || "";
+  if (prefix && target.startsWith(prefix)) return target.slice(prefix.length);
+  return target;
+}
 // The one host mode that MINTS an app, named so the two comparisons below cannot drift apart.
 const HOST_NEW_APP = "new-app";
 export function deriveApplicationCode(manifest, signals = {}) {
@@ -786,8 +796,7 @@ export function deriveApplicationCode(manifest, signals = {}) {
   // No target package recorded → nothing to derive FROM; keep the supplied code and report the package it makes.
   // `startsWith` on a non-empty prefix only: with prefix `""` every string "starts with" it and slice(0) is a no-op,
   // which is the correct behaviour anyway (a stand that prefixes nothing leaves the code as the package).
-  const stem = target ? (prefix && target.startsWith(prefix) ? target.slice(prefix.length) : target) : (supplied || "");
-  const code = stem || null;
+  const code = appCodeStem(target, prefix, supplied) || null;
   const pkg = code == null ? null : prefix + code;
   return { code, prefix, pkg, supplied, mints: true,
     corrected: !!(code && supplied && supplied !== code),

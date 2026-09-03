@@ -485,11 +485,10 @@ function answeredListColumnLine(section, resolutions) {
   const line = listColumnLine(section);
   const r = matchResolution(resolutions, { kind: "list-columns", item: listColumnsAnsweredItem(section) });
   if (!r) return line;
-  const who = [r.decidedBy, r.date].filter(Boolean).map(esc).join(", ");
   // Strip the leading `- **List columns:** ` so the answer takes its place; whatever the line said becomes the
   // parenthetical. The prefix is this module's own literal, so the slice is safe.
   const asked = line.replace(/^- \*\*List columns:\*\* /, "");
-  return `- **List columns:** **✅ answered:** ${esc(r.answer)}${who ? ` _(${who})_` : ""} — supersedes the engine's unresolved reading (${asked})`;
+  return `- **List columns:** ${answeredText(r)} — supersedes the engine's unresolved reading (${asked})`;
 }
 function listColumnsAnsweredItem(section) {
   if (section?.listColumnSource === "entity-default") return "fallback list column set";
@@ -802,8 +801,14 @@ const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget",
 function resolutionSuffix(resolutions, kind, item) {
   const r = matchResolution(resolutions, { kind, item });
   if (!r) return "";
+  return ` · ${answeredText(r)}`;
+}
+// `**✅ answered:** <answer> _(who, when)_` — ONE renderer, so the ⚠ rows and the list-column line cannot drift into
+// two spellings of the same fact (they did: `✅ **answered:**` vs `**✅ answered:**`, and a test had to pick one).
+function answeredText(r) {
   const who = [r.decidedBy, r.date].filter(Boolean).map(esc).join(", ");
-  return ` · **✅ answered:** ${esc(r.answer)}${who ? ` _(${who})_` : ""}`;
+  const attribution = who ? ` _(${who})_` : "";
+  return `**✅ answered:** ${esc(r.answer)}${attribution}`;
 }
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
@@ -1749,6 +1754,15 @@ function renderMiniPageMapping(result) {
 // is stated rather than applied silently, and a target package the prefix cannot produce is a ⚠ decision, because
 // no `create-app` code reaches it. Empty when the run records no app at all (a mini/child fold, `pages-only-no-menu`
 // with no app, or a plan whose placement was never recorded).
+// The `schemaNamePrefix` signal's line. Its own function (not a ternary inside the push): three genuinely different
+// states, and the unresolved one carries the query to run — a ternary chain here read as one unreadable expression.
+function schemaPrefixLine(sig) {
+  if (sig?.resolved !== true || typeof sig.value !== "string")
+    return "- **Schema name prefix:** ⚠ not resolved — read it on-stand (`query-sys-settings` code `SchemaNamePrefix`, or `odata-read SysSettings`) and record `signals.schemaNamePrefix = { resolved: true, value: \"<prefix>\" }`. Until then the app code below cannot be checked against the target package, and the build-time identifiers gate is the only thing left to catch a double prefix";
+  if (sig.value === "")
+    return "- **Schema name prefix:** none (checked on-stand → a code is used verbatim as the schema/package name)";
+  return `- **Schema name prefix:** \`${esc(sig.value)}\` (checked on-stand) — the stand PREPENDS it to every code \`create-app\`/\`create-page\` is given, so a code that already carries it produces a DOUBLE prefix`;
+}
 function renderIdentifiers(opts) {
   const a = opts.appCode;
   if (!a || (!a.code && !a.supplied)) return [];
@@ -1879,14 +1893,9 @@ export function renderPlan(result, opts = {}) {
   };
   // ENG-96457 (item 3) — the prefix is an on-stand signal like the four above (a value that lives on the stand and
   // appears in no schema body), but it carries a STRING rather than present/absent, so it gets its own line shape.
-  const prefixSig = signals.schemaNamePrefix;
-  const prefixLine = prefixSig?.resolved !== true || typeof prefixSig.value !== "string"
-    ? "- **Schema name prefix:** ⚠ not resolved — read it on-stand (`query-sys-settings` code `SchemaNamePrefix`, or `odata-read SysSettings`) and record `signals.schemaNamePrefix = { resolved: true, value: \"<prefix>\" }`. Until then the app code below cannot be checked against the target package, and the build-time identifiers gate is the only thing left to catch a double prefix"
-    : (prefixSig.value === ""
-      ? "- **Schema name prefix:** none (checked on-stand → a code is used verbatim as the schema/package name)"
-      : `- **Schema name prefix:** \`${esc(prefixSig.value)}\` (checked on-stand) — the stand PREPENDS it to every code \`create-app\`/\`create-page\` is given, so a code that already carries it produces a DOUBLE prefix`);
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"), prefixLine, "");
-  P.push(...renderIdentifiers(opts));
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"),
+    sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"),
+    schemaPrefixLine(signals.schemaNamePrefix), "", ...renderIdentifiers(opts));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -1961,6 +1970,23 @@ function buildLayoutGroupRows(cs, regionOf) {
     return { label: `${k} — ${parts.join(" · ")}` };
   });
 }
+// ENG-96457 (item 2) — AN ELEMENT THE CHOSEN TEMPLATE DOES NOT SHIP IS A DELIVERABLE, NOT CONTEXT. While the plan
+// called Feed "template context" it carried no expected count of its own, so `--verify` could not miss it and the
+// page's `Tabs — 1 expected` criterion actively argued against adding it. Every base-declared element the MEASURED
+// capability table says the template lacks gets its own count and its own `crt.*` gate here. Only the measured
+// `absent` verdict gates: `unconfirmed` stays a ⚠ in the Layout table, because a count no one has measured is not a
+// criterion. Own function so `buildCoverageRows` stays under Sonar CC 15.
+function templateAbsentRows(cs, opts) {
+  const rows = [];
+  for (const w of cs.widgets || []) {
+    if (templateVerdict(opts, w.capability) !== TPL.ABSENT) continue;
+    const ctype = featureVerifyType(CAPABILITY_FEATURE[w.capability] || "");
+    if (!ctype) continue;
+    rows.push({ label: `${esc(w.widget)} — 1 expected (\`${ctype}\`) — the chosen template ships none, so it is built explicitly`,
+      vk: { type: "element", ctype, n: 1 } });
+  }
+  return rows;
+}
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
 function buildCoverageRows(cs, pm, result, opts = {}) {
@@ -2006,19 +2032,7 @@ function buildCoverageRows(cs, pm, result, opts = {}) {
   for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
     cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
       vk: { type: "element", ctype, n: e.n } });
-  // ENG-96457 (item 2) — AN ELEMENT THE CHOSEN TEMPLATE DOES NOT SHIP IS A DELIVERABLE, NOT CONTEXT. While the plan
-  // called Feed "template context" it carried no expected count of its own, so `--verify` could not miss it and the
-  // page's `Tabs — 1 expected` criterion actively argued against adding it. Every base-declared element the
-  // MEASURED capability table says the template lacks now gets its own count and its own `crt.*` gate. Only the
-  // measured `absent` verdict gates: `unconfirmed` stays a ⚠ in the Layout table, because a count no one has
-  // measured is not a criterion.
-  for (const w of cs.widgets || []) {
-    if (templateVerdict(opts, w.capability) !== TPL.ABSENT) continue;
-    const ctype = featureVerifyType(CAPABILITY_FEATURE[w.capability] || "");
-    if (!ctype) continue;
-    cover.push({ label: `${esc(w.widget)} — 1 expected (\`${ctype}\`) — the chosen template ships none, so it is built explicitly`,
-      vk: { type: "element", ctype, n: 1 } });
-  }
+  cover.push(...templateAbsentRows(cs, opts));
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND

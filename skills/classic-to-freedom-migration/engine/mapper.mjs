@@ -662,6 +662,17 @@ function createContainers(ctx) {
 // two controls bound to the same classic method still get their own request (the classic method is a shared
 // handler; the request is the element's own entry point).
 const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
+// The Header block's SHAPE, as the two fields the plan reads off it. `headerLayout: "wide"` says the Classic page
+// carries a populated Header (fields in the header, not just the title) → the Freedom target should be the top-area
+// template, so the header elements land in `TopAreaProfileContainer` instead of the narrow left profile.
+// `headerColumns` (ENG-96457, item 2) says HOW MANY columns it has, which is what makes the recommendation
+// checkable: `PageWithTopAreaAndTabsFreedomTemplate` has a ONE-column top area, so recommending it for a 2-column
+// Classic Header (measured on the ENG-96445 page) silently promises a layout the template cannot render.
+// One pure function rather than two ternaries inside `mapFields` — it keeps that function under Sonar CC 15 and
+// makes the two fields impossible to set inconsistently.
+const headerShape = (columnCount) => (columnCount > 1
+  ? { headerLayout: "wide", headerColumns: columnCount }
+  : { headerLayout: null, headerColumns: null });
 
 function mapFields(ctx, containers) {
   const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
@@ -1121,12 +1132,7 @@ function mapFields(ctx, containers) {
     // ENG-95543 — tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
-    headerLayout: headerIsWide ? "wide" : null,
-    // ENG-96457 (item 2) — HOW MANY columns that Header block has. The template recommendation is only sound if the
-    // recommended template's top area has at least this many: `PageWithTopAreaAndTabsFreedomTemplate` has ONE, so
-    // recommending it for a 2-column Classic Header (measured on the ENG-96445 page) silently promises a layout the
-    // template cannot render. `null` when the header is not a wide block.
-    headerColumns: headerIsWide ? headerCols.size : null };
+    ...headerShape(headerCols.size) };
 }
 
 // details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
