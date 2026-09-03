@@ -610,7 +610,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   for (const rel of inlined) {
     const src = readFileSync(path.join(coreDir, rel), "utf8");
     for (const m of src.matchAll(declRe)) {
-      if (!new RegExp(`(?:^|[^\\w$])${m[1]}\\b`).test(generated)) missing.push(`${rel}:${m[1]}`);
+      if (!new RegExp(String.raw`(?:^|[^\w$])${m[1]}\b`).test(generated)) missing.push(`${rel}:${m[1]}`);
     }
   }
   check("build-workflows: every top-level export declared by a core module survives into the generated workflow — the inline transform is lossless, not merely self-consistent",

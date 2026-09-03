@@ -67,7 +67,10 @@ const isImportStart = (line) => /^import\s/.test(line)
 // arbitrary span of the module vanished from the generated artifact with no error - and `--check`
 // could not catch it, because it compares two outputs of the same broken transform.
 const endsImport = (line) => {
-  const trimmed = line.trim().replace(/\s*(?:\/\/.*)?$/, '').replace(/;$/, '')
+  // Two linear passes rather than one `/\s*(?:\/\/.*)?$/`: an optional group sitting next to
+  // `\s*$` makes the engine retry every split of the trailing run of whitespace, which is
+  // super-linear on a long line for no gain here.
+  const trimmed = line.replace(/\/\/.*$/, '').trim().replace(/;$/, '').trim()
   return /from\s+(['"])[^'"]+\1$/.test(trimmed) || /^\}\s+from\s+(['"])[^'"]+\1$/.test(trimmed)
 }
 // A re-export has nothing to inline. Stripping `export ` off one left a bare `{ a, b }` — a block of expression
@@ -79,6 +82,30 @@ function isReExport(line) {
   return trimmed.endsWith('}') || /\}\s*from\s+'[^']+'$/.test(trimmed)
 }
 
+// Is this a top-level declaration? Reaching one mid-import means endsImport failed to recognise
+// the specifier form.
+const isTopLevelDeclaration = (line) =>
+  /^(?:export\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s/.test(line)
+
+// One line of a multi-line import span. Returns true when the import terminated here, false when
+// it continues. Split out of inlineOne so that loop stays a flat dispatch over line kinds.
+function consumeImportLine(rel, lines, importStartLine, i) {
+  const line = lines[i]
+  if (endsImport(line)) return true
+  // A multi-line import that runs into a top-level declaration means endsImport did not
+  // recognise its specifier. Fail CLOSED here: consuming to EOF would delete the rest of the
+  // module from a generated, Sonar-excluded, un-line-reviewed artifact - the worst failure
+  // mode available to this tool.
+  if (isTopLevelDeclaration(line)) {
+    throw new Error(
+      `${rel}: unterminated import starting at line ${importStartLine + 1} ` +
+        `(${lines[importStartLine].trim()}) - reached a top-level declaration at line ${i + 1}. ` +
+        'endsImport does not recognise that specifier form; fix the pattern rather than the source.',
+    )
+  }
+  return false
+}
+
 function inlineOne(rel) {
   const src = readFileSync(path.join(CORE, rel), 'utf8')
   const out = []
@@ -87,21 +114,7 @@ function inlineOne(rel) {
   const lines = src.split('\n')
   for (const [i, line] of lines.entries()) {
     if (skipping) {
-      if (endsImport(line)) {
-        skipping = false
-        continue
-      }
-      // A multi-line import that runs into a top-level declaration means endsImport did not
-      // recognise its specifier. Fail CLOSED here: consuming to EOF would delete the rest of the
-      // module from a generated, Sonar-excluded, un-line-reviewed artifact - the worst failure
-      // mode available to this tool.
-      if (/^(?:export\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s/.test(line)) {
-        throw new Error(
-          `${rel}: unterminated import starting at line ${importStartLine + 1} ` +
-            `(${lines[importStartLine].trim()}) - reached a top-level declaration at line ${i + 1}. ` +
-            'endsImport does not recognise that specifier form; fix the pattern rather than the source.',
-        )
-      }
+      skipping = !consumeImportLine(rel, lines, importStartLine, i)
       continue
     }
     if (isImportStart(line)) {

@@ -460,35 +460,65 @@ def _matching_brace(text: str, opening: int) -> int:
     line-initial ``name:`` anywhere in the file wins" hole this function exists to close.
     """
     depth = 0
-    quote = ""
     index = opening
     while index < len(text):
+        skipped = _skip_noncode(text, index)
+        if skipped < 0:
+            return -1
+        if skipped != index:
+            index = skipped
+            continue
         char = text[index]
-        if quote:
-            if char == "\\":
-                index += 2
-                continue
-            if char == quote:
-                quote = ""
-        elif char == "/" and text.startswith("//", index):
-            newline = text.find("\n", index)
-            if newline < 0:
-                return -1
-            index = newline
-        elif char == "/" and text.startswith("/*", index):
-            closer = text.find("*/", index + 2)
-            if closer < 0:
-                return -1
-            index = closer + 1
-        elif char in "'\"`":
-            quote = char
-        elif char == "{":
+        if char == "{":
             depth += 1
         elif char == "}":
             depth -= 1
             if depth == 0:
                 return index
         index += 1
+    return -1
+
+
+def _skip_noncode(text: str, index: int) -> int:
+    """Index just past the comment or string literal starting at ``index``.
+
+    Returns ``index`` unchanged when nothing non-code starts there, and -1 when what starts there
+    is unterminated. Splitting the two skips out of the brace scan keeps that scan a flat walk
+    over code characters instead of a state machine that carries a quote character across
+    iterations.
+    """
+    if text.startswith(("//", "/*"), index):
+        return _skip_comment(text, index)
+    if text[index] in "'\"`":
+        return _skip_string(text, index)
+    return index
+
+
+def _skip_comment(text: str, index: int) -> int:
+    """Index just past the comment starting at ``index``, or -1 when it is unterminated."""
+    if text.startswith("//", index):
+        newline = text.find("\n", index)
+        return newline + 1 if newline >= 0 else -1
+    closer = text.find("*/", index + 2)
+    return closer + 2 if closer >= 0 else -1
+
+
+def _skip_string(text: str, index: int) -> int:
+    """Index just past the literal opened at ``index``, or -1 when it is unterminated.
+
+    A backslash consumes the next character whatever it is, so an escaped quote does not close
+    the literal.
+    """
+    quote = text[index]
+    index += 1
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        index += 1
+        if char == quote:
+            return index
     return -1
 
 

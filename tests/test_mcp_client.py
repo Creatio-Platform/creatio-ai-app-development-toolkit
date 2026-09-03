@@ -181,13 +181,14 @@ class McpClientTests(unittest.TestCase):
         self.assertEqual(parsed["timeout"], 30)
 
     def test_parse_cli_request_accepts_args_file_mode(self):
-        temp_path = ROOT / ".tmp-tests" / "mcp-client-args.json"
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
-        try:
+        # The fixture goes under TOOL_TREE_ROOT, one of the two bases load_cli_arguments accepts.
+        # The repository root itself is not a base: on a Windows CI runner the checkout sits on
+        # `D:\a\...` while the profile is on `C:`, so a fixture at the repo root is under neither
+        # the home store nor the tool tree and the resolution is refused.
+        with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
+            temp_path = Path(temp) / "mcp-client-args.json"
+            temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
             parsed = parse_cli_request(["list-apps", "--args-file", str(temp_path), "--timeout", "45"])
-        finally:
-            temp_path.unlink(missing_ok=True)
         self.assertEqual(parsed["tool_name"], "list-apps")
         self.assertEqual(parsed["arguments"], {"environment-name": "local"})
         self.assertEqual(parsed["timeout"], 45)
