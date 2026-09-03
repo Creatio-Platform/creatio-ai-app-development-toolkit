@@ -1801,8 +1801,9 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
 // which is the exact failure mode the fixed-literal rule exists to prevent. The pattern stays module-local — no
 // caller needs it, and `.test()` on a non-global regex keeps no state between calls.
 const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-// PR #128 review (round 8) — Creatio's `DataValueType.LOOKUP`. The scan below reads it to tell a lookup-record
-// reference from a GUID-shaped string that merely happens to sit in a comparison.
+// Creatio's `DataValueType.LOOKUP`. The scan below reads it to tell a lookup-record reference from a GUID-shaped
+// string that merely happens to sit in a comparison — an external key or a correlation id in a TEXT column is
+// GUID-shaped and is NOT a lookup, so the type is what separates them.
 const DVT_LOOKUP = 10;
 // EVERY OBJECT NODE in a mapped rule tree. The scoping that matters is NOT this walk -- it is that the test below
 // reads `node.value` and its sibling `node.dataValueType`, instead of the old

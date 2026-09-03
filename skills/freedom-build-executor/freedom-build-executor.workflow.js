@@ -1618,6 +1618,14 @@ function checkRowsByPair(checks) {
 }
 const RULE_SHAPED_KINDS = new Set(['lookup-value', 'rule', 'visibility-rule'])
 const isRuleShapedKind = (kind) => RULE_SHAPED_KINDS.has(String(kind))
+
+const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
+function upsertResolutionDiscrepancy(rows, row) {
+  const at = (rows || []).findIndex((d) => d.kind === RESOLUTION_NOT_APPLIED
+    && idKey(d.unit) === idKey(row.unit) && idKey(d.id) === idKey(row.id))
+  if (at < 0) return [...(rows || []), row]
+  return (rows || []).map((d, i) => (i === at ? row : d))
+}
 function releasedResolutionPairs(checks) {
   const out = new Map()
   for (const c of checkRowsByPair(checks).values()) {
@@ -3452,13 +3460,9 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
       log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
       const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
-      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+      const notApplied = { round, unit: c.unit, id: c.id, kind: RESOLUTION_NOT_APPLIED,
         claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
-      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-      discrepancies = seenAt >= 0
-        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-        : [...discrepancies, notApplied]
+      discrepancies = upsertResolutionDiscrepancy(discrepancies, notApplied)
       if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
         unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
       }

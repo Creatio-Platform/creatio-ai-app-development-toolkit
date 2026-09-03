@@ -1810,6 +1810,34 @@ const RULE_SHAPED_KINDS = new Set(['lookup-value', 'rule', 'visibility-rule'])
 // Exposed as a PREDICATE rather than the Set: the offline slice suite exports the block's helpers as functions, and a
 // bare Set is data the reconcile would then have to be trusted to read the same way twice.
 export const isRuleShapedKind = (kind) => RULE_SHAPED_KINDS.has(String(kind))
+
+// The `kind` a refuted-answer discrepancy row carries. A constant so the row, the dedup and any reader match on ONE
+// literal — the same rule `RESOLUTIONS_BLOCKED_WHAT` already follows for `blockedItems`.
+export const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
+// ONE ROW PER REFUTED ANSWER, KEYED ON `(unit, id)` (PR #128 review, round 21, Major 1).
+// The dedup this replaces compared the RENDERED `claim` string, and `claim` embeds `capCarryText(c.how)` — the
+// builder's own free-form prose about what it built. So it deduped only when the builder re-worded nothing: the
+// same `(unit, id)` refuted again with different wording missed the existing row and APPENDED a second one. The
+// comment above the old site claimed "DEDUPED ON `(unit, id, kind)`" while the predicate never compared `id` at
+// all; it compared a string that merely CONTAINED it.
+// Why that is worse than untidy: `discrepancies` is re-seeded from the persisted queue file, nothing prunes it
+// (retention is deliberate), and every close prompt renders it whole via `j(carry.discrepancies)` against
+// `RECONCILE_ANSWER_MAX_BYTES`. A stubborn answer — re-claimed and re-refuted each round, as a builder that keeps
+// trying different wording does — added ~900 bytes per round until Reconcile, the run's FIRST agent, could not
+// start at all. That is a harder failure than the diagnostic this row exists to carry.
+// `id` is now a FIELD on the row rather than only text inside `claim`, and it is the identity. The discrepancy's
+// own `kind` slot is already taken by `RESOLUTION_NOT_APPLIED`, and the ANSWER's kind adds nothing to the identity
+// (it is a function of the id) — it already travels on the `unconsumed` row for the same pair.
+// `idKey` ON BOTH SIDES, like every id comparison in this file: `d.unit`/`d.id` come off an agent-transcribed queue
+// file on a resume, so a padded field must not silently start a second row.
+// Rows this site did not create are untouched: a verifier-appended discrepancy carries no `id`, so `idKey(d.id)`
+// cannot equal a real one, and the `kind` guard excludes it first regardless.
+export function upsertResolutionDiscrepancy(rows, row) {
+  const at = (rows || []).findIndex((d) => d.kind === RESOLUTION_NOT_APPLIED
+    && idKey(d.unit) === idKey(row.unit) && idKey(d.id) === idKey(row.id))
+  if (at < 0) return [...(rows || []), row]
+  return (rows || []).map((d, i) => (i === at ? row : d))
+}
 // WHICH PAIRS THIS ROUND'S VERIFIER RELEASED, and on what strength. A Map rather than a Set because the STRENGTH
 // decides what may be released: `reconcileUnconsumed` treats a positive read as outranking any source, and a
 // reasoned `unknown` as the narrow rule-shaped escape only.

@@ -38,7 +38,7 @@ import {
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planInvalidNextAll,
   preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
-  resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
+  RESOLUTION_NOT_APPLIED, resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
   // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
@@ -50,7 +50,7 @@ import {
   tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause,
   unnamedRuleSurfaceChecks, unnamedRuleSurfaceLogLine, unsettledResolutionClaims,
   verifierSchemaWithChecks,
-  unconsumedResolutions,
+  unconsumedResolutions, upsertResolutionDiscrepancy,
   UNCONSUMED_CARRY_WARN,
 } from './helpers.mjs'
 import {
@@ -2617,24 +2617,22 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
       // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
       // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
-      // DEDUPED ON `(unit, id, kind)` (PR #128 review, round 19). `discrepancies` is re-seeded from the queue file
-      // and rendered into EVERY close prompt via `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention
-      // is deliberate (`helpers.mjs`: the historical row the `no` filed stays regardless). So a refutation repeated
-      // across rounds and across resumes appended a fresh ~900-byte row every time, all of them counted against
-      // `RECONCILE_ANSWER_MAX_BYTES`. Same fix, same reason, as the `blockedItems` `(unit, what)` dedup above: keep
-      // ONE row per refuted answer and REFRESH it in place, so the operator reads the CURRENT `found` rather than a
-      // stale round-1 one. The per-round history of a repeated refutation is already in the round logs and in
-      // `unconsumedResolutions`; what is lost here is presentational.
-      // `how` clause first, then a single-level claim string (S4624). Byte-identical to what it replaced, which
-      // matters here beyond tidiness: `claim` is the DEDUP KEY two lines down, so any drift in it re-appends.
+      // ONE ROW PER REFUTED ANSWER, keyed on `(unit, id)` (round 19 intent, corrected in round 21 Major 1).
+      // `discrepancies` is re-seeded from the queue file and rendered into EVERY close prompt via
+      // `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention is deliberate (`helpers.mjs`: the
+      // historical row the `no` filed stays regardless). So a refutation repeated across rounds and across resumes
+      // appended a fresh ~900-byte row every time, all of them counted against `RECONCILE_ANSWER_MAX_BYTES`.
+      // ROUND 19 CLAIMED THIS FIX AND DID NOT MAKE IT: the predicate compared the rendered `claim`, which embeds
+      // `capCarryText(c.how)` -- the builder's own free-form prose -- so it deduped only while the builder re-worded
+      // nothing, and `id` was never compared at all. The identity is a FIELD on the row now and the keying lives in
+      // `upsertResolutionDiscrepancy`, which is pure and executed by the offline suite rather than pinned by regex.
+      // `claim`/`found` stay refreshed DATA, so the operator reads the CURRENT wording, not a stale round-1 one.
+      // The per-round history of a repeated refutation is already in the round logs and in `unconsumedResolutions`;
+      // what is lost here is presentational.
       const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
-      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+      const notApplied = { round, unit: c.unit, id: c.id, kind: RESOLUTION_NOT_APPLIED,
         claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
-      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-      discrepancies = seenAt >= 0
-        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-        : [...discrepancies, notApplied]
+      discrepancies = upsertResolutionDiscrepancy(discrepancies, notApplied)
       if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
         // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
         // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very

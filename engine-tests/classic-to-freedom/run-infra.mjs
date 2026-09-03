@@ -185,6 +185,7 @@ const H_ANSWERS_CHANNEL = ["resolutionAccountingMiss", "unconsumedResolutions",
   "grantPairsToPersist", "seedGrantPairs",
   "resolutionClaimRows", "resolutionClaimsLine", "resolutionContradictions",
   "checkRowsByPair", "isRuleShapedKind", "verifierSchemaWithChecks", "resolutionClaimCount",
+  "upsertResolutionDiscrepancy",
   "namesRuleSurface", "tallyResolutionChecks", "unsettledResolutionClaims",
   "unnamedRuleSurfaceChecks", "unnamedRuleSurfaceLogLine"];
 // The in-context gate: what a unit says about itself, and whether it may continue rather than park.
@@ -225,7 +226,8 @@ check("PR #128 review (round 16): the grouped helper surface has no name in two 
 // echoes `shows` back and the clear keys on `source` exactly, so a copy re-typed here could drift from the run's.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS", "RESOLUTIONS_RETURN",
   "CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED", "UNCONSUMED_CARRY_WARN",
-  "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH"];
+  "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH",
+  "RESOLUTION_NOT_APPLIED"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
@@ -2681,7 +2683,11 @@ check("ENG-95503 wiring: the two re-open channels stay SEPARATE at the source �
 check("ENG-95503 wiring: the VERIFIER is asked for `resolutionChecks` and the round tail compares them against the claims — a builder's `applied: true` is its own word until the agent that did not build the page looks at it",
   /resolutionChecks: \{[\s\S]{0,400}?required: \['unit', 'id', 'shows'\]/.test(wfSrc)
     && /resolutionContradictions\(claims, lastVerifier\?\.resolutionChecks\)/.test(wfSrc)
-    && /kind: 'resolution-not-applied'/.test(wfSrc));
+    // ROUND 21 (Major 1): the row's `kind` is the SHARED constant now, not a re-typed literal — the dedup, the row
+    // and any reader must match on one string. Both halves are pinned, so moving the value without moving the
+    // definition (or re-typing the literal back at the row) reddens this.
+    && /kind: RESOLUTION_NOT_APPLIED/.test(wfSrc)
+    && /RESOLUTION_NOT_APPLIED = 'resolution-not-applied'/.test(wfSrc));
 // PR #128 review (RC-6a) — THE TWO LINES THAT TURN A CONTRADICTION INTO A GATE. The pin above asserts only that
 // `resolutionContradictions` is CALLED. Delete the `unconsumed` append and the re-open beside it and the entire
 // suite stayed green: the helper's own unit tests still passed, the `resolution-not-applied` discrepancy still
@@ -3505,6 +3511,65 @@ check("PR #128 review (round 7, G6): the one-round terminus is pinned on the SHI
     && /if \(c\.shows === SHOWS_YES\) out\.set\(pairKey\(c\.unit, c\.id\), SHOWS_YES\)[\s\S]{0,40}else if \(reasonedUnknown\) out\.set\(pairKey\(c\.unit, c\.id\), SHOWS_UNKNOWN\)/.test(wfSrc)
     && /if \(strength === SHOWS_YES\) return false/.test(wfSrc)
     && /if \(strength === SHOWS_UNKNOWN && u\.source === UNCONSUMED_FROM_VERIFIER[\s\S]{0,40}&& isRuleShapedKind\(u\.kind\)\) return false/.test(wfSrc));
+
+/* PR #128 REVIEW (ROUND 21) — TWO EXECUTED CHECKS FOR THE TWO FINDINGS THAT HAD ONLY SOURCE PINS.
+   Major 1: the refuted-answer dedup keyed on the RENDERED `claim`, which embeds the builder's free-form `how`, so
+   the same `(unit, id)` refuted again with different wording appended a second ~900-byte row instead of refreshing
+   the first. Round 19's comment claimed `(unit, id, kind)` while the predicate never compared `id` at all. Executed
+   on the extracted `upsertResolutionDiscrepancy` — the regex pin that stood here could not have caught it, because
+   the string it matched was still present and still correct.
+   Minor: the dispatch-vs-verifier release exclusion was exercised with a HAND-BUILT `source` literal, so a wiring
+   regression that stopped tagging dispatch rows would not have been caught. The check below composes the REAL
+   producer (`unconsumedResolutions`, which is what sets `source`) into the reconcile, so the tag is proven at the
+   seam rather than assumed. */
+const R21_UNIT = "list";
+const R21_ID = "list#confirm:lookup-value:Status";
+const r21Row = (round, how) => ({ round, unit: R21_UNIT, id: R21_ID, kind: wf.RESOLUTION_NOT_APPLIED,
+  claim: `applied the answer to ${JSON.stringify(R21_ID)} — ${how}`, found: `round ${round} read of the page` });
+
+check("PR #128 review (round 21, Major 1): a refuted answer re-claimed with DIFFERENT `how` wording keeps ONE discrepancy row — the dedup keys on `(unit, id)`, so a builder that re-words its claim every round can no longer grow the carry that is rendered into every close prompt against `RECONCILE_ANSWER_MAX_BYTES`",
+  () => {
+    let rows = [];
+    rows = wf.upsertResolutionDiscrepancy(rows, r21Row(1, "added a filter, I think"));
+    rows = wf.upsertResolutionDiscrepancy(rows, r21Row(2, "wired the lookup differently this time"));
+    rows = wf.upsertResolutionDiscrepancy(rows, r21Row(3, "third attempt, another wording entirely"));
+    // ONE row, and it is the LATEST one: `claim`/`found` are refreshed data, so the operator reads this round.
+    return rows.length === 1 && rows[0].round === 3 && rows[0].id === R21_ID
+      && /third attempt/.test(rows[0].claim) && rows[0].found === "round 3 read of the page";
+  },
+  () => "three rounds, three wordings, one row carrying the third");
+check("PR #128 review (round 21, Major 1): the dedup separates DIFFERENT answers and different units, and leaves a verifier-appended discrepancy (which carries no `id`) alone — narrowing the key must not collapse two questions into one row",
+  () => {
+    let rows = [{ round: 1, unit: R21_UNIT, kind: "component-mismatch", claim: "a verifier row", found: "no id on it" }];
+    rows = wf.upsertResolutionDiscrepancy(rows, r21Row(1, "x"));
+    rows = wf.upsertResolutionDiscrepancy(rows, { ...r21Row(1, "y"), id: "list#confirm:lookup-value:Owner" });
+    rows = wf.upsertResolutionDiscrepancy(rows, { ...r21Row(1, "z"), unit: "main" });
+    return rows.length === 4 && rows[0].kind === "component-mismatch"
+      // and a padded key off an agent-transcribed queue file still refreshes rather than duplicating
+      && wf.upsertResolutionDiscrepancy(rows, { ...r21Row(2, "w"), unit: ` ${R21_UNIT} `, id: ` ${R21_ID} ` }).length === 4;
+  },
+  () => "one verifier row + three distinct answers, and a padded rehydrated key refreshes in place");
+
+check("PR #128 review (round 21, Minor): the dispatch-sourced exclusion is proven through the REAL producer — `unconsumedResolutions` is what stamps `source`, and a rule-shaped dispatch row survives a reasoned `unknown` that WOULD release a verifier-sourced one",
+  () => {
+    const routed = [{ id: R21_ID, pageKey: R21_UNIT, kind: "lookup-value", item: "Status",
+      resolution: { answer: "restrict to Status IN {InProgress, OnDistribution}" } }];
+    // The builder reported nothing for it, so the real accounting helper files it as unconsumed.
+    const gone = wf.unconsumedResolutions(routed, { resolutionsApplied: [] }, R21_UNIT);
+    if (gone.length !== 1 || gone[0].source !== wf.UNCONSUMED_FROM_DISPATCH) return false;
+    if (!wf.isRuleShapedKind(gone[0].kind)) return false;   // the escape is rule-shaped only; this one qualifies
+    const checks = [{ unit: R21_UNIT, id: R21_ID, shows: wf.SHOWS_UNKNOWN,
+      found: "the effect lands in BusinessRule_* schemas, which viewConfig cannot show" }];
+    const released = wf.releasedResolutionPairs(checks);
+    const owed = wf.owedResolutionPairs(routed, [R21_UNIT]);
+    const published = wf.publishedResolutionIds(routed);
+    const keptDispatch = wf.reconcileUnconsumed(gone, owed, released, published);
+    // Same row, same reasoned `unknown`, only the SOURCE differs — the verifier-sourced one IS released.
+    const asVerifier = [{ ...gone[0], source: wf.UNCONSUMED_FROM_VERIFIER }];
+    const keptVerifier = wf.reconcileUnconsumed(asVerifier, owed, released, published);
+    return keptDispatch.length === 1 && keptVerifier.length === 0;
+  },
+  () => "dispatch row held, verifier row released, on one reasoned `unknown`");
 // Round-8 (H1) — the unconsumed carry REPORTS its size instead of being trimmed. The review asked for a ceiling;
 // a silent one is unavailable here because this text is the persist instruction, so a rendered subset becomes a
 // persisted subset. Making the growth visible is the part that can be done without losing rows.
