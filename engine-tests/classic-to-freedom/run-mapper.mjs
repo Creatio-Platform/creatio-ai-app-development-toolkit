@@ -3182,11 +3182,20 @@ check("C2/ENG-96327: a lookup-GUID rule NO LONGER prompts a [lookup-value] note 
   !/\[lookup-value\]/.test(guidCs.designSpec));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
-check("P3: page business rule shows in the Business rules table (field · when <attr> · effect · page business rule)",
+check("P3/ENG-96327: a page business rule shows the WHOLE condition in the Trigger (field · when <attr> <op> <value> · effect · type) — a lookup GUID renders as 'a specific value'",
   /#### Business rules/.test(guidCs.designSpec)
-  && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+  && /\| Contact \| when Stage = a specific value \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
+// ENG-96327: the Trigger states the WHOLE condition — a presence check reads "is filled/empty", a readable value
+// renders inline; only a lookup GUID collapses to "a specific value" (pinned above). An unknown comparison would
+// fall back to the attribute alone, never a guessed operator.
+const brRun = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Sf:{r:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:12,leftExpression:{type:1,attribute:"Stage"}}]}},Am:{r:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Amount"},rightExpression:{type:0,value:5,dataValueType:4}}]}}},diff:[{operation:"insert",name:"Sf",parentName:"Header",propertyName:"items",values:{bindTo:"Sf"}},{operation:"insert",name:"Am",parentName:"Header",propertyName:"items",values:{bindTo:"Am"}}]};});` }] }, { baseDir: FIX });
+check("ENG-96327 business-rule Trigger: a presence check reads 'is filled'; a readable value renders inline ('when Amount = 5')",
+  /\| Sf \| when Stage is filled \| required \(else optional\) \| page business rule \|/.test(brRun.designSpec)
+  && /\| Am \| when Amount = 5 \| required \(else optional\) \| page business rule \|/.test(brRun.designSpec),
+  () => brRun.designSpec.split("\n").filter((l) => /^\| (Sf|Am) \|/.test(l)));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);

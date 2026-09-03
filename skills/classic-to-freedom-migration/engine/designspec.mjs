@@ -327,13 +327,34 @@ function rowsForProfileCards(profileCards, regionOf) {
   });
 }
 
+// Terrasoft.core.enums.ComparisonType → a human operator. Only the well-established values are mapped; an
+// unrecognized comparison degrades to the attribute name alone rather than risk a WRONG operator in the plan.
+const COMPARISON_OP = { 3: "=", 4: "≠", 5: "<", 6: "≤", 7: ">", 8: "≥" };
+const GUID_VALUE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// ENG-96327 — one condition → a readable phrase, so the Trigger states the WHOLE condition, not just the attribute:
+// "<attr> is filled/empty" for a presence check, "<attr> <op> <value>" otherwise. A lookup value is a raw record
+// GUID (unreadable — the reason the removed [lookup-value] prompt existed), so it renders as "a specific value" and
+// the agent resolves the real name on-stand. An unknown comparison or a missing value falls back to the attribute
+// alone (the prior behaviour), never a guessed operator. Robust to BOTH the sanitized shape (`comparison`/`left`/
+// `right.value`) and a raw condition (`comparisonType`/`leftExpression`/`rightExpression.value`).
+function conditionPhrase(c) {
+  const attr = c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.leftExpression?.attributePath || c?.attribute;
+  if (!attr) return null;
+  const cmp = typeof c?.comparison === "number" ? c.comparison : c?.comparisonType;
+  if (cmp === 12) return `${esc(attr)} is filled`;   // IS_NOT_NULL
+  if (cmp === 11) return `${esc(attr)} is empty`;    // IS_NULL
+  const op = COMPARISON_OP[cmp], v = c?.right?.value ?? c?.rightExpression?.value;
+  if (op && v !== null && v !== undefined) {
+    const shown = typeof v === "string" && GUID_VALUE.test(v) ? "a specific value" : String(v);
+    return `${esc(attr)} ${op} ${esc(shown)}`;
+  }
+  return esc(attr);
+}
 // Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
 function pageRuleRows(cs) {
-  const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
   return (cs.pageBusinessRules || []).map((r) => {
-    const attrs = condAttrs(r.conditions);
-    const condTrigger = (r.conditions || []).length ? "conditional" : "always";
-    const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
+    const phrases = (r.conditions || []).map(conditionPhrase).filter(Boolean);
+    const trigger = phrases.length ? `when ${phrases.join(" and ")}` : ((r.conditions || []).length ? "conditional" : "always");
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
     return [esc(r.element), trigger, effect, "page business rule"];
   });
