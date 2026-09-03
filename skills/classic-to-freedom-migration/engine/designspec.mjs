@@ -3234,7 +3234,14 @@ function resolveEvidenceCombinedVk(vk, ctx) {
       const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
       contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page: re-file the record with what is actually there, or confirm the deliverable really is absent.`;
     }
-    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing", "verifier"];
+    // PR review — NO owner tag here, unlike the `judged === false` site below. The two share a return shape but not
+    // a meaning: a judge ruled on a filed RECORD, and only the verifier can re-file it, so that one is verifier-owned
+    // by contract. `rec === false` is the verifier asserting something else entirely — as the comment above says, that
+    // the deliverable is GENUINELY ABSENT from the page. Tagging it `"verifier"` moved it off `builderOpen`, which
+    // flipped the scoped in-context gate from exit 2 to exit 0: a build agent whose page really is missing a
+    // deliverable self-certified, no repair round was dispatched, and the run could not converge — the verifier cannot
+    // honestly file `true` for something that does not exist, and the builder was never sent to build it.
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing", "verifier"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
@@ -3247,7 +3254,9 @@ function resolveEvidenceCombinedVk(vk, ctx) {
 function resolveEvidenceFiledPart(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""})`;
-  if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing", "verifier"];
+  // PR review — untagged, for the reason spelled out at `resolveEvidenceCombinedVk`: a record filed `false` says the
+  // deliverable is absent from the page, which is the BUILDER's row, not a re-filing job.
+  if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
   return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
 }
@@ -3266,7 +3275,8 @@ function resolveEvidenceJudgedPart(vk, ctx) {
       const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
       contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page.`;
     }
-    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing", "verifier"];
+    // PR review — untagged, same reason as the other two `rec === false` sites.
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing", "verifier"];
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
@@ -3518,11 +3528,16 @@ function verifyCtxFactory(root) {
 // (AC7/AC8), which still treats an unconfirmed row as a reason not to call the page done.
 //
 // ENG-95901 (reopened 2026-09-03) — the SAME conflation survived one level up, in the run-level counters. A row the
-// JUDGE rejected, or one the verifier filed as `false`, resolves `❌ MISSING` and used to carry no owner at all, so
-// it landed on the BUILDER's side of the axis: the 2026-09-02 paired run closed `⛔ INCOMPLETE, missing: 3` with all
-// three rows being evidence rejections and not one deliverable short. Those five return sites now name `"verifier"`
-// (they are the read-only verifier's / judge's rows by contract — a builder may not file them), and the tally keeps
-// FOUR cells, not three: {builder, verifier} × {missing, unverified}.
+// JUDGE rejected resolves `❌ MISSING` and used to carry no owner at all, so it landed on the BUILDER's side of the
+// axis: the 2026-09-02 paired run closed `⛔ INCOMPLETE, missing: 3` with all three rows being evidence rejections
+// and not one deliverable short. The `judged === false` return sites now name `"verifier"` (they are the read-only
+// verifier's / judge's rows by contract — a builder may not re-file them), and the tally keeps FOUR cells, not
+// three: {builder, verifier} × {missing, unverified}.
+//
+// PR review — a record the verifier filed as `false` is deliberately NOT tagged, even though it is also written by
+// the verifier: that record asserts the deliverable is genuinely ABSENT from the page, so it is builder-owned work.
+// Tagging it moved it off `builderOpen` and flipped the scoped gate from exit 2 to exit 0 on a page that really was
+// short. The tag follows who can REMEDY the row, not who wrote it.
 //
 // The counters are ADDITIVE, deliberately: `missing` and `unverified` keep their exact former meaning (every ❌ row,
 // every ⚠ row), because they are what the human-facing `--verify` verdict and the CLI exit code read, and AC7/AC8 of
@@ -3581,9 +3596,20 @@ export function planGaps(result) {
 // judge rejected. It is also the sentence the close report presents verbatim (`verify.md`), so a wrong attribution
 // here is what an operator reads. The SEVERITY is unchanged — a rejected record is still ⛔, still a reason not to
 // call the run done — only the CLAIM about whose work is short is split onto the axis that now exists.
-function verifyVerdict(missing, unverified, buildMissing = missing, rejected = 0) {
+//
+// PR review — the "YOUR BUILD is NOT short" claim is guarded on `builderOpen`, not on `buildMissing`. The four
+// counters this function used to receive cannot tell "no builder-owned rows at all" from "no builder-owned ❌ rows":
+// a partially built page resolves `unverified`, so `buildMissing === 0` while fields are genuinely absent, and the
+// `rejected > 0` branch returned before the `unverified > 0` branch below could mention them — the header then
+// contradicted the very table under it (`1/3 expected fields present — missing: Amount, Owner`). `builderOpen ===
+// buildMissing + builder-owned unverified`, so it is the one counter that answers the question the sentence asks.
+// `missing` is gone from the signature: it was no longer read in the body, surviving only as `buildMissing`'s
+// default, and neither default could fire — the single call site passes every argument. Had one ever fired it would
+// have silently reconstructed the pre-fix sentence.
+function verifyVerdict(unverified, buildMissing, rejected, builderOpen) {
   if (buildMissing > 0 && rejected > 0) return `⛔ **INCOMPLETE — ${buildMissing} machine-checked deliverable(s) MISSING from YOUR BUILD, and ${rejected} evidence row(s) REJECTED by the judge** (build the first set; the rejected records are re-FILED by the read-only verifier/judge, not built)`;
   if (buildMissing > 0) return `⛔ **INCOMPLETE — ${buildMissing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
+  if (rejected > 0 && builderOpen > 0) return `⛔ **INCOMPLETE — ${rejected} evidence row(s) REJECTED by the judge, and ${builderOpen} open row(s) YOUR BUILD owns** (re-FILE the rejected records — that half is the read-only verifier's/judge's; the build rows are named in the table above)`;
   if (rejected > 0) return `⛔ **NOT DONE — ${rejected} evidence row(s) REJECTED by the judge; YOUR BUILD is NOT short** (re-FILE the record with what is actually on the page — nothing here is built)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
   return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
@@ -3622,7 +3648,7 @@ export function renderVerify(result, opts = {}, built = {}) {
     }
   }
   const { missing, unverified, builderOpen, buildMissing, rejected, unfiled, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified, buildMissing, rejected);
+  const verdict = verifyVerdict(unverified, buildMissing, rejected, builderOpen);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),

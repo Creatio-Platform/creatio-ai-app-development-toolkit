@@ -2913,6 +2913,45 @@ try {
     } finally {
       fs.rmSync(bareBuiltRejectedPath, { force: true });
     }
+    // PR REVIEW — THE CLI PROOF FOR THE STATE EVERY NEW CASE ABOVE MISSES: `buildMissing === 0 && builderOpen > 0`.
+    // Each new case has `builderOpen === 0`, which is exactly why the suites were green while the banner was wrong. A
+    // partially built page resolves `unverified`, never `missing` (`resolveFieldsByIdentity` returns `unverified` for
+    // ANY count below expected, `0/N` included), so `buildMissing` cannot see it — and the run then announced "YOUR
+    // BUILD is not short … nothing here is built" over a page with fields genuinely absent, routing a repair round
+    // away from real build work. Two expected fields, one built, is the smallest payload that produces it.
+    const twoFieldManifest = JSON.stringify({
+      entity: "Bare",
+      entityColumns: { Name: { dataValueType: 1, caption: "Name" }, Amount: { dataValueType: 1, caption: "Amount" } },
+      schemas: [{ pkg: "Bare", body: 'define("Bare",[],function(){return{entitySchemaName:"Bare",diff:[{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:0,colSpan:12},bindTo:"Name",contentType:0,caption:"Name"}},{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:1,colSpan:12},bindTo:"Amount",contentType:0,caption:"Amount"}}]};});' }],
+      seed: CLEAN_SEED,
+      detailSchemas: {},
+      planMeta: { scope: "single-section", environment: "test", package: "X → Y", approach: "Parallel rebuild", whatItDoes: "bare test.", sectionSchema: "BareSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" },
+      signals: FULL_SIGNALS,
+    });
+    const barePartialPath = path.join(os.tmpdir(), `c2f_bare_built_partial_${process.pid}.json`);
+    fs.writeFileSync(barePartialPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+    }));
+    try {
+      const vPartial = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", barePartialPath, "--verify-json", bareFullVerdictPath], { input: twoFieldManifest, encoding: "utf8" });
+      const pv = JSON.parse(fs.readFileSync(bareFullVerdictPath, "utf8"));
+      const builderOpen = pv.pages?.main?.builderOpen ?? 0;
+      check("PR review: the CLI reproduces the missed state — a partially built page puts builder-owned rows in `unverified`, so `builderOpen > 0` while `buildMissing === 0`; this is the most common intermediate state of any run, and no case above produced it",
+        vPartial.status === 2 && pv.buildMissing === 0 && builderOpen > 0,
+        () => ({ status: vPartial.status, buildMissing: pv.buildMissing, builderOpen, unverified: pv.unverified, rows: pv.pages?.main?.openRows?.map((r) => [r.owner, r.evidence]) }));
+      check("PR review: on that state the banner and the repair advice point at the BUILD — `buildIsShort` keys on `builderOpen`, so the run no longer says 'YOUR BUILD is not short' or 'nothing here is built' while deliverables are genuinely absent",
+        /⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete/.test(vPartial.stderr || "")
+        && !/YOUR BUILD is not short/.test(vPartial.stderr || "")
+        && !/nothing here is built/.test(vPartial.stderr || "")
+        && /build the missing pieces/.test(vPartial.stderr || ""),
+        () => vPartial.stderr);
+    } finally {
+      fs.rmSync(barePartialPath, { force: true });
+    }
   } finally {
     fs.rmSync(bareBuiltPath, { force: true });
     fs.rmSync(bareUnitVerdictPath, { force: true });
@@ -11006,16 +11045,48 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95901 (reopened): AC7/AC8 UNCHANGED on a rejected row — the post-hoc `complete` is still false, because for a human an unconvincing record IS a reason not to call it done",
       u1.complete === false, () => u1);
 
-    // (2) The VERIFIER filed the record as `false` — 'the deliverable is genuinely absent'. Still not the builder's
-    // row to close: a builder that "fixed" it would be writing the evidence record it is forbidden to write.
+    // (2) The VERIFIER filed the record as `false` — 'the deliverable is genuinely absent'.
+    //
+    // PR REVIEW REVERSED THIS GOLDEN, deliberately. The first round tagged it `"verifier"` on the reasoning that the
+    // verifier WROTE it, so a builder "fixing" it would be writing an evidence record it is forbidden to write. But
+    // the tag decides the OWNERSHIP axis, and that axis feeds `buildComplete`, which the scoped in-context gate exits
+    // on. Tagged, a page whose deliverable is genuinely ABSENT reported `buildComplete: true` and the scoped gate went
+    // from exit 2 to exit 0: the build agent self-certified, no repair round was dispatched, and the run could not
+    // converge — the verifier cannot honestly re-file `true` for something that does not exist, and the builder was
+    // never sent to build it. The run-level strings then blamed "REJECTED by the judge" with no judge involved.
+    // So the tag follows who can REMEDY the row, not who wrote it: `judged === false` is verifier-owned (only the
+    // verifier can re-file a record a judge ruled on), `rec === false` is builder-owned (build the deliverable).
     const filedFalse = { ...body, evidence: { "main#quality-gates": false } };
     const u2 = verifyUnit(applicantR1, {}, filedFalse, "main");
-    check("ENG-95901 (reopened): a record the VERIFIER filed as `false` is verifier-owned too — ❌ MISSING, `buildMissing: 0`, and the builder is never asked to repair a row it may not file",
+    check("PR review: a record the verifier filed as `false` is BUILDER-owned — it asserts the deliverable is genuinely absent, so `buildMissing > 0`, `buildComplete: false`, and the scoped gate keeps exiting 2 instead of letting the build self-certify",
       // BOTH halves of the split quality-gates row fire here (nothing was filed, so nothing can be judged either),
       // hence `missing === 2` — the count is not the point; the OWNER of both rows is.
-      u2.missing === 2 && u2.buildMissing === 0 && u2.buildComplete === true
-      && u2.openRows.every((r) => r.owner === "verifier"),
+      u2.missing === 2 && u2.buildMissing === 2 && u2.buildComplete === false
+      && u2.openRows.every((r) => r.owner === "builder"),
       () => u2);
+    // The exit code itself, not only `verifyUnit`'s view of it — the finding was about the CLI gate, and the first
+    // round's `filedFalse` case pinned `buildComplete` through `verifyUnit` alone.
+    check("PR review: the SCOPED CLI gate still exits 2 on a `rec === false` page — `buildComplete` is its input, so pinning the flag without pinning the gate is what let the exit code flip unnoticed",
+      (() => { const v = renderVerify(applicantR1, { scopePageKey: "main" }, filedFalse); return v.pages.main.buildComplete === false && v.pages.main.builderOpen === 2; })(),
+      () => renderVerify(applicantR1, { scopePageKey: "main" }, filedFalse).pages.main);
+
+    // (2b) PR REVIEW — the case none of the new suites reached: a judge rejection PLUS a builder-owned partial page,
+    // i.e. `buildMissing === 0 && rejected > 0 && builderOpen > 0`. Every new CLI/Markdown case had `builderOpen === 0`,
+    // which is why the "YOUR BUILD is NOT short … nothing here is built" sentence went out over a table whose own body
+    // read `1/3 expected fields present`. A partial page resolves `unverified`, never `missing`, so `buildMissing`
+    // cannot see it and `builderOpen` is the only counter that can.
+    {
+      const partialPlusRejected = { pages: { main: { viewConfig: a3Body(2), businessRules: a3Rules } },
+        evidence: { "main#quality-gates": { referencePage: "an existing Freedom page reviewed for parity", components: ["crt.Input"] } },
+        judge: { "main#quality-gates": { convincing: false, why: "the record names containers, not the caption text and its binding" } } };
+      const v = renderVerify(applicantR1, {}, partialPlusRejected);
+      check("PR review: on a judge rejection over a PARTIALLY BUILT page the counters are `rejected > 0`, `buildMissing === 0` and `builderOpen > 0` — the state the new cases never produced, and the one the wrong axis mis-reported",
+        v.rejected > 0 && v.buildMissing === 0 && v.builderOpen > 0, () => v);
+      check("PR review: the Markdown verdict the close report presents VERBATIM no longer claims 'YOUR BUILD is NOT short' over a page with open build rows — it names both halves, so the header stops contradicting its own table",
+        !/YOUR BUILD is NOT short/.test(v.markdown) && /open row\(s\) YOUR BUILD owns/.test(v.markdown), () => v.markdown.split("\n").filter((l) => /INCOMPLETE|NOT DONE/.test(l)));
+      check("PR review: the pure-rejection case this ticket targets KEEPS its new sentence — `builderOpen === 0` there, so guarding on it narrows the claim without undoing the fix",
+        /YOUR BUILD is NOT short/.test(renderVerify(applicantR1, {}, rejected).markdown), () => renderVerify(applicantR1, {}, rejected).markdown.split("\n").filter((l) => /NOT DONE/.test(l)));
+    }
 
     // (3) The other direction — the axis must still FIRE on a genuinely short build. Same manifest, an EMPTY page.
     const short = { pages: { main: { viewConfig: [] } } };

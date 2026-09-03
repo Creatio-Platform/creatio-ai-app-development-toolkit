@@ -1109,7 +1109,7 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       schemaNamePrefixEmpty: false,
-      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } },
+      verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     };
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));

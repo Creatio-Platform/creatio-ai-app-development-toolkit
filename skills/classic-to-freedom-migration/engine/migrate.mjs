@@ -2947,8 +2947,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Per page, the same distinction as the headline: `missing` folds the judge-rejected rows in, so a page whose
     // build is whole but whose evidence was rejected read "3 missing" and sent a reader hunting for absent fields.
     const pageShortfall = (p) => {
-      const rejected = (p.missing ?? 0) - (p.buildMissing ?? 0);
-      return rejected > 0 ? `${p.buildMissing ?? 0} missing + ${rejected} judge-rejected` : `${p.missing ?? 0} missing`;
+      // PR review — `?? p.missing` and not `?? 0`, matching `shortfallOf` (`helpers.mjs`), whose comment states the
+      // rule this copy has to follow too: an absent `buildMissing` OVER-reports the build axis, never a false zero.
+      // With `?? 0` a page entry that predates the field read `rejected = missing`, i.e. "0 missing" on a page whose
+      // build really is short. Unreachable today (the object is the in-process tally), but this is the copy a future
+      // reader imitates.
+      const buildMissing = p.buildMissing ?? p.missing ?? 0;
+      const rejected = (p.missing ?? 0) - buildMissing;
+      return rejected > 0 ? `${buildMissing} missing + ${rejected} judge-rejected` : `${p.missing ?? 0} missing`;
     };
     // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
     // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
@@ -2981,7 +2987,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The BANNER and the advice follow the same number. Leaving them fixed would have the line say "YOUR BUILD is
     // incomplete … build the missing pieces" on a run whose build is whole and whose only ❌ rows are records the
     // judge rejected — the very sentence the reopened ticket quotes as what sent a reader hunting for absent fields.
-    const buildIsShort = pageArg || (verifyRes.buildMissing ?? 0) > 0;
+    // PR review — the claim keys on `builderOpen`, NOT on `buildMissing`. `buildMissing` is `missing` narrowed by
+    // owner, so it inherits `missing`'s blind spot: a partially built page resolves `unverified`
+    // (`resolveFieldsByIdentity` returns it for ANY field count below expected, including `0/N`; `resolveCountVk` for
+    // any partial component count; "no `--built.pages` entry" too), which leaves `buildMissing === 0` on the most
+    // common intermediate state of a run — and the line then read "YOUR BUILD is not short … nothing here is built"
+    // while fields were genuinely absent, routing a repair round away from real build work. `builderOpen ===
+    // buildMissing + builder-owned unverified` covers BOTH halves of the builder's own work, so the pure-rejection
+    // case this ticket targets still yields `builderOpen === 0` and keeps its new banner.
+    const buildIsShort = pageArg || (verifyRes.builderOpen ?? 0) > 0;
     const banner = buildIsShort ? "YOUR BUILD is incomplete" : "the RUN is not done — but YOUR BUILD is not short";
     let repairAdvice = "build the missing pieces / file the on-stand evidence, then re-verify";
     if (pageArg) repairAdvice = "build / complete the pieces named in the rows, then re-verify";

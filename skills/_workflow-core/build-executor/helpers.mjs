@@ -80,7 +80,12 @@ export function shortfallOf(st) {
   const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
   return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
 }
+// PR review — an UNMEASURED run reads `?`, never `0 MISSING`. `shortfallOf(undefined)` legitimately returns zeros
+// (its callers need arithmetic), but rendering those zeros as prose put a false zero on the one axis this helper's own
+// comment forbids one on: the close line could read `NOT COMPLETE after 3 round(s): 0 MISSING + ? unconfirmed`, the
+// `?` beside it proving no verdict had been read. `parkWhy` already guards `!st` first; these two call sites did not.
 export function shortfallText(st) {
+  if (st == null) return '? MISSING'
   const { buildMissing, rejected } = shortfallOf(st)
   return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
 }

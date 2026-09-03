@@ -32,7 +32,11 @@ and is what the park reason and the close line report; when the two differ the l
 
 ```
 migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING from the build + 2 unconfirmed …
-             (build whole, only rejected records → "— the RUN is not done — but YOUR BUILD is not short")
+             (NO builder-owned open row at all — the build is whole and the only ❌ rows are
+              records the judge rejected → "— the RUN is not done — but YOUR BUILD is not short".
+              The test is `builderOpen === 0`, NOT `buildMissing === 0`: a partially built page
+              resolves ⚠ `unverified`, so `buildMissing` is 0 while fields are genuinely absent,
+              and that state keeps the "YOUR BUILD is incomplete" line above.)
                                      ^^^^^^^^^^^^^^^^^^^^^^ repairable on-stand → repair round
 migrate.mjs: ⛔ GATE BLOCKED — do NOT build. …
 migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. …

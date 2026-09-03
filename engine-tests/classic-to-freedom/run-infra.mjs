@@ -1906,13 +1906,45 @@ const missingBuildMissing = wf.reconcileShapeErrors
 check("ENG-95901 (reopened): the shipped shape check REFUSES a verify page entry with no `buildMissing` — without it the answer degrades to the conflated `missing` and a judge-rejected row is reported as a build gap again",
   missingBuildMissing.some((m) => m.includes("buildMissing")),
   () => missingBuildMissing);
+// PR REVIEW — the WORKFLOW-side helper, exercised with `rejected > 0`. Finding 7: every page fixture in
+// `run-workflow-parity.mjs` sets `buildMissing === missing`, and the one executed park-reason golden carries neither
+// field, so the old `${st.missing ?? 0} MISSING` and the new `shortfallText(st)` rendered byte-identically —
+// reverting `parkWhy`, the after-preflight log and `completionLine` left every suite green. These pin the helper's
+// two axes directly, so a revert cannot pass unnoticed.
+{
+  const st = { missing: 3, buildMissing: 1, unverified: 0 };
+  check("PR review: `shortfallText` NAMES the rejected half — the workflow's park reason, after-preflight log and close line all render through it, and no parity fixture ever gave it `buildMissing !== missing` to render",
+    wf.shortfallText?.(st) === "1 MISSING + 2 judge-rejected", () => wf.shortfallText?.(st));
+  check("PR review: `shortfallText` on a whole build stays the plain sentence — the split adds a clause only when there is a rejection to name",
+    wf.shortfallText?.({ missing: 2, buildMissing: 2, unverified: 0 }) === "2 MISSING",
+    () => wf.shortfallText?.({ missing: 2, buildMissing: 2, unverified: 0 }));
+  check("PR review: an UNMEASURED verdict renders `? MISSING`, never `0 MISSING` — the close line could otherwise read `0 MISSING + ? unconfirmed`, a false zero on the one axis `shortfallOf`'s own comment forbids one on, with the adjacent `?` proving no verdict was read",
+    wf.shortfallText?.(undefined) === "? MISSING" && wf.shortfallText?.(null) === "? MISSING",
+    () => ({ undef: wf.shortfallText?.(undefined), nul: wf.shortfallText?.(null) }));
+}
+// PR REVIEW — the SAME gate at the TOP LEVEL, which is the level the run's own close line reads. `shortfallText(state
+// .verify)` feeds `completionLine` and the after-preflight log, and `verdictOf` fills the returned `buildMissing`/
+// `rejected` from the same object — all off the TOP-LEVEL field. `reconcileShapeErrors` faults only on `required` and
+// skips any key that is `undefined`, so before this an answer copying the summary faithfully except for that one
+// field was ACCEPTED, `shortfallOf` fell back to `missing`, and the run closed with the conflated `3 MISSING`. The
+// per-page pin above cannot catch it: the two levels have separate `required` lists.
+const missingTopBuildMissing = wf.reconcileShapeErrors
+  ? wf.reconcileShapeErrors({ verify: { complete: false, missing: 3, unverified: 0, planGaps: [],
+      pages: { main: { complete: false, buildComplete: true, buildMissing: 0, missing: 3, unverified: 0, builderOpen: 0 } } } })
+  : [];
+check("PR review: the shipped shape check REFUSES an answer with no TOP-LEVEL `buildMissing` — the field `shortfallText`/`verdictOf` read for the run's close line, which a faithful-but-for-one-field answer used to omit and get accepted",
+  missingTopBuildMissing.some((m) => m.includes("buildMissing")),
+  () => missingTopBuildMissing);
+check("PR review: `unfiled` is NOT on the Reconcile wire — nothing in skills/** reads it, and unlike `rejected` it is not derivable from what this channel carries, so it was one more field name to transcribe (and a type fault away from a full retry) for a number with no consumer",
+  !/unfiled: v\?\.unfiled/.test(wfSrc) && !/buildMissing\\`\/\\`rejected\\`\/\\`unfiled/.test(wfSrc),
+  () => "the generated workflow still publishes or orders `unfiled` on the Reconcile channel");
 check("ENG-95901 (reopened): the Reconcile PROMPT names `buildMissing` in the fields it orders copied — a field the checker requires but the prompt never mentions costs every attempt of every run instead of being supplied",
   /COPY EVERY FIELD OF THE SUMMARY[\s\S]{0,900}buildMissing/.test(wfSrc)
     && /buildMissing.{0,400}REQUIRED ON EVERY PAGE ENTRY/s.test(wfSrc),
   () => "the prompt's field list does not name `buildMissing`");
 const goodDigest = {
   approval: { found: true, version: "v1" },
-  verify: { complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [],
+  verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, builderOpen: 1, planGaps: [],
     pages: { main: { complete: false, buildComplete: false, buildMissing: 1, builderOpen: 1, missing: 1, unverified: 0,
       openRows: [{ n: 1, deliverable: "d", status: "s", evidence: "e", outcome: "missing", owner: "builder" }] } } },
   preflightItems: [{ id: "p1", pageKey: "main", resolution: null },
@@ -1935,7 +1967,7 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
 // projection runs here: a digest-shaped verdict (openRows and all) goes through the shipped `verifySummary`, the
 // counts-only output must carry `buildComplete` per page and NO rows, and the shipped checker must accept it whole.
 {
-  const richVerdict = { complete: false, missing: 2, unverified: 1, builderOpen: 1,
+  const richVerdict = { complete: false, missing: 2, unverified: 1, buildMissing: 2, builderOpen: 1,
     pages: { main: { complete: false, buildComplete: false, buildMissing: 2, missing: 2, unverified: 1, builderOpen: 1,
       openRows: [{ n: 1, deliverable: "Field Amount", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } };
   const summary = verifySummary({}, richVerdict);
@@ -1959,7 +1991,7 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
         missing: done ? 0 : 2, unverified: 1, builderOpen: done ? 0 : 1,
         openRows: [{ n: 1, deliverable: "Поле Сума", status: "❌ MISSING", evidence: "0/7 полів", outcome: "missing", owner: "builder" }] };
     }
-    const s = verifySummary({}, { complete: false, missing: count, unverified: count, pages });
+    const s = verifySummary({}, { complete: false, missing: count, unverified: count, buildMissing: count, pages });
     return { summary: s, answer: { ...goodDigest, verify: s } };
   };
   const eighty = atScale(80);
@@ -2111,7 +2143,7 @@ check("ENG-95930: an unknown token FAULTS instead of accepting everything — bo
 const TYPE_PROBES = [
   ["string", { discrepancies: [{ unit: 1, claim: "c", found: "f" }] }, "unit"],
   ["boolean", { reachability: [{ key: "k", appliesWhen: "yes" }] }, "appliesWhen"],
-  ["integer", { verify: { complete: false, missing: "2", unverified: 0, pages: {} } }, "missing"],
+  ["integer", { verify: { complete: false, missing: "2", unverified: 0, buildMissing: 0, pages: {} } }, "missing"],
   ["string-or-null", { orphanedPagesOnFile: [{ schema: "S", orphanedBy: 7 }] }, "orphanedBy"],
   ["string[]", { reachability: [{ key: "k", appliesWhen: true, pages: ["a", 2] }] }, "pages"],
 ];
@@ -2126,12 +2158,12 @@ check("ENG-95930: the shape check REJECTS a wrong-typed value for every token in
 check("ENG-95930: the shape check fails fast on a value of the wrong SHAPE — `null` for a plain object, a non-array for an array, a scalar for the page map, and a non-object answer",
   wf.reconcileShapeErrors?.({ approval: null }).length === 1
     && wf.reconcileShapeErrors({ reachability: { key: "k" } }).length === 1
-    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: 7 } }).length === 1
+    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pages: 7 } }).length === 1
     && wf.reconcileShapeErrors(null).length === 1
     && wf.reconcileShapeErrors([]).length === 1,
   () => JSON.stringify({ nullObject: wf.reconcileShapeErrors({ approval: null }),
     nonArray: wf.reconcileShapeErrors({ reachability: { key: "k" } }),
-    scalarMap: wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: 7 } }) }));
+    scalarMap: wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pages: 7 } }) }));
 // For the classifier's size refusal, "re-run and it may pass" is wrong by construction, so the triage line carries
 // the measured cause instead.
 check("ENG-95930: the repeated-rejection triage names the MEASURED cause of the classifier block (a serialized schema over 4096 bytes in an `auto`-permission session) instead of calling it transient",
@@ -4216,7 +4248,7 @@ check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is att
 const shapeShort = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
   verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false } } } };
 const shapeOk = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
-  verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 0 } } } };
+  verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1 } } } };
 let faultThenOkCalls = 0;
 const faultPrompts = [];
 const faultThenOk = await runWith({}, async (prompt) => {
@@ -4370,7 +4402,7 @@ check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight R
 // pointer, and NO per-unit row prose. This shape replaced an array of up to 8 deliverable strings, and nothing else
 // in the suite drives `dryRunReport`, so a regression — a wrong count, a dropped field, the old row-string shape
 // creeping back — would ship silently without this.
-const dryVerify = { complete: false, missing: 2, unverified: 1, builderOpen: 0, planGaps: [],
+const dryVerify = { complete: false, missing: 2, unverified: 1, buildMissing: 2, builderOpen: 0, planGaps: [],
   pages: { main: { complete: false, buildComplete: false, buildMissing: 2, missing: 2, unverified: 1 } } };
 const dryRunPreview = await runToPostPreflight({ ...midRunBaseline, verify: dryVerify }, { ...midRunBaseline, verify: dryVerify }, { dryRun: true })
   .catch((e) => ({ threw: e.message }));
@@ -4548,7 +4580,9 @@ const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
   const trace = [];
   const baseline = { ...roundBaseline, unitKeys: units, buildOrder: units };
   const openVerdict = {
-    complete: false, missing: units.length, unverified: 0,
+    // PR review — `buildMissing` at the TOP LEVEL too: `RECONCILE_SHAPE.verify.required` carries it now, because that
+    // is the level `shortfallText`/`verdictOf` read for the run's close line. Same reasoning as the per-page field.
+    complete: false, missing: units.length, unverified: 0, buildMissing: units.length,
     // ENG-95930 — a page entry carries `complete`/`buildComplete` and a full open row because that is what the
     // response contract requires and what `reconcileShapeErrors` now checks on arrival. The old schema required the
     // same fields; this harness bypassed the host and so never had to produce them.
@@ -4930,7 +4964,7 @@ const runPreflight = (judgeReports, verifyReports) => {
       evidence.push({ verify: /PREFLIGHT EVIDENCE —/.test(prompt) });
       return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: verifyReports };
     }
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: true, missing: 0, unverified: 0, pages: {} } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pages: {} } };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -5047,7 +5081,7 @@ const runVerifyBranch = (queueWritten, extra = {}) => {
       persistWhys.push(m ? m[1] : "(no why)");
       return { written: true, parkKeys: [] };
     }
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 0, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -5082,7 +5116,7 @@ const runFailedJudge = () => {
     if (label.startsWith("build:")) return buildAnswer(false);
     if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
     if (label === "persist:carry") return { written: true, parkKeys: [] };
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 0, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -5275,11 +5309,20 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
      Nothing measured this before, and the omission has a precedent in this very ticket: `RECONCILE_SCHEMA_BUDGET`
      sat at 6000 above a real 4096-byte cap and let the schema grow straight past it — the run-killing bug ENG-95930
      exists to fix. A generated file grows one prompt sentence at a time, so this is the check that has to notice.
-     Two thresholds, matching the schema convention: the HOST's hard limit, and a working budget under it. */
+     Two thresholds, matching the schema convention: the HOST's hard limit, and a working budget under it.
+     PR REVIEW — plus a WARN BAND under the budget, and the byte count printed on a PASS as well as a failure. The
+     check as first written was binary and silent while passing, so the margin was invisible until it was gone: this
+     branch left the file at 479 957 B against the 480 000-byte budget, i.e. 43 B of headroom, and the next prompt
+     sentence added anywhere in `skills/_workflow-core/**` would have turned this suite red on someone else's
+     unrelated branch, with no warning on the PR that spent the margin. The band makes the squeeze visible one PR
+     before it blocks one; it never fails the suite, because a file inside its budget is not a defect. */
   const WORKFLOW_SCRIPT_INLINE_CAP = 524288;
   const WORKFLOW_SCRIPT_BUDGET = 480000;
+  const WORKFLOW_SCRIPT_WARN_AT = Math.floor(WORKFLOW_SCRIPT_BUDGET * 0.97);
   for (const file of wfFiles) {
     const bytes = statSync(file).size;
+    if (bytes > WORKFLOW_SCRIPT_WARN_AT && bytes <= WORKFLOW_SCRIPT_BUDGET)
+      console.log(`  ⚠ workflow script ${path.basename(file)} is inside its budget but into the warn band: ${bytes} B, only ${WORKFLOW_SCRIPT_BUDGET - bytes} B of headroom left of ${WORKFLOW_SCRIPT_BUDGET} (warn from ${WORKFLOW_SCRIPT_WARN_AT}). Shrink prompt text, or raise the budget deliberately and say why — the next added sentence may turn this red on an unrelated branch.`);
     check(`workflow script ${path.basename(file)} fits the host's ${WORKFLOW_SCRIPT_INLINE_CAP}-byte \`script\` field — the approval handler inlines this file into it, so an oversized file is rejected before the run starts`,
       bytes <= WORKFLOW_SCRIPT_INLINE_CAP,
       () => `${bytes} B (${(bytes / WORKFLOW_SCRIPT_INLINE_CAP * 100).toFixed(1)}% of the cap)`);
