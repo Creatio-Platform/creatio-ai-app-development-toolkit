@@ -718,13 +718,15 @@ export function runMigration(manifest, opts = {}) {
   const blank = (v) => v == null || String(v).trim() === "";
   const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
   out.planMetaMissing = REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k]));
-  // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
-  // must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
-  // check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
-  // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
-  // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
+  // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables /
+  // section dashboards) must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the
+  // classic body, check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and
+  // records the answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`.
+  // An absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
   // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-  const SIGNAL_KEYS = ["dcm", "processes", "printables"];
+  // `dashboards` items additionally carry `{ id, caption, package? }` — `package` present = that dashboard ships
+  // in a package, absent = it exists only as stand data; the migrated dashboard must keep the same delivery.
+  const SIGNAL_KEYS = ["dcm", "processes", "printables", "dashboards"];
   const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
   out.signals = signals;
   out.signalsMissing = SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true);
@@ -819,7 +821,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
-  if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
+  if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable/dashboard checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   if (notReady) process.exit(2);

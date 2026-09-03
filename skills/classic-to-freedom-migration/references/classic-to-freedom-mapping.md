@@ -157,6 +157,68 @@ button; always a **menu item in the template's existing `Actions` button**, one 
 
 None connected on a surface ⇒ nothing on that surface. None connected anywhere ⇒ drop the button entirely.
 
+### Section dashboards (7x analytics → the Freedom list page)
+
+**Storage model — why the schemas look empty.** A classic `*Section` schema contains **no dashboard code**. The
+analytics view is inherited from `BaseSectionV2` in `CrtUIPlatform7x`, and the dashboards themselves are *rows*:
+
+| What | Where it lives | Key columns |
+| --- | --- | --- |
+| The dashboard | `SysDashboard` (a data row, not a schema) | `Caption` (its title — there is **no `Name`**), `Section` → `SysModule`, `Items`, `ViewConfig`, `Position` |
+| Which section owns it | `SysDashboard.Section` → `SysModule` | a section's `SysModule` is found by `SectionSchemaUId` |
+| Section schema ↔ module | `SysModule.SectionSchemaUId` → `SysSchema.UId` | a plain **Guid** column, not a lookup |
+| Whether it ships in a package | `SysPackageSchemaData` (a data binding) | `Name`, `SysPackage`, `SysSchema`, `Data` (the bound rows, as JSON) |
+
+Two consequences drive everything below: the dashboards can only be discovered **on the stand** (nothing in the
+schema chain reveals them), and their *delivery* — packaged vs stand-only — is a property of the **bindings**,
+not of the section's own package. A single section routinely owns one of each.
+
+**Resolution order.** Both chains run at PLAN time and their answer is recorded in `manifest.signals.dashboards`
+(the engine gates the plan on it). Read them with **`execute-esq`**, not `odata-read`: `SectionSchemaUId` is a
+plain-Guid column the OData endpoint drops from `select` and rejects in `filter`, while DataService handles it.
+
+1. `SysSchema` by `Name = '<SectionSchema>'` → the `UId`s of the section schema's layers.
+2. `SysModule` filtered `SectionSchemaUId` ∈ those UIds → `SysModule.Id`.
+3. `SysDashboard` filtered `Section` = that `SysModule.Id` → the items (`Id` + `Caption`).
+4. Per item: the `SysPackageSchemaData` binding of `SysDashboard` whose bound rows carry that `Id` → its
+   package is the dashboard's delivery; no binding ⇒ **stand-only**.
+
+The executable form of both chains — which layer's `UId` the module actually points at, the shape of a
+binding's `Data` JSON, and the per-check caveats (strict `Section` filter, record-level administration, no
+`HasAnalytics`/`CreatedOn` heuristics, an errored query is not a "none") — lives with the recipe in the
+skill's `signals` step.
+
+**Why the binding scan must be package-agnostic.** A section's dashboards and its schema layers can sit in
+entirely unrelated packages, so step 4 scans *every* `SysDashboard` binding **package-agnostically** rather than
+probing the section's own packages. On one reference stand the ML models section's layers live in `ML`, whose
+only `SysDashboard` binding carries an unrelated page-level dashboard, while that section's genuinely packaged
+dashboard is bound from a different package altogether. Narrowing the scan does not fail loudly — it returns a
+*wrong* answer, reporting a packaged dashboard as stand-only and stripping its delivery on migration.
+
+**The target surface.** The migration writes into the section's Freedom **list** page. `ListPageV3Template`
+already ships the whole structure — `MainTabPanel` → `DashboardsTabContainer` → `DashboardsContainer` → an
+element named **`Dashboards`** of type `crt.Dashboards`. On any other list template you add that tab, container
+and element to the same page yourself, and a hand-added element carries the designer's own name —
+`Dashboards_<slug>` — rather than the template's `Dashboards`.
+
+**Run contract.** `MigrateDashboardsProcess` (from `CrtDashboardsMigratorApp`) does the migration — the agent
+never re-authors the widgets. Its five parameters carry the section's `SysModule.Id`, the built list page's
+`SysSchema.Id` (its **primary key** — the process filters `SysSchema` by primary column, so a `UId` matches
+no row and degrades to `Guid.Empty`; resolve it with `execute-esq` on `SysSchema` by `Name` and pick the
+layer whose `UId` is the `schemaUId` `get-page` reported), the dashboard ids to migrate, the `crt.Dashboards`
+element's name and the target package. The rest of the procedure — why the run repeats once per delivery
+group, how to read the verdict, and when a re-run is safe — is the skill's dashboards hand-off step.
+
+**What this migration does NOT cover** — state this explicitly rather than letting it be assumed:
+
+- **`SysWidgetDashboard` record-page card widgets.** Dashboard-like widgets embedded in a *record page* are not
+  section analytics; they stay a `needsDecision` item for a human to place.
+- **`SysDashboard` rows with an empty `Section`.** Page-level dashboards, out of scope even when their widgets
+  reference the section being migrated.
+- **Installing the migrator.** `CrtDashboardsMigratorApp` must already be on the stand; nothing here installs it.
+- **Anything the migrator itself gets wrong.** The widgets are moved by the platform app, so a mis-migrated
+  widget is a `CrtDashboardsMigratorApp` issue, not something to patch by hand-authoring the Freedom dashboard.
+
 ### Embedded profile cards (linked-record blocks) → the Freedom side profile
 
 A Classic page can embed a **compact card of a linked record**: a request page shows a "requester" block with
