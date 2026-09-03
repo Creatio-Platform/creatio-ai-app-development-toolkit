@@ -3682,7 +3682,9 @@ check("PR #128 review (round 20, Major 1): a key in BOTH halves is held by its F
 check("PR #128 review (round 20, Major 1): with the budget UNSPENT `reopenKeySet` is exactly the union of the two halves and reports nothing exhausted — the fix must not narrow the normal path",
   () => {
     const { keys, exhausted } = wf.reopenKeySet(new Set(["a"]), new Set(["b", "c"]), () => false);
-    return [...keys].sort().join(",") === "a,b,c" && exhausted.length === 0
+    // EXPLICIT comparator, the convention this file already follows (S2871): a bare `.sort()` compares
+    // string-coerced values, which is right for these three keys by luck rather than by contract.
+    return [...keys].sort((a, b) => a.localeCompare(b)).join(",") === "a,b,c" && exhausted.length === 0
       && wf.reopenKeySet(undefined, undefined, EXHAUST_ALL).keys.size === 0;
   },
   () => "a,b,c with no exhaustion, and absent sets are empty rather than a throw");
