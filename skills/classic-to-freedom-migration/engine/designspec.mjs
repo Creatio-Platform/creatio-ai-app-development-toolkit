@@ -1393,16 +1393,14 @@ function reuseClassicChildSentence(c) {
 }
 
 // ENG-95861 — the boundary child's own block in `### Child page mappings`. Own fn for Sonar CC 15: `renderChild`
-// already carries a seven-arm chain, and this arm is the only one that is a SCOPE statement rather than a mapping.
-// It says three things, because a reader who takes any one of them wrong re-opens a settled decision: what stays
-// Classic, that nothing here is a deliverable (so nothing about it can ever read MISSING), and how to reverse it.
+// This arm is a SCOPE statement, not a mapping: it says what stays Classic, that nothing is built here, and that the
+// boundary is reversible if the scope later widens. The machine mechanics behind it (why it publishes no
+// --units/--verify deliverable; how to reverse it via the manifest) live in the SKILL — the plan states the decision.
 function boundaryChildLines(c) {
   const pg = boundaryClassicPage(c);
   const opens = pg ? "`" + esc(pg) + "`" : "the Classic page the detail already opens";
   return [
-    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it: ${opens}. **Nothing here is folded, rebuilt or built** — the platform opens a Classic page from a Freedom related list, and that is the intended end state, not a gap. This resolution publishes NO deliverable: no \`--units\` build unit, no \`--verify\` row, so nothing about ${esc(c.entity)} can be reported MISSING.`,
-    ">",
-    `> **Migrating ${esc(c.entity)} is that section's own job.** If the user later widens the scope, drop \`opensClassicPage\` from this detail's manifest entry, supply the child page's schema in \`childPageSchemas\`, and re-run — the boundary is a scope decision recorded in \`decisions.md\`, reversible by re-planning, never a defect of this plan.`,
+    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it (${opens}). Nothing is built here — that is the intended end state, not a gap. Migrating ${esc(c.entity)} is that section's own job, and the boundary is reversible later if the scope widens.`,
   ];
 }
 
@@ -1428,7 +1426,7 @@ function renderChildMappings(childs) {
     } else if (typeof c.editPage === "string" && c.editPage) {
       P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
     } else if (c.editPage === false) {
-      P.push(`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`);
+      P.push(`> **No separate child page** — a read-only / attach-only related list; nothing to migrate here.`);
     } else if (c.editable === false) {
       // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
       // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.

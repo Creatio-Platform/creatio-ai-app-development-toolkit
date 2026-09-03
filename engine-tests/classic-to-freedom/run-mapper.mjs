@@ -3566,11 +3566,10 @@ check("ENG-95861: the Main-scope row calls it `Reuse (Classic)` and names the pa
   () => (xsBoundary.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
 check("ENG-95861: the child section states the boundary and that NOTHING is built for it",
   /Reuse \(Classic\) — cross-section boundary \(approved\)/.test(xsBoundary.plan)
-  && /Nothing here is folded, rebuilt or built/.test(xsBoundary.plan)
-  && /publishes NO deliverable/.test(xsBoundary.plan));
-check("ENG-95861: it also states how to REVERSE the decision — a scope decision, not a defect",
-  /drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
-  && /reversible by re-planning, never a defect of this plan/.test(xsBoundary.plan));
+  && /Nothing is built here — that is the intended end state, not a gap/.test(xsBoundary.plan));
+check("ENG-95861: it also states the decision is reversible (a scope decision, not a defect) — the manifest how-to lives in the SKILL, not the plan (ENG-96327)",
+  /Migrating InternalRequest is that section's own job/.test(xsBoundary.plan)
+  && /reversible later if the scope widens/.test(xsBoundary.plan));
 check("ENG-95861 / ENG-96327: the cross-section boundary renders as a `Reuse (Classic)` row in the Main-scope table (the Call-value legend was removed)",
   /\| InternalRequest[^|]*\|[^|]*\| Reuse \(Classic\) \|/.test(xsBoundary.plan));
 check("ENG-95861: the plan never claims the child page was mapped, and prints no `Rebuild (child)` for it",
@@ -3632,15 +3631,15 @@ check("ENG-95861: CHILD_PAGE_ANSWERS names the boundary AND that it is the user'
   && /a SECTION BOUNDARY is the user's scope decision, not a skip you declare/.test(CHILD_PAGE_ANSWERS),
   () => CHILD_PAGE_ANSWERS);
 
-// --- ENG-95850 (D): a single `*Page` search cannot answer the child-page question for a TYPED entity. `list-pages`
-// finding no `<Entity>Page` is not the same as the entity having no Classic card — a typed entity registers a per-type
-// card in `SysModuleEdit` instead. A real run recorded `editPage: false` for `InternalRequest` (~18 typed edit pages)
-// and the plan asserted there was nothing to migrate; only a hand-written Adjustments entry caught it.
-check("ENG-95850 (D): the recorded `editPage: false` sentence no longer reads as VERIFIED — it names the typed-entity check that has to confirm it",
-  () => /Recorded: no separate child page/.test(DESIGNSPEC_SRC)
-    && !/\*\*Verified: no separate child page\.\*\*/.test(DESIGNSPEC_SRC)
-    && /TYPED entity registers a per-type edit card/.test(DESIGNSPEC_SRC)
-    && /also returns no \\`editPages\\`/.test(DESIGNSPEC_SRC));
+// --- ENG-96327 (supersedes ENG-95850's PLAN caveat, per Katya's explicit call): the `editPage: false` child note is
+// now the plain decision — "No separate child page … nothing to migrate here" — with NO typed-entity confirm in the
+// plan (the human approver catches a wrong "nothing to migrate"; the typed-entity guidance still lives in the
+// child-page ANSWER list + the reuse sentence + the SKILL, asserted below). This is a deliberate, recorded reversal:
+// ENG-95850's signal came from a real failure (`InternalRequest`, ~18 typed edit pages, recorded editPage:false, plan
+// wrongly asserted nothing to migrate) — kept here as history so the drop is not mistaken for an accident.
+check("ENG-96327: the editPage:false child note is the plain decision — NO typed-entity confirm caveat in the plan",
+  () => /No separate child page\*\* — a read-only \/ attach-only related list; nothing to migrate here/.test(DESIGNSPEC_SRC)
+    && !/ONE CHECK BEFORE ACCEPTING/.test(DESIGNSPEC_SRC));
 check("ENG-95850 (D): the child-page ANSWER list names `list-entity-client-schemas` as the call that settles a typed entity, so the answer is not recorded off `list-pages` alone",
   () => /list-entity-client-schemas` by that '/.test(DESIGNSPEC_SRC)
     && /TYPED entity registers per-type edit cards instead of one/.test(CHILD_PAGE_ANSWERS)
