@@ -22,7 +22,7 @@
 //
 // Zero dependencies (node built-ins only), same `check` idiom as the sibling
 // runners, exits 1 on any failed check.
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
@@ -92,10 +92,9 @@ check("record: an ERROR entry keeps name+message and NOT the stack — a stack d
     return e.error.name === "TypeError" && e.error.message === "529 overloaded" && !("stack" in e.error); });
 check("errorShape: a null/undefined error still yields a usable message rather than `undefined`",
   () => errorShape(null).message === "rejected with no reason given" && !/undefined/.test(errorShape(new Error("no message reaches the shape")).message));
-check("reviveError: an ERROR entry round-trips back into a real Error, so the core's own `catch` sees the cause",
-  () => { const r = reviveError(errorShape(new RangeError("nope"))); return r instanceof Error && r.name === "RangeError" && r.message === "nope"; });
 check("reviveError: a revived error carries the `workItemOutcome` mark — it is how a core's catch tells a DELIVERED outcome (retry-budget material) from a local throw (a bug that must surface), so dropping the mark silently turns code bugs into 'host rejected' retries",
-  () => { const e = reviveError(errorShape(new TypeError("529 overloaded"))); return e.workItemOutcome === true && e.name === "TypeError"; });
+  () => { const e = reviveError(errorShape(new TypeError("529 overloaded"))); return e.workItemOutcome === true && e.name === "TypeError"; });check("reviveError: an ERROR entry round-trips back into a real Error, so the core's own `catch` sees the cause",
+  () => { const r = reviveError(errorShape(new RangeError("nope"))); return r instanceof Error && r.name === "RangeError" && r.message === "nope"; });
 check("record: an unknown outcome throws — there are exactly three states and a fourth is an orchestration bug",
   () => { try { record(workItem(okItem), "maybe"); return false } catch { return true } });
 
@@ -738,6 +737,49 @@ const genSrc = readFileSync(GENERATED, "utf8");
   const res = spawnSync(process.execPath, [path.join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   check("generator: the shipped `.workflow.js` is IN SYNC with the core — an edit to either alone must fail here, not ship as a silent divergence",
     res.status === 0, () => `${res.stdout}${res.stderr}`);
+  // ANTI-VACUITY on the gate itself (PR #128 review, round 18). `--check` now runs behind an entry-point guard, so
+  // the script is importable and a test can reach `stripComments`. A guard that stopped matching — a launcher that
+  // hands over a symlinked or differently-cased argv[1] — would make this script exit 0 having compared NOTHING,
+  // and a status-only assertion would call that green. So the gate must be seen to have SPOKEN: one line per target.
+  check("generator: `--check` actually COMPARED both targets — a status-0 run that printed nothing is a gate that did not run, not a gate that passed",
+    () => {
+      const lines = `${res.stdout}`.split("\n").filter((l) => /matches the core|is out of sync/.test(l));
+      return lines.length === 2;
+    },
+    () => `stdout was: ${JSON.stringify(res.stdout)}`);
+}
+/* PR #128 (round 17) — EVERY SIBLING EXPORT A MODULE CALLS MUST BE IN ITS IMPORT LIST.
+   This is the one defect class the generated artifact CANNOT show and the slice suite cannot see: the inlined
+   artifact shares a single scope, so a name missing from `core.mjs`'s import list resolves there and throws only on
+   the MODULE path (Codex, the CLI). It has now shipped twice — `reconcileUnconsumed` (caught by this suite on a green
+   baseline the artifact ran fine) and `pairParts`, which reached review inside the round-close warning that fires
+   exactly when a persist writer under-reports `unconsumedWritten`, i.e. on the run that most needed to close.
+   Structural rather than per-name: it reads every `build-executor/*.mjs`, and for each sibling export the module
+   CALLS (`name(` — the narrowest evidence it is executed) but does not import and does not declare locally, it fails.
+   Block comments and whole-line `//` comments are stripped first, so prose naming a helper is never a call site. */
+{
+  const decomment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const BEX = path.join(CORE, "build-executor");
+  const unresolved = [];
+  for (const file of readdirSync(BEX).filter((f) => f.endsWith(".mjs"))) {
+    const raw = readFileSync(path.join(BEX, file), "utf8");
+    const src = decomment(raw);
+    for (const m of raw.matchAll(/import \{([^{}]*?)\} from '(\.\/[\w./-]+\.mjs)'/g)) {
+      const imported = new Set(m[1].split("\n").filter((l) => !l.trim().startsWith("//"))
+        .join(" ").split(",").map((s) => s.trim()).filter(Boolean));
+      let sibSrc;
+      try { sibSrc = readFileSync(path.resolve(BEX, m[2]), "utf8"); } catch { continue; }
+      for (const e of sibSrc.matchAll(/^export (?:const|function\*?|let|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+        const name = e[1];
+        if (imported.has(name)) continue;
+        if (new RegExp(String.raw`(?:const|let|var|function\*?|class)\s+` + name + String.raw`(?![\w$])`).test(src)) continue;
+        if (new RegExp(String.raw`(?<![\w$.])` + name + String.raw`\s*\(`).test(src)) unresolved.push(`${file}: ${name} (exported by ${m[2]})`);
+      }
+    }
+  }
+  check("module path (PR #128 round 17): every sibling export a `build-executor` module CALLS is in its import list — the inlined artifact shares one scope and hides this, so it throws only on the Codex/CLI path",
+    unresolved.length === 0, () => unresolved.join(" | "));
 }
 check("generated: no `import` or `export` survives except `meta` — the host evaluates this as a function body, so either would be a SyntaxError at run time",
   genSrc.split("\n").filter((l) => /^\s*(import|export)\s/.test(l)).join(" | ") === "export const meta = {",
@@ -1055,21 +1097,24 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       () => JSON.stringify(next1.items[0]).slice(0, 300));
     check("build-executor cli: the prompt carries the run's OWN engine command lines, shell-quoted — a Codex agent runs them verbatim",
       next1.items[0].prompt.includes("'/plug/skills/classic-to-freedom-migration/engine/migrate.mjs' '/mig/manifest.json' --units"));
-    check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL — a per-dispatch answer file (named by the dispatch label, so no retry or later call-site overwrites it) and the exact encoder source the offline suite executes",
+check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL — a per-dispatch answer file (named by the dispatch label, so no retry or later call-site overwrites it) and the exact encoder source the offline suite executes",
       next1.items[0].prompt.includes("/mig/reconcile-answer-baseline-1.json")
         && next1.items[0].prompt.includes("/mig/encode-answer.mjs")
         && next1.items[0].prompt.includes(bex.ANSWER_ENCODER_SOURCE),
-      () => next1.items[0].prompt.slice(-600));
-    // A green baseline closes the run with no stand write at all.
+      () => next1.items[0].prompt.slice(-600));    // A green baseline closes the run with no stand write at all.
     const green = {
       approval: { found: true, version: "plan-abc", quote: "approved" }, planVersion: "plan-abc",
       unitKeys: ["main"], buildOrder: ["main"], targetPackage: "P", packageState: "exists", mainEntity: "Deal",
       sectionHost: "existing-app", applicationCode: "App", componentTypes: [], componentResolution: [],
       pageSchemas: { main: "MainPage" }, parents: {}, reachability: [], reachabilityState: {},
       preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
+      // ENG-95503 — the answer channel's three round-trip keys are REQUIRED of Reconcile, so a fixture that omits
+      // them is refused by the schema exactly as a live agent would be. `[]` is the honest first-run value for all
+      // three: no answer has gone unconsumed, and no repair grant has been spent.
+      unconsumedResolutions: [], resolutionsReopened: [], resolutionsPending: [],
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
-      schemaNamePrefixEmpty: false,
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
+      schemaNamePrefixEmpty: false,
       // No `verify.planGaps`: the Reconcile prompt now names the fields to copy from the counts-only summary and
       // that is not among them (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`). Keeping it here
       // would make the suite's model answer describe a shape the contract no longer asks for.
@@ -1080,7 +1125,13 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
     const sub = cli("submit", runFile, "reconcile.baseline", gFile);
     check("build-executor cli: the Reconcile result is accepted (the required keys the schema names are all present)",
       sub.status === 0, () => sub.stderr);
-    const done = JSON.parse(cli("next", runFile).stdout);
+    // The CLI's stderr is surfaced when `next` produces nothing: a bare `JSON.parse(...stdout)` on a crashed run
+    // throws "Unexpected end of JSON input" and hides the actual error. ENG-95503 hit exactly that — the module
+    // path was missing an import the inlined artifact did not need, and the real message was three frames down.
+    const nextOut = cli("next", runFile);
+    check("build-executor cli: `next` answered at all — an empty stdout means the run crashed, and the reason is on stderr",
+      Boolean(nextOut.stdout.trim()), () => `status=${nextOut.status} stderr=${String(nextOut.stderr).slice(0, 800)}`);
+    const done = JSON.parse(nextOut.stdout);
     check("build-executor cli: a green baseline closes the run WITHOUT a single stand write — the idempotent answer to 'do the next undone thing' when nothing is undone",
       done.status === "done" && done.result.complete === true && done.result.skipped === true && done.result.rounds === 0,
       () => JSON.stringify(done.result).slice(0, 400));
@@ -1223,6 +1274,58 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
         && !/add any PLAN-level stderr line/.test(next1.items[0].prompt)
         && !/STRUCTURE INCOMPLETE`, `COVERAGE INCOMPLETE/.test(next1.items[0].prompt),
       () => (next1.items[0].prompt.match(/^.*planGaps.*$/gm) || []).join("\n---\n").slice(0, 900));
+    /* AC5 AT THE RUN LEVEL, EXECUTED (PR #128 review, round 17, Major 9).
+       Every consumption DECISION was executed by the offline helper suite, but the RUN-level guarantee — a
+       persisted unconsumed answer plus a green gate must NOT report `complete`, must hand the row back, and must
+       name it in `next` — was asserted only by source regexes over the shipped artifact. That is the exact defect
+       the PR body records as having survived into the branch ("AC5 held for exactly one session"): found by review,
+       not by a test. It needed nothing new from the harness — `submit` + `next` already drives the seed path and
+       the zero-work exit through `runComplete`. This is that run, and it is also the only check that fails when
+       the zero-work `next` stops appending `unconsumedNextClause`. */
+    {
+      const heldRun = path.join(tmp, "held.json");
+      cli("start", heldRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      JSON.parse(cli("next", heldRun).stdout);
+      const HELD_ID = "main#confirm:entity-filter:Department";
+      const held = {
+        ...green,
+        // The question is PUBLISHED and ANSWERED, so the pair is genuinely OWED — the row survives on the owed
+        // path rather than on `reconcileUnconsumed`'s fail-closed branch for an unpublished id.
+        preflightItems: [{ id: HELD_ID, pageKey: "main", kind: "entity-filter", item: "Department",
+          resolution: { answer: "filter Department by active records", decidedBy: "op", date: "2026-08-24" } }],
+        // The queue file carried this from an earlier session: the builder was handed the answer and declined it
+        // cleanly (`applied: false` + a real `why`), which files no `blocked` row and no `discrepancies` row.
+        unconsumedResolutions: [{ unit: "main", id: HELD_ID, source: "dispatch", kind: "entity-filter",
+          item: "Department", answer: "filter Department by active records",
+          why: "the lookup has no Active column on this stand" }],
+        // The grant was already spent on that earlier session, so nothing re-opens the unit: `resolutionsPending`
+        // is empty and `openNow()` is empty. This is the ONLY shape the scenario can take once the grant is gone.
+        resolutionsReopened: [{ unit: "main", id: HELD_ID }], resolutionsPending: [],
+      };
+      const hFile = path.join(tmp, "held-reconcile.json"); writeFileSync(hFile, JSON.stringify(held));
+      const hSub = cli("submit", heldRun, "reconcile.baseline", hFile);
+      check("build-executor cli (AC5): a Reconcile carrying a persisted unconsumed answer is accepted — the row is data the schema requires, not an error",
+        hSub.status === 0, () => hSub.stderr);
+      const hOut = cli("next", heldRun);
+      check("build-executor cli (AC5): `next` answered at all on the held-answer path",
+        Boolean(hOut.stdout.trim()), () => `status=${hOut.status} stderr=${String(hOut.stderr).slice(0, 800)}`);
+      const hDone = JSON.parse(hOut.stdout);
+      check("build-executor cli (AC5): a GREEN gate with a held answer does NOT report `complete` — the gate has no row for an answer that produced nothing, and before this was persisted the same folder reported `complete: true` on the next session",
+        hDone.status === "done" && hDone.result.complete === false && hDone.result.skipped === true && hDone.result.rounds === 0,
+        () => JSON.stringify(hDone.result).slice(0, 500));
+      check("build-executor cli (AC5): the run HANDS THE ROW BACK — an operator cannot act on a `complete: false` that names nothing",
+        Array.isArray(hDone.result.unconsumedResolutions) && hDone.result.unconsumedResolutions.length === 1
+          && hDone.result.unconsumedResolutions[0].id === HELD_ID
+          && /Active column/.test(hDone.result.unconsumedResolutions[0].why || ""),
+        () => JSON.stringify(hDone.result.unconsumedResolutions));
+      check("build-executor cli (AC5): the ZERO-WORK `next` names the held answer instead of advertising a completion report — this exit is the resume path a held answer actually takes, and it used to say `present the verify table as the completion report`",
+        /produced NO build action/.test(hDone.result.next) && /Department/.test(hDone.result.next)
+          && !/as the completion report/.test(hDone.result.next),
+        () => String(hDone.result.next).slice(0, 400));
+      check("build-executor cli (AC5): the REASON says the gate is green AND the run is not finished — the two facts an operator reconciles by hand otherwise",
+        /NOT complete/.test(hDone.result.reason) && /green/.test(hDone.result.reason),
+        () => String(hDone.result.reason));
+    }
 
     // A work-item id is not a filename. `build.child:Documents.r1` carries a colon, which Windows refuses — and
     // this suite runs on windows-latest.
@@ -1251,6 +1354,55 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       () => JSON.stringify(stopState.stop));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+
+/* PR #128 (approving round) — THE GENERATOR'S LF NORMALISATION, EXERCISED END TO END. `build-workflows.mjs` strips
+   CR because `.gitattributes` pins `*.workflow.js text eol=lf` and the on-disk check below asserts it — but on a
+   Linux/macOS runner the core modules are checked out LF-only, so removing that `.replace(...)` changes nothing CI
+   can see: the artifact is LF because its INPUT was, not because the generator normalised. Only a Windows
+   contributor with `core.autocrlf=true` would rediscover the bug, which is a pin with no failure mode on the
+   machine that runs it. This feeds CRLF INPUT through the real generator, on any OS, and asserts none survives. */
+{
+  const tmpGen = mkdtempSync(path.join(os.tmpdir(), "wf-crlf-"));
+  try {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const copyTree = (from, to) => {
+      mkdirSync(to, { recursive: true });
+      for (const e of readdirSync(from, { withFileTypes: true })) {
+        const s = path.join(from, e.name), d = path.join(to, e.name);
+        if (e.isDirectory()) copyTree(s, d); else copyFileSync(s, d);
+      }
+    };
+    mkdirSync(path.join(tmpGen, "scripts"), { recursive: true });
+    copyFileSync(path.join(repoRoot, "scripts/build-workflows.mjs"), path.join(tmpGen, "scripts/build-workflows.mjs"));
+    copyTree(path.join(repoRoot, "skills/_workflow-core"), path.join(tmpGen, "skills/_workflow-core"));
+    // The generator writes its two targets into these, so they have to exist.
+    mkdirSync(path.join(tmpGen, "skills/freedom-build-executor"), { recursive: true });
+    mkdirSync(path.join(tmpGen, "skills/classic-to-freedom-migration"), { recursive: true });
+    // CRLF-ify EVERY core module and template — exactly what a Windows checkout hands the generator.
+    const crlfify = (dir) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { crlfify(p); continue; }
+        if (!/\.(mjs|js)$/.test(e.name)) continue;
+        writeFileSync(p, readFileSync(p, "utf8").replaceAll("\r\n", "\n").replaceAll("\n", "\r\n"), "utf8");
+      }
+    };
+    crlfify(path.join(tmpGen, "skills/_workflow-core"));
+    const gen = spawnSync(process.execPath, [path.join(tmpGen, "scripts/build-workflows.mjs")], { encoding: "utf8" });
+    const outFile = path.join(tmpGen, "skills/freedom-build-executor/freedom-build-executor.workflow.js");
+    const produced = existsSync(outFile) ? readFileSync(outFile, "utf8") : "";
+    check("PR #128 (approving round): the generator NORMALISES CRLF core sources to LF — fed a fully CRLF checkout it still emits an artifact with no CR, so a Linux CI run can catch the loss of that normalisation instead of leaving it for a Windows contributor to rediscover",
+      gen.status === 0 && produced.length > 0 && !produced.includes("\r"),
+      () => ({ status: gen.status, stderr: String(gen.stderr).slice(0, 300),
+        bytes: produced.length, crCount: (produced.match(/\r/g) || []).length }));
+    // ... and the input really WAS CRLF, or the assertion above passes vacuously on an unchanged tree.
+    check("PR #128 (approving round): the fixture genuinely fed CRLF in — without this the normalisation check would pass on any LF checkout and prove nothing, which is the exact shape of the gap it was added to close",
+      readFileSync(path.join(tmpGen, "skills/_workflow-core/build-executor/core.mjs"), "utf8").includes("\r\n"));
+  } finally {
+    rmSync(tmpGen, { recursive: true, force: true });
   }
 }
 

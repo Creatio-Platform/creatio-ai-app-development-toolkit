@@ -101,6 +101,15 @@ jobs:
       - name: Workflow core ↔ generated workflow in sync
         if: always()
         run: node scripts/build-workflows.mjs --check
+      # PR #128 review (round 18) — the step above proves the artifact REGENERATES identically; it cannot prove the
+      # generation is CORRECT. `stripComments` is a hand-written tokeniser over a file that is mostly PROMPTS, where
+      # a line of instruction text may legitimately begin with `//`. A stripper bug that ate a character inside such
+      # a literal would corrupt both sides of the identity comparison above identically and pass for ever, surfacing
+      # only as an agent misbehaving on instructions nobody could see had changed. This is the direct test.
+      - name: Comment-stripper goldens (build-workflows)
+        if: always()
+        working-directory: engine-tests/build-workflows
+        run: node strip-comments.mjs
       # The host-neutral core itself: the work-item protocol's three outcomes, capability negotiation (an explicit
       # stop, never a silent degradation), journal replay/resume, CROSS-HOST PARITY (the Claude adapter and the CLI
       # must return the identical result), and an evaluation of the generated file the way the host evaluates it.

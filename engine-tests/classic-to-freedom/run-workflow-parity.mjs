@@ -631,6 +631,115 @@ for (const pair of PAIRS) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE POPULATED CARRY, which no scenario above can reach (PR #128 review, round 18).
+//
+// The scenario loop compares two RUNS. The baseline deliberately does not model the answers channel — matching
+// answers to questions, spending a repair grant, blocking `complete` on an unconsumed row all live in the shipped
+// core and are covered by run-infra/run-mapper — so `unconsumed` is `[]` on every scenario, on both sides. Which
+// means the whole populated-carry RENDERING, the wording this ticket actually adds, was compared on the empty path
+// only: two functions that both return `''` agree perfectly and prove nothing about the sentence they produce when
+// there IS something to say. A later edit to the shipped wording (a cap, a count, a re-phrasing) would drift silently
+// away from this frozen reference, which is the one thing the reference exists to prevent.
+//
+// So the RENDER is compared directly instead of through a run: the function source is sliced out of both files and
+// both are called with the same populated input. This keeps the baseline a frozen mirror of the OUTPUT rather than a
+// second implementation of the CHANNEL — the distinction the baseline's own note draws, and the reason a
+// scenario-driven populated carry is not the right instrument here.
+console.log(`\n===== freedom-build-executor: the populated answers-carry render =====`);
+
+// A top-level `function <name>(…) {` through the next line that is a bare `}` at column 0. Both files are generated
+// or written with that shape, and the slice is asserted non-empty below so a formatting change fails LOUDLY here
+// rather than silently comparing two empty strings.
+// The arrow-const twin of `sliceFunction`: `const NAME = (...) => {` through its closing brace at column 0.
+function sliceArrowConst(src, name) {
+  const start = src.indexOf(`\nconst ${name} = `);
+  if (start === -1) return null;
+  const end = src.indexOf("\n}\n", start);
+  if (end === -1) return null;
+  return src.slice(start + 1, end + 3);
+}
+
+function sliceFunction(src, name) {
+  const start = src.indexOf(`\nfunction ${name}(`);
+  if (start === -1) return null;
+  const end = src.indexOf("\n}\n", start);
+  if (end === -1) return null;
+  return src.slice(start + 1, end + 3);
+}
+
+async function loadRenderers(src, label) {
+  const parts = ["CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED"].map((k) => {
+    const m = new RegExp(`^const ${k} = (.+)$`, "m").exec(src);
+    return m ? `const ${k} = ${m[1]}\n` : null;
+  });
+  // `encodedAsciiBytes` joined this surface when the carry cap moved to wire bytes (round 19): `capCarryText`
+  // now calls it, so a slice without it throws instead of rendering. It is an arrow const in the generated
+  // artifact and in the baseline, which `sliceFunction` (declaration form only) cannot take -- hence the pair.
+  const fns = [
+    sliceArrowConst(src, "encodedAsciiBytes"),
+    ...["capCarryText", "unconsumedNextClause", "unconsumedLogLine"].map((n) => sliceFunction(src, n)),
+  ];
+  if (parts.includes(null) || fns.includes(null)) {
+    return { error: `${label}: could not slice the render surface (constants: ${parts.map((p) => p !== null).join()}, functions: ${fns.map((f) => f !== null).join()})` };
+  }
+  const body = `${parts.join("")}${fns.join("\n")}\nexport { capCarryText, unconsumedNextClause, unconsumedLogLine }\n`;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "carry-render-"));
+  const file = path.join(dir, "render.mjs");
+  writeFileSync(file, body, "utf8");
+  try { return { mod: await import(pathToFileURL(file).href), body }; }
+  catch (e) { return { error: `${label}: the sliced render surface does not evaluate — ${e.message}` }; }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+{
+  const pair = PAIRS.find((p) => p.name === "freedom-build-executor");
+  const baseSrc = read(pair.baseline), shipSrc = read(pair.shipped);
+  const base = await loadRenderers(baseSrc, "baseline"), ship = await loadRenderers(shipSrc, "shipped");
+  check("the render surface slices out of BOTH files", !base.error && !ship.error,
+    () => [base.error, ship.error].filter(Boolean).join("\n      "));
+
+  if (base.mod && ship.mod) {
+    // ONE entry, MANY entries, and a list long enough to cross the cap — the three shapes the wording distinguishes.
+    const ONE = [{ unit: "main", id: "#confirm:dcm:Deal", why: "the builder reported nothing" }];
+    const TWO = [...ONE, { unit: "list", id: "#confirm:list-columns:Deal", why: "declined" }];
+    const MANY = Array.from({ length: 40 }, (_, i) => ({ unit: `child:Entity${i}`, id: `#confirm:field:AVeryLongQuestionText${i}`, why: "x" }));
+    // NAMED FIELDS, not a mixed tuple (S6551): as `[["one entry", ONE], …]` the array's element type is
+    // `string | object[]`, so `label` reads as possibly-an-object at the interpolation below — a real
+    // stringification hazard in general, and here just noise. One shape per case says what each half is.
+    const CASES = [
+      { label: "one entry", entries: ONE },
+      { label: "two entries", entries: TWO },
+      { label: "forty entries (crosses the carry cap)", entries: MANY },
+      { label: "empty (the path the scenarios already cover)", entries: [] },
+    ];
+
+    for (const { label, entries } of CASES) {
+      for (const fn of ["unconsumedNextClause", "unconsumedLogLine"]) {
+        const a = base.mod[fn](entries), b = ship.mod[fn](entries);
+        check(`${fn} — ${label}: baseline and shipped render byte-identical text`, a === b,
+          () => `baseline (${a.length}): ${JSON.stringify(a.slice(0, 300))}\n      shipped  (${b.length}): ${JSON.stringify(b.slice(0, 300))}`);
+      }
+    }
+
+    // ANTI-VACUITY: every comparison above would also pass if both sides returned `''` for everything.
+    check("ANTI-VACUITY: the populated render actually produces text, and names the count and the ids",
+      () => {
+        const s = ship.mod.unconsumedNextClause(TWO);
+        return s.length > 0 && s.includes("2 operator answer(s)") && s.includes('"main"/"#confirm:dcm:Deal"');
+      },
+      () => JSON.stringify(ship.mod.unconsumedNextClause(TWO)));
+    check("ANTI-VACUITY: the cap is REACHED by the forty-entry case, so the capped path is the one compared",
+      () => {
+        const s = ship.mod.unconsumedNextClause(MANY);
+        return s.includes("…[truncated]") && s.includes("40 operator answer(s)");
+      },
+      () => JSON.stringify(ship.mod.unconsumedNextClause(MANY).slice(0, 300)));
+    check("ANTI-VACUITY: the two sides are not trivially equal — a deliberately altered baseline render DIVERGES",
+      () => base.mod.unconsumedNextClause(ONE) !== ship.mod.unconsumedNextClause(ONE).replace("ALSO:", "ALSO :"));
+  }
+}
+
 // The first differing key path between two results — a bare "they differ" on a 40-key return is not actionable.
 function firstJsonDiff(a, b, at = "result") {
   if (JSON.stringify(a) === JSON.stringify(b)) return "identical";
