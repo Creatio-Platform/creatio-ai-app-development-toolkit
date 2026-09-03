@@ -51,7 +51,14 @@ migrate.mjs: ⛔ COVERAGE INCOMPLETE — 4 schema member(s) unaccounted …
 migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: …   ← `--plan` mode; reaches this run via `--units.planGaps`
 migrate.mjs: ℹ this run ALSO has PLAN-level gaps (structure · coverage) — those are NOT
              buildable-out-of; return them to the caller instead of re-verifying against them.
+migrate.mjs: ℹ this run publishes 1 PLAN-level gap(s) in `units.planGaps` — NOT buildable-out-of,
+             and NOT reflected in this exit code: plan INCOMPLETE — placement not settled (1
+             blocker(s)). …   ← `--units` mode; INFORMATIONAL, exit stays 0
 ```
+
+The last line is the one THIS run actually sees, because Reconcile step 2 runs `--units`. It is
+informational by design and the exit code stays 0 there — exit 2 would conflate the plan-level
+kinds with `VERIFY INCOMPLETE`, which IS repairable by building. Gate on the array, not on it.
 
 **These lines are for a HUMAN reader.** Do not classify from them — the stop reads
 `--units.planGaps`. They are printed here so an operator recognises what the machine set is naming.

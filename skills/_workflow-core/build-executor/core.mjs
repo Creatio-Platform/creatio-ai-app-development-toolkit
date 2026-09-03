@@ -36,7 +36,7 @@ import {
   earnedFrom, findingsFor,
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
-  ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planGapKinds, planGapNext, planInvalidNextAll,
+  ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planGapKindLabel, planGapNext, planInvalidNextAll,
   preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
   resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
@@ -1012,7 +1012,7 @@ Return the schema. Nothing else.`
     // ENG-95857 — `state.planGaps` is `--units.planGaps` VERBATIM (all FOUR checks), topped up by nothing. It
     // used to be part-assembled from stderr lines an agent retyped, from an enumeration naming three of the four.
     if ((state.planGaps || []).length) {
-      log(`STOP — ${state.planGaps.length} PLAN-level gap(s) [${planGapKinds(state.planGaps).join(' · ')}]: the plan is incomplete, not the build`)
+      log(`STOP — ${state.planGaps.length} PLAN-level gap(s) [${planGapKindLabel(state.planGaps)}]: the plan is incomplete, not the build`)
       return runReturn({
         stopped: 'plan-gap',
         planGaps: state.planGaps,
@@ -2789,7 +2789,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // A plan gap can APPEAR mid-run (a repair that touched the manifest, a re-plan in another
       // session). It stops the run for the same reason it stops it at the head: nothing built closes it.
       if ((state.planGaps || []).length) {
-        log(`STOP after round ${round} — ${state.planGaps.length} PLAN-level gap(s) appeared [${planGapKinds(state.planGaps).join(' · ')}]`)
+        log(`STOP after round ${round} — ${state.planGaps.length} PLAN-level gap(s) appeared [${planGapKindLabel(state.planGaps)}]`)
         yield* persistPending('stopping on a plan gap')
         return runReturn({
           stopped: 'plan-gap', rounds: round, planGaps: state.planGaps, proposals,

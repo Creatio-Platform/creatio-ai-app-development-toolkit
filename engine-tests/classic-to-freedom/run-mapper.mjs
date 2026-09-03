@@ -2762,6 +2762,18 @@ const unitsCleanRun = runWithPlacement(FULL_PLACEMENT, "--units");
 check("ENG-95857 F5: a `--units` run over a CLEAN plan says nothing on stderr — the line reports the PUBLISHED set, so silence and `[]` can never disagree",
   unitsCleanRun.status === 0 && !/PLAN-level gap/.test(unitsCleanRun.stderr || ""),
   () => (unitsCleanRun.stderr || "").slice(0, 300));
+// PR review — THE SLICE'S OMISSION IS AN INVARIANT, so it is pinned rather than only asserted in a comment.
+// `pageUnitsSlice` carries every OTHER run-level field (`planVersion`, `sectionHost`, `applicationCode`) and
+// deliberately leaves `planGaps` out: a slice reaches a builder only after the run-level plan-gap stop has passed,
+// so carrying it would hand a build agent a plan gap it cannot close. Nothing made that fail if someone added it
+// "for symmetry" — the very thing the comment above `pageUnitsSlice` tells the next reader not to do.
+const sliceGapUnits = unitsFor(undefined);
+check("ENG-95857 PR review: the `--units --page` SLICE carries NO `planGaps` own-property even when the run-level set is non-empty — a builder is never handed a plan gap it cannot close",
+  () => { const slice = pageUnitsSlice(sliceGapUnits, "main");
+    return sliceGapUnits.planGaps.length > 0 && slice !== null && !Object.hasOwn(slice, "planGaps")
+      && Object.hasOwn(slice, "planVersion") && Object.hasOwn(slice, "sectionHost") },
+  () => ({ runLevel: sliceGapUnits.planGaps, sliceKeys: Object.keys(pageUnitsSlice(sliceGapUnits, "main") || {}) }));
+
 // R1 AC5 — the plan document a human approves against names the SAME kind the machine set does, so the two can
 // never be read as disagreeing.
 check("ENG-95857 R1: the plan document's ⛔ banner names the plan-completeness kind whenever the published set does",
@@ -7608,7 +7620,8 @@ const PG_MANIFEST = {
   signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
-// `planCompleteness: true` mirrors what the `--units` CLI passes (`planGoverned` in migrate.mjs) — `--units` is a
+// `planCompleteness: true` mirrors what the `--units` CLI passes (the literal in migrate.mjs's `--units` branch,
+// which is where the reasoning for it being a literal rather than a shared constant lives) — `--units` is a
 // plan-governed run, and the byte-identity check below compares this object against that CLI's output, so the two
 // callers must supply the same opts or the drift detector fires on the opts rather than on the producer.
 const pgOpts = { ...checklistOpts(PG_MANIFEST), planCompleteness: true };

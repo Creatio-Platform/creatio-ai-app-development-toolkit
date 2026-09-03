@@ -844,19 +844,23 @@ const gapKindsOf = (g) => {
 }
 const planGapKinds = (planGaps) => [...new Set((planGaps || []).flatMap(gapKindsOf))]
 
+const planGapKindLabel = (planGaps) => planGapKinds(planGaps).join(' · ') || 'unclassified'
+
 const MANIFEST_REMEDY = 'in the manifest (\`planMeta\` / \`signals\`, after the read-only stand check / \`placement\`, or the structure/coverage inputs named)'
 const GATE_REMEDY = 'a BLOCKED gate is fixed in the stand or the input schemas, NOT the manifest — resolve what its reasons name'
 function planGapNext(planGaps, tail = 'then re-run this build') {
-  const list = (planGaps || []).map(String).filter((s) => s.trim())
+  const all = (planGaps || []).map(String)
+  const list = all.filter((s) => s.trim())
   const kinds = planGapKinds(list)
+  const reported = list.length ? list.join(' · ') : '(the entries carry no text)'
   const replan = `Then re-run \`--plan --out\`, get the NEW plan version approved, ${tail}`
   if (!kinds.length)
-    return `${list.length} PLAN-level gap(s) this script could not classify — act on the engine's own text: ${list.join(' · ')} (a BLOCKED correctness gate is fixed in the stand or the input schemas; anything else ${MANIFEST_REMEDY}). ${replan}`
+    return `${all.length} PLAN-level gap(s) this script could not classify — act on the engine's own text: ${reported} (a BLOCKED correctness gate is fixed in the stand or the input schemas; anything else ${MANIFEST_REMEDY}). ${replan}`
   const parts = []
   const gated = kinds.includes('gate BLOCKED')
   if (gated) parts.push(GATE_REMEDY)
   if (kinds.some((k) => k !== 'gate BLOCKED')) parts.push(`${gated ? 'the rest are' : 'answered'} ${MANIFEST_REMEDY}`)
-  return `${kinds.join(' · ')} — ${parts.join('; ')}. ${replan}`
+  return `${kinds.join(' · ')} — ${parts.join('; ')}. The engine reported: ${reported}. ${replan}`
 }
 function buildMode(raw) {
   const BUILD_MODES = ['auto', 'checkpoints', 'guided']
@@ -2466,7 +2470,7 @@ Return the schema. Nothing else.`
     }
 
     if ((state.planGaps || []).length) {
-      log(`STOP — ${state.planGaps.length} PLAN-level gap(s) [${planGapKinds(state.planGaps).join(' · ')}]: the plan is incomplete, not the build`)
+      log(`STOP — ${state.planGaps.length} PLAN-level gap(s) [${planGapKindLabel(state.planGaps)}]: the plan is incomplete, not the build`)
       return runReturn({
         stopped: 'plan-gap',
         planGaps: state.planGaps,
@@ -3569,7 +3573,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       }
 
       if ((state.planGaps || []).length) {
-        log(`STOP after round ${round} — ${state.planGaps.length} PLAN-level gap(s) appeared [${planGapKinds(state.planGaps).join(' · ')}]`)
+        log(`STOP after round ${round} — ${state.planGaps.length} PLAN-level gap(s) appeared [${planGapKindLabel(state.planGaps)}]`)
         yield* persistPending('stopping on a plan gap')
         return runReturn({
           stopped: 'plan-gap', rounds: round, planGaps: state.planGaps, proposals,

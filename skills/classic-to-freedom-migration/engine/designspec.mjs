@@ -3565,7 +3565,9 @@ function verifyTally() {
 // them unconditionally would fire on a `--spec` run that was never asked to satisfy them. Emptiness is not a
 // usable proxy either: an absent `planMeta` is exactly what a legitimate `--spec` run looks like AND what an
 // unfilled `--plan` run looks like, so a check inferred from it would disable itself on the failure it exists to
-// catch. The caller that knows the mode says so; see `planGoverned` in migrate.mjs.
+// catch. The caller that knows the mode says so: migrate.mjs passes `planCompleteness: true` as a literal in its
+// `--units` branch, and that branch is the ONE site that publishes a machine-readable plan-gap set. Deliberately
+// not a shared constant — the reasoning is written out at that call site.
 export function planGaps(result, opts = {}) {
   const g = [];
   if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
