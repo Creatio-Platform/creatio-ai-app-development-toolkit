@@ -3209,9 +3209,9 @@ function resolveEvidenceCombinedVk(vk, ctx) {
       const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
       contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page: re-file the record with what is actually there, or confirm the deliverable really is absent.`;
     }
-    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing", "verifier"];
   }
-  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing", "verifier"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
   return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
@@ -3222,7 +3222,7 @@ function resolveEvidenceCombinedVk(vk, ctx) {
 function resolveEvidenceFiledPart(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""})`;
-  if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
+  if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing", "verifier"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
   return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
 }
@@ -3241,9 +3241,9 @@ function resolveEvidenceJudgedPart(vk, ctx) {
       const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
       contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page.`;
     }
-    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing", "verifier"];
   }
-  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing", "verifier"];
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified", "verifier"];
   return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
@@ -3492,21 +3492,50 @@ function verifyCtxFactory(root) {
 // on their own. `complete` is kept exactly as before (missing||unverified) for the post-hoc `--verify` CLI verdict
 // (AC7/AC8), which still treats an unconfirmed row as a reason not to call the page done.
 //
+// ENG-95901 (reopened 2026-09-03) — the SAME conflation survived one level up, in the run-level counters. A row the
+// JUDGE rejected, or one the verifier filed as `false`, resolves `❌ MISSING` and used to carry no owner at all, so
+// it landed on the BUILDER's side of the axis: the 2026-09-02 paired run closed `⛔ INCOMPLETE, missing: 3` with all
+// three rows being evidence rejections and not one deliverable short. Those five return sites now name `"verifier"`
+// (they are the read-only verifier's / judge's rows by contract — a builder may not file them), and the tally keeps
+// FOUR cells, not three: {builder, verifier} × {missing, unverified}.
+//
+// The counters are ADDITIVE, deliberately: `missing` and `unverified` keep their exact former meaning (every ❌ row,
+// every ⚠ row), because they are what the human-facing `--verify` verdict and the CLI exit code read, and AC7/AC8 of
+// the first round pinned that behaviour. The split rides alongside, mirroring the `complete` → `buildComplete`
+// precedent this same ticket set:
+//   · `buildMissing` — ❌ rows the BUILDER owns; this is "my build is short", the counter a park/close report wants;
+//   · `rejected`     — ❌ rows the verifier/judge owns (evidence rejected, or filed `false`); NOT a build shortfall;
+//   · `unfiled`      — ⚠ rows the verifier owns (nobody has filed the record yet).
+// Invariants, pinned by golden: `missing === buildMissing + rejected`, `builderOpen === buildMissing + builder-owned
+// unverified`, and therefore per page `rejected = missing - buildMissing` and `unfiled = unverified - (builderOpen -
+// buildMissing)`. That derivability is why the per-page entry gains exactly ONE integer (`buildMissing`) and not
+// three: every page entry of `--verify-summary` is transcribed into the Reconcile agent's answer against a
+// 16000-byte wire ceiling (ENG-95930), so a per-page field costs bytes on every page of the plan while the totals
+// cost them once.
+//
+// NOT named `evidenceRejected`: that name is already taken in the same run, as the reconcile answer's ARRAY OF IDS
+// (`state.evidenceRejected`, read by `earnedFrom`). One word in two shapes is what an LLM agent transcribing both
+// into one answer gets wrong, so the counter is `rejected` and the id list keeps its name.
+//
 // PR review: the axis is keyed on the row's OWNER, not on its `missing`/`unverified` label. Keying it on the label
 // was wrong in the dangerous direction — `resolveFieldsByIdentity` returns `unverified` for ANY field count below
 // expected including `0/N`, `resolveCountVk` returns it for any partial component count, and "no `--built.pages`
 // entry" / "re-run get-page and pass viewConfig VERBATIM" are `unverified` too. All of those are the builder's own,
 // named, actionable work, and a page with none of its expected fields reported `buildComplete: true`.
 function verifyTally() {
-  const t = { missing: 0, unverified: 0, builderOpen: 0, pages: {} };
+  const t = { missing: 0, unverified: 0, builderOpen: 0, buildMissing: 0, rejected: 0, unfiled: 0, pages: {} };
   t.add = (pageKey, outcome, row, owner) => {
-    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, builderOpen: 0, complete: true, buildComplete: true, openRows: [] });
+    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, builderOpen: 0, buildMissing: 0, complete: true, buildComplete: true, openRows: [] });
     if (outcome !== "missing" && outcome !== "unverified") return;
     t[outcome]++; p[outcome]++; p.complete = false;
     // `builderOpen` is the count that matches the axis — how many open rows this builder can actually act on. The
     // scoped exit-2 diagnostic reports THIS, not `missing`: a `0/N expected fields` page has `missing: 0` and would
     // otherwise announce "0 MISSING deliverable(s)" while exiting 2, which reads as a broken gate.
-    if (owner !== "verifier") { p.buildComplete = false; p.builderOpen++; t.builderOpen++; }
+    if (owner !== "verifier") {
+      p.buildComplete = false; p.builderOpen++; t.builderOpen++;
+      if (outcome === "missing") { p.buildMissing++; t.buildMissing++; }
+    } else if (outcome === "missing") t.rejected++;
+    else t.unfiled++;
     p.openRows.push(row);
   };
   return t;
@@ -3522,8 +3551,15 @@ export function planGaps(result) {
   if (result?.coverage?.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
   return g;
 }
-function verifyVerdict(missing, unverified) {
-  if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
+// ENG-95901 (reopened) — this sentence is the one the 2026-09-03 comment quotes: it said "3 machine-checked
+// deliverable(s) MISSING from YOUR BUILD" on a run whose build was whole and whose three ❌ rows were records the
+// judge rejected. It is also the sentence the close report presents verbatim (`verify.md`), so a wrong attribution
+// here is what an operator reads. The SEVERITY is unchanged — a rejected record is still ⛔, still a reason not to
+// call the run done — only the CLAIM about whose work is short is split onto the axis that now exists.
+function verifyVerdict(missing, unverified, buildMissing = missing, rejected = 0) {
+  if (buildMissing > 0 && rejected > 0) return `⛔ **INCOMPLETE — ${buildMissing} machine-checked deliverable(s) MISSING from YOUR BUILD, and ${rejected} evidence row(s) REJECTED by the judge** (build the first set; the rejected records are re-FILED by the read-only verifier/judge, not built)`;
+  if (buildMissing > 0) return `⛔ **INCOMPLETE — ${buildMissing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
+  if (rejected > 0) return `⛔ **NOT DONE — ${rejected} evidence row(s) REJECTED by the judge; YOUR BUILD is NOT short** (re-FILE the record with what is actually on the page — nothing here is built)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
   return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
 }
@@ -3560,13 +3596,13 @@ export function renderVerify(result, opts = {}, built = {}) {
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }
-  const { missing, unverified, builderOpen, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified);
+  const { missing, unverified, builderOpen, buildMissing, rejected, unfiled, pages } = tally;
+  const verdict = verifyVerdict(missing, unverified, buildMissing, rejected);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),
     ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages };
+  return { markdown: md, missing, unverified, builderOpen, buildMissing, rejected, unfiled, complete: missing === 0 && unverified === 0, pages };
 }
 
 // THE IN-CONTEXT COMPLETENESS GATE'S OWN CALL SITE (ENG-95469, A3). The post-hoc `--verify` sweep above reconciles
@@ -3608,10 +3644,10 @@ export function verifyUnit(result, opts = {}, built = {}, pageKey) {
     // (`error`, `complete: false`, `buildComplete: false`) instead so the caller / CLI fails distinctly rather than
     // reading a false green.
     const known = new Set(checklistGroups(result, opts).map((g) => g.pageKey));
-    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
-    return { pageKey, complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
+    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
+    return { pageKey, complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
   }
-  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen, openRows: p.openRows, planGaps: gaps };
+  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen, openRows: p.openRows, planGaps: gaps };
 }
 
 // The MACHINE-READABLE verdict (`--verify --verify-json <file>`). Everything `renderVerify` already computed —
@@ -3625,6 +3661,9 @@ export function verifyUnit(result, opts = {}, built = {}, pageKey) {
 export function verifyReport(result, v) {
   return {
     complete: v.complete, missing: v.missing, unverified: v.unverified,
+    // The owner split (ENG-95901 reopened). `missing` stays every ❌ row; `buildMissing` is the builder-owned half —
+    // the one a caller scheduling repair rounds must read, since `rejected` rows are not its work to redo.
+    buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled,
     planGaps: planGaps(result),
     pages: v.pages,
   };
@@ -3643,9 +3682,9 @@ export function verifyReport(result, v) {
 export function verifyDigest(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
-    pages[k] = p?.complete === true ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen } : p;
+    pages[k] = p?.complete === true ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen } : p;
   }
-  return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, planGaps: planGaps(result), pages };
 }
 
 // THE COUNTS-ONLY SUMMARY (`--verify-summary <file>`). SAME SHAPE as `verifyDigest` for the totals and the per-page
@@ -3666,9 +3705,9 @@ export function verifyDigest(result, v) {
 export function verifySummary(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
-    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, unverified: p?.unverified, builderOpen: p?.builderOpen };
+    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen };
   }
-  return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, planGaps: planGaps(result), pages };
 }
 
 // THE WIRE'S OWN BYTES — the size the summary costs once the Reconcile agent's answer is ASCII-encoded for

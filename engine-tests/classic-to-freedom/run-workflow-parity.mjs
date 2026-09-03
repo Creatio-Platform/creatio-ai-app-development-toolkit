@@ -249,12 +249,12 @@ function buildScenarios() {
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
     staleQueueKeys: [], newKeys: [],
-    verify: verify({ "child:Documents": { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true }, main: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
+    verify: verify({ "child:Documents": { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
     exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
+    verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({

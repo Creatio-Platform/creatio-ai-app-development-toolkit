@@ -59,6 +59,18 @@ export function unitStem(unit, pageNo) {
 }
 export const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
+// ENG-95901 (reopened) — the shortfall split behind every "N MISSING" line. Rationale: designspec.mjs `verifyTally`.
+// A verdict predating `buildMissing` falls back to `missing` — over-report, never a false zero.
+export function shortfallOf(st) {
+  const missing = st?.missing ?? 0
+  const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
+  return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
+}
+export function shortfallText(st) {
+  const { buildMissing, rejected } = shortfallOf(st)
+  return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
+}
+
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:
 // a key ABSENT from the verdict is open, because absent means nothing confirmed it — most often that
 // `--verify` never ran (the baseline round, before a built file exists) or that the page could not be

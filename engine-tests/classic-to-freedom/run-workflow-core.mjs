@@ -1006,12 +1006,12 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       { key: "c", sc: { ran: false } },
       { key: "d", sc: { ran: true, complete: false } },
     ], (k) => ({ key: k, kind: "page" }),
-      { pages: { a: { complete: false, buildComplete: false }, b: { complete: false, buildComplete: false },
-        c: { complete: false, buildComplete: false }, d: { complete: false, buildComplete: false } } }, {}, null)
+      { pages: { a: { complete: false, buildComplete: false, buildMissing: 0 }, b: { complete: false, buildComplete: false, buildMissing: 0 },
+        c: { complete: false, buildComplete: false, buildMissing: 0 }, d: { complete: false, buildComplete: false, buildMissing: 0 } } }, {}, null)
       .map((m) => `${m.key}:${m.kind}`).join(" | ")
       === "a:reported-complete-but-verifier-open | b:ran-without-verdict | c:gate-not-run",
     () => JSON.stringify(selfCheckMismatches([{ key: "b", sc: { ran: true } }],
-      (k) => ({ key: k, kind: "page" }), { pages: { b: { complete: false, buildComplete: false } } }, {}, null)));
+      (k) => ({ key: k, kind: "page" }), { pages: { b: { complete: false, buildComplete: false, buildMissing: 0 } } }, {}, null)));
   // ENG-95474 — the continuation cap is the continuation path's ONLY termination guarantee, so it is EXECUTED here
   // rather than matched against the constant in the source.
   check("build-executor helpers: the continuation ceiling terminates — spent < cap is honoured, spent === cap is refused, and cap 0 refuses every ask (never read as `no limit`)",
@@ -1064,7 +1064,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       schemaNamePrefixEmpty: false,
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
-      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } },
+      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     };
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));

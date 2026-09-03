@@ -139,7 +139,7 @@ const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
 const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
-const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
+const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "shortfallOf", "shortfallText", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
   "appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
   // ENG-95468 — the other two axes of the same pre-build question: the templates the plan names, and whether the
@@ -377,6 +377,23 @@ check("ENG-95901: derivedBuildComplete is the ONE shared derivation behind selfC
 check("ENG-95901 (review): derivedBuildComplete reads the ROWS before the lossy `missing` count — a legacy-shaped report with `missing: 0` but a BUILDER-owned open row is NOT build-complete",
   () => wf.derivedBuildComplete({ complete: false, missing: 0,
     openRows: [{ deliverable: "Fields — 2 expected", status: "⚠ verify", evidence: "0/2 expected fields present", outcome: "unverified", owner: "builder" }] }) === false);
+// ===== ENG-95901 (REOPENED 2026-09-03) — the RUN-LEVEL half: `missing` folds judge-REJECTED rows in ==============
+// `shortfallOf`/`shortfallText` are what every "N MISSING" line now reads. The degradation order is the load-bearing
+// part: a verdict written before `buildMissing` existed must OVER-report (fall back to the conflated `missing`),
+// never under-report, because a false zero on the build axis is the failure mode that ships a short page as done.
+check("ENG-95901 (reopened): shortfallOf SPLITS a verdict that carries `buildMissing` — the rejected rows are the remainder, and the three numbers reconcile",
+  () => { const r = wf.shortfallOf({ missing: 3, buildMissing: 1 });
+          return r.missing === 3 && r.buildMissing === 1 && r.rejected === 2 && r.missing === r.buildMissing + r.rejected; });
+check("ENG-95901 (reopened): shortfallOf on a LEGACY verdict with no `buildMissing` falls back to `missing` — it over-reports the build gap rather than printing a false zero, the only safe direction for a completeness line",
+  () => { const r = wf.shortfallOf({ missing: 3 }); return r.buildMissing === 3 && r.rejected === 0; });
+check("ENG-95901 (reopened): shortfallOf never returns a NEGATIVE rejected count on a malformed verdict (`buildMissing > missing`) — a human-facing line must not print '-2 judge-rejected'",
+  () => wf.shortfallOf({ missing: 1, buildMissing: 4 }).rejected === 0);
+check("ENG-95901 (reopened): shortfallOf on an ABSENT verdict is all zeros, not NaN — the close line runs on a run that never reached a verify pass",
+  () => { const r = wf.shortfallOf(undefined); return r.missing === 0 && r.buildMissing === 0 && r.rejected === 0; });
+check("ENG-95901 (reopened): shortfallText is UNCHANGED wording when nothing was rejected — the park reason a reader already knows does not churn on runs this ticket does not touch",
+  () => wf.shortfallText({ missing: 3, buildMissing: 3 }) === "3 MISSING");
+check("ENG-95901 (reopened): shortfallText NAMES the rejected half when the two differ — this is the sentence `parkedWhy` and the close line put in front of an operator instead of the conflated '3 MISSING'",
+  () => wf.shortfallText({ missing: 3, buildMissing: 1 }) === "1 MISSING + 2 judge-rejected");
 check("ENG-95901 (review): the same shape with only VERIFIER-owned open rows still reads build-complete — the boundary the axis exists for is untouched",
   () => wf.derivedBuildComplete({ complete: false, missing: 0,
     openRows: [{ deliverable: "Evidence", status: "⚠ verify", evidence: "no complete evidence record", outcome: "unverified", owner: "verifier" }] }) === true);
@@ -464,7 +481,7 @@ check("ENG-95901 (review): the in-context 'still short' log line carries NO coun
   const K = "child:A";
   const unitK = [{ key: K, kind: "page" }];
   const budgetSpentAgain = { [K]: 3 };
-  const evidenceOnlyOpenAgain = { pages: { [K]: { complete: false, buildComplete: true } } };
+  const evidenceOnlyOpenAgain = { pages: { [K]: { complete: false, buildComplete: true, buildMissing: 0 } } };
   check("ENG-95901 item 7 (deliberately reverted): a page with `buildComplete: true` (build done, only evidence unfiled) IS round-budget parkable once its budget is spent — parkableKeys applies the SAME rule to every open unit, with no build-axis exclusion",
     () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, { maxRounds: wf.DEFAULT_MAX_ROUNDS, alreadyParked: new Set() }).join(",") === K,
     () => wf.parkableKeys({}, budgetSpentAgain, unitK, evidenceOnlyOpenAgain, {}, undefined, { maxRounds: wf.DEFAULT_MAX_ROUNDS, alreadyParked: new Set() }));
@@ -478,9 +495,9 @@ check("ENG-95901 (review): the in-context 'still short' log line carries NO coun
   // ENG-95901: the outer "is this unit still open" filter stays on the COMBINED `complete` (unchanged, AC7/AC8 — a
   // unit open only on unfiled evidence still belongs in this audit sweep); the MISMATCH branch itself now compares
   // `buildComplete` to `buildComplete`, so each fixture below carries both fields deliberately.
-  const openVerify = { pages: { "child:A": { complete: false, buildComplete: false } } };   // verifier: OPEN, and a genuine MISSING deliverable
-  const openOnEvidenceOnly = { pages: { "child:A": { complete: false, buildComplete: true } } }; // verifier: OPEN, but build is done — only unfiled evidence
-  const greenVerify = { pages: { "child:A": { complete: true, buildComplete: true } } };   // …and here it finds it fully COMPLETE
+  const openVerify = { pages: { "child:A": { complete: false, buildComplete: false, buildMissing: 0 } } };   // verifier: OPEN, and a genuine MISSING deliverable
+  const openOnEvidenceOnly = { pages: { "child:A": { complete: false, buildComplete: true, buildMissing: 0 } } }; // verifier: OPEN, but build is done — only unfiled evidence
+  const greenVerify = { pages: { "child:A": { complete: true, buildComplete: true, buildMissing: 0 } } };   // …and here it finds it fully COMPLETE
   const fabricatedGreen = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
   const notRun = [{ key: "child:A", sc: { ran: false, notRunWhy: "could not get-page" } }];
   const honestComplete = [{ key: "child:A", sc: { ran: true, buildComplete: true } }];
@@ -1708,10 +1725,25 @@ const missingBuildComplete = wf.reconcileShapeErrors
 check("ENG-95901 + ENG-95930: the shipped shape check REFUSES a verify page entry with no `buildComplete` — the field the loosened schema no longer forces, and the one `derivedBuildComplete` silently replaces with the combined `complete` (which folds in evidence a builder cannot clear) when it goes missing",
   missingBuildComplete.some((m) => m.includes("buildComplete")),
   () => missingBuildComplete);
+// ENG-95901 (REOPENED) — the SAME drift gate for the second required field. `buildMissing` is what every "N MISSING"
+// line reads now, and an LLM does not reproduce a field nothing asks for: if the shape check stops forcing it, the
+// answer arrives without it, `shortfallOf` falls back to the conflated `missing`, and the reopened bug is back with
+// every unit test above still green. Asserted through the shipped checker, and paired with the PROMPT that names it
+// — the contract only holds when both the asker and the refuser carry it.
+const missingBuildMissing = wf.reconcileShapeErrors
+  ? wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false } } } })
+  : [];
+check("ENG-95901 (reopened): the shipped shape check REFUSES a verify page entry with no `buildMissing` — without it the answer degrades to the conflated `missing` and a judge-rejected row is reported as a build gap again",
+  missingBuildMissing.some((m) => m.includes("buildMissing")),
+  () => missingBuildMissing);
+check("ENG-95901 (reopened): the Reconcile PROMPT names `buildMissing` in the fields it orders copied — a field the checker requires but the prompt never mentions costs every attempt of every run instead of being supplied",
+  /COPY EVERY FIELD OF THE SUMMARY[\s\S]{0,900}buildMissing/.test(wfSrc)
+    && /buildMissing.{0,400}REQUIRED ON EVERY PAGE ENTRY/s.test(wfSrc),
+  () => "the prompt's field list does not name `buildMissing`");
 const goodDigest = {
   approval: { found: true, version: "v1" },
   verify: { complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [],
-    pages: { main: { complete: false, buildComplete: false, builderOpen: 1, missing: 1, unverified: 0,
+    pages: { main: { complete: false, buildComplete: false, buildMissing: 1, builderOpen: 1, missing: 1, unverified: 0,
       openRows: [{ n: 1, deliverable: "d", status: "s", evidence: "e", outcome: "missing", owner: "builder" }] } } },
   preflightItems: [{ id: "p1", pageKey: "main", resolution: null },
     { id: "p2", pageKey: "main", resolution: { answer: "yes", decidedBy: "me", date: "2026-08-26" } }],
@@ -1734,7 +1766,7 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
 // counts-only output must carry `buildComplete` per page and NO rows, and the shipped checker must accept it whole.
 {
   const richVerdict = { complete: false, missing: 2, unverified: 1, builderOpen: 1,
-    pages: { main: { complete: false, buildComplete: false, missing: 2, unverified: 1, builderOpen: 1,
+    pages: { main: { complete: false, buildComplete: false, buildMissing: 2, missing: 2, unverified: 1, builderOpen: 1,
       openRows: [{ n: 1, deliverable: "Field Amount", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } };
   const summary = verifySummary({}, richVerdict);
   check("ENG-95930 (review round 13): the REAL `verifySummary()` output — not a hand-built fixture — passes `reconcileShapeErrors` whole: counts-only (no `openRows` survives the projection), `buildComplete` kept per page, and zero faults on arrival",
@@ -1753,7 +1785,7 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
       // Complete pages carry openRows in the rich verdict too (rows closed late stay listed); the projection must
       // strip rows from EVERY page, not only incomplete ones.
       const done = i % 3 === 0;
-      pages[`child:Сторінка-${i}`] = { complete: done, buildComplete: done,
+      pages[`child:Сторінка-${i}`] = { complete: done, buildComplete: done, buildMissing: done ? 0 : 2,
         missing: done ? 0 : 2, unverified: 1, builderOpen: done ? 0 : 1,
         openRows: [{ n: 1, deliverable: "Поле Сума", status: "❌ MISSING", evidence: "0/7 полів", outcome: "missing", owner: "builder" }] };
     }
@@ -2701,7 +2733,7 @@ check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is att
 const shapeShort = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
   verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false } } } };
 const shapeOk = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
-  verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false } } } };
+  verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 0 } } } };
 let faultThenOkCalls = 0;
 const faultPrompts = [];
 const faultThenOk = await runWith({}, async (prompt) => {
@@ -2856,7 +2888,7 @@ check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight R
 // in the suite drives `dryRunReport`, so a regression — a wrong count, a dropped field, the old row-string shape
 // creeping back — would ship silently without this.
 const dryVerify = { complete: false, missing: 2, unverified: 1, builderOpen: 0, planGaps: [],
-  pages: { main: { complete: false, buildComplete: false, missing: 2, unverified: 1 } } };
+  pages: { main: { complete: false, buildComplete: false, buildMissing: 2, missing: 2, unverified: 1 } } };
 const dryRunPreview = await runToPostPreflight({ ...midRunBaseline, verify: dryVerify }, { ...midRunBaseline, verify: dryVerify }, { dryRun: true })
   .catch((e) => ({ threw: e.message }));
 check("ENG-95930: `dryRunReport` carries the COUNTS contract — `openRowCount` is missing+unverified from the verdict (and `null` when the unit has no verdict entry), `verifyTable` points at the rows on disk, and the unit entry carries no row prose",
@@ -3037,7 +3069,7 @@ const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
     // ENG-95930 — a page entry carries `complete`/`buildComplete` and a full open row because that is what the
     // response contract requires and what `reconcileShapeErrors` now checks on arrival. The old schema required the
     // same fields; this harness bypassed the host and so never had to produce them.
-    pages: Object.fromEntries(units.map((u) => [u, { complete: false, buildComplete: false,
+    pages: Object.fromEntries(units.map((u) => [u, { complete: false, buildComplete: false, buildMissing: 0,
       openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] }])),
   };
   const agentStub = async (prompt, opts = {}) => {
@@ -3269,7 +3301,7 @@ const runVerifyBranch = (queueWritten, extra = {}) => {
       persistWhys.push(m ? m[1] : "(no why)");
       return { written: true, parkKeys: [] };
     }
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 0, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -3304,7 +3336,7 @@ const runFailedJudge = () => {
     if (label.startsWith("build:")) return buildAnswer(false);
     if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
     if (label === "persist:carry") return { written: true, parkKeys: [] };
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 0, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))

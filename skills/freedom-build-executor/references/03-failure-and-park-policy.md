@@ -25,10 +25,14 @@ The verdict file already classifies them: `verify.json`'s `planGaps` holds the P
 and `complete` is the BUILD-side verdict (as opposed to `planGaps`, which is PLAN-level) — a run
 can be `complete: true` with a non-empty `planGaps`, which means there is nothing left to build and
 the run still stops. (`complete` itself still folds `missing` and `unverified` together; the
-builder-owned axis is `buildComplete`, covered below.) stderr names each one for a human reader:
+builder-owned axis is `buildComplete`, covered below. ENG-95901 reopened — `missing` folds two states as well: a
+row the JUDGE rejected is `❌` but is re-FILED by the verifier, not built. `buildMissing` is the builder-owned half
+and is what the park reason and the close line report; when the two differ the line reads
+`1 MISSING + 2 judge-rejected` instead of a flat `3 MISSING`.) stderr names each one for a human reader:
 
 ```
-migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING + 2 unconfirmed …
+migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING from the build + 2 unconfirmed …
+             (build whole, only rejected records → "— the RUN is not done — but YOUR BUILD is not short")
                                      ^^^^^^^^^^^^^^^^^^^^^^ repairable on-stand → repair round
 migrate.mjs: ⛔ GATE BLOCKED — do NOT build. …
 migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. …

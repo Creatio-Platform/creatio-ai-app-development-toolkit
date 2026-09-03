@@ -383,12 +383,15 @@ const VERIFY_RESULT = {
         // populate it — only `required` does. Without this, the agent-mediated Reconcile path could still legally
         // transcribe a page as `{complete:false, unverified:3}` with `buildComplete` omitted, and `derivedBuildComplete`
         // would fall back to the combined `complete`, silently reintroducing the exact conflation this ticket fixes.
-        required: ['complete', 'buildComplete'],
+        required: ['complete', 'buildComplete', 'buildMissing'],
         properties: {
           complete: { type: 'boolean' },
           buildComplete: { type: 'boolean' },
           builderOpen: { type: 'integer' },
           missing: { type: 'integer' },
+          // ENG-95901 (reopened) — the builder-owned half of `missing`; REQUIRED for the same reason
+          // `buildComplete` is, since `missing` alone folds in the evidence rows the judge rejected.
+          buildMissing: { type: 'integer' },
           unverified: { type: 'integer' },
           // Every row that is not ✅, as the engine emitted it: the same Deliverable / Status /
           // Evidence text the table shows. These are what the next build round is handed.
@@ -2238,7 +2241,22 @@ function runReturn(extra) {
     ...extra,
   }
 }
-const verdictOf = (v) => ({ missing: v?.missing ?? 0, unverified: v?.unverified ?? 0, pages: v?.pages || {} })
+// ENG-95901 (reopened) — the shortfall split, mirroring the shipped core: `missing` folds the judge-REJECTED
+// evidence rows in with the genuinely short build deliverables, so `buildMissing` is the builder-owned half and
+// `rejected` the remainder. A verdict predating the field falls back to `missing` (over-report, never a false zero).
+const shortfallOf = (st) => {
+  const missing = st?.missing ?? 0
+  const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
+  return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
+}
+const shortfallText = (st) => {
+  const { buildMissing, rejected } = shortfallOf(st)
+  return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
+}
+const verdictOf = (v) => {
+  const { missing, buildMissing, rejected } = shortfallOf(v)
+  return { missing, buildMissing, rejected: v?.rejected ?? rejected, unfiled: v?.unfiled ?? null, unverified: v?.unverified ?? 0, pages: v?.pages || {} }
+}
 
 // ---------------------------------------------------------------------------
 // Reconcile — the head of EVERY round. Read-only against the stand; its one write
@@ -2353,7 +2371,7 @@ DO SIX THINGS, in order:
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. **RETURN BOTH AS \`[]\` WHEN THERE IS NOTHING TO LIST — do not omit them.** Round 1 has nothing filed and nothing rejected, and that is the normal case, not a reason to leave the field out: both are REQUIRED, and the close row reads them to tell an id that is already earned from one that is merely unfiled. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer. Also return \`pagesRecorded\` — EVERY key whose \`pages\` entry already exists in the built file, whether that entry is a recorded object or \`false\`. That is what lets the verifier leave a page this round did not touch alone instead of re-reading the whole section every round; omit it and every page is fetched again, which is correct but wasteful.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
    - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the full machine verdict, \`--verify-digest\` the same minus completed pages' rows, \`--verify-summary\` the COUNTS-ONLY verdict you copy below, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
-   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified }\`. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
+   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`buildMissing\`/\`rejected\`/\`unfiled\`/\`unverified\`/\`builderOpen\`/\`planGaps\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, buildMissing, unverified }\`. **\`buildComplete\` AND \`buildMissing\` ARE REQUIRED ON EVERY PAGE ENTRY** — they are the builder-owned axis this script's park and close arithmetic reads. The combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the combined \`missing\` also folds in evidence rows the JUDGE rejected, which are re-FILED by the read-only verifier and are not a build gap at all; neither pair is interchangeable, and an answer missing either field is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
 
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
@@ -2824,7 +2842,7 @@ function parkWhy(key, rounds) {
   const u = unitOf(key)
   if (u.kind === 'reach') return `${head} — ${u.what || 'the on-stand wiring this key names'} was not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
   if (!st) return `${head} — the machine verdict carries no entry for this unit, so nothing confirmed it closed; the usual cause is that no Freedom schema is recorded for the key, which leaves nothing for the verifier to fetch`
-  return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
+  return `${head} — ${shortfallText(st)} + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
 }
 function parkRecord(key, why, rounds) {
   const n = typeof rounds === 'number' ? rounds : roundsRun(state.roundOf, localRounds, key)
@@ -3735,7 +3753,7 @@ if (pendingJudgeIds.size) {
         independence, planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
         pageSchemas, staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [] })
     }
-    log(`after preflight: ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${openNow().length} unit(s) open`)
+    log(`after preflight: ${shortfallText(state.verify)} + ${state.verify?.unverified ?? '?'} unconfirmed · ${openNow().length} unit(s) open`)
   } else {
     // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
     // have closed. Said out loud rather than retried — the round loop reconciles at its own tail either way.
@@ -4187,7 +4205,7 @@ await persistPending('closing the run')
 const complete = state.verify?.complete === true && parked.length === 0
 log(complete
   ? `COMPLETE after ${round} round(s): the engine gate is green`
-  : `NOT COMPLETE after ${round} round(s): ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s)`)
+  : `NOT COMPLETE after ${round} round(s): ${shortfallText(state.verify)} + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s)`)
 
 // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it.
 return runReturn({

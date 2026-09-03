@@ -72,7 +72,8 @@ string the `decisions.md` approval entry names, and the string the delegated bui
 `plan.md` is engine-WRITTEN, so nothing else can put a version in it and survive the next `--plan --out`.
 
 `--verify-json <file>` (only with `--verify`) writes the verdict a CALLER computes on:
-`{ complete, missing, unverified, planGaps, pages: { "<key>": { missing, unverified, complete, buildComplete,
+`{ complete, missing, buildMissing, rejected, unfiled, unverified, planGaps, pages: { "<key>": { missing,
+buildMissing, unverified, complete, buildComplete,
 openRows: [ { n, deliverable, status, evidence, outcome, id? } ] } } }`. It is ADDITIVE — stdout and `--out` still
 carry the Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at
 all, and the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open
@@ -84,7 +85,20 @@ BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate 
 two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
 each row's `owner` (`"builder"` / `"verifier"`), NOT on its `missing`/`unverified` label: `unverified` is also what a
 PARTIAL or unread build resolves to (`0/N expected fields`, `k/N components`, "no `--built.pages` entry"), all of
-them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
+them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports.
+
+ENG-95901 (reopened 2026-09-03) — the SAME split now applies to the ❌ rows, because `missing` folds two states
+together as well. A row the JUDGE rejected (`judge[id].convincing === false`), or one the verifier filed as `false`,
+is `❌ MISSING` and is **not** a deliverable short on the page: it is a record filed unconvincingly by the separate
+read-only verifier/judge, and re-filing it is their work, not the builder's. So `missing` keeps its old meaning
+(every ❌ row, and it is still what the human-facing verdict and the CLI exit code read), and three counters ride
+alongside it: `buildMissing` — the ❌ rows the BUILDER owns, the honest "my build is short" number; `rejected` — the
+❌ rows the verifier/judge owns; `unfiled` — the ⚠ rows the verifier owns (note that `unverified` is NOT the same
+number, since it also counts a partially-built page). `missing === buildMissing + rejected` always holds, so nothing
+is dropped from the totals. Per page only `buildMissing` is published alongside `missing` — the other two are
+derivable (`rejected = missing - buildMissing`) and every per-page field costs bytes on every page of the plan in
+the `--verify-summary` answer. The unscoped `⛔ VERIFY INCOMPLETE` stderr line now reads
+`N MISSING from the build + M evidence row(s) REJECTED by the judge (re-FILE the record — not a build gap)`. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
 creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each with its expected template, target
 package and `expect` counts (including
 `expect.fieldNames`, the element names the fields check matches on), plus the five reachability keys with

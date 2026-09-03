@@ -224,7 +224,8 @@ export const RECONCILE_SCHEMA = {
     staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
-    // planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
+    // planGaps, buildMissing, rejected, unfiled, pages["<key>"] = { complete, buildComplete, builderOpen, missing,
+    // buildMissing, unverified } }`, NO
     // `openRows`. The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
     // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
     // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
@@ -298,12 +299,16 @@ export const RECONCILE_SHAPE = {
   // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. Per
   // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
   // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
+  // ENG-95901 (reopened) — `buildMissing` is the builder-owned half of `missing` (rationale: designspec.mjs
+  // `verifyTally`), REQUIRED per page for the same reason `buildComplete` is: an agent drops a field nothing asks
+  // for, and a dropped one sends the arithmetic back to the conflated `missing`. `rejected`/`unfiled` stay optional
+  // totals — derivable, so an old answer degrades to arithmetic rather than to a wrong number.
   verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', planGaps: 'string[]' },
-    map: { pages: { required: ['complete', 'buildComplete'],
-      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer', unfiled: 'integer', planGaps: 'string[]' },
+    map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {
