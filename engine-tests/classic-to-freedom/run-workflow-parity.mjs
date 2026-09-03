@@ -26,12 +26,24 @@
 // WHAT THE `freedom-build-executor` BASELINE IS, as of ENG-96204: the PREVIOUSLY SHIPPED script, frozen. It began
 // life as the hand-written original the generator replaced, and it was replaced when the control-mode work (a
 // deliberate change to the return shape and to the Reconcile prompt) made every prompt and return diverge on
-// purpose — and replaced a SECOND time, in the same ticket, when the round-boundary stop was reworked onto
+// purpose — replaced a SECOND time, in the same ticket, when the round-boundary stop was reworked onto
 // ENG-95930's counts-plus-pointer pattern and `openRanked` left the return shape (DR-4 in the executor's decision
-// records). It therefore says nothing about the change that replaced it — that change's own coverage is the
-// executed suites in `run-infra.mjs` and `run-workflow-core.mjs` — and everything about the NEXT one: the whole
-// prompt text and return shape of the current behaviour is now pinned byte for byte. The value of this file is
-// always forward-looking, which is why replacing it is a reviewed act and not a build step.
+// records) — and a THIRD time, still in ENG-96204, when the engine began publishing per-page severity counts the
+// stop tallies (AC 2), spent round answers became a queue-file record the gate refuses by (`consumedRoundAnswers`,
+// DR-5), and the scenarios below were widened to drive the control-mode stops themselves. It therefore says nothing
+// about the change that replaced it — that change's own coverage is the executed suites in `run-infra.mjs` and
+// `run-workflow-core.mjs` — and everything about the NEXT one: the whole prompt text and return shape of the
+// current behaviour is now pinned byte for byte. The value of this file is always forward-looking, which is why
+// replacing it is a reviewed act and not a build step.
+//
+// WHAT THE `freedom-build-executor` SCENARIOS NOW COVER (ENG-96204, folding in ENG-96475): besides the `auto`-mode
+// runs the suite always had, `buildScenarios()` drives every control-mode outcome a caller can observe — a `round1`
+// run to `paused-at-round`; a `layout-first` LAYOUT pass to its stop, and the RESUMED logic pass (marker and count
+// on file, a valid `round-N` answer) to the next; the two refusals to start (`mode-not-chosen`, `mode-invalid`);
+// `awaiting-round-decision` on a folder one round deep with no answer; and the by-record refusal of a spent answer
+// against a walked-back count. Every one is a scripted host with fixed answers, so both sides see identical
+// inputs and the comparison is deterministic. What is NOT here: the two bundle-size checks (`run-infra.mjs`) and
+// any scenario that depends on a real filesystem — the host has none, and neither do these.
 //
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -280,6 +292,10 @@ function buildScenarios() {
     reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the section is in the app menu", miss: "pages stay unreachable" }],
     reachabilityState: { sectionRegistered: "unset" },
     preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
+    // ENG-96204 — the two RUN-level lists a real Reconcile answer always carries (both REQUIRED by the schema):
+    // the operator's run-scoped answers, and the round answers the queue file already records as spent. Empty
+    // here, the normal first run; the control-mode scenarios below override them.
+    runResolutions: [], consumedRoundAnswers: [],
     schemaNamePrefixEmpty: false,
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
@@ -596,6 +612,59 @@ function buildScenarios() {
         ], unresolved: [] },
         judge: { verdicts: [{ id: "#confirm:dcm:Deal", convincing: true, why: "queried" }], evidenceWritten: ["#confirm:dcm:Deal"], notes: "" },
       }),
+    },
+    // ENG-96204 (ENG-96475) — THE CONTROL-MODE STOPS, driven end to end. Each of these is a return shape and a
+    // prompt set the earlier scenarios (all `auto`) never reached, so a change to any of them was invisible here.
+    // `ONE_ROUND_SPENT` is what the queue file holds after one full round: every unit charged once, the folder's
+    // own count at 1. `ROUND_2_GO` is the operator's authorisation for the next round, as `--units` republishes it.
+    {
+      // Mode A: one round, a shortfall left open ⇒ `paused-at-round`, asking for `round-2`.
+      name: "`round1` — one round, still open, stops `paused-at-round`",
+      args: { ...ARGS, mode: "round1" },
+      answer: host({ reconciles: [RECONCILE(), RECONCILE({ roundOf: { "child:Documents": 1, list: 1, main: 1 }, roundsSpent: 1 })] }),
+    },
+    {
+      // Mode C, first invocation: the LAYOUT pass — page builders scoped to layout, no repair round charged, the
+      // marker recorded, the logic rows reported as scheduled rather than short.
+      name: "`layout-first` — the layout pass stops `paused-at-round` with the marker recorded",
+      args: { ...ARGS, mode: "layout-first" },
+      answer: host({ reconciles: [RECONCILE(), RECONCILE({ roundsSpent: 1, layoutPassDone: true })] }),
+    },
+    {
+      // Mode C, second invocation: the marker and the count are on file and the operator has authorised round 2 ⇒
+      // the LOGIC pass builds (step 6, no layout rebuild), spends a repair round, and stops asking for `round-3`.
+      name: "`layout-first` — the resumed LOGIC pass, authorised by `round-2`",
+      args: { ...ARGS, mode: "layout-first" },
+      answer: host({ reconciles: [
+        RECONCILE({ layoutPassDone: true, roundsSpent: 1, roundOf: {}, runResolutions: [{ item: "round-2", answer: "go" }] }),
+        RECONCILE({ layoutPassDone: true, roundsSpent: 2, roundOf: { "child:Documents": 1, list: 1, main: 1 }, runResolutions: [{ item: "round-2", answer: "go" }], consumedRoundAnswers: ["round-2"] }),
+      ] }),
+    },
+    {
+      // AC 1: no mode from any of the three sources ⇒ the run refuses to start, after the baseline Reconcile and
+      // before any stand write.
+      name: "no mode resolved — `mode-not-chosen`",
+      args: { ...ARGS, mode: undefined },
+      answer: host({ reconciles: [RECONCILE()] }),
+    },
+    {
+      // DR-2: a mistyped RECORDED mode is a structured stop, not an exception.
+      name: "a mistyped recorded control-mode answer — `mode-invalid`",
+      args: { ...ARGS, mode: undefined },
+      answer: host({ reconciles: [RECONCILE({ runResolutions: [{ item: "control-mode", answer: "round-1" }] })] }),
+    },
+    {
+      // AC 4: a folder one round deep, re-run with no authorisation on file ⇒ nothing is built.
+      name: "a re-run with no round answer on file — `awaiting-round-decision`",
+      args: { ...ARGS, mode: "round1" },
+      answer: host({ reconciles: [RECONCILE({ roundOf: { "child:Documents": 1, list: 1, main: 1 }, roundsSpent: 1 })] }),
+    },
+    {
+      // DR-5: the answer is on file AND already recorded as spent, while the count has been walked back to where
+      // it would be asked for again ⇒ refused by record, nothing built.
+      name: "a spent `round-2` answer against a walked-back count — refused by record",
+      args: { ...ARGS, mode: "round1" },
+      answer: host({ reconciles: [RECONCILE({ roundOf: {}, roundsSpent: 1, runResolutions: [{ item: "round-2", answer: "go" }], consumedRoundAnswers: ["round-2"] })] }),
     },
   ];
 }
