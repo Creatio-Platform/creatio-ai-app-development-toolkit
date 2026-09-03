@@ -168,7 +168,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
 const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings", "reopenKeySet"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
-const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
+const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
 // What a build agent is HANDED: its schema, its prompt, and the guidelines record it owes.
 const H_BUILD_PROMPT = ["resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
@@ -1199,6 +1199,21 @@ check("ownPackageRecord: only a STRICT `true` closes the app unit — a truthy s
   () => (wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: "yes" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg" }, "UsrPkg").appUnitComplete === false
     && wf.ownPackageRecord({ package: "UsrPkg", appUnitComplete: true }, "UsrPkg").appUnitComplete === true));
+
+// ENG-96147 — sectionRouteFrom is the ONLY place in the whole run that assembles a `#Section/...` string. A
+// guessed one (dropped `_ListPage` suffix, retyped from the section's code) cost a database flush and a
+// compile on a shared stand, so this function's whole job is to make composition impossible anywhere else:
+// given a schema name a builder copied verbatim out of a tool response, and NOTHING besides that name.
+check("sectionRouteFrom: a real schema name becomes '#Section/' + that name, verbatim",
+  () => { const r = wf.sectionRouteFrom("UsrApplicants_ListPage"); return r?.route === "#Section/UsrApplicants_ListPage" && r?.schemaName === "UsrApplicants_ListPage"; });
+check("sectionRouteFrom: surrounding whitespace is trimmed, never folded into the route itself",
+  () => { const r = wf.sectionRouteFrom("  UsrApplicants_ListPage  "); return r?.route === "#Section/UsrApplicants_ListPage" && r?.schemaName === "UsrApplicants_ListPage"; });
+check("sectionRouteFrom: empty / whitespace-only / missing / non-string input returns null — never a route padded from nothing",
+  () => (wf.sectionRouteFrom("") === null
+    && wf.sectionRouteFrom("   ") === null
+    && wf.sectionRouteFrom(undefined) === null
+    && wf.sectionRouteFrom(null) === null));
+
 check("packagePreconditionStop: an own record ALSO resolves a `new-app` stop over 'unknown' — 'unknown' + a matching COMPLETE record is exactly the resumed-run-over-its-own-success case ENG-95884 exists to let through, not a stop to preserve",
   () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app", ownRec()) === null));
 check("packagePreconditionStop: 'unknown' + a matching but INCOMPLETE record resolves to the OWNERSHIP stop, not the generic unknown one — the record already answers 'exists', so the operator is told to finish the app unit, not to go check `list-packages` by hand",
@@ -1693,7 +1708,8 @@ check("ENG-95850 (B2): NOTHING in the run unbinds a workplace — both the verif
     && /reports it instead of unbinding/.test(wfSrc));
 check("ENG-95850 (B2): a count that is not exactly one becomes a BLOCKER in the run's answer, and 0 vs 2+ are given different reasons — unreachable is not the same defect as a leftover binding",
   /function applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
-    && /if \(unit\.kind === 'reach'\) applyWorkplaceBindings\(unit, res\)/.test(wfSrc)
+    // ENG-96147 widened this dispatch line to also record the section's route; still one `reach`-kind hook.
+    && /if \(unit\.kind === 'reach'\) \{ applyWorkplaceBindings\(unit, res\);/.test(wfSrc)
     && /a section in no workplace is unreachable/.test(wfSrc)
     && /the previous binding is still there/.test(wfSrc));
 check("ENG-95850 (B2): a non-integer count is IGNORED rather than reported as a binding — a malformed claim must not manufacture a blocker",
@@ -1720,6 +1736,37 @@ check("ENG-95850 (A2): Reconcile is told to read the provenance OFF THE FILE and
   /Return \\`packageCreatedByRun\\`/.test(wfSrc)
     && /do NOT derive it from the stand/.test(wfSrc)
     && /no stand read can say WHO created it/.test(wfSrc));
+
+// ENG-96147 — the section's navigation route, mirroring the packageCreated block above call for call: ONE
+// recording function, called from BOTH write sites (the `new-app` app unit and the `existing-app` reach unit),
+// threaded into every return, and persisted immediately after either site writes it — the same "irreversible
+// stand write, then a long killable agent" reasoning packageCreated already gets, extended to the write site
+// that did not have it.
+check("ENG-96147: recordSectionRoute is ONE function, and it goes through sectionRouteFrom — no second place in the run may assemble the '#Section/' prefix",
+  /function recordSectionRoute\(schemaName\)/.test(wfSrc)
+    && /const rec = sectionRouteFrom\(schemaName\)/.test(wfSrc)
+    && /if \(!rec\) return/.test(wfSrc));
+check("ENG-96147: the app unit records the route on BOTH branches — the closed one and the short one — from `res.starterListPage`, exactly where packageCreated is recorded on both",
+  (wfSrc.match(/recordSectionRoute\(res\.starterListPage\)/g) || []).length === 2);
+check("ENG-96147: the reach unit's dispatch hook reports its route from `res.sectionRoute.schemaName` — a builder-owned field, never a name the script reconstructs",
+  /if \(unit\.kind === 'reach'\) \{ applyWorkplaceBindings\(unit, res\); if \(recordSectionRoute\(res\.sectionRoute\?\.schemaName\)\) r\.sectionRouteWritten = true \}/.test(wfSrc));
+check("ENG-96147: `sectionRouteByRun` is threaded into every return, defaulted from THIS process's own record like `packageCreatedByRun`",
+  /sectionRouteByRun: standWrites\.sectionRoute \|\| null/.test(wfSrc));
+check("ENG-96147: the reach unit's stand write is ALSO persisted IMMEDIATELY after dispatch — the gap the app-unit-only guard left, closed by this ticket rather than for a later run to lose its route to. Gated on THIS unit's own write (review, tetiana-moshon), so a later reach unit that wrote nothing does not buy a persist agent of its own",
+  /if \(unit\.kind === 'reach' && r\.sectionRouteWritten\) \{/.test(wfSrc)
+    && /r\.sectionRouteWritten = false/.test(wfSrc)
+    && !/unit\.kind === 'reach' && standWrites\.sectionRoute/.test(wfSrc));
+check("ENG-96147 (review, tetiana-moshon): the route on FILE is folded back into `standWrites` like the orphan list — otherwise a resumed run reads its own recorded route as absent and re-persists nothing",
+  /function mergeSectionRoute\(fromFile\)/.test(wfSrc)
+    && (wfSrc.match(/mergeSectionRoute\(state\.sectionRouteByRun\)/g) || []).length === 2
+    && (wfSrc.match(/mergeOrphanedPages\(state\.orphanedPagesOnFile\)/g) || []).length === 2);
+check("ENG-96147: Reconcile is told to read the route OFF THE FILE, never compose or reconstruct it from a naming convention",
+  /Return \\`sectionRouteByRun\\`/.test(wfSrc)
+    && /do NOT compose it/.test(wfSrc)
+    && /do NOT reconstruct it from a schema-naming convention/.test(wfSrc));
+check("ENG-96147: the reach-unit build prompt forbids the builder from composing the '#Section/...' URL itself",
+  /do NOT compose the \\`#Section\/\.\.\.\\` URL yourself/.test(wfSrc)
+    && /this script is the only thing that assembles that prefix/.test(wfSrc));
 // THE THREE call sites are the baseline, the post-preflight refresh and the round tail. The retry is only a fix if
 // ALL of them go through it, so the pin counts both directions: three calls to the helper, and the prompt itself
 // built in exactly ONE place — its own definition plus the single dispatch INSIDE the helper. A fourth
@@ -1848,7 +1895,11 @@ const reconcileSchemaBytes = wf.RECONCILE_SCHEMA ? JSON.stringify(wf.RECONCILE_S
 // the host's hard 4096-byte cap, which is the number that actually stops a run. The three fields adopted the same
 // compacted `additionalProperties` form as every other object array here, which is why the cost is 407 and not the
 // ~700 the expanded declarations would have carried.
-const RECONCILE_SCHEMA_BUDGET = 3900;
+// ENG-96147 raised it again, 3900 -> 4000: `sectionRouteByRun` is declared BARE (its inner shape lives in
+// `RECONCILE_SHAPE`), so the shrink convention is already spent on it. Measured after the merge with PR #128's
+// answers channel: 3908 bytes — 8 over the 3900 margin that number was a working margin for, and 4000 still leaves
+// 96 bytes under the host's hard 4096-byte cap, which is the number that actually stops a run.
+const RECONCILE_SCHEMA_BUDGET = 4000;
 check(`ENG-95930: the Reconcile structured-output schema stays inside its stated budget of ${RECONCILE_SCHEMA_BUDGET} serialized bytes — a working margin under the host's hard ${SCHEMA_CLASSIFIER_CAP}-byte cap, because this is the schema that blocked the run and the one still being extended`,
   reconcileSchemaBytes > 0 && reconcileSchemaBytes <= RECONCILE_SCHEMA_BUDGET,
   () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET}, host cap ${SCHEMA_CLASSIFIER_CAP})`);
@@ -1861,8 +1912,8 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
 // `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
 // `resolutions*` keys are the reopen bookkeeping that must survive a resume.
-check("ENG-95930: the loosened Reconcile schema still declares all 45 properties (42 + the answers channel's three round-trip keys) and its 18-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 45 && (wf.RECONCILE_SCHEMA?.required || []).length === 18
+check("ENG-95930: the loosened Reconcile schema still declares all 46 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun`) and its 18-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 46 && (wf.RECONCILE_SCHEMA?.required || []).length === 18
     && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
@@ -2123,9 +2174,9 @@ const looseProps = Object.entries(wf.RECONCILE_SCHEMA?.properties || {}).filter(
 }).map(([k]) => k);
 const looseWithoutShape = looseProps.filter((k) => !wf.RECONCILE_SHAPE?.[k]);
 check("ENG-95930: every LOOSENED property (a bare object / array of objects, which the host cannot validate) has a `RECONCILE_SHAPE` entry — a loosened property with no shape entry is a field nothing checks on either side",
-  // Round 17b: 14 -> 16. The answers channel added two object arrays (`unconsumedResolutions`,
+  // Round 17b: 14 -> 16, then ENG-96147 -> 17 (`sectionRouteByRun` is bare too). The answers channel added two object arrays (`unconsumedResolutions`,
   // `resolutionsReopened`) in the same compacted form, so both are loosened and both carry a shape entry.
-  looseProps.length === 16 && looseWithoutShape.length === 0,
+  looseProps.length === 17 && looseWithoutShape.length === 0,
   () => `${looseProps.length} loosened: ${looseProps.join(", ")} | without a shape entry: ${looseWithoutShape.join(", ") || "(none)"}`);
 // The table can only enforce what its own vocabulary covers: a mistyped token (`'bool'`) accepts every value, so it
 // is a disabled check that no answer-shaped probe would reveal.
@@ -6267,6 +6318,76 @@ export { buildPrompt };
       && /\*\*`mode: checkpoints`\*\* \(item 5\)/.test(migrationSkillSrc),
     () => migrationSkillSrc.split("\n").filter((l) => /Tier 4|automatic:4/.test(l)).slice(0, 3).join("\n"));
 }
+
+/* ENG-96147 REVIEW (tetiana-moshon), EXECUTED. Both findings were about behaviour a source-pin cannot see: a record
+   that is written and then read as absent on every later round, and a guard that fires for units that wrote nothing.
+   So the two are driven through the real generator.
+
+   The schedule is two reach units with no pages of their own, so both are open on a GREEN page gate — which is the
+   real shape: the section registration and the typed routing are configuration records, not page bodies. Only
+   `sectionRegistered` reports a `sectionRoute`; `typedRouting` reports none, which is what makes "one persist, not
+   one per reach unit" measurable rather than asserted. */
+const ROUTE_SCHEMA = "UsrApplicants_ListPage";
+const runReachRoute = (seed = {}, routeFromUnit = "sectionRegistered") => {
+  const persists = [];
+  const reach = [
+    { key: "sectionRegistered", kind: "reach", what: "the section is registered in the app menu", pages: [], appliesWhen: true, miss: "the section is unreachable" },
+    { key: "typedRouting", kind: "reach", what: "the typed routing is wired", pages: [], appliesWhen: true, miss: "typed navigation does not resolve" },
+  ];
+  const green = { complete: true, missing: 0, buildMissing: 0, unverified: 0,
+    pages: { main: { complete: true, buildComplete: true, buildMissing: 0, openRows: [] } } };
+  const baseline = { ...roundBaseline, unitKeys: ["main"], buildOrder: ["main"],
+    reachability: reach, reachabilityState: { sectionRegistered: "unset", typedRouting: "unset" }, verify: green, ...seed };
+  const agentStub = async (prompt, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "persist:carry") { persists.push(prompt); return { written: true, evidenceWritten: [] }; }
+    if (label === "reconcile:baseline") return { ...baseline };
+    if (label.startsWith("build:")) {
+      const key = label.slice("build:".length);
+      const base = { ...buildAnswer(false), claimedBuilt: ["wiring"] };
+      return key === routeFromUnit ? { ...base, sectionRoute: { schemaName: ROUTE_SCHEMA } } : base;
+    }
+    if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
+    if (label.startsWith("reconcile:")) return { ...baseline, ...seed };
+    return null;
+  };
+  return runWith({ checkpointAfter: [] }, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
+    .then((res) => ({ res, persists }))
+    .catch((e) => ({ threw: e.message, persists }));
+};
+// TWO different counts, deliberately. `routePersists` is how many persist prompts CARRY the record (the file's copy
+// no longer depends on the writer's merge discipline), while `routeWritePersists` counts only the persists the ROUTE
+// WRITE itself bought — `persistPending`'s `why` note is verbatim in the prompt, which is what separates the write
+// site's own extra write from the round's ordinary one.
+const routePersists = (prompts) => prompts.filter((t) => t.includes(`#Section/${ROUTE_SCHEMA}`)).length;
+const routeWritePersists = (prompts) => prompts.filter((t) => t.includes("(recording the section's navigation route)")).length;
+const reachRun = await runReachRoute();
+check("ENG-96147 review (Major 2, executed): the route write buys exactly ONE persist — the sibling reach unit that reported no route, and the same two units on every later round, dispatch none of their own, which is what the `standWrites.sectionRoute` guard did once any route existed",
+  !reachRun.threw && routeWritePersists(reachRun.persists) === 1,
+  () => (reachRun.threw ? `threw: ${reachRun.threw}`
+    : `persists=${reachRun.persists.length}, bought by the route write=${routeWritePersists(reachRun.persists)}, carrying the route=${routePersists(reachRun.persists)}`));
+check("ENG-96147 review (Major 2, executed): the route this run recorded still reaches its own return — narrowing the persist guard did not narrow the record",
+  !reachRun.threw && reachRun.res?.sectionRouteByRun?.route === `#Section/${ROUTE_SCHEMA}`,
+  () => (reachRun.threw ? `threw: ${reachRun.threw}` : JSON.stringify(reachRun.res?.sectionRouteByRun)));
+// A RESUMED run: no unit reports a route this time, and the queue file's record comes back through Reconcile.
+const resumedRun = await runReachRoute(
+  { sectionRouteByRun: { route: `#Section/${ROUTE_SCHEMA}`, schemaName: ROUTE_SCHEMA, sectionHost: "existing-app", planVersion: "v1" } },
+  "(none)");
+check("ENG-96147 review (Major 1, executed): a RESUMED run whose Reconcile reports `sectionRouteByRun` off the file reports it back on its own return — this used to be `null` while `build-queue.json` held the record, so a reader applying this ticket's own rule would call an on-file route UNRESOLVED",
+  !resumedRun.threw && resumedRun.res?.sectionRouteByRun?.route === `#Section/${ROUTE_SCHEMA}`
+    && resumedRun.res?.sectionRouteByRun?.schemaName === ROUTE_SCHEMA,
+  () => (resumedRun.threw ? `threw: ${resumedRun.threw}` : JSON.stringify(resumedRun.res?.sectionRouteByRun)));
+check("ENG-96147 review (Major 1, executed): and the carried record is back in `standWrites`, so the persistence agent is handed it rather than the file's copy depending on the writer preferring a merge over an exact copy — and NO unit wrote a route this run, so the extra write site never fired",
+  !resumedRun.threw && routePersists(resumedRun.persists) >= 1 && routeWritePersists(resumedRun.persists) === 0,
+  () => (resumedRun.threw ? `threw: ${resumedRun.threw}`
+    : `persists=${resumedRun.persists.length}, carrying the route=${routePersists(resumedRun.persists)}, bought by a write=${routeWritePersists(resumedRun.persists)}`));
+// NEGATIVE CONTROL: nothing on file and nothing reported ⇒ still `null`. Otherwise the two checks above would pass on
+// a merge that invented a record.
+const noRouteRun = await runReachRoute({}, "(none)");
+check("ENG-96147 review (executed, negative control): a run with no route on file and none reported still returns `null`, and no persist is bought by a write that never happened — the fold-back carries a record, it never fabricates one",
+  !noRouteRun.threw && (noRouteRun.res?.sectionRouteByRun ?? null) === null
+    && routePersists(noRouteRun.persists) === 0 && routeWritePersists(noRouteRun.persists) === 0,
+  () => (noRouteRun.threw ? `threw: ${noRouteRun.threw}` : JSON.stringify(noRouteRun.res?.sectionRouteByRun)));
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -104,7 +104,9 @@ there is no "resume" command: there is one command, and it does the next undone 
                         "planVersion": "plan-4f9c2ab17e03", "sectionPage": "UsrApplicants_FormPage" },
     "orphanedPages": [
       { "schema": "UsrApplicants_FormPage", "orphanedBy": "main", "at": "plan-4f9c2ab17e03" }
-    ]
+    ],
+    "sectionRoute": { "route": "#Section/UsrApplicants_ListPage", "schemaName": "UsrApplicants_ListPage",
+                      "sectionHost": "new-app", "planVersion": "plan-4f9c2ab17e03" }
   },
   "proposals": [
     { "unit": "main", "deviation": "merge two profile islands into one",
@@ -263,6 +265,25 @@ Rules that make it trustworthy:
     than merely unreported. If even that dedicated read cannot open the file, the stop text says so explicitly
     (`packageRecordUnread: true`) instead of reading like a confirmed absence: that case is not evidence of anything,
     and simply re-running retries the read at no cost.
+  - **`sectionRoute` — where the section this run built actually opens (ENG-96147).** `route` is `'#Section/'` plus
+    `schemaName`, and `schemaName` is the list page's OWN schema name, copied VERBATIM out of `create-app-section`'s
+    response — never retyped, never reconstructed with a guessed `_ListPage` suffix. **Why it has to be on disk:**
+    nothing in this toolkit composes a `#Section/...` URL (a `grep '#Section/'` across `skills/` finds no such
+    code), so before this field existed, whatever needed to OPEN the built section — an orienting agent, the
+    per-page render check — improvised one from memory. On the ST_2 run that guess dropped the `_ListPage` suffix,
+    the wrong URL produced `Script error`, and the run believed it had found a real page defect: the recovery ran a
+    database flush and a `compile-creatio` against a shared stand for a page that was never broken. Written the
+    moment either write site reports a schema name — the `new-app` app unit's `starterListPage`, or the
+    `existing-app` `sectionRegistered` reach unit's `sectionRoute.schemaName` — and persisted immediately after,
+    the same "irreversible stand write, then a long killable agent" reasoning `packageCreated` already gets.
+    **Absence is never a fallback to guessing.** A record with no `sectionRoute` — a folder written before this
+    field existed, or a `sectionHost: pages-only-no-menu` run that never registers a section at all — means the
+    reader reports the route as UNRESOLVED, distinct from a page defect and from a dependency-ordering theory (see
+    `03-failure-and-park-policy.md`), never a cue to fall back to a naming convention.
+  - **It does not go stale.** Unlike a page's binding, a section's identity IS its list-page schema — Creatio has
+    no operation that "re-points" a section at a different one while keeping the same URL; that would be a
+    different section. So there is no freshness/re-validation concern here the way `orphanedPages` has for a
+    page's own re-bind: once observed, the record is good for the life of the section.
 
 ### `verify.md` / `verify.json` are only current as of the last COMPLETED Reconcile (ENG-95850 / D)
 

@@ -357,6 +357,7 @@ const RECONCILE_SCHEMA = {
     packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
     packageCreatedByRun: { type: ['object', 'null'] },
     orphanedPagesOnFile: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    sectionRouteByRun: { type: ['object', 'null'], additionalProperties: { maxLength: RECONCILE_TEXT_CAP } },
     mainEntity: { type: ['string', 'null'] },
     sectionHost: { type: ['string', 'null'], enum: ['existing-app', 'new-app', 'pages-only-no-menu', null] },
     applicationCode: { type: ['string', 'null'] },
@@ -404,6 +405,8 @@ const RECONCILE_SHAPE = {
     types: { package: 'string', appUnitComplete: 'boolean', planVersion: 'string-or-null', sectionPage: 'string-or-null' } },
   orphanedPagesOnFile: { kind: 'array', required: ['schema'],
     types: { schema: 'string', orphanedBy: 'string-or-null', at: 'string-or-null' } },
+  sectionRouteByRun: { kind: 'object-or-null', required: ['route', 'schemaName'],
+    types: { route: 'string', schemaName: 'string', sectionHost: 'string-or-null', planVersion: 'string-or-null' } },
   componentResolution: { kind: 'array', required: ['type', 'resolved'],
     types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
@@ -473,6 +476,13 @@ const BUILD_PROPERTIES = {
     properties: {
       count: { type: 'integer' },
       names: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  sectionRoute: {
+    type: 'object',
+    required: ['schemaName'],
+    properties: {
+      schemaName: { type: 'string' },
     },
   },
   guidelines: {
@@ -952,6 +962,12 @@ function packagePreconditionStop(targetPackage, packageState, sectionHost, packa
     return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
   }
   return null
+}
+
+function sectionRouteFrom(schemaName) {
+  const name = String(schemaName ?? '').trim()
+  if (!name) return null
+  return { route: `#Section/${name}`, schemaName: name }
 }
 
 const GATE_COMPOSITE = 'composite'
@@ -1974,7 +1990,7 @@ function appSectionHostNoMenuBlock(unit) {
 }
 
 function appSectionHostMigrationBlock(unit) {
-  return `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits.
+  return `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits. \`starterListPage\` becomes this section's recorded NAVIGATION ROUTE (ENG-96147) — report the exact string the tool returned, never a name you reconstruct, since this script (not you) assembles the \`#Section/...\` URL from it.
 5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
 6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, and no stub left behind.`
 }
@@ -2044,6 +2060,7 @@ let resolutionCheckTally = new Map()
       targetPackage: null,
       packageState: null,
       packageCreatedByRun: standWrites.packageCreated || null,
+      sectionRouteByRun: standWrites.sectionRoute || null,
       orphanedPages,
       sectionHost: null,
       applicationCode: null,
@@ -2156,6 +2173,7 @@ DO SIX THINGS, in order:
     - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` and \`continuations\` counters each unit already has. **Do NOT increment either one here.** A round is charged per ATTEMPT, and you are not the phase that attempts anything: incrementing for every open unit charges the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parks untouched pages. The counters are moved by the phase that runs straight after Build, for exactly the units it dispatched. Return \`roundOf\` = the rounds counter now on file for every key and \`continuationOf\` = the continuations counter now on file for every key. **KEEP the root \`standWrites\` key exactly as the file holds it** — it records stand writes an earlier run or the other route made, and it is not yours to recompute.
    - Return \`packageCreatedByRun\` — the file's \`standWrites.packageCreated\`, VERBATIM (\`{ package, appUnitComplete, planVersion, sectionPage }\`), or \`null\` when the file has no such record. This is the run's own memory of having created the target package, and it is the ONE thing that tells a package this migration made apart from a package somebody else owns: under \`sectionHost: new-app\` the second is a stop and the first is a resume. **Read it off the file; do NOT derive it from the stand.** \`find-app\`/\`list-packages\` can say a package EXISTS — no stand read can say WHO created it — so a record you infer would authorise building over somebody's application. No record ⇒ \`null\`: absence is the safe answer here, and the script stops on it.
    - Return \`orphanedPagesOnFile\` — the file's \`standWrites.orphanedPages\` array, VERBATIM, each entry \`{ schema, orphanedBy, at }\` (\`orphanedBy\` the run or unit that left it, \`at\` when — copy both, \`null\` included) (\`[]\` when the file has none; REQUIRED to be present, never omitted). These are pages an EARLIER run or the other route left bound to no key after a re-bind. They are read back for one reason: the failure they come from was a LATER diagnosis fetching a dead page and concluding the build was short, so a list nobody reads is a list that helps nobody. Copy it; do not recompute it from the stand, and do not drop an entry because the page looks fine — an orphan is perfectly fetchable, which is the whole problem.
+   - Return \`sectionRouteByRun\` — the file's \`standWrites.sectionRoute\`, VERBATIM (\`{ route, schemaName, sectionHost, planVersion }\`), or \`null\` when the file has no such record. This is the run's own memory of the navigation route the section it built actually opens at — the ONE thing that stops a later reader (an orienting agent, the per-page render check) from composing a \`#Section/<guess>\` URL and mistaking a wrong route's \`Script error\` for a genuine page defect (D10, ST_2 run: that exact guess cost a database flush and a compile on a shared stand). **Read it off the file; do NOT compose it, and do NOT reconstruct it from a schema-naming convention** — a route this script did not itself write is not a fact this run can vouch for. No record ⇒ \`null\`.
 
 6. REPORT QUEUE DRIFT. \`staleQueueKeys\` = keys in the queue file that \`--units\` no longer publishes (the plan was regenerated — they gate nothing now). \`newKeys\` = keys \`--units\` publishes that the queue did not have. Report both; never silently trust either.
 
@@ -2322,6 +2340,7 @@ Return the schema. Nothing else.`
   const appUnitDone = () => ownPackageRecord(ownPackageNow(), state?.targetPackage)?.appUnitComplete === true
   mergeContinuationCounters(state.continuationOf)
   mergeOrphanedPages(state.orphanedPagesOnFile)
+  mergeSectionRoute(state.sectionRouteByRun)
   logUnmatchedResolutions('baseline reconcile')
 
   function packageStopReturn(stopOnPackage, packageRecordUnread, componentMismatches, templateMismatchesNow, appIdentity) {
@@ -2829,7 +2848,8 @@ ${unit.sectionHost === 'pages-only-no-menu' ? appSectionHostNoMenuBlock(unit) : 
         : ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.'
     }
     const workplaceBindingsNote = unit.key !== 'sectionRegistered' ? '' : ` THEN COUNT THE WORKPLACE BINDINGS (ENG-95850 / B2): registering a section into a workplace does NOT unbind the one it was in, so after this unit the section can sit in TWO workplaces and look correct in the one you opened — that is exactly what a real run shipped. Count this section's \`SysModuleInWorkplace\` rows, report \`workplaceBindings: { count: <n>, names: [...] }\`, and if it is more than the one the plan approved, say so in \`proposals\` naming every workplace. **Do NOT unbind anything** — a workplace binding is a customer record, its removal is not this unit's decision, and the gate reports the extra binding for a human to settle. **REPORT IT EVEN WHEN IT IS 1 (ENG-95470 / defect 4):** this script carries \`workplaceBindings\` into the SAME round's Verify, which can now file \`reachability.sectionRegistered\` from it even if Verify's own independent on-stand count is skipped or missed — omitting it here because "it's just the expected 1" is exactly the gap that left the row at \`reachability: {}\` forever on a real run.`
-    return `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${VERIFICATION_SURFACE_NOTE} If that surface turns out unachievable for this wiring (a login wall, a per-action approval, a CLI that now errors), report it in \`blocked\` with \`what\` naming the verification surface as unachievable and \`why\` the reason — never silently opening the built-in pane and never closing this unit on the saved record alone.${workplaceBindingsNote}`
+    const sectionRouteNote = unit.key !== 'sectionRegistered' ? '' : ` REPORT THE SECTION'S NAVIGATION ROUTE (ENG-96147): \`create-app-section\`'s response carries a \`pages\` array with THREE entries (a Detail, a FormPage and a ListPage) — find the ONE whose \`uId\` equals the response's OWN \`section.section-schema-u-id\` (verified on a live stand: that is the list page, every time, regardless of naming) and copy that entry's EXACT \`schema-name\` into \`sectionRoute: { schemaName: "<verbatim>" }\`. Do NOT pick it by GUESSING which of the three looks like a list page, do NOT retype it from the section's code or caption, and do NOT compose the \`#Section/...\` URL yourself — this script is the only thing that assembles that prefix, from the exact string you report here. A guessed route is indistinguishable from a correct one until someone opens it, which is exactly how the last one became an expensive false page-defect report.`
+    return `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${VERIFICATION_SURFACE_NOTE} If that surface turns out unachievable for this wiring (a login wall, a per-action approval, a CLI that now errors), report it in \`blocked\` with \`what\` naming the verification surface as unachievable and \`why\` the reason — never silently opening the built-in pane and never closing this unit on the saved record alone.${workplaceBindingsNote}${sectionRouteNote}`
   }
 
   function pageKindBlock(unit, known) {
@@ -2979,6 +2999,29 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     log(`state file: recording that THIS run created the package \`${pkg}\` (app unit ${complete ? 'complete' : 'INCOMPLETE'}) — the placement gate reads it as ours, on this route and the other one`)
   }
 
+  function recordSectionRoute(schemaName) {
+    const rec = sectionRouteFrom(schemaName)
+    if (!rec) return false
+    if (standWrites.sectionRoute?.route === rec.route) return false
+    standWrites = {
+      ...standWrites,
+      sectionRoute: {
+        route: rec.route,
+        schemaName: rec.schemaName,
+        sectionHost: state?.sectionHost ?? standWrites.sectionRoute?.sectionHost ?? null,
+        planVersion: state?.planVersion ?? null,
+      },
+    }
+    log(`state file: recording the section's navigation route \`${rec.route}\` — later readers (the render check, the orienting agent) use this instead of composing one`)
+    return true
+  }
+
+  function mergeSectionRoute(fromFile) {
+    if (standWrites.sectionRoute || !fromFile || typeof fromFile.route !== 'string' || !fromFile.route.trim()) return
+    standWrites = { ...standWrites, sectionRoute: fromFile }
+    log(`state file: the section's navigation route \`${fromFile.route}\` was carried over from the state file — this run reports and re-persists it rather than reading it as absent`)
+  }
+
   function orphanBlock() {
     if (!orphanedPages.length) return ''
     const lines = orphanedPages.map((o) => `- \`${o.schema}\` — orphaned when \`${o.orphanedBy}\` re-bound to a different page`).join('\n')
@@ -3043,10 +3086,12 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
         : `app unit: package \`${got}\` exists — no section was created (sectionHost: ${unit.sectionHost}), so \`main\` builds its own page in it`)
       recordStarterPages(res)
       recordPackageCreated(got, sectionPage)
+      recordSectionRoute(res.starterListPage)
       return
     }
     if (got && got === unit.package) {
       recordPackageCreated(got, sectionPage, false)
+      recordSectionRoute(res.starterListPage)
       blockedItems = [...blockedItems, { unit: unit.key,
         what: partialAppUnitWhat(got, sectionPage, unitBlocked),
         why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
@@ -3132,7 +3177,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
     reportResolutionAccounting(unit, routed, res)
     if (unit.kind === 'app') applyAppUnitResult(unit, res)
-    if (unit.kind === 'reach') applyWorkplaceBindings(unit, res)
+    if (unit.kind === 'reach') { applyWorkplaceBindings(unit, res); if (recordSectionRoute(res.sectionRoute?.schemaName)) r.sectionRouteWritten = true }
     if (unit.kind === 'page') applyReboundOrphan(unit, res)
     if (unit.kind === 'page') recordPageSchema(unit, res, r)
     proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
@@ -3148,11 +3193,15 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     log(`round ${round}: ${open.length} open unit(s) — ${open.map((u) => u.key).join(', ')}`)
     logMissingEvidenceIds()
     const r = { built: [], claims: [], noSchema: [], continued: [], deferred: [], checkFirst: [], pausedAfter: null,
-      selfCheckShort: [], selfChecks: [] }
+      selfCheckShort: [], selfChecks: [], sectionRouteWritten: false }
     for (const unit of open) {
       if (r.pausedAfter) { r.deferred.push(unit.key); continue }
       yield* dispatchUnit(unit, r)
       if (unit.kind === 'app' && standWrites.packageCreated) yield* persistPending('recording the package the app unit created')
+      if (unit.kind === 'reach' && r.sectionRouteWritten) {
+        r.sectionRouteWritten = false
+        yield* persistPending('recording the section\'s navigation route')
+      }
     }
     if (r.noSchema.length) log(`no Freedom schema reported for: ${r.noSchema.join(', ')} — those units cannot be verified until one is`)
     if (r.pausedAfter) {
@@ -3400,6 +3449,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     logUnmatchedResolutions(whereFrom)
     pageSchemas = { ...state.pageSchemas, ...pageSchemas }
     mergeOrphanedPages(state.orphanedPagesOnFile)
+    mergeSectionRoute(state.sectionRouteByRun)
     carryPersisted = carryFingerprint()
     const stopApproval = approvalStop(state.approval || approval, state.planVersion, { planFile: input.planFile, unitsCmd: CLI_UNITS })
     if (stopApproval) {

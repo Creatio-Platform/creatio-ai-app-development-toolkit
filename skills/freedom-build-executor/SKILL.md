@@ -66,9 +66,14 @@ Eight rules. Everything else here serves them.
    one migration folder must agree about what has been done to that stand, and the only thing that can
    make them agree is the file. This is why a **stand WRITE** goes in it too, not just bookkeeping —
    at the root, under `standWrites`, because a package is not a page and the next run's placement gate
-   looks for it before any unit exists. Today it carries one fact,
-   `standWrites.packageCreated = { package, appUnitComplete, planVersion, sectionPage }`: the
-   application and package the app unit created, and whether that unit met its FULL deliverable.
+   looks for it before any unit exists. It carries three facts:
+   `standWrites.packageCreated = { package, appUnitComplete, planVersion, sectionPage }` (the
+   application and package the app unit created, and whether that unit met its FULL deliverable);
+   `standWrites.orphanedPages` (pages a re-bind left pointing at nothing); and
+   `standWrites.sectionRoute = { route, schemaName, sectionHost, planVersion }` (ENG-96147 — the
+   `#Section/...` URL the built section actually opens at, so nothing that needs to open it has to
+   compose one — see `./references/02-queue-and-built-files.md` for why a guessed route once cost a
+   database flush and a compile on a shared stand).
 
    **What it buys, and it is not bookkeeping.** From the stand, a package this migration created and a
    package a stranger owns are the same fact — `list-packages` says a package exists and no stand read
