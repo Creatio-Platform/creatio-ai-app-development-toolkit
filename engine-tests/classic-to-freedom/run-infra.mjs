@@ -957,11 +957,25 @@ check("ENG-95471 review fix: none of the files that carried the retired `guideli
 // PR #128 review (round 6, Minor): this pin was WIDENED and ANCHORLESS. This PR took it from `{0,1400}` to
 // `{0,2600}` and dropped the trailing `\]`, so it stopped asserting that those three fields END the required
 // array and started matching however many fields followed — the "pin with no failure mode" shape its own sibling
-// two hunks below was written to avoid. The closing anchor is restored and the four fields this channel appended
-// are named, so dropping OR reordering any of them turns this red. Round 17b widened the middle window only,
-// because ENG-95930 inserted `schemaNamePrefixEmpty` (with its comment) between the evidence triple and the four.
-check("ENG-95471 review fix (+ PR #128 round 6, round 17): the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two — and the required array ENDS with the four keys this channel added, so a dropped or reordered field cannot slip past the window",
-  /required: \['approval'[\s\S]{0,2000}'evidenceIds', 'evidenceFiled', 'evidenceRejected',[\s\S]{0,900}'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'\]/.test(wfSrc));
+// two hunks below was written to avoid.
+// ROUND 20 (Minor) — AND IT IS NO LONGER A SOURCE REGEX. Round 17b widened the middle window again (ENG-95930
+// inserted `schemaNamePrefixEmpty`, with its comment, between the evidence triple and the four), which is the
+// second time this pin's WINDOW rather than its CLAIM had to be maintained: a `{0,900}` gap proves source-text
+// adjacency, would go green-but-vacuous on a reformat that pushed the two groups apart, and says nothing about
+// the schema the host actually receives. `wf` is sliced out of the shipped artifact and imported, so the same
+// facts are readable off the parsed `required` array — and they are asserted there now, with no window to widen.
+// The CLAIM is unchanged and is still stronger than the by-name check further down: the evidence triple must be
+// required, AND the four keys this channel appended must be the LAST four, in order, so a drop or a reorder is
+// still red. The four names are the shared constant, so this pin and the by-name one cannot drift apart.
+const RECONCILE_REQUIRED_ANSWER_KEYS = ["preflightItems", "resolutionsReopened", "resolutionsPending", "unconsumedResolutions"];
+check("ENG-95471 review fix (+ PR #128 round 6, round 17, round 20): the three evidence lists are REQUIRED of Reconcile — the close row keys off `evidenceIds`, and its overwrite guard reads the other two — and `required` ENDS with the four keys this channel added, so a dropped or reordered field is red; asserted against the PARSED array, not a source window",
+  () => {
+    const req = wf.RECONCILE_SCHEMA?.required || [];
+    return ["approval", "evidenceIds", "evidenceFiled", "evidenceRejected"].every((k) => req.includes(k))
+      && req[0] === "approval"
+      && req.slice(-4).join(",") === RECONCILE_REQUIRED_ANSWER_KEYS.join(",");
+  },
+  () => ({ required: wf.RECONCILE_SCHEMA?.required || [], lastFour: (wf.RECONCILE_SCHEMA?.required || []).slice(-4) }));
 check("ENG-95471 review fix: an ABSENT `evidenceFiled` yields the UNKNOWN set, not an empty one — the two must not collapse, or the overwrite guard silently stops firing",
   /const earnedFrom = \(filed, rejected\) => \(Array\.isArray\(filed\)[\s\S]{0,140}: null\)/.test(wfSrc));
 // The BUILDER-FACING wording, pinned on the shipped constant. `ran: false` is an honest answer whose row is a hard
@@ -1826,7 +1840,6 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
 // `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
 // `resolutions*` keys are the reopen bookkeeping that must survive a resume.
-const RECONCILE_REQUIRED_ANSWER_KEYS = ["preflightItems", "resolutionsReopened", "resolutionsPending", "unconsumedResolutions"];
 check("ENG-95930: the loosened Reconcile schema still declares all 45 properties (42 + the answers channel's three round-trip keys) and its 18-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
   Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 45 && (wf.RECONCILE_SCHEMA?.required || []).length === 18
     && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
