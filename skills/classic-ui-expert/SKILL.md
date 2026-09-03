@@ -101,9 +101,17 @@ prove it with the member ledger. What the digest changes is your output. Read it
   every member. State the difference as a set difference; do not trim your enumeration to match.
 - **Emit a second deliverable: `behaviour-index.json`** next to the report — one entry per row,
   keyed exactly as the digest keys it (`"<method>"`, `"<schema>::<method>"`, `"<kind>:<name>"`),
-  each `{ "card": "C13", "ac": ["AC-21","AC-22"], "trigger": "internal", "from": "save" }`
-  (`trigger`/`from` only where you resolved one the caller could not). This is what lets the
-  caller's generated worklist carry your card reference; a prose report alone cannot be keyed.
+  each `{ "card": "C13", "ac": ["AC-21","AC-22"], "whatItDoes": "…", "useCase": "…", "trigger": "internal", "from": "save" }`
+  (`trigger`/`from` only where you resolved one the caller could not). Two of these fields are the
+  **plain-language columns the migration plan shows the human approver**, so write them for a reader
+  with no technical knowledge — no method names, no framework terms:
+  - **`whatItDoes`** — one or two sentences naming what the logic does in the user's terms
+    (trigger → effect). This is the card's *What it is*, restated for the row.
+  - **`useCase`** — a short step-by-step walkthrough of how it works in practice, as a person would
+    describe it ("1) the user … 2) the form … 3) …"). Keep it to one line — a compact narrative, not
+    the acceptance-criteria list re-typed.
+  This is what lets the caller's generated worklist carry your card reference and its human summary;
+  a prose report alone cannot be keyed.
 
 With no digest supplied, work exactly as the six phases say and skip this section.
 

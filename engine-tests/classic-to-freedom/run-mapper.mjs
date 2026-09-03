@@ -4363,24 +4363,6 @@ check("Major(imperative-sink): the Business rules table renders no method name t
   /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
   () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
-// The CALL names in `Body does` are a second sink for the same hostile input — a call path comes from an untrusted
-// body, and the cell prints it verbatim so the reader can grep for it. Fed straight to the renderer, bypassing the
-// parser, exactly as the `processNames` test above does. `readsWritesText` reads `ev.readsAttrs.length` without
-// optional chaining, so the synthetic evidence must carry both arrays.
-const callSinkSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "hostile",
-  category: "unclassified",
-  evidence: { kinds: [], calls: ["this.ba|d", "this.o`k"], readsAttrs: [], writesAttrs: [] } }] } });
-// Split on UNESCAPED pipes only — an escaped `\|` inside a cell is content, not a column boundary, and splitting
-// naively on "|" would cut the very cell under test in half.
-const cells = (line) => line.split(/(?<!\\)\|/);
-const callSinkCell = cells(callSinkSpec.split("\n").find((l) => l.startsWith("|") && cells(l)[1]?.trim() === "hostile") || "")[4] || "";
-check("Major(call-sink): an unclassified CALL name is escaped where it is rendered — once, and with no raw pipe left",
-  callSinkCell.includes(String.raw`this.ba\|d`)          // escaped…
-  && !/[^\\]\|d/.test(callSinkCell)                      // …no raw pipe survives
-  && !callSinkCell.includes(String.raw`\\|`)             // …and not escaped twice
-  && !callSinkCell.includes("`"),                        // backticks neutralized too
-  () => JSON.stringify(callSinkCell));
-
 // Minor 1 — ONE canonical resourceKey shared by mapper (store) + designspec (lookup): strips $/prefix/#anchor
 // uniformly, so a `Resources.Strings.Foo#en-US` caption resolves instead of leaking the raw key.
 check("Minor1: resourceKey strips $-sigil, Resources.Strings prefix, and #culture anchor uniformly",
@@ -5402,11 +5384,14 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       return !titles.includes("Form — Logic") && titles.includes("Form — Custom methods")
         && (methods?.rows || []).some((r) => /^Handler — /.test(r.label)); },
     () => checklistGroups(impRun, {}).map((g) => g.title));
+  // ENG-96534: the members table now reads `Member | Kind | What the item does | Use case | Described in` (the
+  // mechanical `Detail` column is gone). Each row is still POSITIVELY rendered — asserted on its Member + Kind
+  // identity; with no behaviour card in this fixture the three trailing cells are `⚠ not described`.
   check("⚠ Other declared logic table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
-    () => /^\| Owner \| attribute-lookup-filter \| 1 filter\(s\), keys: ownerFilter on Contact \|/m.test(impPlan)
-      && /^\| CanEdit \| attribute-virtual \| \(dataValueType 12\) · default false \|/m.test(impPlan)
-      && /^\| Computed \| attribute-imperative \| function key\(s\): value \|/m.test(impPlan)
-      && /^\| ConfigurationConstants, VisaHelper \| module-dep \| — \|/m.test(impPlan),
+    () => /^\| Owner \| attribute-lookup-filter \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(impPlan)
+      && /^\| CanEdit \| attribute-virtual \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(impPlan)
+      && /^\| Computed \| attribute-imperative \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(impPlan)
+      && /^\| ConfigurationConstants, VisaHelper \| module-dep \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Owner|CanEdit|Computed|ConfigurationConstants/.test(l)));
   check("⚠ Other declared logic table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
     () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
@@ -5457,7 +5442,7 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   check("⚠ Other declared logic table: an attribute-dependency with no parsed handler row is visible in the approval plan",
     () => orphanDepRun.changeSet.handlerStubs.length === 0
       && orphanDepRun.changeSet.needsDecision.some((n) => n.kind === "attribute-dependency" && n.item === "Amount ← Quantity, Price")
-      && /^\| Amount ← Quantity, Price \| attribute-dependency \| — \| ⚠ not described \|$/m.test(orphanPlan),
+      && /^\| Amount ← Quantity, Price \| attribute-dependency \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(orphanPlan),
     () => ({ stubs: orphanDepRun.changeSet.handlerStubs, decisions: orphanDepRun.changeSet.needsDecision, lines: orphanPlan.split("\n").filter((l) => /Amount ←|attribute-dependency|Imperative members/.test(l)) }));
   check("⚠ Confirm: orphan attribute-dependency still does NOT fall back to Confirm once rendered as an imperative member",
     () => !/^- \*\*\[attribute-dependency\]\*\*/m.test(orphanPlan),
@@ -5530,104 +5515,12 @@ const EVID_BODY = `define("EvidPage", [], function() { return {
 const evid = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: EVID_BODY }] }, { baseDir: FIX });
 const evStub = (m) => evid.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
 const evPlan = renderPlan(evid, {});
-// The `Body does` cell of one row, by method name. The Method cell may carry a `↳` fold marker, so match on the
-// cell's CONTENT, not on the raw line prefix — `includes` would take the first line anywhere naming the method.
-// One definition, because every reader below wants the same cell out of a different rendered plan.
-const bodyDoesCell = (md, m) => (md.split("\n").find((l) => l.startsWith("|")
-  && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
-const evCell = (m) => bodyDoesCell(evPlan, m);
-
 check("category: a suggestive method name (on…Changed / init…) derives no category — `unclassified`",
   evStub("onThingChanged").category === "unclassified" && evStub("initSomething").category === "unclassified",
   () => JSON.stringify([evStub("onThingChanged").category, evStub("initSomething").category]));
 check("category: an unclassified row degrades to the GENERIC Freedom target, never a named construct",
   /request handler \/ converter \/ virtual attribute/.test(evPlan.split("\n").find((l) => l.includes("| onThingChanged |")) || ""),
   () => evPlan.split("\n").find((l) => l.includes("| onThingChanged |")));
-check("body does: `callParent` alone is NOT recognition — the real unclassified call is named instead",
-  /⚠ unclassified: this\.someUnknownApi/.test(evCell("initSomething") || ""), () => evCell("initSomething"));
-check("body does: attribute writes ARE evidence — `sets values`, not a ⚠",
-  evCell("setStuff") === "sets values", () => evCell("setStuff"));
-check("body does: noise (this.get / Ext.isEmpty) is not listed as unclassified — it says nothing recognised",
-  evCell("onThingChanged") === "⚠ nothing recognised", () => evCell("onThingChanged"));
-// The two namespaces carry the same predicates and real bodies use both spellings; a call that says something about
-// the record or the user is NOT noise and must survive.
-const nsRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
-  `define("NsPage", [], function() { return { entitySchemaName: "Deal", methods: {
-    tsPredicates: function() { return Terrasoft.isEmpty(this.get("A")) || Terrasoft.isObject(this.get("B")); },
-    realCondition: function() { return Terrasoft.isCurrentUserSsp(); } },
-    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
-  { baseDir: FIX });
-const nsPlan = renderPlan(nsRun, {});
-const nsCell = (m) => bodyDoesCell(nsPlan, m);
-check("body does: `Terrasoft.*` predicates are noise too, not only their `Ext.*` twins",
-  nsCell("tsPredicates") === "⚠ nothing recognised", () => nsCell("tsPredicates"));
-check("body does: a call that gates on the USER is not noise — it stays visible as unclassified",
-  /Terrasoft\.isCurrentUserSsp/.test(nsCell("realCondition") || ""), () => nsCell("realCondition"));
-// The cell caps the list to stay readable. A SILENT cap is the failure this column exists to prevent — four names
-// would read as the whole list — so the overflow is stated, the same way the CLI's gap lines state theirs.
-const capRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
-  `define("CapPage", [], function() { return { entitySchemaName: "Deal", methods: {
-    manyUnknowns: function() { this.apiOne(); this.apiTwo(); this.apiThree(); this.apiFour(); this.apiFive(); this.apiSix(); } },
-    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
-  { baseDir: FIX });
-const capCell = bodyDoesCell(renderPlan(capRun, {}), "manyUnknowns");
-check("body does: the unclassified list states its overflow instead of truncating silently",
-  /…and 2 more/.test(capCell || "") && (capCell || "").split(",").length === 5,
-  () => capCell);
-// BOUNDARIES, so `>` cannot drift to `>=`: at the cap exactly there is no marker, one past it says "1 more".
-const capAt = (n) => {
-  const names = Array.from({ length: n }, (_, i) => `this.api${i}();`).join(" ");
-  const r = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
-    `define("BoundPage", [], function() { return { entitySchemaName: "Deal", methods: { many: function() { ${names} } },
-      diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
-    { baseDir: FIX });
-  return bodyDoesCell(renderPlan(r, {}), "many");
-};
-check("body does: exactly at the cap there is no overflow marker (a `>=` drift would print `…and 0 more`)",
-  !/…and/.test(capAt(4) || "") && (capAt(4) || "").split(",").length === 4, () => capAt(4));
-check("body does: one past the cap states `…and 1 more`",
-  (capAt(5) || "").endsWith("…and 1 more"), () => capAt(5));
-// The PARSER's own cap counts too: a body with more callee paths than it forwards must not read as if the
-// forwarded slice were the whole list. Reported APART from the unclassified names, because those calls never
-// passed the noise/sibling filters — folding them into `…and N more` claims unclassified calls nobody established.
-const cappedEvidence = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "dense",
-  category: "unclassified",
-  evidence: { kinds: [], calls: ["this.a", "this.b"], callsTotal: 12, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: calls the parser never forwarded are stated, not silently dropped",
-  bodyDoesCell(cappedEvidence, "dense") === "⚠ unclassified: this.a, this.b (+10 call(s) the parser did not forward)",
-  () => bodyDoesCell(cappedEvidence, "dense"));
-check("body does: the parser's cap is NOT folded into the unclassified overflow — those calls were never filtered",
-  !/…and 10 more/.test(cappedEvidence), () => bodyDoesCell(cappedEvidence, "dense"));
-// The failure that wording produced: every forwarded call was a SIBLING, so nothing unclassified was established
-// at all, yet the row rendered `⚠ unclassified: …and 4 more` — a warning naming nothing.
-const siblingHidden = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
-  { sourceMethod: "callsOnlySiblings", category: "unclassified",
-    evidence: { kinds: [], calls: ["this.helperOne"], callsTotal: 5, readsAttrs: [], writesAttrs: [] } },
-  { sourceMethod: "helperOne", category: "unclassified",
-    evidence: { kinds: [], calls: [], callsTotal: 0, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: a ⚠ unclassified is never raised by hidden calls alone — with only siblings forwarded the cell names the gap as unread",
-  bodyDoesCell(siblingHidden, "callsOnlySiblings") === "⚠ nothing recognised (+4 call(s) the parser did not forward)",
-  () => bodyDoesCell(siblingHidden, "callsOnlySiblings"));
-// BOTH signals are true at once for a method that writes an attribute AND makes a call nobody read. Returning only
-// the first hid the second, and an unread call is exactly what a step-5.1 resolver needs before marking the row
-// resolved (Contract rule 7) — the one signal this table exists to surface, dropped because another also held.
-const writesAndCalls = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "stampAndCall",
-  category: "set-values",
-  evidence: { kinds: [], calls: ["this.someUnknownApi"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } });
-check("body does: attribute writes do NOT swallow the unclassified call — both signals are reported",
-  bodyDoesCell(writesAndCalls, "stampAndCall") === "sets values; ⚠ also calls: this.someUnknownApi",
-  () => bodyDoesCell(writesAndCalls, "stampAndCall"));
-// The composed branch is a NEW sink for the call name, so the escaping contract has to hold on it too — a raw pipe
-// would split the row into extra columns. Default to a value CONTAINING a pipe, so a vanished row fails loudly.
-const pipedCell = bodyDoesCell(renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "piped",
-  category: "set-values",
-  evidence: { kinds: [], calls: ["this.a|b"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } }), "piped");
-check("body does: the composed cell still escapes the call name at the sink (a piped name must not break the row)",
-  !/\|/.test(pipedCell || "x|x") && /sets values; ⚠ also calls: this\.a/.test(pipedCell || ""), () => pipedCell);
-// `evCell` returns undefined when no row matches, so a negative assertion on it alone would pass vacuously if the
-// column moved or the row vanished — assert the cell EXISTS and holds the expected state, then that it is clean.
-check("body does: a call to a SIBLING row is the call graph's business, never an unclassified framework call",
-  evCell("callsSibling") === "⚠ nothing recognised", () => evCell("callsSibling"));
 check("vocabulary: `loadEntity` is a record reload → refresh (sibling of reloadEntity, which was already known)",
   evStub("reloadIt").category === "refresh", () => JSON.stringify(evStub("reloadIt").evidence?.kinds));
 check("vocabulary: `sendSaveCardModuleResponse` is a sandbox publish (per its CrtUIPlatform7x body) → message-publish",
@@ -5688,8 +5581,6 @@ check("⚠ Custom methods: EVERY client method has a row — the defect was meth
   /#### ⚠ Custom methods/.test(impRun.designSpec)
   && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(String.raw`\| ` + m + String.raw` \|`).test(impSpecSection)),
   () => impSpecSection);
-check("⚠ Custom methods: an unresolved trigger is stated as unresolved, never guessed from the name",
-  /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
 check("member ledger: kept on --spec (per-kind dispositions + counted zeros) but NOT in the human approval plan (ENG-96327)",
   /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec)
   && !/#### Member ledger/.test(renderPlan(impRun, {})));
@@ -6664,12 +6555,6 @@ check("inverse graph: every caller travels with the answer when there is more th
   (invTrig("sharedHelper")?.callers || []).join(",") === "callerOne,callerTwo",
   () => JSON.stringify(invTrig("sharedHelper")));
 
-const invPlan = renderPlan(invRun, {});
-check("inverse graph: the plan distinguishes a recovered internal call from a declarative trigger",
-  /\(internal call\)/.test(invPlan) && /platform lifecycle/.test(invPlan),
-  () => invPlan.split("\n").filter(l => /internal call|lifecycle/.test(l)).slice(0, 4));
-check("inverse graph: a multi-caller row says so in the plan",
-  /\+1 more caller/.test(invPlan));
 // The digest must keep the two states distinguishable for the handoff prompt.
 const invDigest = invRun.stubIndex[0].counts;
 // unresolved = the three nothing calls (orphanHelper, callerOne, callerTwo); internalCallOnly = the two halves of
@@ -6826,7 +6711,7 @@ check("handoff BACK: a key matching no row anywhere is reported, never swallowed
 // The plan is the artifact that has to CARRY the reference — an Adjustments section did not survive a re-run.
 const hoPlan = renderPlan(hoBack, {});
 check("handoff BACK: the generated ⚠ Custom methods table carries a `Described in` cell per row",
-  /\| Method \| Source \| Trigger \| Body does \| Reads → writes \| Freedom target \| Described in \|/.test(hoPlan) &&
+  /\| Method \| Source \| What the item does \| Use case \| Freedom target \| Described in \|/.test(hoPlan) &&
   /C01 AC-1, AC-2/.test(hoPlan));
 check("handoff BACK: undescribed rows surface as a warning ('could not identify and describe … method(s)')",
   /could not identify and describe the logic of \d+ of \d+ method/.test(renderPlan(ho, {})));
@@ -6867,9 +6752,6 @@ check("chain roots: a REPORTED caller trigger propagates down to the helper that
   rootsStub(rootsRun, "setThingInfo").triggers[0].root === "onThingChange"
   && rootsStub(rootsRun, "setThingInfo").triggers[0].rootTrigger.kind === "reported",
   () => JSON.stringify(rootsStub(rootsRun, "setThingInfo").triggers));
-check("chain roots: the composed cell keeps the reported provenance — a described origin still prints `— reported`",
-  /— reported → onThingChange \(internal call\)/.test(renderPlan(rootsRun, {})),
-  () => renderPlan(rootsRun, {}).split("\n").filter((l) => /setThingInfo/.test(l)));
 check("chain roots: a TRACED root is never overwritten by a reported caller trigger",
   rootsStub(rootsRun, "recalcTotals").triggers[0].rootTrigger.kind === "attribute-dependency",
   () => JSON.stringify(rootsStub(rootsRun, "recalcTotals").triggers));
@@ -6929,14 +6811,6 @@ check("chain roots: a multi-caller helper takes the answer from ANY caller that 
 check("chain roots: every caller still travels with the row, so the reader sees it is called from more than one place",
   (multiStub("sharedHelper").callers || []).length === 2,
   () => JSON.stringify(multiStub("sharedHelper").callers));
-// …and it must SURVIVE INTO THE CELL on the composed branch. That branch is only reached by rows this pass creates,
-// so the other multi-caller assertion (a row with no inherited root) takes a different code path and would not
-// notice `(+N more caller)` being dropped here.
-const multiCell = (renderPlan(multiRun, {}).split("\n").find((l) => l.startsWith("|")
-  && l.split("|")[1]?.replaceAll("↳", "").trim() === "sharedHelper") || "").split("|")[3]?.trim();
-check("chain roots: a composed trigger still renders the multi-caller provenance `(+N more caller)`",
-  /\+1 more caller/.test(multiCell || "") && /— reported → zAnsweredOne \(internal call\)/.test(multiCell || ""),
-  () => multiCell);
 check("chain roots: mutual recursion terminates and leaves both rows intact (the cycle guard)",
   !!multiStub("pingA") && !!multiStub("pingB")
   && multiStub("pingA").rootTrigger === undefined && multiStub("pingB").rootTrigger === undefined,
@@ -6965,11 +6839,6 @@ check("chain roots: the SETUP holds — the caller carries `lifecycle` while the
 check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop — the row inherits the platform hook",
   lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.lifecycle === "onSaved",
   () => JSON.stringify(lifeTrig("cHelper")));
-check("chain roots: and the composed cell names the platform hook instead of stopping at the calling method",
-  /onSaved \(platform lifecycle\) → internal call/.test(
-    renderPlan(lifeRun, {}).split("\n").find((l) => l.startsWith("|")
-      && l.split("|")[1]?.replaceAll("↳", "").trim() === "cHelper") || ""),
-  () => renderPlan(lifeRun, {}).split("\n").filter((l) => /cHelper/.test(l)));
 check("chain roots: the header stops counting that row as knowing only its calling method",
   !/know only their calling method/.test(renderPlan(lifeRun, {})),
   () => renderPlan(lifeRun, {}).split("\n").filter((l) => /no trigger yet/.test(l)));

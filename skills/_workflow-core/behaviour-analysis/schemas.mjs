@@ -64,6 +64,8 @@ export const INDEX_ENTRY = {
     key: { type: 'string' },               // EXACTLY as the digest keys it
     card: { type: 'string' },              // namespaced: '<scope>/C03'
     ac: { type: 'array', items: { type: 'string' } },
+    whatItDoes: { type: 'string' },        // ENG-96534: plain-language "what it does" (card's "What it is") — a human plan column
+    useCase: { type: 'string' },           // ENG-96534: plain-language step-by-step walkthrough for a non-technical reader — a human plan column
     bodyCard: { type: 'string' },          // the body's OWN card, when the behaviour is defined outside this scope
     bodyAc: { type: 'array', items: { type: 'string' } },
     trigger: { type: 'string' },           // only when this run resolved one the engine could not

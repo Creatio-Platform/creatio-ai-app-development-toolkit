@@ -122,6 +122,22 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "Write these cards to `out/customizations-shared-core.md`",
       why: "a literal `<outDir>` placeholder in a prompt is unexpandable; the run's actual migration folder is interpolated instead",
     },
+    {
+      // ENG-96534: the behaviour index now carries two plain-language fields, `whatItDoes` and `useCase`, which the
+      // migration plan shows the human approver as the "What the item does" / "Use case" columns (replacing the
+      // engine's mechanical Trigger / Body does / Reads → writes). The Describe prompt's point 2 gains the
+      // instruction to author them; the FROZEN baseline predates it.
+      baseline: "the AC numbers. Where you resolved a trigger the engine could not trace",
+      shipped: "In each entry ALSO write two plain-language fields the migration plan shows the human approver",
+      why: "ENG-96534: Describe agents now author `whatItDoes`/`useCase` for the plan's human-readable logic columns; the frozen baseline predates the fields",
+    },
+    {
+      // ENG-96534 (Merge side): the merge prompt's `behaviour-index.json` example gains the two fields and an
+      // instruction to carry them through from the Describe returns.
+      baseline: `"ac": ["AC-1"], "trigger": "internal"`,
+      shipped: "Carry through each Describe agent's two plain-language fields",
+      why: "ENG-96534: the merge step carries `whatItDoes`/`useCase` into behaviour-index.json for the plan's human-readable logic columns; the frozen baseline predates the fields",
+    },
   ],
   "freedom-build-executor": [
     {

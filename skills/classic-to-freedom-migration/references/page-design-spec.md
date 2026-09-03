@@ -29,8 +29,8 @@ HTML or a rendered artifact.
   obligation.
 - **`⚠ Other declared logic`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
   `module-dep`, `referenced-module`) — declared on this page, defined elsewhere. Same contract as
-  `⚠ Custom methods`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
-  is, is stated once above the table; the row carries only what differs.
+  `⚠ Custom methods`: one row each, ported/dropped/blocked, with plain-language **What the item does** /
+  **Use case** columns and a **Described in** cell. What each KIND is, is stated once above the table.
 - **`⚠ Confirm before I build`** collects only what needs a human ON-STAND answer (plus any discovery
   risks/gaps you append). A member explained by a step-5.1 card is NOT a confirm item — it is work, and it
   lives in `⚠ Other declared logic`.
@@ -134,16 +134,16 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
 
 #### ⚠ Custom methods — account for EVERY row (<N>)
-| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
-| --- | --- | --- | --- | --- | --- | --- |
-| <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values[; ⚠ also calls: <call>] / ⚠ unclassified: <call> / ⚠ nothing recognised [(+<N> call(s) the parser did not forward)] | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
-| ↳ <helper> | L<from>-<to> | internal call from <caller> | … | … | port with `<caller>` | <card> <AC…> |
+| Method | Source | What the item does | Use case | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- |
+| <method> | L<from>-<to> | <plain-language what it does> / ⚠ not described | <plain-language step-by-step use case> / ⚠ not described | <Freedom construct> | <card> <AC…> / ⚠ not described |
+| ↳ <helper> | L<from>-<to> | … | … | port with `<caller>` | <card> <AC…> |
 
 #### ⚠ Other declared logic — account for EVERY row (<N>)
 > what each KIND is, one line per kind present — stated here, not repeated on every row
-| Member | Kind | Detail | Described in |
-| --- | --- | --- | --- |
-| <name> | mixin / message / attribute-* / module-dep / referenced-module | <what differs for this row> | <card> <AC…> / ⚠ not described |
+| Member | Kind | What the item does | Use case | Described in |
+| --- | --- | --- | --- | --- |
+| <name> | mixin / message / attribute-* / module-dep / referenced-module | <plain-language what it does> / ⚠ not described | <plain-language step-by-step use case> / ⚠ not described | <card> <AC…> / ⚠ not described |
 
 #### ⚠ Confirm before I build
 - **[<kind>]** <item> — <what to confirm / resolve>
@@ -208,10 +208,10 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 
 #### ⚠ Custom methods — account for EVERY row (2)
-| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
-| --- | --- | --- | --- | --- | --- | --- |
-| onContactChange | L247-250 | attribute-onchange (from Contact attribute onChange) — reported | refresh | — | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
-| ↳ setContactInfo | L429-433 | internal call from onContactChange | sets values | Email, MobilePhone, Skype → Email, MobilePhone, Skype | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
+| Method | Source | What the item does | Use case | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- |
+| onContactChange | L247-250 | When the selected contact changes, the page reloads its related data so the form shows that contact's details. | 1) the user picks a different Contact; 2) the page notices the change; 3) it re-fetches and refreshes the related fields. | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
+| ↳ setContactInfo | L429-433 | Fills the chosen contact's email, mobile phone and Skype into the form. | 1) runs as part of the contact-change handler; 2) copies the contact's Email, Mobile phone and Skype into the matching fields. | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
 
 #### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.

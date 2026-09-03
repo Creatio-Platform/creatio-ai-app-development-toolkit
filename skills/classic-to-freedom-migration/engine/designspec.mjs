@@ -879,36 +879,6 @@ export function renderDesignSpec(result, opts = {}) {
   return L.join("\n");
 }
 
-// One row per client-authored method: what calls it, what its body does, and where it lives in the classic body.
-// A passthrough override is listed too (never silently filtered) but marked as carrying no behaviour of its own,
-// so the reader can tell "nothing to port" from "not looked at".
-// ONE trigger, rendered from its traced origin. `attribute-dependency` names the attribute and the columns whose
-// change fires it; a control trigger names the element and the bound property.
-function triggerText(t) {
-  // A trigger the step-5.1 behaviour analysis established, not the AST. Marked as such: the engine traced nothing
-  // here, so a reader must know the answer is a described one (and which run described it).
-  if (t.kind === "reported") {
-    const from = t.from ? ` (from ${esc(t.from)})` : "";
-    return `${esc(t.reportedKind || "resolved")}${from} — reported`;
-  }
-  // Recovered from the inverse call graph: this method is invoked from another method's BODY. Deliberately NOT
-  // dressed up as a declarative trigger — the reader has to see the difference, because the Freedom target follows
-  // from what STARTS the chain, not from the call itself. Three grades of answer, most specific first: the chain
-  // reaches a declaration (name it), it reaches a platform lifecycle method, or only the immediate caller is known.
-  if (t.kind === "internal") {
-    const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
-    // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites
-    // is not the same port as one with a single caller.
-    const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${t.callers.length > 2 ? "s" : ""})` : "";
-    if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${more}`;
-    if (t.lifecycle) return `${esc(t.lifecycle)} (platform lifecycle) → internal call${more}`;
-    return `internal call from ${esc(t.from)}${via}${more}`;
-  }
-  if (t.kind !== "attribute-dependency") return `${esc(t.element)}.${esc(t.property)}`;
-  const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
-  return `${esc(t.attribute)} changes${cols}`;
-}
-
 // The ⚠ Confirm rows a behaviour-analysis run (SKILL.md step 5.1) must describe, alongside the methods. That step
 // names four unanswerable row types and only two of them are method-shaped: a `message`'s counterpart lives in
 // ANOTHER schema by definition, a `mixin`'s members are defined outside this page body entirely. A handoff that
@@ -939,6 +909,21 @@ function describedInText(h) {
   if (d.bodyCard) parts.push(`body ${cite(d.bodyCard, d.bodyAc)}`);
   return parts.join(" · ");
 }
+
+// ENG-96534 — the two plain-language columns the human plan shows for a logic row, in place of the mechanical
+// Trigger / Body does / Reads → writes: WHAT the item does and a step-by-step USE CASE. Both are authored on the
+// behaviour card by the step-5.1 analysis and carried per row in the behaviour index (`whatItDoes` from the card's
+// "What it is"; `useCase` a non-technical walkthrough the analyst writes — the card has no such field, it is new).
+// No card yet → the same `⚠ not described` marker the `Described in` column uses, so a blank can never read as
+// "nothing to do"; the row is still named by its Method/Member column, so an undescribed row stays findable for the
+// separate, parallel follow-up. `esc` (via `strip`) folds any newline the walkthrough contains into a space, so a
+// multi-step narrative stays inside one Markdown cell.
+const describedField = (x, key) => {
+  const t = x.describedIn?.[key];
+  return typeof t === "string" && t.trim() ? esc(t) : "⚠ not described";
+};
+const whatItDoesText = (x) => describedField(x, "whatItDoes");
+const useCaseText = (x) => describedField(x, "useCase");
 
 const attrDependencyItemFromTrigger = (t) =>
   t?.kind === "attribute-dependency"
@@ -972,84 +957,6 @@ function sourceText(h) {
   return h.lines ? `L${h.lines.start}-${h.lines.end}` : DASH;
 }
 
-// Calls that say nothing about what a body DOES: the base call, attribute access (already rendered in
-// `Reads → writes`), and plain JS/utility helpers. Listing them as "unclassified" would bury the one call that
-// actually matters under noise. A Set rather than one alternation — exact names, and no regex complexity to carry.
-// Both namespaces carry the same predicates, so an entry added on one side needs its twin on the other — filtering
-// `Ext.isEmpty` but not `Terrasoft.isEmpty` (which real bodies use) leaves a warning pointing at nothing.
-// A call that says something about the RECORD or the USER is not noise: `Terrasoft.isCurrentUserSsp` is a real
-// condition and stays visible.
-const BODY_CALL_NOISE = new Set([
-  "callParent", "get", "set", "log",
-  ...["isEmpty", "isObject", "isFunction", "isString", "isNumber", "isArray", "isDate"]
-    .flatMap((p) => [`Ext.${p}`, `Terrasoft.${p}`]),
-  "Ext.String.format", "Terrasoft.each", "Terrasoft.findItem", "Terrasoft.chain",
-  "Terrasoft.clearTime", "Terrasoft.dateDiffDays", "Terrasoft.getFormattedNumberValue",
-  "Boolean", "Number", "String", "Date", "Array", "Object",
-]);
-// whole namespaces that are computation, whatever member is called on them
-const BODY_CALL_NOISE_NS = new Set(["JSON", "Math"]);
-const bareCall = (c) => c.replace(/^this\./, "");
-
-// The framework calls a body makes that the classifier did NOT recognise, minus noise and minus calls to sibling
-// rows (an internal call is the call graph's business, not this cell's). Named rather than counted, so the cell
-// says WHICH call it could not read — an actionable gap instead of a dead end.
-// Rendered as WRITTEN in the body (`this.` kept), so a reader can search the source for it; the tests below are
-// on the bare name.
-const UNCLASSIFIED_SHOWN = 4;
-function unclassifiedCalls(h, siblings) {
-  const drop = (c) => {
-    const b = bareCall(c);
-    return BODY_CALL_NOISE.has(b) || BODY_CALL_NOISE_NS.has(b.split(".")[0])
-      || siblings.has(b) || siblings.has(b.split(".")[0]);
-  };
-  const kept = h.evidence?.calls || [];
-  const open = kept.filter((c) => !drop(c));
-  // The cap keeps the cell readable, but a silent truncation is the failure this column exists to prevent — the
-  // reader would take four names for the whole list. Same `…and N more` overflow the CLI's gap lines use.
-  const shown = open.slice(0, UNCLASSIFIED_SHOWN).map(esc);
-  const over = Math.max(0, open.length - UNCLASSIFIED_SHOWN);
-  if (over) shown.push(`…and ${over} more`);
-  // TWO things can be hidden and they are DIFFERENT hidings, so they are reported apart. The parser keeps only the
-  // first N callee paths in locale order, and every noise namespace (`Boolean`, `Ext.`, `Math.`, `Terrasoft.`) sorts
-  // ahead of `this.`, so a call-dense body can arrive here as nothing but noise. Those calls never passed the noise
-  // and sibling filters above, so adding them to `…and N more` claims unclassified calls nobody established — a
-  // method whose only forwarded call was a SIBLING then rendered `⚠ unclassified: …and 4 more`, a warning naming
-  // nothing. Counted on its own as "not read", which is what it is.
-  return { shown, unread: Math.max(0, (h.evidence?.callsTotal ?? kept.length) - kept.length) };
-}
-
-// What the body does, from evidence. Distinct states, kept apart on purpose: body elsewhere · nothing of its own ·
-// recognised calls · writes but no recognised call · nothing recognised (a ⚠, and it names what it could not read).
-// `callParent` is NOT recognition — it is the base call, present in most overrides, and counting it would report a
-// method whose real work went unread as "it just calls the base".
-function bodyDoesText(h, siblings = new Set()) {
-  if (h.externalRef) return "defined in another module";
-  if (h.trivial) return "passthrough (base only)";
-  const kinds = (h.evidence?.kinds || []).filter((k) => k !== "callParent");
-  if (kinds.length) return kinds.map(esc).join(", ");
-  const { shown, unread } = unclassifiedCalls(h, siblings);   // already escaped at the sink, plus an overflow marker
-  // What the PARSER never forwarded is stated wherever this cell enumerates calls, so the list cannot read as the
-  // whole one. Kept out of the unclassified names themselves — see `unclassifiedCalls`.
-  const hidden = unread ? ` (+${unread} call(s) the parser did not forward)` : "";
-  // Attribute writes ARE evidence — the same evidence `categorize` promotes to `set-values`, so this row is not a ⚠.
-  // But writing an attribute does not make an unread call read. BOTH signals are true at once, and returning only
-  // the first hid the second whenever a method happened to do both — the unread call is exactly what a step-5.1
-  // resolver needs before marking the row resolved (SKILL.md rule 7), so it is composed in, not swallowed.
-  // The cell is the ONLY place this is reported: `categorize` still answers `set-values` (the writes are real, and
-  // so is the handler target that follows from them) — what the unread call changes is how much of the row is read.
-  if ((h.evidence?.writesAttrs || []).length)
-    return (shown.length ? `sets values; ⚠ also calls: ${shown.join(", ")}` : "sets values") + hidden;
-  return (shown.length ? `⚠ unclassified: ${shown.join(", ")}` : "⚠ nothing recognised") + hidden;
-}
-
-function readsWritesText(ev) {
-  if (!ev || (!ev.readsAttrs.length && !ev.writesAttrs.length)) return DASH;
-  const reads = ev.readsAttrs.map(esc).join(", ") || DASH;
-  const writes = ev.writesAttrs.map(esc).join(", ") || DASH;
-  return `${reads} → ${writes}`;
-}
-
 function targetText(h) {
   if (h.externalRef) return "read that module, then port its behaviour";
   if (h.trivial) return "confirm template provides it";
@@ -1059,9 +966,11 @@ function targetText(h) {
 // ENG-96327 — no worklist-mechanics preamble in the plan (ported/dropped/blocked, `↳` fold, `⚠ unresolved`,
 // `Described in`): those semantics are agent-facing and live in the build-executor references, which the build agent
 // is handed. Only the table header remains; a warning above the table flags any rows the analysis could not explain.
+// ENG-96534 — the columns are plain-language for the human approver: What the item does + Use case (from the
+// behaviour card) replace the mechanical Trigger / Body does / Reads → writes.
 const IMPERATIVE_LOGIC_TABLE_HEADER = [
-  "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
-  "| --- | --- | --- | --- | --- | --- | --- |",
+  "| Method | Source | What the item does | Use case | Freedom target | Described in |",
+  "| --- | --- | --- | --- | --- | --- |",
 ];
 
 // Fold a helper under the row that calls it. A method the inverse call graph traced to ONE caller present in this
@@ -1131,9 +1040,12 @@ function renderImperativeMembers(cs) {
     L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${rows.length} member(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   // One explanation per kind PRESENT, above the table — a per-row reason repeats the same paragraph on every row.
   for (const k of order.keys()) if (rows.some((r) => r.kind === k)) L.push("> " + (MEMBER_KIND_NOTE[k] || ATTRIBUTE_DEPENDENCY_NOTE));
-  L.push("", "| Member | Kind | Detail | Described in |", "| --- | --- | --- | --- |");
+  // ENG-96534 — same plain-language columns as ⚠ Custom methods (What the item does + Use case, from the behaviour
+  // card). The mechanical `Detail` column is dropped: its content is technical and the human columns + the per-kind
+  // note above the table now carry the meaning; the Member/Kind columns still identify an undescribed row.
+  L.push("", "| Member | Kind | What the item does | Use case | Described in |", "| --- | --- | --- | --- | --- |");
   for (const d of rows)
-    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${d.detail ? esc(d.detail) : "—"} | ${describedInText(d)} |`);
+    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${whatItDoesText(d)} | ${useCaseText(d)} | ${describedInText(d)} |`);
   L.push("");
   return L;
 }
@@ -1153,17 +1065,11 @@ function renderImperativeLogic(cs) {
   if (undescribed > 0)
     L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${stubs.length} method(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   L.push(...IMPERATIVE_LOGIC_TABLE_HEADER);
-  // A call to another row of this table is an INTERNAL call — the fold column already carries it, so it must not
-  // also print as an unclassified framework call.
-  const siblings = new Set(stubs.map((h) => h.sourceMethod));
   for (const { stub: h, depth, parent } of ordered) {
-    const triggers = h.triggers || [];
-    const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const target = parent ? `port with \`${esc(parent)}\`` : targetText(h);
-    const cells = [name, sourceText(h), trigger, bodyDoesText(h, siblings), readsWritesText(h.evidence),
-      target, describedInText(h)];
+    const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
   L.push("");

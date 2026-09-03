@@ -551,7 +551,15 @@ function describedInOf(entry) {
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
   const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
-  return card || ac.length || bodyCard ? { card, ac, bodyCard, bodyAc } : null;
+  // ENG-96534 — the plain-language plan columns. Free prose the step-5.1 analyst authored on the behaviour card
+  // (`whatItDoes` from the card's "What it is"; `useCase` a non-technical step-by-step it writes). Sanitized to a
+  // trimmed non-empty string here; the renderer escapes it into the cell. Either alone counts as a description, so a
+  // row carrying only these still sets `describedIn` (the `Described in` column keys off card/ac, not off these).
+  const prose = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const whatItDoes = prose(entry.whatItDoes);
+  const useCase = prose(entry.useCase);
+  return card || ac.length || bodyCard || whatItDoes || useCase
+    ? { card, ac, bodyCard, bodyAc, whatItDoes, useCase } : null;
 }
 
 // A behaviour report covers a whole SURFACE, so its answers span several scopes (the record page, the mini page,
