@@ -704,22 +704,29 @@ export function roundsSpentOnFile(state) {
 // the ceiling and dies `reconcile-failed` instead of stopping honestly.
 //
 // SO: COUNTS PLUS A POINTER, as `parkWhy`, `parkRecord.shortRows: []` and `dryRunReport` already do. One entry per
-// still-open unit — `{ unit, kind, open, missing, unverified, severity, why }`: `missing`/`unverified` are the two
-// outcome counts the boundary does carry (`null` where the verdict has no entry), `why` is a one-line reason for a
-// unit whose openness is not a row count at all, `severity` is set ONLY where the CALLER classified the item.
-// THE SEVERITY AXIS IS NOT RE-DERIVED HERE: the engine stamps `rowSeverity` on every open row into `verify.json`
-// and the digest, that is where it lives, and a second copy of its fidelity discrimination is a second thing to
-// drift. Page rows arrive as a number with no band and are tallied as `unstamped`, pointing there; a non-page unit
-// is `correctness` by its own state. Both bands are counted because both are the axis — today only `correctness`
-// can be non-zero at a stop.
+// still-open unit — `{ unit, kind, open, missing, unverified, correctness, fidelity, severity, why }`:
+// `missing`/`unverified` are the two OUTCOME counts the boundary carries (`null` where the verdict has no entry),
+// `correctness`/`fidelity` are the two SEVERITY counts it carries for a page (ENG-96204 AC 2: the engine's
+// `verifySummary` publishes `openCorrectness` / `openFidelity` per page, each open row counted once under the band
+// `rowSeverity` stamped on it — `null` on a summary that predates the field), `why` is a one-line reason for a unit
+// whose openness is not a row count at all, and `severity` is set ONLY where the CALLER classified the WHOLE item
+// (a non-page unit is `correctness` by its own state).
+// THE SEVERITY AXIS IS STILL NOT RE-DERIVED HERE. The engine stamps `rowSeverity` on every open row into
+// `verify.json`, counts the stamps per page, and this tallies the COUNTS it published — a second copy of its
+// fidelity discrimination would be a second thing to drift, and there is none. `unstamped` is what is left for a
+// page whose summary carries no band (a folder verified by an engine older than the field): its rows are still
+// stamped per row in `verify.json`, so the status points there. Clamped at zero so a stale or inconsistent
+// summary can never print a negative count; the engine tests pin that the two integers sum to the open rows.
 export function openCountsOf(units) {
   const list = (units || []).filter((u) => u && typeof u === 'object')
   const num = (n) => (Number.isInteger(n) && n > 0 ? n : 0)
-  const band = (s) => list.reduce((n, u) => n + (u.severity === s ? num(u.open) : 0), 0)
+  // A unit classified WHOLE (`severity`) puts every open item in that band; a page puts its two published counts
+  // in theirs. Never both: the page path leaves `severity` null, and a whole-item classification carries no counts.
+  const band = (s) => list.reduce((n, u) => n + (u.severity === s ? num(u.open) : num(u[s])), 0)
   const open = list.reduce((n, u) => n + num(u.open), 0)
   const correctness = band('correctness')
   const fidelity = band('fidelity')
-  return { units: list, unitsOpen: list.length, open, correctness, fidelity, unstamped: open - correctness - fidelity }
+  return { units: list, unitsOpen: list.length, open, correctness, fidelity, unstamped: Math.max(0, open - correctness - fidelity) }
 }
 // THE STATUS DOCUMENT (ENG-96204, AC 5). A stop's payload is a return value, and a return value reaches whoever
 // launched the run and nobody else: the operator who comes back to the migration folder an hour later — or the
@@ -771,7 +778,11 @@ export function runStatusDoc(status = {}) {
     if (!Number.isInteger(u.missing) && !Number.isInteger(u.unverified)) {
       return `${head} — open, and the machine verdict carries no entry for this unit`
     }
-    return `${head} — ${u.open} open row(s): ${u.missing ?? 0} MISSING + ${u.unverified ?? 0} unconfirmed`
+    // The severity split rides on the same line when the summary published it (ENG-96204 AC 2); a page whose
+    // summary predates the field reads as before, and its band is per row in the verify JSON.
+    const stamped = Number.isInteger(u.correctness) || Number.isInteger(u.fidelity)
+    const split = stamped ? ` · ${u.correctness ?? 0} correctness / ${u.fidelity ?? 0} fidelity` : ''
+    return `${head} — ${u.open} open row(s): ${u.missing ?? 0} MISSING + ${u.unverified ?? 0} unconfirmed${split}`
   }
   L.push('# Build run status', '')
   L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)

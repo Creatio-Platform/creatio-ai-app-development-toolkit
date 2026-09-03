@@ -179,8 +179,11 @@ machine-readable, each stamped by the engine with `rowSeverity` (`correctness` /
 That split is this boundary's existing rule, not a new one: the central verify Reconcile transcribes
 the counts-only `verify-summary.json`, its answer is capped at 16000 wire bytes, and per-row prose
 crossing this boundary is what truncated a real run's first structured answer before it built
-anything. `unstamped` in the tally is therefore the normal reading for page rows — their band is
-stamped per row in `verify.json`, and the stop reports the count rather than re-deriving the band.
+anything. The severity tally is REAL for pages too: the engine's counts-only `verify-summary.json`
+publishes `openCorrectness` / `openFidelity` per page — each open row counted once under the
+`rowSeverity` band stamped on it — and the stop tallies those two integers, never re-deriving the
+band. `unstamped` is left only for a page whose summary predates the two fields (a folder verified by
+an older engine); its rows are still stamped per row in `verify.json`, and the stop points there.
 
 **Every round after the first needs the operator's word**, and that word travels as a run-scoped
 answer in `resolutions.json` — the same single answer channel everything else uses:

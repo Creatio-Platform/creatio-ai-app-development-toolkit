@@ -328,10 +328,11 @@ export const RECONCILE_SCHEMA = {
     newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
     // planGaps, buildMissing, rejected, pages["<key>"] = { complete, buildComplete, builderOpen, missing,
-    // buildMissing, unverified } }`, NO `openRows`. The FILE also carries its own `planGaps`; this channel
-    // deliberately does NOT transcribe it (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`
-    // below, and this channel is the BUILD verdict), which is why `RECONCILE_SHAPE.verify` names no `planGaps`
-    // either and the step-4 prompt says so in as many words.
+    // buildMissing, unverified, openCorrectness, openFidelity } }`, NO `openRows` (the last two are ENG-96204's
+    // per-page severity counts — integers, so the summary stays counts-only). The FILE also carries its own
+    // `planGaps`; this channel deliberately does NOT transcribe it (ENG-95857 — the plan-level verdict has ONE
+    // home, `--units.planGaps` below, and this channel is the BUILD verdict), which is why
+    // `RECONCILE_SHAPE.verify` names no `planGaps` either and the step-4 prompt says so in as many words.
     // The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
     // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
     // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
@@ -463,8 +464,12 @@ export const RECONCILE_SHAPE = {
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
     types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer' },
+    // ENG-96204 (AC 2) — `openCorrectness` / `openFidelity`: the page's open rows counted per severity band, off the
+    // engine's own `rowSeverity` stamp. Typed, NOT required: a summary written by an engine older than the field
+    // legitimately lacks them, and the executor then tallies that page as `unstamped` rather than refusing the answer.
     map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
-      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer' } } } },
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer',
+        openCorrectness: 'integer', openFidelity: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {

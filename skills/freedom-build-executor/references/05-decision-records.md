@@ -143,16 +143,21 @@ ENG-95930 already applied to `parkWhy`, `parkRecord.shortRows` and `dryRunReport
 
 **What this costs.** AC 2 asked for open items *ranked by severity* at the stop. The stop now
 reports the severity tally rather than an ordered list, and the ordering is read one hop away, in
-the artifacts that hold the per-row stamp. The `unstamped` count is the honest reading for page
-rows: their band is in `verify.json` and is deliberately not re-derived here, because a second copy
-of the engine's fidelity discrimination is a second thing to drift.
+the artifacts that hold the per-row stamp. The band is deliberately not re-derived in the executor,
+because a second copy of the engine's fidelity discrimination is a second thing to drift — so when
+this record was written every page row was tallied `unstamped`, and `fidelity` was structurally
+zero. *Superseded in the same ticket:* the engine's `verifySummary` now publishes `openCorrectness`
+/ `openFidelity` per page (two integers, counted off the same `rowSeverity` stamp), and the stop
+tallies those, so the severity tally is real for pages and `unstamped` is left only to a summary
+written before the fields existed.
 
 **What was rejected.** *Capping the rows instead of dropping them.* There is no cap at which per-row
 prose fits: the fixture that measured this is 40 open rows on one page, whose answer encodes to
 36,298 wire bytes against a 16,000-byte ceiling, and the cap the first cut applied was on the
 STATUS DOCUMENT — downstream of an answer that never arrives. *Publishing severity counts from the
-engine's `verifySummary`.* That is the clean long-term fix and it is an engine change; this rework
-deliberately left the engine half untouched.
+engine's `verifySummary`.* Deferred at the time as an engine change this rework did not make — and
+then made, later in the same ticket, as the two per-page integers described above (the counts are
+the only thing that crosses; the rows still do not).
 
 **Migration path.** A caller reading `openRanked` reads `openCounts` instead: `openCounts.open` for
 the total, `openCounts.units` for the per-unit numbers, and `verify.json` for the rows. `built`,

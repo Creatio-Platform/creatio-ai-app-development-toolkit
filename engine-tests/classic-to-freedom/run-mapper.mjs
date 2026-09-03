@@ -2194,6 +2194,32 @@ check("ENG-96204 (T3): the severity rides into `verifyDigest` too — the digest
     const rows = Object.values(dig.pages || {}).flatMap((p) => p.openRows || []);
     return rows.length > 0 && rows.every((r) => r.severity === "correctness" || r.severity === "fidelity"); },
   () => Object.values(verifyDigest(lpEmptySection, sevVerify).pages || {}).flatMap((p) => (p.openRows || []).map((r) => r.severity)));
+/* ENG-96204 (AC 2, Part C) — THE SEVERITY COUNTS ARE PUBLISHED PER PAGE, IN THE COUNTS-ONLY SUMMARY. The stop
+   downstream tallies `correctness`/`fidelity` off `verifySummary`, which used to publish only the outcome axis, so
+   `fidelity` was structurally 0 and every page row landed in `unstamped`. The two integers are derived from the SAME
+   per-row stamp the checks above pin — counted, never re-classified — so they equal the stamped rows by construction. */
+{
+  const sevReport = verifyReport(lpEmptySection, sevVerify);
+  const sevSummary = verifySummary(lpEmptySection, sevVerify);
+  const pageKeys = Object.keys(sevReport.pages || {});
+  const stampedCount = (k, band) => (sevReport.pages[k].openRows || []).filter((r) => r.severity === band).length;
+  check("ENG-96204 (AC 2): `verifySummary` publishes `openCorrectness` and `openFidelity` as INTEGERS on every page — the severity axis crosses the counts-only boundary as two numbers, not as rows",
+    () => pageKeys.length > 0 && pageKeys.every((k) => Number.isInteger(sevSummary.pages[k].openCorrectness) && Number.isInteger(sevSummary.pages[k].openFidelity)),
+    () => Object.fromEntries(pageKeys.map((k) => [k, sevSummary.pages[k]])));
+  check("ENG-96204 (AC 2): on every page the two counts EQUAL the rows stamped with that band in the full report — derived from the same `rowSeverity` stamp, so the summary cannot disagree with `verify.json`",
+    () => pageKeys.every((k) => sevSummary.pages[k].openCorrectness === stampedCount(k, "correctness") && sevSummary.pages[k].openFidelity === stampedCount(k, "fidelity")),
+    () => pageKeys.map((k) => ({ k, summary: [sevSummary.pages[k].openCorrectness, sevSummary.pages[k].openFidelity], stamped: [stampedCount(k, "correctness"), stampedCount(k, "fidelity")] })));
+  check("ENG-96204 (AC 2): and they SUM to the page's open rows (`missing + unverified`) — every open row is in exactly one band, so the severity axis and the outcome axis count the same rows",
+    () => pageKeys.every((k) => sevSummary.pages[k].openCorrectness + sevSummary.pages[k].openFidelity === sevSummary.pages[k].missing + sevSummary.pages[k].unverified),
+    () => pageKeys.map((k) => ({ k, sev: sevSummary.pages[k].openCorrectness + sevSummary.pages[k].openFidelity, open: sevSummary.pages[k].missing + sevSummary.pages[k].unverified })));
+  check("ENG-96204 (AC 2): the fresh-stand fixture has BOTH bands non-zero on the page carrying the design-pass row — so the checks above are not satisfied by an all-correctness page, and `fidelity` is reachable from the engine side",
+    () => pageKeys.some((k) => sevSummary.pages[k].openFidelity > 0) && pageKeys.some((k) => sevSummary.pages[k].openCorrectness > 0),
+    () => Object.fromEntries(pageKeys.map((k) => [k, [sevSummary.pages[k].openCorrectness, sevSummary.pages[k].openFidelity]])));
+  check("ENG-96204 (AC 2): the summary is STILL counts-only after the addition — no `openRows`, no per-row prose, and each page entry is a fixed set of booleans and integers",
+    () => { const s = JSON.stringify(sevSummary); return !/openRows/.test(s) && !/deliverable/.test(s)
+      && pageKeys.every((k) => Object.values(sevSummary.pages[k]).every((v) => typeof v === "boolean" || Number.isInteger(v) || v === undefined)); },
+    () => JSON.stringify(sevSummary).slice(0, 300));
+}
 
 check("ENG-95218: under `pages-only-no-menu` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
   () => { const spec = renderDesignSpec(lpRun, lpNoMenuOpts);
@@ -7954,6 +7980,18 @@ const evJudgedYes = renderVerify({ changeSet: { viewConfigDiff: [{ name: "Contac
 check("ENG-94975 D7 evidence: a filed record with NO judge entry is `⚠ verify` (a record nobody reviewed is not a closed row) — an absent judge is NOT consent",
   evNoJudge.unverified === 1 && evNoJudge.missing === 0 && evNoJudge.complete === false && /but NOT judged/.test(evNoJudge.markdown),
   () => ({ u: evNoJudge.unverified, m: evNoJudge.missing, row: evNoJudge.markdown.split("\n").filter((l) => /judge/.test(l)).map((l) => l.slice(-140)) }));
+// ENG-96204 (AC 2, Part C) — the one-open-row page above is the quality-gates row ALONE: its summary must read as
+// pure fidelity. This is the case the executor's stop used to report as `unstamped` (or, worse, as correctness had
+// it guessed), and the reason the counts are published from here rather than inferred downstream.
+check("ENG-96204 (AC 2): a page whose ONLY open row is the design-pass (`#quality-gates`) row publishes `openFidelity: 1, openCorrectness: 0` in `verifySummary` — a polish outstanding on a complete page is fidelity, not a missing deliverable",
+  () => { const s = verifySummary({}, evNoJudge).pages.main; return s.openFidelity === 1 && s.openCorrectness === 0 && s.missing === 0 && s.unverified === 1; },
+  () => verifySummary({}, evNoJudge).pages.main);
+check("ENG-96204 (AC 2): once the judge closes that row the page publishes 0/0 — the counts fall with the rows, and a complete page carries no phantom severity",
+  () => { const s = verifySummary({}, evJudgedYes).pages.main; return s.openFidelity === 0 && s.openCorrectness === 0 && s.complete === true; },
+  () => verifySummary({}, evJudgedYes).pages.main);
+check("ENG-96204 (AC 2): a judge REJECTION on that row moves the SAME row to `missing` and it STAYS fidelity — the severity is the row's kind, not its outcome, exactly as `rowSeverity` decides it",
+  () => { const s = verifySummary({}, evJudgedNo).pages.main; return s.openFidelity === 1 && s.openCorrectness === 0 && s.missing === 1; },
+  () => verifySummary({}, evJudgedNo).pages.main);
 check("ENG-94975 D7 evidence: tri-state — `convincing: false` is a HARD ❌ MISSING (with the reason surfaced), `convincing: true` on a complete record closes the row",
   evJudgedNo.missing === 1 && /judge REJECTED/.test(evJudgedNo.markdown) && /ran on one page only/.test(evJudgedNo.markdown)
   && evJudgedYes.missing === 0 && evJudgedYes.unverified === 0,

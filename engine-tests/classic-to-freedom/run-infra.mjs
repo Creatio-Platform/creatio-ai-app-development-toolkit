@@ -839,6 +839,42 @@ check("ENG-96204 (T3): an empty open set totals to zeroes rather than `undefined
       && wf.openCountsOf(undefined).open === 0
       && noCount.unitsOpen === 1 && noCount.open === 0 && noCount.units.length === 1; },
   () => ({ empty: wf.openCountsOf([]), noCount: wf.openCountsOf([{ unit: "main", open: null }]) }));
+/* ENG-96204 (AC 2, Part C) — A PAGE'S BANDS COME FROM THE ENGINE'S PER-PAGE COUNTS. `verifySummary` now publishes
+   `openCorrectness` / `openFidelity` per page (each open row counted once under its `rowSeverity` stamp), and the
+   tally reads those two integers — so the stop's `fidelity` is no longer structurally 0 for pages and `unstamped`
+   is left only to a summary that predates the field. */
+check("ENG-96204 (AC 2): a page unit carrying the engine's two severity counts is tallied INTO the bands — `correctness`/`fidelity` from the counts, nothing left `unstamped`",
+  () => { const c = wf.openCountsOf([{ unit: "main", kind: "page", open: 3, missing: 2, unverified: 1, correctness: 2, fidelity: 1, severity: null, why: null }]);
+    return c.open === 3 && c.correctness === 2 && c.fidelity === 1 && c.unstamped === 0; },
+  () => wf.openCountsOf([{ unit: "main", kind: "page", open: 3, missing: 2, unverified: 1, correctness: 2, fidelity: 1 }]));
+check("ENG-96204 (AC 2): a page with ONLY the design-pass row open tallies as fidelity 1 / correctness 0 — the band the executor used to be unable to report for any page",
+  () => { const c = wf.openCountsOf([{ unit: "main", kind: "page", open: 1, missing: 0, unverified: 1, correctness: 0, fidelity: 1, severity: null, why: null }]);
+    return c.fidelity === 1 && c.correctness === 0 && c.unstamped === 0; },
+  () => wf.openCountsOf([{ unit: "main", open: 1, correctness: 0, fidelity: 1 }]));
+check("ENG-96204 (AC 2): page counts and a whole-item classification COMBINE in one tally — a stamped page beside the app unit's `correctness` item adds up on every axis, and a page whose summary PREDATES the field still lands in `unstamped`",
+  () => { const c = wf.openCountsOf([
+      { unit: "main", kind: "page", open: 3, missing: 2, unverified: 1, correctness: 2, fidelity: 1, severity: null, why: null },
+      { unit: "app", kind: "app", open: 1, missing: null, unverified: null, correctness: null, fidelity: null, severity: "correctness", why: "no package" },
+      { unit: "child:Old", kind: "page", open: 2, missing: 2, unverified: 0, correctness: null, fidelity: null, severity: null, why: null }]);
+    return c.unitsOpen === 3 && c.open === 6 && c.correctness === 3 && c.fidelity === 1 && c.unstamped === 2; },
+  () => wf.openCountsOf([{ unit: "main", open: 3, correctness: 2, fidelity: 1 }, { unit: "app", open: 1, severity: "correctness" }, { unit: "child:Old", open: 2 }]));
+check("ENG-96204 (AC 2): `unstamped` is clamped at zero — a summary whose bands exceed its open rows (a stale or hand-edited file) can never print a NEGATIVE count in the operator's status document",
+  () => wf.openCountsOf([{ unit: "main", open: 1, correctness: 2, fidelity: 1 }]).unstamped === 0,
+  () => wf.openCountsOf([{ unit: "main", open: 1, correctness: 2, fidelity: 1 }]));
+check("ENG-96204 (AC 2): the status document's per-unit line carries the split ONLY when the summary published it — a stamped page reads `N correctness / M fidelity`, a pre-field page reads exactly as before",
+  () => { const stamped = wf.runStatusDoc({ mode: "round1", openCounts: wf.openCountsOf([{ unit: "main", kind: "page", open: 3, missing: 2, unverified: 1, correctness: 2, fidelity: 1, severity: null, why: null }]), next: "x" });
+    const legacy = wf.runStatusDoc({ mode: "round1", openCounts: wf.openCountsOf([{ unit: "main", kind: "page", open: 3, missing: 2, unverified: 1, correctness: null, fidelity: null, severity: null, why: null }]), next: "x" });
+    return /`main` — 3 open row\(s\): 2 MISSING \+ 1 unconfirmed · 2 correctness \/ 1 fidelity/.test(stamped)
+      && /— 2 correctness · 1 fidelity$/m.test(stamped) && !/stamped per row/.test(stamped)
+      && /`main` — 3 open row\(s\): 2 MISSING \+ 1 unconfirmed$/m.test(legacy) && /3 stamped per row in/.test(legacy); },
+  () => wf.runStatusDoc({ mode: "round1", openCounts: wf.openCountsOf([{ unit: "main", open: 3, missing: 2, unverified: 1, correctness: 2, fidelity: 1 }]), next: "x" }).split("\n").filter((l) => /main|Total/.test(l)).join(" | "));
+check("ENG-96204 (AC 2): `RECONCILE_SHAPE.verify` TYPES the two per-page counts as integers and does NOT require them — a string there is a fault the retry names, an absent pair (a summary older than the field) is a legal answer",
+  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openCorrectness: "1", openFidelity: 0 } } } }).length === 1
+    && wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false } } } }).length === 0
+    && wf.RECONCILE_SHAPE?.verify?.map?.pages?.types?.openCorrectness === "integer"
+    && wf.RECONCILE_SHAPE?.verify?.map?.pages?.types?.openFidelity === "integer"
+    && !(wf.RECONCILE_SHAPE?.verify?.map?.pages?.required || []).includes("openCorrectness"),
+  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openCorrectness: "1" } } } }));
 /* ENG-96204 (AC 5) — THE STATUS DOCUMENT. Composed here rather than by an agent: a status an agent writes in its
    own words is a paraphrase of the verdict, and the reason this run computes rather than asserts is that
    paraphrases of verdicts drift. Every fact AC 5 names must be in it — and the open section is COUNTS plus a
@@ -4924,6 +4960,38 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
       && /Application \/ package/.test(persistPrompt(nonPageOpen.calls))
       && /1 unit\(s\) still open · 1 open row\(s\) — 1 correctness · 0 fidelity/.test(persistPrompt(nonPageOpen.calls)),
     () => persistPrompt(nonPageOpen.calls).split("\n").filter((l) => /nothing is open|Still open|^- `|^- \*\*Total/.test(l)).slice(0, 10).join(" | "));
+
+  /* --- AC 2 (Part C): the stop's severity tally is REAL for pages, read off the engine's own per-page counts ----- */
+  // The verdict is produced by the ENGINE's `verifySummary` (imported at the top of this file), fed a per-page tally
+  // in the shape `renderVerify` emits — so this drives the exact object the Reconcile agent copies, through the real
+  // generated script, and checks that the executor reads back what the engine published, field for field.
+  const STAMPED_VERIFY = verifySummary({}, { complete: false, missing: 1, unverified: 1,
+    pages: { main: { complete: false, buildComplete: false, builderOpen: 1, missing: 1, unverified: 1, openCorrectness: 1, openFidelity: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } });
+  const stampedStop = await scriptRun({ mode: "round1" }, [RECONCILE_R({ verify: STAMPED_VERIFY }), RECONCILE_R({ verify: STAMPED_VERIFY, roundOf: { main: 1 } })]);
+  check("ENG-96204 (AC 2): with the engine's per-page `openCorrectness`/`openFidelity` in the summary, the `paused-at-round` stop reports a REAL severity tally for the page — 1 correctness, 1 fidelity, 0 unstamped — where the same open set used to be 2 `unstamped` because the summary carried no band",
+    !stampedStop.res.threw && stampedStop.res.stopped === "paused-at-round"
+      && stampedStop.res.openCounts?.open === 2 && stampedStop.res.openCounts?.correctness === 1
+      && stampedStop.res.openCounts?.fidelity === 1 && stampedStop.res.openCounts?.unstamped === 0
+      && stampedStop.res.openCounts?.units?.[0]?.correctness === 1 && stampedStop.res.openCounts?.units?.[0]?.fidelity === 1,
+    () => (stampedStop.res.threw ? `threw: ${stampedStop.res.threw}` : stampedStop.res.openCounts));
+  check("ENG-96204 (AC 2): and the status document the operator reads carries the same split on the page's own line and in the total — with no `stamped per row` remainder to send them hunting for a band the file already states",
+    /`main` — 2 open row\(s\): 1 MISSING \+ 1 unconfirmed · 1 correctness \/ 1 fidelity/.test(persistPrompt(stampedStop.calls))
+      && /1 unit\(s\) still open · 2 open row\(s\) — 1 correctness · 1 fidelity$/m.test(persistPrompt(stampedStop.calls)),
+    () => persistPrompt(stampedStop.calls).split("\n").filter((l) => /`main`|Total/.test(l)).join(" | "));
+  const QG_ONLY_VERIFY = verifySummary({}, { complete: false, missing: 0, unverified: 1,
+    pages: { main: { complete: false, buildComplete: true, builderOpen: 0, missing: 0, unverified: 1, openCorrectness: 0, openFidelity: 1, openRows: [ROW_FIDELITY] } } });
+  const qgOnlyStop = await scriptRun({ mode: "round1" }, [RECONCILE_R({ verify: QG_ONLY_VERIFY }), RECONCILE_R({ verify: QG_ONLY_VERIFY, roundOf: { main: 1 } })]);
+  check("ENG-96204 (AC 2): a page whose only open row is the design pass stops with `fidelity: 1, correctness: 0` — the operator is told the page is complete-but-unpolished, not that something is missing, and not that the band is somewhere else",
+    !qgOnlyStop.res.threw && qgOnlyStop.res.stopped === "paused-at-round"
+      && qgOnlyStop.res.openCounts?.fidelity === 1 && qgOnlyStop.res.openCounts?.correctness === 0 && qgOnlyStop.res.openCounts?.unstamped === 0,
+    () => (qgOnlyStop.res.threw ? `threw: ${qgOnlyStop.res.threw}` : qgOnlyStop.res.openCounts));
+  check("ENG-96204 (AC 2): the pre-field summary (`SHORT_VERIFY`, no per-page bands) STILL tallies as `unstamped` — the field is read, never assumed, so a folder verified by an older engine keeps pointing at the per-row stamp in `verify.json` instead of reporting a band nobody published",
+    r1.res.openCounts?.unstamped === 2 && r1.res.openCounts?.correctness === 0 && r1.res.openCounts?.fidelity === 0
+      && r1.res.openCounts?.units?.[0]?.correctness === null && r1.res.openCounts?.units?.[0]?.fidelity === null,
+    () => r1.res.openCounts);
+  check("ENG-96204 (AC 2): the Reconcile prompt NAMES both per-page counts beside the fields it already lists — a field the prose does not name is a field the copying agent drops, and the shape table types it so a string there is a fault",
+    /pages\["<key>"\] = \{ complete, buildComplete, builderOpen, missing, unverified, openCorrectness, openFidelity \}/.test(wfSrc),
+    () => wfSrc.slice(wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY"), wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY") + 400));
 
   /* --- H1 (thread helpers.mjs:463): a mistyped RECORDED mode is a structured stop, not a crash mid-run -------- */
   const badRecordedMode = await scriptRun({ mode: undefined }, [RECONCILE_R({ runResolutions: [{ item: "control-mode", answer: "round-1" }] })]);

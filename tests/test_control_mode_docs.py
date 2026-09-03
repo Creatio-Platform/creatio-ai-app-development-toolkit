@@ -194,9 +194,20 @@ class ControlModeDocTests(unittest.TestCase):
                 "read the correctness rows first",
                 # And WHY, so nobody re-adds the rows: the ceiling is the reason, not a preference.
                 "capped at 16000 wire bytes",
+                # ENG-96204 Part C: the severity tally is real for pages — the engine publishes the two
+                # per-page counts and the stop tallies them. A doc still calling `unstamped` the normal
+                # reading would send an operator to `verify.json` for a band the status already states.
+                "publishes `openCorrectness` / `openFidelity` per page",
+                "`unstamped` is left only for a page whose summary predates the two fields",
             ],
         )
         self.assertFalse(missing, f"the counts-plus-pointer contract must be stated where the build runs; missing {missing}")
+
+    def test_executor_contract_no_longer_calls_unstamped_the_normal_reading(self):
+        # ENG-96204 Part C — the sentence the severity-count publication superseded. Pinned as ABSENT so the
+        # claim cannot come back in a re-wrap: `fidelity` is no longer structurally zero for pages.
+        content = flat(read_text(EXECUTOR_SKILL))
+        self.assertNotIn("`unstamped` in the tally is therefore the normal reading for page rows", content)
 
     def test_executor_contract_states_the_refusal_and_both_stop_mechanisms(self):
         content = read_text(EXECUTOR_SKILL)

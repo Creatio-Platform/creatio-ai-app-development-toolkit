@@ -3657,9 +3657,16 @@ function verifyCtxFactory(root) {
 function verifyTally() {
   const t = { missing: 0, unverified: 0, builderOpen: 0, buildMissing: 0, rejected: 0, unfiled: 0, pages: {} };
   t.add = (pageKey, outcome, row, owner) => {
-    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, builderOpen: 0, buildMissing: 0, complete: true, buildComplete: true, openRows: [] });
+    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, builderOpen: 0, buildMissing: 0, openCorrectness: 0, openFidelity: 0, complete: true, buildComplete: true, openRows: [] });
     if (outcome !== "missing" && outcome !== "unverified") return;
     t[outcome]++; p[outcome]++; p.complete = false;
+    // ENG-96204 (AC 2) — the SAME severity stamp the row carries, COUNTED per page. `openCorrectness + openFidelity`
+    // is `missing + unverified` by construction: every open row is stamped exactly one band by `rowSeverity`, and
+    // this reads the stamp off the row rather than re-deriving it, so the two integers cannot disagree with the rows
+    // they summarise. They exist so the counts-only `verifySummary` can carry the severity axis across the capped
+    // Reconcile boundary as two integers — the executor's round-boundary stop tallies on them, where it used to
+    // count every page row as `unstamped` because the summary published no band at all.
+    if (row?.severity === SEVERITY.FIDELITY) p.openFidelity++; else p.openCorrectness++;
     // `builderOpen` is the count that matches the axis — how many open rows this builder can actually act on. The
     // scoped exit-2 diagnostic reports THIS, not `missing`: a `0/N expected fields` page has `missing: 0` and would
     // otherwise announce "0 MISSING deliverable(s)" while exiting 2, which reads as a broken gate.
@@ -3875,10 +3882,18 @@ export function verifyDigest(result, v) {
 // approach the answer's 16000-byte wire ceiling on counts alone. Pages are NOT dropped to fit (an absent entry
 // reads as "nobody looked" downstream and would re-open settled units); instead the `--verify-summary` writer warns
 // loudly as the ceiling nears, and the true close at scale is the answer-slimming follow-up, not a silent cut here.
+// ENG-96204 (AC 2) — TWO MORE INTEGERS PER PAGE, `openCorrectness` / `openFidelity`: the page's open rows split by
+// the severity band `rowSeverity` stamps on each of them (see `verifyTally`). Still counts-only, still fixed-shape,
+// still invariant in the row count — a page costs ~40 more wire bytes and the summary stays bounded by the page
+// count alone. This is what lets the executor's stop report a REAL severity tally for pages instead of `unstamped`:
+// the band is stamped once, in the engine, and published here as two numbers rather than re-derived downstream.
+// Absent (undefined, so dropped by JSON) only on a verdict that predates the field, which the executor keeps reading
+// as `unstamped`.
 export function verifySummary(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
-    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen };
+    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen,
+      openCorrectness: p?.openCorrectness, openFidelity: p?.openFidelity };
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, planGaps: planGaps(result), pages };
 }
