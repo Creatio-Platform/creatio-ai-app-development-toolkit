@@ -1503,7 +1503,8 @@ function resolutionClaimsLine(rows, fence, unitKey) {
   if (!(rows || []).length) return ''
   const wrap = typeof fence === 'function' ? fence : String
   const line = (r) => {
-    const said = r.applied ? `claims APPLIED${r.how ? ` — ${wrap(String(r.how).slice(0, CARRY_TEXT_CAP))}` : ''}` : 'reports NOT applied'
+    const howClause = r.how ? ` — ${wrap(String(r.how).slice(0, CARRY_TEXT_CAP))}` : ''
+    const said = r.applied ? `claims APPLIED${howClause}` : 'reports NOT applied'
     return `  · ${JSON.stringify(r.id)} (${JSON.stringify(r.kind || 'confirm')}) — answer: ${wrap(String(r.answer ?? '').slice(0, CARRY_TEXT_CAP))} — the builder ${said}`
   }
   return `OPERATOR ANSWERS THIS UNIT WAS BUILT FROM — check each against the page you just fetched:\n${rows.map(line).join('\n')}\n  RETURN ONE \`resolutionChecks\` ROW FOR EACH LINE ABOVE: \`{ unit, id, shows, found }\`. \`unit\` is \`${JSON.stringify(unitKey)}\` — the unit key on this bullet, NOT the page key and NOT the Freedom schema name. \`id\` is copied from the line BYTE FOR BYTE. \`shows\` is one of \`"yes"\` / \`"no"\` / \`"unknown"\` as defined below, and \`found\` says what you actually saw. A line you return no row for is read as UNCONFIRMED — it is not a refutation, and it does not close anything.`
@@ -1516,7 +1517,7 @@ function resolutionContradictions(claims, checks) {
     for (const row of claim?.resolutionClaims || []) {
       if (!row.applied) continue
       const seen = shown.get(pairKey(claim.unit, row.id))
-      if (!seen || seen.shows !== SHOWS_NO) continue
+      if (seen?.shows !== SHOWS_NO) continue
       out.push({ unit: claim.unit, id: row.id, kind: row.kind, item: capCarryText(row.item),
         answer: capCarryText(row.answer), how: capCarryText(row.how),
         source: UNCONSUMED_FROM_VERIFIER,
@@ -1546,7 +1547,7 @@ const pairParts = (key) => {
 const grantPairsToPersist = (set) => [...(set || [])].map(pairParts)
 const seedGrantPairs = (rows) => {
   const out = new Set()
-  for (const r of rows || []) if (r && r.unit && r.id) out.add(pairKey(r.unit, r.id))
+  for (const r of rows || []) if (r?.unit && r.id) out.add(pairKey(r.unit, r.id))
   return out
 }
 
@@ -1564,11 +1565,11 @@ function owedResolutionPairs(items, unitKeys) {
 const RULE_SURFACE_STEMS = ['businessrule', 'readpagebusinessrules']
 const namesRuleSurface = (found) => {
   if (!nonBlank(found)) return false
-  const t = String(found).toLowerCase().replace(/[\s_\-]+/g, '')
+  const t = String(found).toLowerCase().replace(/[\s_-]+/g, '')
   return RULE_SURFACE_STEMS.some((k) => t.includes(k))
 }
 function unnamedRuleSurfaceChecks(checks, entries) {
-  const byPair = new Map((entries || []).filter((u) => u && u.source === UNCONSUMED_FROM_VERIFIER)
+  const byPair = new Map((entries || []).filter((u) => u?.source === UNCONSUMED_FROM_VERIFIER)
     .map((u) => [pairKey(u.unit, u.id), u]))
   const out = []
   for (const c of checkRowsByPair(checks).values()) {
@@ -2064,8 +2065,8 @@ let resolutionCheckTally = new Map()
       if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
         log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
       }
-      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
-      out.push(`\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, not every unit: two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question. A dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
+      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`,
+      `\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, not every unit: two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question. A dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
     if (carry.preflightEvidence && Object.keys(carry.preflightEvidence).length) {
       out.push(`\nPREFLIGHT EVIDENCE — merge these id/value pairs into \`${BUILT_FILE}.evidence\` exactly. A DIFFERENT FILE from the queue merge above, so it needs its own answer: RETURN \`evidenceWritten\` = every id you actually merged there. \`queueWritten\` says nothing about this write, and this run drops exactly the ids you name — one you file but do not report is re-sent to the next writer (harmless, the merge is idempotent); one you report but do not file is lost. A record object goes in as that object; the literal \`false\` goes in as \`false\`, NOT as \`{}\`. Keep existing evidence and judge entries that are already in the file:\n${j(carry.preflightEvidence)}`)
     }
@@ -2586,7 +2587,11 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       const confirmedWrite = new Set((persisted.unconsumedWritten || []).map((w) => pairKey(w?.unit, w?.id)))
       const unconfirmedWrite = owedWrite.filter((k) => !confirmedWrite.has(k))
       if (unconfirmedWrite.length) {
-        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${capCarryText(unconfirmedWrite.map((k) => { const p = pairParts(k); return `${JSON.stringify(p.unit)}/${JSON.stringify(p.id)}` }).join(', '))} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+        const unconfirmedPairs = unconfirmedWrite.map((k) => {
+          const p = pairParts(k)
+          return `${JSON.stringify(p.unit)}/${JSON.stringify(p.id)}`
+        }).join(', ')
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${capCarryText(unconfirmedPairs)} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
       }
       markCarryPersisted()
     }
@@ -2619,11 +2624,9 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       : 'every published unit is either already closed on this stand or parked — nothing left this run can build') + held
   }
   function zeroWorkNext() {
-    const base = parked.length
-      ? `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
-      : unconsumed.length
-        ? `present ${VERIFY_TABLE} verbatim — it is green, and this run is still NOT COMPLETE for the reason below`
-        : `present ${VERIFY_TABLE} verbatim as the completion report`
+    let base = `present ${VERIFY_TABLE} verbatim as the completion report`
+    if (unconsumed.length) base = `present ${VERIFY_TABLE} verbatim — it is green, and this run is still NOT COMPLETE for the reason below`
+    if (parked.length) base = `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
     return `${base}${unconsumedNextClause(unconsumed)}`
   }
 
@@ -3443,6 +3446,39 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     pendingJudgeIds.clear()
   }
 
+
+  function foldResolutionEvidence(claims) {
+    resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
+    for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
+      log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
+      const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
+      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+        claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
+      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
+        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
+      discrepancies = seenAt >= 0
+        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
+        : [...discrepancies, notApplied]
+      if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
+        unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
+      }
+      if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
+    }
+  }
+
+  function reportUnnamedRuleSurface() {
+    const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
+    if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
+  }
+
+  function foldSelfCheckMismatches(selfChecks) {
+    for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
+      const { label, claim } = selfCheckDiscrepancyText(m.kind)
+      log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
+      discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
+    }
+  }
+
   function* oneRound(open) {
       const { built: builtThisRound, claims, pausedAfter, continued, deferred, checkFirst,
         selfCheckShort, selfChecks } = yield* buildRound(open)
@@ -3477,23 +3513,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       }
       absorbVerifier(lastVerifier, builtThisRound, claims)
 
-      resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
-      for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
-        log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
-        const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
-          claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${capCarryText(c.how)}` : ''}`, found: c.found }
-        const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-          && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-        discrepancies = seenAt >= 0
-          ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-          : [...discrepancies, notApplied]
-        if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
-          unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
-        }
-        if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
-      }
-      const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
-      if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
+      foldResolutionEvidence(claims)
+      reportUnnamedRuleSurface()
 
       yield* persistPending(`closing round ${round}`)
 
@@ -3540,11 +3561,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         })
       }
 
-      for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
-        const { label, claim } = selfCheckDiscrepancyText(m.kind)
-        log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
-        discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
-      }
+      foldSelfCheckMismatches(selfChecks)
       unconsumed = reconcileUnconsumed(unconsumed,
         owedResolutionPairs(state.preflightItems, state.unitKeys),
         releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))
@@ -3624,7 +3641,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   {
     const vague = unsettledResolutionClaims(resolutionCheckTally)
     if (vague.length) {
-      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${capCarryText(vague.map((v) => `${JSON.stringify(v.unit)}/${JSON.stringify(v.id)} (${v.unknownRounds}x)`).join(", "))}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
+      const vaguePairs = vague.map((v) => `${JSON.stringify(v.unit)}/${JSON.stringify(v.id)} (${v.unknownRounds}x)`).join(", ")
+      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${capCarryText(vaguePairs)}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
     }
   }
 

@@ -1814,7 +1814,7 @@ const DVT_LOOKUP = 10;
 // kept with an apology.
 function* ruleNodes(node) {
   if (!node || typeof node !== "object") return;
-  if (Array.isArray(node)) { for (const x of node) yield* ruleNodes(x); return; }
+  if (Array.isArray(node)) { for (const x of node) { yield* ruleNodes(x); } return; }
   yield node;
   for (const v of Object.values(node)) yield* ruleNodes(v);
 }

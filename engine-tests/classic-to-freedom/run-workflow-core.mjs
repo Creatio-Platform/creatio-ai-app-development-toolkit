@@ -767,8 +767,8 @@ const genSrc = readFileSync(GENERATED, "utf8");
       for (const e of sibSrc.matchAll(/^export (?:const|function\*?|let|class)\s+([A-Za-z_$][\w$]*)/gm)) {
         const name = e[1];
         if (imported.has(name)) continue;
-        if (new RegExp("(?:const|let|var|function\\*?|class)\\s+" + name + "(?![\\w$])").test(src)) continue;
-        if (new RegExp("(?<![\\w$.])" + name + "\\s*\\(").test(src)) unresolved.push(`${file}: ${name} (exported by ${m[2]})`);
+        if (new RegExp(String.raw`(?:const|let|var|function\*?|class)\s+` + name + String.raw`(?![\w$])`).test(src)) continue;
+        if (new RegExp(String.raw`(?<![\w$.])` + name + String.raw`\s*\(`).test(src)) unresolved.push(`${file}: ${name} (exported by ${m[2]})`);
       }
     }
   }
@@ -1242,7 +1242,7 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
         const p = path.join(dir, e.name);
         if (e.isDirectory()) { crlfify(p); continue; }
         if (!/\.(mjs|js)$/.test(e.name)) continue;
-        writeFileSync(p, readFileSync(p, "utf8").replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"), "utf8");
+        writeFileSync(p, readFileSync(p, "utf8").replaceAll("\r\n", "\n").replaceAll("\n", "\r\n"), "utf8");
       }
     };
     crlfify(path.join(tmpGen, "skills/_workflow-core"));

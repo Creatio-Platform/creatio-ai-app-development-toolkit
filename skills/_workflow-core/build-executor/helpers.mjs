@@ -1559,7 +1559,9 @@ export function resolutionClaimsLine(rows, fence, unitKey) {
     // `r.how` IS BOUNDED (PR #128 review, RC-6). It is build-agent-authored text — the untrusted party this verifier
     // prompt exists to check — and it reaches the read-only verifier fenced but, until this, uncapped, while the
     // sibling `answer` a line below is `.slice(0, 400)`. Fencing stops a break-out, not a context-flooding string.
-    const said = r.applied ? `claims APPLIED${r.how ? ` — ${wrap(String(r.how).slice(0, CARRY_TEXT_CAP))}` : ''}` : 'reports NOT applied'
+    // The `how` clause is lifted to its own value (S3358/S4624): one ternary, one template level, same bytes out.
+    const howClause = r.how ? ` — ${wrap(String(r.how).slice(0, CARRY_TEXT_CAP))}` : ''
+    const said = r.applied ? `claims APPLIED${howClause}` : 'reports NOT applied'
     // `r.id` IS STAND-DERIVED TEXT (PR #128 review). It is composed as `{pageKey}#confirm:{kind}:{item}` from the
     // RAW `item` — a diff `bindTo`, a `define()` dependency, a source method or process name read off the customer's
     // Classic schema. It used to be interpolated into a backtick span unfenced, while the sibling
@@ -1603,7 +1605,8 @@ export function resolutionContradictions(claims, checks) {
       // the question -- is treated exactly like an ABSENT row: unconfirmed and silent. It used to arrive here as
       // `false` and read as a contradiction, so one wasted build round plus a NOT COMPLETE was the EXPECTED outcome
       // for every answer whose effect is not in the page body.
-      if (!seen || seen.shows !== SHOWS_NO) continue
+      // An ABSENT row and a present non-refuting row take the SAME branch, which is exactly what `?.` says (S6582).
+      if (seen?.shows !== SHOWS_NO) continue
       out.push({ unit: claim.unit, id: row.id, kind: row.kind, item: capCarryText(row.item),
         answer: capCarryText(row.answer), how: capCarryText(row.how),
         source: UNCONSUMED_FROM_VERIFIER,
@@ -1656,7 +1659,7 @@ export const pairParts = (key) => {
 export const grantPairsToPersist = (set) => [...(set || [])].map(pairParts)
 export const seedGrantPairs = (rows) => {
   const out = new Set()
-  for (const r of rows || []) if (r && r.unit && r.id) out.add(pairKey(r.unit, r.id))
+  for (const r of rows || []) if (r?.unit && r.id) out.add(pairKey(r.unit, r.id))
   return out
 }
 
@@ -1717,7 +1720,8 @@ export function owedResolutionPairs(items, unitKeys) {
 const RULE_SURFACE_STEMS = ['businessrule', 'readpagebusinessrules']
 export const namesRuleSurface = (found) => {
   if (!nonBlank(found)) return false
-  const t = String(found).toLowerCase().replace(/[\s_\-]+/g, '')
+  // A trailing `-` in a character class is already literal, so escaping it says nothing (S6535).
+  const t = String(found).toLowerCase().replace(/[\s_-]+/g, '')
   return RULE_SURFACE_STEMS.some((k) => t.includes(k))
 }
 // PR #128 review (round 18) -- THE ROWS THAT ALMOST ESCAPED AND DID NOT. A rule-shaped, verifier-sourced row whose
@@ -1726,7 +1730,7 @@ export const namesRuleSurface = (found) => {
 // verifier phrasing nobody anticipated is a matcher to widen, an unexamined row is a page to go and read. Reported,
 // never gating: this changes no release decision, it only says out loud which rows were refused on this ground.
 export function unnamedRuleSurfaceChecks(checks, entries) {
-  const byPair = new Map((entries || []).filter((u) => u && u.source === UNCONSUMED_FROM_VERIFIER)
+  const byPair = new Map((entries || []).filter((u) => u?.source === UNCONSUMED_FROM_VERIFIER)
     .map((u) => [pairKey(u.unit, u.id), u]))
   const out = []
   for (const c of checkRowsByPair(checks).values()) {

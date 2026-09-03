@@ -82,7 +82,7 @@ const CASES = [
   {
     name: "a comment right after a REGEX LITERAL is stripped and the regex is not eaten as one",
     src: "const re = /ab\\/cd/g // prose after a regex\n",
-    keep: ["/ab\\/cd/g"],
+    keep: [String.raw`/ab\/cd/g`],
     gone: ["prose after a regex"],
   },
   {
@@ -100,7 +100,7 @@ const CASES = [
   {
     name: "an ESCAPED QUOTE inside a string does not end it early",
     src: "const s = 'it\\'s // not a comment' // this one is\n",
-    keep: ["'it\\'s // not a comment'"],
+    keep: [String.raw`'it\'s // not a comment'`],
     gone: ["this one is"],
   },
   {
@@ -228,7 +228,7 @@ function literalPayloads(src) {
   const out = [];
   (function walk(node) {
     if (!node || typeof node !== "object") return;
-    if (Array.isArray(node)) { for (const n of node) walk(n); return; }
+    if (Array.isArray(node)) { for (const n of node) { walk(n); } return; }
     if (node.type === "Literal" && typeof node.value === "string") out.push("s:" + node.value);
     else if (node.type === "Literal" && node.regex) out.push("r:" + node.regex.pattern + "/" + node.regex.flags);
     else if (node.type === "TemplateElement") out.push("t:" + (node.value?.cooked ?? node.value?.raw ?? ""));
@@ -266,7 +266,7 @@ check("SELF-TEST: the payload comparator IGNORES comments, so an unchanged liter
 for (const rel of SOURCES) {
   const abs = path.join(CORE_DIR, rel);
   let src;
-  try { src = readFileSync(abs, "utf8").replace(/\r\n/g, "\n"); }
+  try { src = readFileSync(abs, "utf8").replaceAll("\r\n", "\n"); }
   catch { check(`${rel} is readable`, false, `missing: ${abs}`); continue; }
 
   const stripped = stripComments(src);

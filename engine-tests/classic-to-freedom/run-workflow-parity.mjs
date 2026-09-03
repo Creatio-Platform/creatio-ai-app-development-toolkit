@@ -676,7 +676,7 @@ async function loadRenderers(src, label) {
     sliceArrowConst(src, "encodedAsciiBytes"),
     ...["capCarryText", "unconsumedNextClause", "unconsumedLogLine"].map((n) => sliceFunction(src, n)),
   ];
-  if (parts.some((p) => p === null) || fns.some((f) => f === null)) {
+  if (parts.includes(null) || fns.includes(null)) {
     return { error: `${label}: could not slice the render surface (constants: ${parts.map((p) => p !== null).join()}, functions: ${fns.map((f) => f !== null).join()})` };
   }
   const body = `${parts.join("")}${fns.join("\n")}\nexport { capCarryText, unconsumedNextClause, unconsumedLogLine }\n`;
@@ -700,9 +700,17 @@ async function loadRenderers(src, label) {
     const ONE = [{ unit: "main", id: "#confirm:dcm:Deal", why: "the builder reported nothing" }];
     const TWO = [...ONE, { unit: "list", id: "#confirm:list-columns:Deal", why: "declined" }];
     const MANY = Array.from({ length: 40 }, (_, i) => ({ unit: `child:Entity${i}`, id: `#confirm:field:AVeryLongQuestionText${i}`, why: "x" }));
-    const CASES = [["one entry", ONE], ["two entries", TWO], ["forty entries (crosses the carry cap)", MANY], ["empty (the path the scenarios already cover)", []]];
+    // NAMED FIELDS, not a mixed tuple (S6551): as `[["one entry", ONE], …]` the array's element type is
+    // `string | object[]`, so `label` reads as possibly-an-object at the interpolation below — a real
+    // stringification hazard in general, and here just noise. One shape per case says what each half is.
+    const CASES = [
+      { label: "one entry", entries: ONE },
+      { label: "two entries", entries: TWO },
+      { label: "forty entries (crosses the carry cap)", entries: MANY },
+      { label: "empty (the path the scenarios already cover)", entries: [] },
+    ];
 
-    for (const [label, entries] of CASES) {
+    for (const { label, entries } of CASES) {
       for (const fn of ["unconsumedNextClause", "unconsumedLogLine"]) {
         const a = base.mod[fn](entries), b = ship.mod[fn](entries);
         check(`${fn} — ${label}: baseline and shipped render byte-identical text`, a === b,

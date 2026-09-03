@@ -3363,8 +3363,14 @@ check("PR #128 review (round 6, Minor): `reopenKeys()` is called ONCE PER `openN
     && !/isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, reopenKeys\(\), packageState\)/.test(wfSrc));
 
 // Round-6 Minor (F6) — one source of truth for the cap.
+// ROUND 20 (Sonar S4624): the clause moved out of the claim template into its own `howClause` value, because a
+// template inside a template is a code smell and this was one of three in the file. The CLAIM this pin makes is
+// unchanged — the cap is `capCarryText`, never a re-typed literal — so only its spelling follows the refactor:
+// `howClause` must be built with `capCarryText` AND must be what the claim interpolates. Both halves are asserted,
+// so a `howClause` that is computed and then not used (or used and not capped) is still red.
 check("PR #128 review (round 6, Minor): the `resolution-not-applied` claim caps `c.how` through `capCarryText`, not a re-typed `400` — a bare literal keeps truncating to the old value if `CARRY_TEXT_CAP` ever moves, and nothing would catch the divergence",
-  /\$\{c\.how \? ` — \$\{capCarryText\(c\.how\)\}` : ''\}/.test(wfSrc)
+  /const howClause = c\.how \? ` — \$\{capCarryText\(c\.how\)\}` : ''/.test(wfSrc)
+    && /claim: `applied the answer to \$\{JSON\.stringify\(c\.id\)\}\$\{howClause\}`/.test(wfSrc)
     && !/\$\{String\(c\.how\)\.slice\(0, 400\)\}/.test(wfSrc));
 /* ===================================================================================================
    PR #128 SEVENTH-ROUND REVIEW — the repair grant is per ANSWER, the cap binds on rehydration, the

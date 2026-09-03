@@ -58,7 +58,11 @@ import {
   PREFLIGHT_SCHEMA, RECONCILE_SCHEMA, REFS_SCHEMA, VERIFIER_SCHEMA,
   // Round 17b — the two unconsumed-source tags moved to `schemas.mjs` with the other shared contract
   // literals, to break the `helpers <-> schemas` cycle the ENG-95930 merge created. See that file.
-  UNCONSUMED_FROM_VERIFIER, UNCONSUMED_FROM_DISPATCH,
+  // Only the DISPATCH tag is READ in this module — the per-unit clear in `reportResolutionAccounting` scopes on
+  // it. The verifier tag is applied by `resolutionContradictions` in `helpers.mjs` and reaches this file only as
+  // `c.source`, so naming it here bought an unused binding (S1128). It is still named in the comments below,
+  // which is where the invariant about it belongs.
+  UNCONSUMED_FROM_DISPATCH,
 } from './schemas.mjs'
 
 export { normalizeInput, resolveEngineCli, resolveSkillsRoot } from './context.mjs'
@@ -404,7 +408,10 @@ let resolutionCheckTally = new Map()
       if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
         log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
       }
-      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`)
+      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`,
+      // ONE `push` FOR BOTH BLOCKS (S7778). They are unconditional neighbours in the same list and `out` is joined
+      // at the end, so two calls and one two-argument call produce the identical array — the comment below stays
+      // attached to the block it explains rather than being hoisted away from it.
       // PR #128 review (N2) — THE ANSWER-CHANNEL REPAIR GRANTS RIDE THE CARRY TOO. The grant markers used to be derived
       // from `unconsumedResolutions` on resume, but a transient build death (`!res`) files an unconsumed row WITHOUT
       // spending the grant, so the derivation over-marked those units and denied them their one repair round. Persisted
@@ -412,7 +419,7 @@ let resolutionCheckTally = new Map()
       // `resolutionsPending` ⊆ it = the subset still owed that round's dispatch (keep them open until it runs). Written
       // EVEN WHEN `[]`, for the same reason the list above is — an emptied set is how a resumed run learns a grant was
       // finally consumed, and a stale non-empty one would strand a settled unit.
-      out.push(`\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, not every unit: two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question. A dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
+      `\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, not every unit: two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question. A dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
     if (carry.preflightEvidence && Object.keys(carry.preflightEvidence).length) {
       out.push(`\nPREFLIGHT EVIDENCE — merge these id/value pairs into \`${BUILT_FILE}.evidence\` exactly. A DIFFERENT FILE from the queue merge above, so it needs its own answer: RETURN \`evidenceWritten\` = every id you actually merged there. \`queueWritten\` says nothing about this write, and this run drops exactly the ids you name — one you file but do not report is re-sent to the next writer (harmless, the merge is idempotent); one you report but do not file is lost. A record object goes in as that object; the literal \`false\` goes in as \`false\`, NOT as \`{}\`. Keep existing evidence and judge entries that are already in the file:\n${j(carry.preflightEvidence)}`)
     }
@@ -1271,7 +1278,12 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       const confirmedWrite = new Set((persisted.unconsumedWritten || []).map((w) => pairKey(w?.unit, w?.id)))
       const unconfirmedWrite = owedWrite.filter((k) => !confirmedWrite.has(k))
       if (unconfirmedWrite.length) {
-        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${capCarryText(unconfirmedWrite.map((k) => { const p = pairParts(k); return `${JSON.stringify(p.unit)}/${JSON.stringify(p.id)}` }).join(', '))} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+        // Pair list rendered BEFORE the message, so no template nests inside a template (S4624). Same bytes out.
+        const unconfirmedPairs = unconfirmedWrite.map((k) => {
+          const p = pairParts(k)
+          return `${JSON.stringify(p.unit)}/${JSON.stringify(p.id)}`
+        }).join(', ')
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${capCarryText(unconfirmedPairs)} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
       }
       markCarryPersisted()
     }
@@ -1320,11 +1332,11 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
     // the one shape this scenario can take once the grant is spent — queue holds the row, `resolutionsPending` empty,
     // `openNow()` empty, gate green — told the orchestrating agent to "present the completion report" while the run
     // was holding an answer that went nowhere. `references/02-queue-and-built-files.md` promises the opposite.
-    const base = parked.length
-      ? `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
-      : unconsumed.length
-        ? `present ${VERIFY_TABLE} verbatim — it is green, and this run is still NOT COMPLETE for the reason below`
-        : `present ${VERIFY_TABLE} verbatim as the completion report`
+    // Three outcomes as three statements rather than a nested ternary (S3358). The ORDER carries the meaning: a
+    // park outranks a held answer, which outranks the clean report, so the strongest claim is assigned LAST.
+    let base = `present ${VERIFY_TABLE} verbatim as the completion report`
+    if (unconsumed.length) base = `present ${VERIFY_TABLE} verbatim — it is green, and this run is still NOT COMPLETE for the reason below`
+    if (parked.length) base = `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
     return `${base}${unconsumedNextClause(unconsumed)}`
   }
 
@@ -2583,6 +2595,80 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     pendingJudgeIds.clear()   // whatever the judge skipped comes back as `unjudgedEvidenceIds` next reconcile
   }
 
+  // ENG-95503 / PR #128 review (round 20, Sonar S3776) — THREE FOLDS LIFTED OUT OF `oneRound`.
+  // `oneRound` had a cognitive complexity of 23 against the repo's pinned limit of 15, and the excess was three
+  // self-contained "fold what an agent just returned into run state" passes, each with its own nested branching.
+  // They are plain functions, not generators: none of them yields, which is exactly why they could be lifted at
+  // all — the round's dispatch sequence is untouched and still reads top-to-bottom in `oneRound`. They mutate the
+  // same closure state they always did (`discrepancies`, `unconsumed`, the two grant sets, `resolutionCheckTally`),
+  // so this is a move, not a rewrite: no call order, no condition and no rendered string changes.
+
+  // WHERE THE BUILDER'S "I APPLIED IT" MEETS THE VERIFIER'S READ OF THE PAGE.
+  function foldResolutionEvidence(claims) {
+    // ENG-95503 — THE INDEPENDENT CHECK ON "I APPLIED THE OPERATOR'S ANSWER". Run here for the same reason the
+    // self-check cross-check above is: this is where the READ-ONLY verifier's observation of the page it fetched is
+    // fresh, and a builder's `applied: true` is its own word until something that did not build the page looks. A
+    // contradiction makes the answer UNCONSUMED — the claim is not evidence the answer produced anything — so it is
+    // recorded, it holds the run short of `complete`, and it buys the unit the same one repair round.
+    resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
+    for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
+      log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
+      // DEFENSE-IN-DEPTH, matching `resolutionClaimsLine` (PR #128 review, O3). `c.id` is stand-derived and `c.how` is
+      // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
+      // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
+      // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
+      // DEDUPED ON `(unit, id, kind)` (PR #128 review, round 19). `discrepancies` is re-seeded from the queue file
+      // and rendered into EVERY close prompt via `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention
+      // is deliberate (`helpers.mjs`: the historical row the `no` filed stays regardless). So a refutation repeated
+      // across rounds and across resumes appended a fresh ~900-byte row every time, all of them counted against
+      // `RECONCILE_ANSWER_MAX_BYTES`. Same fix, same reason, as the `blockedItems` `(unit, what)` dedup above: keep
+      // ONE row per refuted answer and REFRESH it in place, so the operator reads the CURRENT `found` rather than a
+      // stale round-1 one. The per-round history of a repeated refutation is already in the round logs and in
+      // `unconsumedResolutions`; what is lost here is presentational.
+      // `how` clause first, then a single-level claim string (S4624). Byte-identical to what it replaced, which
+      // matters here beyond tidiness: `claim` is the DEDUP KEY two lines down, so any drift in it re-appends.
+      const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
+      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+        claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
+      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
+        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
+      discrepancies = seenAt >= 0
+        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
+        : [...discrepancies, notApplied]
+      if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
+        // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
+        // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
+        // next dispatch's untrusted `applied: true` erased the independent read that recorded the contradiction, the
+        // exact erase this round's own `source`-scoping was added to prevent. `reconcileUnconsumed` also keys on it, so
+        // without the tag a verifier-confirmed row could never be retracted by a later `shows: "yes"` either.
+        unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
+      }
+      // PER `(unit, id)` (PR #128 review, round 7): keyed on the unit alone, a contradiction on answer B was denied
+      // its one round whenever answer A had already spent the unit's grant -- and a verifier-sourced row is released
+      // only by a fresh read, which a unit that is never re-scheduled never gets.
+      if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
+    }
+  }
+
+  // THE ROWS THE NARROW `unknown` ESCAPE REFUSED, reported before the reconcile consumes the pre-reconcile list.
+  function reportUnnamedRuleSurface() {
+    // PR #128 review (round 18) -- SAY WHICH ROWS THE NARROW ESCAPE REFUSED, before the reconcile consumes the
+    // pre-reconcile list. A rule-shaped row whose `unknown` named no surface is held on a DIFFERENT ground from a
+    // row nobody verified, and the two used to be indistinguishable in the report. Read here because both halves —
+    // this round's checks and the rows as they stand before release — are in hand at exactly this point.
+    const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
+    if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
+  }
+
+  // WHERE A UNIT'S OWN IN-CONTEXT GATE DISAGREES WITH THE INDEPENDENT POST-HOC VERIFIER.
+  function foldSelfCheckMismatches(selfChecks) {
+    for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
+      const { label, claim } = selfCheckDiscrepancyText(m.kind)
+      log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
+      discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
+    }
+  }
+
   function* oneRound(open) {
       const { built: builtThisRound, claims, pausedAfter, continued, deferred, checkFirst,
         selfCheckShort, selfChecks } = yield* buildRound(open)
@@ -2645,46 +2731,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // stays at the tail: it only REMOVES rows, it reads the post-Reconcile `state.preflightItems`, and holding a row
       // one extra round is the fail-closed direction. This is the rule the comment below already states for the round's
       // other decisions -- CLOSE THE ROUND ON DISK, before the next one starts.
-      // ENG-95503 — THE INDEPENDENT CHECK ON "I APPLIED THE OPERATOR'S ANSWER". Run here for the same reason the
-      // self-check cross-check above is: this is where the READ-ONLY verifier's observation of the page it fetched is
-      // fresh, and a builder's `applied: true` is its own word until something that did not build the page looks. A
-      // contradiction makes the answer UNCONSUMED — the claim is not evidence the answer produced anything — so it is
-      // recorded, it holds the run short of `complete`, and it buys the unit the same one repair round.
-      resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
-      for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
-        log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
-        // DEFENSE-IN-DEPTH, matching `resolutionClaimsLine` (PR #128 review, O3). `c.id` is stand-derived and `c.how` is
-        // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
-        // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
-        // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
-        // DEDUPED ON `(unit, id, kind)` (PR #128 review, round 19). `discrepancies` is re-seeded from the queue file
-        // and rendered into EVERY close prompt via `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention
-        // is deliberate (`helpers.mjs`: the historical row the `no` filed stays regardless). So a refutation repeated
-        // across rounds and across resumes appended a fresh ~900-byte row every time, all of them counted against
-        // `RECONCILE_ANSWER_MAX_BYTES`. Same fix, same reason, as the `blockedItems` `(unit, what)` dedup above: keep
-        // ONE row per refuted answer and REFRESH it in place, so the operator reads the CURRENT `found` rather than a
-        // stale round-1 one. The per-round history of a repeated refutation is already in the round logs and in
-        // `unconsumedResolutions`; what is lost here is presentational.
-        const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
-          claim: `applied the answer to ${JSON.stringify(c.id)}${c.how ? ` — ${capCarryText(c.how)}` : ''}`, found: c.found }
-        const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-          && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-        discrepancies = seenAt >= 0
-          ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-          : [...discrepancies, notApplied]
-        if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
-          // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
-          // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
-          // next dispatch's untrusted `applied: true` erased the independent read that recorded the contradiction, the
-          // exact erase this round's own `source`-scoping was added to prevent. `reconcileUnconsumed` also keys on it, so
-          // without the tag a verifier-confirmed row could never be retracted by a later `shows: "yes"` either.
-          unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
-        }
-        // PER `(unit, id)` (PR #128 review, round 7): keyed on the unit alone, a contradiction on answer B was denied
-        // its one round whenever answer A had already spent the unit's grant -- and a verifier-sourced row is released
-        // only by a fresh read, which a unit that is never re-scheduled never gets.
-        if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
-      }
+      foldResolutionEvidence(claims)
       // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier RELEASED
       // (PR #128 review). The only place a verifier-sourced entry is cleared, and the only place an entry whose question
       // has gone away is dropped -- both jobs the per-dispatch clear structurally could not do. FAILS CLOSED per entry on
@@ -2692,12 +2739,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // verifier row is released by a FRESH non-refuting read this round -- `yes` OR `unknown` (finding 2): a rule-shaped
       // answer whose effect the page body cannot show can only ever score `unknown` after its rebuild, so requiring a `yes`
       // to clear it would block `complete` for ever once the unit went green and stopped being re-verified.
-      // PR #128 review (round 18) -- SAY WHICH ROWS THE NARROW ESCAPE REFUSED, before the reconcile consumes the
-      // pre-reconcile list. A rule-shaped row whose `unknown` named no surface is held on a DIFFERENT ground from a
-      // row nobody verified, and the two used to be indistinguishable in the report. Read here because both halves —
-      // this round's checks and the rows as they stand before release — are in hand at exactly this point.
-      const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
-      if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
+      reportUnnamedRuleSurface()
 
       // CLOSE THE ROUND ON DISK, before the next one starts — the same rule the round counter already follows.
       // Everything this round learned (proposals, blockers, discrepancies, the Freedom schemas) is written now,
@@ -2759,11 +2801,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // self-report the independent verifier contradicts (claimed complete but the verifier finds it open; or the gate
       // never ran and the unit is still open) as a discrepancy — it changes no verdict (the post-hoc verifier still
       // governs), it removes the "nothing independently checks the gate ran" gap by recording where the two disagree.
-      for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
-        const { label, claim } = selfCheckDiscrepancyText(m.kind)
-        log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
-        discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
-      }
+      foldSelfCheckMismatches(selfChecks)
       unconsumed = reconcileUnconsumed(unconsumed,
         owedResolutionPairs(state.preflightItems, state.unitKeys),
         releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))
@@ -2873,7 +2911,9 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     // the return. Non-gating — this never changes `complete`.
     const vague = unsettledResolutionClaims(resolutionCheckTally)
     if (vague.length) {
-      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${capCarryText(vague.map((v) => `${JSON.stringify(v.unit)}/${JSON.stringify(v.id)} (${v.unknownRounds}x)`).join(", "))}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
+      // Pair list first, then the one-level message (S4624).
+      const vaguePairs = vague.map((v) => `${JSON.stringify(v.unit)}/${JSON.stringify(v.id)} (${v.unknownRounds}x)`).join(", ")
+      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${capCarryText(vaguePairs)}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
     }
   }
 
