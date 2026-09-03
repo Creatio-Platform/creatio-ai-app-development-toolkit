@@ -2978,6 +2978,15 @@ export function pageUnits(result, opts = {}) {
     // of `plan.md`. This is the ONLY machine-readable source of it: the approval gate compares the version the
     // operator recorded in decisions.md against THIS field. `null` when the caller built the result by hand.
     planVersion: typeof result.planVersion === "string" && result.planVersion.trim() ? result.planVersion.trim() : null,
+    // ENG-95857 — THE PLAN-LEVEL VERDICT, machine-readable, on the artifact the executor reads BEFORE its first
+    // stand write. Its HARD STOP 2 used to be fed by an agent transcribing the CLI's plan-level stderr lines into
+    // its answer, from an enumeration that named only three of the four checks — so the fourth could not stop a
+    // build however loudly `--plan` had refused, and dropping or paraphrasing one of the other three suppressed the
+    // stop entirely. Published here, on `--units`, because that is the plan-governed run the executor makes: the
+    // set is empty on a clean plan and is REQUIRED even then, so a reader can tell a clean plan from an engine that
+    // publishes nothing. `--verify` deliberately does NOT carry the plan-completeness legs (see `planGaps`): that
+    // file is the BUILD verdict, and a `--verify` run legitimately happens over a manifest with no planMeta.
+    planGaps: planGaps(result, opts),
     sectionSchema: opts.planMeta?.sectionSchema || null,
     // The APPROVED section host. Published because a build agent owns ONE page and cannot see the placement
     // decision otherwise — in the run this field exists for, an agent reached for `create-app-section` on its own
@@ -3056,6 +3065,9 @@ const pageReachKeys = (units, pageKey) =>
 
 // ONE page's slice of `--units`: the run-level fields stay (a single unit still needs the plan version, section
 // host and application code), and every list narrows to the rows that name this key.
+// `planGaps` is deliberately NOT among the run-level fields carried here, despite being one. A slice is handed to
+// a builder only AFTER the run-level plan-gap stop has passed, so the set is empty by construction at that point;
+// carrying it would tell a build agent to act on a plan gap it cannot close. Do not add it "for symmetry".
 // An unknown key returns `null`: a caller that asked for one page must never be handed the whole queue.
 // `parent` is copied only when `parents` carries the key, because an absent edge and a `null` edge are different
 // answers: `null` is a root page, absent is a page whose place in the tree is unknown.
@@ -3879,14 +3891,41 @@ function verifyTally() {
   return t;
 }
 // D12 — exit 2 is NOT one condition, and the two it conflates need opposite responses. `verifyIncomplete` says MY
-// BUILD is short: build the missing pieces, file the evidence, re-verify. `gate` / `structure` / `coverage` say
-// the PLAN is incomplete — they fire in every mode, describe the MANIFEST, and no amount of building clears them;
+// BUILD is short: build the missing pieces, file the evidence, re-verify. `gate` / `structure` / `coverage` /
+// `plan` say the PLAN is incomplete — they describe the MANIFEST, and no amount of building clears them;
 // re-running `--verify` in a loop against them costs time and never converges. Name which one this run hit.
-export function planGaps(result) {
+//
+// ENG-95857 — there are FOUR plan-level checks, not three. `plan INCOMPLETE` (unfilled required planMeta,
+// unresolved on-stand signals, unsettled placement) is the fourth, and it was missing from this set while the CLI
+// gated `--plan` on it: the executor's HARD STOP 2 reads THIS classification, so a plan `--plan` had already
+// refused could still be built from. It is named as its OWN kind rather than folded into the other three because
+// the remedy is specific — fill the plan's own fields (a signal answer after a read-only stand check) — where a
+// blocked correctness GATE is fixed in the stand or the input.
+//
+// `opts.planCompleteness` carries applicability EXPLICITLY, and that is the whole design of this leg.
+// `checklistOpts` computes `planMetaMissing` / `signalsMissing` / `placementBlockers` on EVERY run, so reporting
+// them unconditionally would fire on a `--spec` run that was never asked to satisfy them. Emptiness is not a
+// usable proxy either: an absent `planMeta` is exactly what a legitimate `--spec` run looks like AND what an
+// unfilled `--plan` run looks like, so a check inferred from it would disable itself on the failure it exists to
+// catch. The caller that knows the mode says so: migrate.mjs passes `planCompleteness: true` as a literal in its
+// `--units` branch, and that branch is the ONE site that publishes a machine-readable plan-gap set. Deliberately
+// not a shared constant — the reasoning is written out at that call site.
+export function planGaps(result, opts = {}) {
   const g = [];
   if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
   if (result?.structure?.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
   if (result?.coverage?.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
+  if (opts.planCompleteness === true) {
+    // The two key-listing legs name their keys: both sets are small and FIXED (8 required planMeta keys, 4 signal
+    // keys), and the keys ARE the repair instruction. Placement stays a count, like the three kinds above it — its
+    // blockers are multi-sentence prose, and the full text is already in the plan document's ⛔ banner and on stderr.
+    const pm = result?.planMetaMissing || [];
+    const sig = result?.signalsMissing || [];
+    const pl = result?.placementBlockers || [];
+    if (pm.length) g.push(`plan INCOMPLETE — required planMeta unfilled (${pm.length}): ${pm.join(", ")}`);
+    if (sig.length) g.push(`plan INCOMPLETE — on-stand signals not resolved (${sig.length}): ${sig.join(", ")}`);
+    if (pl.length) g.push(`plan INCOMPLETE — placement not settled (${pl.length} blocker(s))`);
+  }
   return g;
 }
 function verifyVerdict(missing, unverified) {

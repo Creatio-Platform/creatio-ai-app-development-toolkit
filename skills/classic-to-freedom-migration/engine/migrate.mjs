@@ -2891,7 +2891,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // therefore deliberately absent from the positional-argument exclusion above: adding it there would make
   // `--units <manifest>` lose its manifest and die with a misleading JSON error.
   else if (unitsMode) {
-    const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionIndex });
+    // ENG-95857 — `planCompleteness: true` HERE, at the one site that publishes a machine-readable plan-gap set.
+    // The plan-completeness checks (`planMetaMissing` / `signalsMissing` / `placementBlockers`) are computed on
+    // EVERY run by `checklistOpts`, so whether they may be REPORTED has to be stated by the caller that knows the
+    // mode; emptiness cannot stand in for it (an absent `planMeta` is what a legitimate `--spec` run looks like AND
+    // what an unfilled `--plan` run looks like). It is a literal rather than a shared `planMode || unitsMode`
+    // constant because this branch is already `unitsMode`, so the `planMode` half could never contribute: `--plan`
+    // publishes no machine set at all (its ⛔ banners are rendered directly by `renderPlan`, and its own exit-2
+    // gate is the `planMode`-only `planIncomplete` below). A shared constant implied a pairing the code does not
+    // have — unlike `--resolved-gates`, whose guard genuinely reads both modes.
+    const units = pageUnits(result, { ...checklistOpts(manifest), planCompleteness: true, resolutions: resolutionIndex });
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
     const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
@@ -3015,10 +3024,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
-  // D12 — the `--verify` leg of exit 2, stated apart from the three above. `gate`/`structure`/`coverage` fire in
-  // EVERY mode and describe the PLAN: an executor cannot build its way out of them, so "loop until --verify is
-  // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS
-  // repairable on-stand. Until now `--verify` exited 2 with no stderr line at all, so the two were indistinguishable.
+  // D12 — the `--verify` leg of exit 2, stated apart from the PLAN-level ones. There are FOUR of those, not three:
+  // `gate`/`structure`/`coverage` fire in EVERY mode, and plan COMPLETENESS (the three `PLAN INCOMPLETE` lines
+  // below) fires in the plan-governed modes. All four describe the PLAN: an executor cannot build its way out of
+  // them, so "loop until --verify is green" against one of them never converges. THIS line is the other condition
+  // — MY BUILD is short — and it IS repairable on-stand. Until now `--verify` exited 2 with no stderr line at all,
+  // so the two were indistinguishable.
   if (verifyIncomplete) {
     // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
     // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
@@ -3056,6 +3067,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  // PR review — the four kinds were ASYMMETRIC on this channel. `gate`/`structure`/`coverage` write their line in
+  // every mode (above) and fold into `notReady`; the three plan-completeness lines are `--plan`-only, so a `--units`
+  // run published the fourth kind in `units.planGaps` and said nothing on stderr at all — an integrator watching
+  // the signal the other three kinds already use IN THIS MODE learned nothing. This line closes that asymmetry and
+  // is INFORMATIONAL: the exit code stays 0 by design (see the engine README, "read the array, not the exit code"
+  // — exit 2 here would conflate the plan-level kinds with `verifyIncomplete`, which IS repairable by building).
+  // It reports the entries the artifact carries, not a second wording of them, so the two channels cannot disagree.
+  if (unitsMode && !planMode) {
+    const planLegs = planGaps(result, { planCompleteness: true }).filter((g) => g.startsWith("plan INCOMPLETE"));
+    if (planLegs.length) process.stderr.write(`migrate.mjs: ℹ this run publishes ${planLegs.length} plan-completeness gap(s) — carried in \`units.planGaps\` alongside any gate/structure/coverage gaps reported above, NOT buildable-out-of, and NOT reflected in this exit code: ${planLegs.join(" · ")}. Fix the manifest and re-plan; the build executor stops on them before its first stand write.\n`);
+  }
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse

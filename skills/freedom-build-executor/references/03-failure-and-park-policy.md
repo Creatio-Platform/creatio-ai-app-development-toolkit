@@ -13,19 +13,34 @@ into an infinite loop or a silent drop.
 
 ## Exit 2 is not one condition
 
-`migrate.mjs` exits 2 for five different reasons. **Four of them can fire on a `--verify` run**,
-and three of those four are about the plan, not the build: `GATE BLOCKED`, `STRUCTURE INCOMPLETE`
-and `COVERAGE INCOMPLETE` fire in EVERY mode, so a perfectly built section still exits 2 when the
-plan manifest has a structure or coverage gap. "Loop until `--verify` is green" is unsatisfiable as
-written. The fifth, `⛔ PLAN INCOMPLETE`, is emitted **only in `--plan` mode** (it reports required
-`planMeta` still unfilled) — it cannot appear on a `--verify` run, so there is nothing to classify
-for it here; it is listed below only so the line is recognisable when the planner hits it.
+`migrate.mjs` reports five different bad outcomes, and exactly ONE of them is about your build.
+The other **four are PLAN-level** and no amount of building closes any of them:
 
-The verdict file already classifies them: `verify.json`'s `planGaps` holds the PLAN-level ones,
-and `complete` is the BUILD-side verdict (as opposed to `planGaps`, which is PLAN-level) — a run
-can be `complete: true` with a non-empty `planGaps`, which means there is nothing left to build and
-the run still stops. (`complete` itself still folds `missing` and `unverified` together; the
-builder-owned axis is `buildComplete`, covered below.) stderr names each one for a human reader:
+| Plan-level kind | What it says | Where the remedy is |
+|---|---|---|
+| `GATE BLOCKED` | a correctness signal — a broken merge, an effect the mapper cannot represent | the **STAND or the input schemas**; resolve what the gate reasons name |
+| `STRUCTURE INCOMPLETE` | required inputs not supplied (detail / profile / child-page schemas) | the **manifest** |
+| `COVERAGE INCOMPLETE` | a schema member with no artifact and no decision | the **manifest** |
+| `PLAN INCOMPLETE` | plan completeness — required `planMeta` unfilled, on-stand `signals` unresolved, `placement` unsettled | the **manifest** (a `signals` answer after a read-only stand check) |
+
+That split is the whole point of naming the kind: three of the four are fixed by editing the
+manifest and re-planning, and a `GATE BLOCKED` is not — telling an operator to "fix the manifest"
+for a blocked correctness gate sends them to the wrong file. `⛔ VERIFY INCOMPLETE` is the fifth
+reason and the only repairable one.
+
+**Where this run gets the classification (ENG-95857).** From `--units.planGaps`, copied VERBATIM by
+Reconcile step 2 — the engine's own machine-readable verdict, covering all four kinds. It is NOT
+assembled from stderr lines an agent retypes: that enumeration named three of the four, so
+`PLAN INCOMPLETE` could not stop a build however loudly `--plan` had refused it, and dropping or
+paraphrasing one of the other three suppressed the stop for that kind too.
+
+`verify.json`/`verify-summary.json` keep their own `planGaps`, and it is deliberately NARROWER —
+those files are the BUILD verdict, and a `--verify` run legitimately happens over a manifest that
+carries no `planMeta`. Do not read the plan-level verdict from them. `complete` there is the
+BUILD-side answer: a run can be `complete: true` with a non-empty `--units.planGaps`, which means
+there is nothing left to build and the run still stops. (`complete` itself still folds `missing`
+and `unverified` together; the builder-owned axis is `buildComplete`, covered below.) stderr names
+each one for a human reader:
 
 ```
 migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING + 2 unconfirmed …
@@ -33,15 +48,27 @@ migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: 3 MISSING + 2 u
 migrate.mjs: ⛔ GATE BLOCKED — do NOT build. …
 migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. …
 migrate.mjs: ⛔ COVERAGE INCOMPLETE — 4 schema member(s) unaccounted …
-migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: …   ← `--plan` mode ONLY; never on `--verify`
+migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: …   ← `--plan` mode; reaches this run via `--units.planGaps`
 migrate.mjs: ℹ this run ALSO has PLAN-level gaps (structure · coverage) — those are NOT
              buildable-out-of; return them to the caller instead of re-verifying against them.
+migrate.mjs: ℹ this run publishes 1 plan-completeness gap(s) — carried in `units.planGaps`
+             alongside any gate/structure/coverage gaps reported above, NOT buildable-out-of,
+             and NOT reflected in this exit code: plan INCOMPLETE — placement not settled (1
+             blocker(s)). …   ← `--units` mode; INFORMATIONAL, exit stays 0
 ```
 
-**A plan-level line stops the run.** Not a repair round: no amount of building closes a coverage
-gap or a blocked correctness gate, and re-running costs a full round for a guaranteed identical
-answer. The run returns the gap list to the caller, who fixes the manifest and re-plans. The one
-exception is the `ℹ` line, which is advisory context printed alongside a genuine
+The last line is the one THIS run actually sees, because Reconcile step 2 runs `--units`. It is
+informational by design and the exit code stays 0 there — exit 2 would conflate the plan-level
+kinds with `VERIFY INCOMPLETE`, which IS repairable by building. Gate on the array, not on it.
+
+**These lines are for a HUMAN reader.** Do not classify from them — the stop reads
+`--units.planGaps`. They are printed here so an operator recognises what the machine set is naming.
+
+**A plan-level gap stops the run.** Not a repair round: no amount of building closes a coverage
+gap, an unfilled plan or a blocked correctness gate, and re-running costs a full round for a
+guaranteed identical answer. The run returns the gap list to the caller, naming which kind fired so
+the caller knows whether the remedy is in the manifest or on the stand (see the table above). The
+one exception is the `ℹ` line, which is advisory context printed alongside a genuine
 `VERIFY INCOMPLETE` — a run may carry both, and then the plan gap is what to report.
 
 ## The repair round
