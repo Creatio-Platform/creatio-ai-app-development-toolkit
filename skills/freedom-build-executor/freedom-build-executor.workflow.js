@@ -2979,6 +2979,104 @@ return { unitNoOf, readablePart, unitFileStem, specFile, worklogFile, sharedWork
   selfBuiltFile, selfVerdictFile, repairVerdictFile, cliSpec, cliSelfCheck, cliRepairCheck }
 }
 
+// ===== inlined from _workflow-core/build-executor/gate.mjs =====
+// _workflow-core/build-executor/gate.mjs — deterministic "spend nothing you don't have to" decisions.
+//
+// PURE functions over the strings the run already holds. No I/O, no agent, no run closure — every input is a
+// parameter, so the whole file is unit-testable without a stand or an AI runtime, exactly like the pure
+// decision helpers in `helpers.mjs`.
+//
+// SCOPE. This file owns ONE decision `helpers.mjs` does not: is a blocker the BUILDER'S to fix (retry) or
+// the SOURCE'S (park once, never re-attempt)? That is the decision behind the measured Applicant failure
+// (ENG-94859): the `list` unit carried the SAME blocker in every one of six runs — "Live render check on
+// surface automatic:3 could not be performed … `#Section/Applicant` errors at runtime with Script error" —
+// and was re-attempted each time, because a `blocked` item is not a `park` and nothing told the run that a
+// runtime error in the CLASSIC source cannot be built out of.
+//
+// Two decisions that were prototyped here and then deliberately NOT shipped, recorded so the next reader does
+// not re-derive them from scratch:
+//   · VERIFICATION-SURFACE DOWNGRADE belongs in the migration skill's pre-write surface preflight (ENG-95855),
+//     which is the layer that RESOLVES the surface. The build-executor core has no render-reachability signal
+//     of its own, so a downgrade wired here would key off an input nobody sets — dead code. Resolve the right
+//     tier upstream instead.
+//   · RECONCILE-REUSE (skip the baseline Reconcile when the stand is unchanged) cannot pay off in the Claude
+//     Workflow sandbox: computing the fingerprint (plan version + stand writes) itself needs the agent that
+//     reads `--units` and the queue file, so there is no cheaper pre-check to gate the skip on.
+
+// ---------------------------------------------------------------------------
+// SOURCE-CAUSED vs RETRYABLE BLOCKER
+// ---------------------------------------------------------------------------
+// A blocker the builder INTRODUCED (a schema it just wrote is wrong, a component it placed is absent) is
+// worth a retry — the next build round can fix it. A blocker in the SOURCE the migration reads FROM — the
+// Classic page throws at runtime, a dependency is not installed, the render surface cannot load the original
+// at all — CANNOT be fixed by rebuilding the Freedom page, so retrying it spends a whole round (Reconcile +
+// Build + Verify + Judge) to re-learn a dead end.
+//
+// Classification reads ONLY the blocker's own `what`/`why` text for a source-failure SHAPE — never a new
+// stand read, and NEVER baseline presence: a resumed run legitimately RE-ATTEMPTS a builder blocker the
+// previous run left behind (a fresh builder may add the field the last one missed), so a queue-carried
+// builder blocker must stay retryable, not park. It is deliberately CONSERVATIVE — anything without a
+// source-failure shape is `unknown`, and the caller retries `unknown`, because a wrongly-parked builder bug
+// is a silently-dropped deliverable while a wrongly-retried source bug costs at most the rounds the budget
+// already caps.
+const SOURCE_PATTERNS = [
+  /errors?\s+at\s+runtime/i,
+  /script\s+error/i,
+  /could\s+not\s+be\s+performed/i,
+  /render\s+check\b[^.]*\b(could\s+not|cannot|failed)/i,
+  /dependency\b[^.]*\b(missing|not\s+installed|absent)/i,
+  /does\s+not\s+(compile|load)/i,
+  /fails?\s+to\s+(compile|load|render)/i,
+]
+
+// The key a blocker names, whichever field carries it (the round loop uses `unit`, some records use `key`).
+function blockerKey(b) {
+  return (b && (b.unit ?? b.key)) || null
+}
+
+// One blocker → { class, reason }. `class` is 'source' | 'unknown' (a non-source blocker is retryable, so it
+// needs no separate 'builder' label to act on — the caller retries everything that is not 'source').
+function classifyBlocker(blocker) {
+  const text = `${blocker?.what || ''} ${blocker?.why || ''}`.trim()
+  if (text && SOURCE_PATTERNS.some((re) => re.test(text))) {
+    return { class: 'source', reason: 'blocker text matches a source-failure shape (runtime/render/dependency failure a rebuild cannot change)' }
+  }
+  if (!text) return { class: 'unknown', reason: 'blocker carries no `what`/`why` text to classify on' }
+  return { class: 'unknown', reason: 'no source-failure signal — treated as retryable (the safe default)' }
+}
+
+// The blockers that should PARK NOW instead of being re-attempted next round/run — the source-caused ones.
+// Returns park RECORDS shaped like the run's other parks ({ key, kind, rounds, parkedWhy, shortRows }), so
+// the round loop can push them straight onto `parked` with no reshaping. `rounds: 0` records the truth: the
+// unit was never given a build round, because a build round could not have helped.
+function sourceBlockerParks(blocked) {
+  const out = []
+  for (const b of blocked || []) {
+    const key = blockerKey(b)
+    if (!key) continue
+    const { class: cls, reason } = classifyBlocker(b)
+    if (cls !== 'source') continue
+    out.push({
+      key,
+      kind: 'page',
+      rounds: 0,
+      parkedWhy: sourceParkWhy(b, reason),
+      shortRows: [],
+    })
+  }
+  return out
+}
+
+// WHY a source blocker parked — names the source failure and states plainly that rebuilding cannot fix it,
+// so an operator reading the parked list sees a diagnosis, not just "gave up". Never blank.
+function sourceParkWhy(blocker, reason) {
+  const what = String(blocker?.what || '').trim()
+  const why = String(blocker?.why || '').trim()
+  const detail = [what, why].filter(Boolean).join(' — ')
+  const head = 'parked without a build attempt: the blocker is in the SOURCE this migration reads from, not in the built page, so no build round can close it'
+  return detail ? `${head}. ${detail}` : `${head} (${reason})`
+}
+
 // ===== inlined from _workflow-core/build-executor/core.mjs =====
 // build-executor/core.mjs — step 7 of a Classic→Freedom migration, as a HOST-NEUTRAL state machine.
 //
@@ -3007,6 +3105,10 @@ return { unitNoOf, readablePart, unitFileStem, specFile, worklogFile, sharedWork
 // OPERATING MODES (`mode`): `auto` builds every unit without stopping · `checkpoints` stops after each unit named
 // in `checkpointAfter` so a human can open that page on the stand and exercise it · `guided` stops after every
 // unit. A stop is always a PAGE BOUNDARY and always returns `stopped: 'paused-at-checkpoint'` — never `complete`.
+
+// ENG-94859 — the deterministic "spend nothing you don't have to" decisions (source-vs-builder blocker
+// classification, surface downgrade, reconcile reuse). Pure, host-neutral, unit-tested in
+// engine-tests/freedom-build-executor/gate.mjs.
 
 // The CLI validates an input before it writes a run file, and it calls `assertInput(input)` with ONE argument for
 // every workflow. This run's required set includes the ENGINE, which is RESOLVED rather than passed — so the
@@ -3997,6 +4099,31 @@ Return the schema. Nothing else.`
     return fresh
   }
 
+  // SOURCE-CAUSED BLOCKER PARKS (ENG-94859). A blocker in the SOURCE this migration reads from — the Classic page
+  // throws at runtime, its render surface cannot load the original at all — is NOT the builder's to fix: no build
+  // round can close it, so re-attempting it spends a full round (or a whole re-run) to re-learn a dead end. This is
+  // the measured Applicant failure: the `list` unit carried the SAME "render check could not be performed —
+  // `#Section/Applicant` errors at runtime" blocker across all six runs, was never parked, and was re-dispatched
+  // every time. A `blocked` item is not a `park`; this turns the source-caused ones into terminal parks so they leave
+  // `openNow()` and never come back. The DECISION is the pure `sourceBlockerParks` (unit-tested in gate.mjs);
+  // classification reads ONLY the blocker's own text for a source-failure SHAPE (runtime error, render impossible,
+  // missing dependency). A blocker WITHOUT that shape stays `unknown` → retryable — a wrongly-parked builder bug is a
+  // dropped deliverable, and a resumed run must be free to re-attempt a builder blocker a fresh builder can fix, so
+  // the default is to retry, never to park on doubt. Mirrors `applyInContextParks`: chosen keys → park records through
+  // the run's own `parkRecord`, then the SAME `parked`/`parkedSet`/`blockedByParked` machinery so ancestors block
+  // identically. `rounds: 0` records the truth — the unit was never given a build round because one could not help.
+  function applySourceBlockerParks() {
+    const candidates = sourceBlockerParks(blockedItems)
+    const fresh = candidates
+      .filter((p) => !parkedSet.has(p.key) && schedule.some((u) => u.key === p.key))
+      .map((p) => parkRecord(p.key, p.parkedWhy, 0))
+    if (!fresh.length) return []
+    parked = [...parked, ...fresh]
+    for (const p of fresh) { parkedSet.add(p.key) }
+    ;({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability, schedule.map((u) => u.key)))
+    return fresh
+  }
+
   // Parks the queue file ALREADY holds need no write; anything this process decides does.
   const parksPersisted = new Set((state.parkedUnits || []).map((p) => p?.key).filter(Boolean))
   const markParksPersisted = () => { for (const p of parked) parksPersisted.add(p.key) }
@@ -4063,6 +4190,14 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   const seededParks = applyParks()
   if (seededParks.length) {
     log(`carried over ${seededParks.length} park(s) from the queue file / spent budget: ${seededParks.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence)`)
+  }
+  // ENG-94859 — park a SOURCE-caused blocker the queue file carried from a previous run, BEFORE the first dispatch.
+  // Without this, a blocker a build round cannot close (the Classic source throws at runtime) was re-attempted on
+  // every re-run — the Applicant `list` unit's six-run loop. `state.blocked` is the baseline here; nothing has been
+  // dispatched yet, so a source blocker on file parks straight away instead of buying another wasted round.
+  const seededSourceParks = applySourceBlockerParks()
+  if (seededSourceParks.length) {
+    log(`parked ${seededSourceParks.length} SOURCE-caused blocker(s) carried from the queue — a build round cannot close these: ${seededSourceParks.map((p) => p.key).join(', ')}`)
   }
 
   // --- NOTHING PUBLISHED -------------------------------------------------------
@@ -5349,6 +5484,15 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       const newlyParked = applyParks()
       if (newlyParked.length) {
         log(`PARKED after ${MAX_ROUNDS} round(s): ${newlyParked.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence), the rest continue`)
+      }
+      // ENG-94859 — a SOURCE-caused blocker this round SURFACED (a build agent tried to render the page and the
+      // original throws at runtime) parks NOW, not after MAX_ROUNDS of re-attempting a dead end. Runs after the
+      // budget park so it never double-parks a unit, and reads this round's `blockedItems` (already augmented with
+      // the build results) against `dispatched` — a blocker on a unit this run built is still classified by its
+      // text, an unknown one stays retryable.
+      const sourceParked = applySourceBlockerParks()
+      if (sourceParked.length) {
+        log(`SOURCE-PARK after round ${round}: ${sourceParked.map((p) => p.key).join(', ')} — the blocker is in the source, not the built page, so no further round is charged; ${blockedSet.size} unit(s) blocked behind them`)
       }
 
       // THE CHECKPOINT RETURN, split out of `oneRound` (Sonar cognitive complexity). Taken here, at the BOTTOM of

@@ -46,6 +46,10 @@ import {
   BUILD_SCHEMAS, JUDGE_SCHEMA, PACKAGE_RECORD_SCHEMA, PERSIST_SCHEMA,
   PREFLIGHT_SCHEMA, RECONCILE_SCHEMA, REFS_SCHEMA, VERIFIER_SCHEMA,
 } from './schemas.mjs'
+// ENG-94859 — the deterministic "spend nothing you don't have to" decisions (source-vs-builder blocker
+// classification, surface downgrade, reconcile reuse). Pure, host-neutral, unit-tested in
+// engine-tests/freedom-build-executor/gate.mjs.
+import { sourceBlockerParks } from './gate.mjs'
 
 export { normalizeInput, resolveEngineCli, resolveSkillsRoot } from './context.mjs'
 
@@ -1038,6 +1042,31 @@ Return the schema. Nothing else.`
     return fresh
   }
 
+  // SOURCE-CAUSED BLOCKER PARKS (ENG-94859). A blocker in the SOURCE this migration reads from — the Classic page
+  // throws at runtime, its render surface cannot load the original at all — is NOT the builder's to fix: no build
+  // round can close it, so re-attempting it spends a full round (or a whole re-run) to re-learn a dead end. This is
+  // the measured Applicant failure: the `list` unit carried the SAME "render check could not be performed —
+  // `#Section/Applicant` errors at runtime" blocker across all six runs, was never parked, and was re-dispatched
+  // every time. A `blocked` item is not a `park`; this turns the source-caused ones into terminal parks so they leave
+  // `openNow()` and never come back. The DECISION is the pure `sourceBlockerParks` (unit-tested in gate.mjs);
+  // classification reads ONLY the blocker's own text for a source-failure SHAPE (runtime error, render impossible,
+  // missing dependency). A blocker WITHOUT that shape stays `unknown` → retryable — a wrongly-parked builder bug is a
+  // dropped deliverable, and a resumed run must be free to re-attempt a builder blocker a fresh builder can fix, so
+  // the default is to retry, never to park on doubt. Mirrors `applyInContextParks`: chosen keys → park records through
+  // the run's own `parkRecord`, then the SAME `parked`/`parkedSet`/`blockedByParked` machinery so ancestors block
+  // identically. `rounds: 0` records the truth — the unit was never given a build round because one could not help.
+  function applySourceBlockerParks() {
+    const candidates = sourceBlockerParks(blockedItems)
+    const fresh = candidates
+      .filter((p) => !parkedSet.has(p.key) && schedule.some((u) => u.key === p.key))
+      .map((p) => parkRecord(p.key, p.parkedWhy, 0))
+    if (!fresh.length) return []
+    parked = [...parked, ...fresh]
+    for (const p of fresh) { parkedSet.add(p.key) }
+    ;({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability, schedule.map((u) => u.key)))
+    return fresh
+  }
+
   // Parks the queue file ALREADY holds need no write; anything this process decides does.
   const parksPersisted = new Set((state.parkedUnits || []).map((p) => p?.key).filter(Boolean))
   const markParksPersisted = () => { for (const p of parked) parksPersisted.add(p.key) }
@@ -1104,6 +1133,14 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   const seededParks = applyParks()
   if (seededParks.length) {
     log(`carried over ${seededParks.length} park(s) from the queue file / spent budget: ${seededParks.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence)`)
+  }
+  // ENG-94859 — park a SOURCE-caused blocker the queue file carried from a previous run, BEFORE the first dispatch.
+  // Without this, a blocker a build round cannot close (the Classic source throws at runtime) was re-attempted on
+  // every re-run — the Applicant `list` unit's six-run loop. `state.blocked` is the baseline here; nothing has been
+  // dispatched yet, so a source blocker on file parks straight away instead of buying another wasted round.
+  const seededSourceParks = applySourceBlockerParks()
+  if (seededSourceParks.length) {
+    log(`parked ${seededSourceParks.length} SOURCE-caused blocker(s) carried from the queue — a build round cannot close these: ${seededSourceParks.map((p) => p.key).join(', ')}`)
   }
 
   // --- NOTHING PUBLISHED -------------------------------------------------------
@@ -2390,6 +2427,15 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       const newlyParked = applyParks()
       if (newlyParked.length) {
         log(`PARKED after ${MAX_ROUNDS} round(s): ${newlyParked.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence), the rest continue`)
+      }
+      // ENG-94859 — a SOURCE-caused blocker this round SURFACED (a build agent tried to render the page and the
+      // original throws at runtime) parks NOW, not after MAX_ROUNDS of re-attempting a dead end. Runs after the
+      // budget park so it never double-parks a unit, and reads this round's `blockedItems` (already augmented with
+      // the build results) against `dispatched` — a blocker on a unit this run built is still classified by its
+      // text, an unknown one stays retryable.
+      const sourceParked = applySourceBlockerParks()
+      if (sourceParked.length) {
+        log(`SOURCE-PARK after round ${round}: ${sourceParked.map((p) => p.key).join(', ')} — the blocker is in the source, not the built page, so no further round is charged; ${blockedSet.size} unit(s) blocked behind them`)
       }
 
       // THE CHECKPOINT RETURN, split out of `oneRound` (Sonar cognitive complexity). Taken here, at the BOTTOM of
