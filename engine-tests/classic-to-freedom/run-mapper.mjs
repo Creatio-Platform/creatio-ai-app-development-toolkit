@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, deriveApplicationCode, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, PLAN_AUTHORING_NOTE} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 // ENG-96457 (item 3) — the BUILD-side arithmetic, imported so the plan's derivation can be pinned against the very
@@ -11108,14 +11108,32 @@ const br1FieldsRow = (payload) => {
 check("ENG-96457 (item 1): `--verify` closes the fields row only when each field sits at its PLANNED cell — a correctly placed build says so and names how many placements it checked",
   /✅ Done/.test(br1FieldsRow(br1Built(false))) && /each at its planned cell/.test(br1FieldsRow(br1Built(false))),
   () => br1FieldsRow(br1Built(false)));
-check("ENG-96457 (item 1): the MIS-PAIRED build — every field present by name, City2/Country1 swapped, exactly what ENG-96445 shipped — is ❌ MISSING, and the message names both the planned and the built cell",
+// PR #156 review (finding 1): the deviation arm is ADVISORY (`⚠ verify`) until the one on-stand read-back confirms
+// that `get-page` reports cells in the space the plan publishes. It still names both cells and still keeps the row
+// open — what it no longer does is assert `❌ MISSING` ("not on the built page") on evidence nothing has checked.
+check("ENG-96457 (item 1): the MIS-PAIRED build — every field present by name, City2/Country1 swapped, exactly what ENG-96445 shipped — is reported (⚠ verify, advisory until the coordinate space is confirmed on-stand), and the message names both the planned and the built cell",
   () => { const row = br1FieldsRow(br1Built(true));
-    return /❌ MISSING/.test(row) && /DIFFERENT cell/.test(row)
+    return /⚠ verify/.test(row) && !/❌ MISSING/.test(row) && /DIFFERENT cell/.test(row)
+      && /coordinate space/.test(row)
       && /Country1.*planned r8·c1, built r7·c13/.test(row) && /City2.*planned r7·c13, built r8·c1/.test(row); },
   () => br1FieldsRow(br1Built(true)));
+// …and the SUBSET case, which used to read as a hard green: a build where only some components carry a
+// `layoutConfig`. The un-compared fields' placement is UNKNOWN, so the row must not close — a re-paired field that
+// happens to publish no `layoutConfig` is never in `off`, and while this returned "ok" that escape passed silently.
+check("ENG-96457 (item 1): a build where only SOME components carry a `layoutConfig` does NOT read as a hard green — the row says how many cells it could compare and stays ⚠ verify, because the rest are unknown",
+  () => { const payload = br1Built(false);
+    const items = payload.pages.main.viewConfig.items;
+    delete items[items.length - 1].layoutConfig;
+    delete items[items.length - 2].layoutConfig;
+    const row = br1FieldsRow(payload);
+    return /⚠ verify/.test(row) && !/✅ Done/.test(row) && /could be compared/.test(row) && /UNKNOWN/.test(row); },
+  () => { const payload = br1Built(false);
+    const items = payload.pages.main.viewConfig.items;
+    delete items[items.length - 1].layoutConfig; delete items[items.length - 2].layoutConfig;
+    return br1FieldsRow(payload); });
 // A payload from BEFORE this field existed carries no `layoutConfig` at all. It must keep its previous verdict —
 // failing a build on evidence it could not have carried would be a new false gate, not a check.
-check("ENG-96457 (item 1): a built payload with NO `layoutConfig` is not failed — placement is reported as NOT CHECKED and the name-identity verdict stands (an older `--built` file keeps its meaning)",
+check("ENG-96457 (item 1): a built payload with NO `layoutConfig` is not failed — placement is reported as NOT CHECKED and the name-identity verdict stands (an older `--built` file keeps its meaning; this is the ONE shape that keeps `ok`, and the subset case above is why)",
   () => { const bare = { pages: { main: { viewConfig: { items: (br1Expect.fieldNames || []).map((n) => ({ name: n, type: BR1_FIELD_TYPE })) },
       packageName: BR1_PKG, parentSchemaName: BR1_TPL, schemaUId: BR1_UID } } };
     const row = br1FieldsRow(bare);
@@ -11138,6 +11156,22 @@ check("ENG-96457 (item 2): …and it gets its own EXPECTED COUNT with a `crt.Fee
 check("ENG-96457 (item 2): the template RECOMMENDATION is checked against the template — a 2-column Classic Header against a measured ONE-column top area is stated as a decision AT the recommendation, not discovered by the build",
   /top area has 1 column\(s\) and this Classic Header has 2/.test(br1PlanOut) && /decide before building/i.test(br1PlanOut),
   () => br1PlanOut.split("\n").filter((l) => /Template recommendation|top area has/.test(l)));
+// PR #156 review (finding 2): the THIRD verdict, `provided`. Every template measured so far ships NO Feed, so this
+// arm — and the "ships … (measured); re-bind it" Source cell it renders — was reachable by no fixture at all, and
+// the first stand template that does ship Feed would have exercised it for the first time in production. Both
+// halves are pinned: the Source cell says RE-BIND (not ADD), and `templateAbsentRows` files NO extra `crt.Feed`
+// expected count for it — an element the template ships must not also be demanded as an explicit build step.
+const br1WithTemplate = (tpl, mode) => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
+  m.planMeta = { ...m.planMeta, formTemplate: tpl };
+  return spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", mode], { input: JSON.stringify(m), encoding: "utf8" }); };
+check("ENG-96457 (item 2): a template MEASURED to ship Feed renders the third verdict — the Feed row reads template context / re-bind it, and it gets NO extra `crt.Feed` expected count (what the template ships must not also be demanded as a build step)",
+  () => { const out = br1WithTemplate("__FixtureTemplateShippingFeed", "--plan").stdout || "";
+    const rows = (br1WithTemplate("__FixtureTemplateShippingFeed", "--checklist").stdout || "").split("\n");
+    return /template context — `__FixtureTemplateShippingFeed` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
+      && !/ships NO Feed/.test(out)
+      && !rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
+  () => ({ feedRows: (br1WithTemplate("__FixtureTemplateShippingFeed", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)),
+    checklist: (br1WithTemplate("__FixtureTemplateShippingFeed", "--checklist").stdout || "").split("\n").filter((l) => /Feed/.test(l)) }));
 check("ENG-96457 (item 2): an UNMEASURED template is 'confirm on-stand', never a claim in either direction — the capability table's third state is what keeps it honest",
   () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
     m.planMeta = { ...m.planMeta, formTemplate: "PageWithTabsFreedomTemplate" };
@@ -11172,6 +11206,29 @@ check("ENG-96457 (item 3): the plan's derived `applicationCode` IS the executor'
   () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
     return { planCode: br1Units.applicationCode, required: requiredAppCode(m.targetPackage, m.signals.schemaNamePrefix.value),
       manifestCode: m.placement.application.code }; });
+// PR #156 review (finding 3): the `mismatch` branch — a target package that does NOT start with the stand's prefix,
+// so NO `create-app` code can produce it. `requiredAppCode` returns null there while `appCodeStem` keeps the whole
+// target, a deliberate divergence nothing pinned. This is the plan-side sibling of the executor's
+// `target-package-not-producible` stop: an operator-facing ⚠ decide line a build cannot proceed past.
+check("ENG-96457 (item 3): a target package that does NOT carry the stand's prefix is a DECISION, not a derivation — the plan raises `⚠ decide` naming the package `create-app` would actually make, and `--units` publishes `appCode.mismatch`",
+  () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
+    m.targetPackage = "FooBarFreedom";
+    const run = (mode) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", mode], { input: JSON.stringify(m), encoding: "utf8" });
+    const out = run("--plan").stdout || "";
+    const units = JSON.parse(run("--units").stdout || "{}");
+    const appCode = deriveApplicationCode(m, m.signals);
+    return /⚠ \*\*decide:\*\* the target package `FooBarFreedom` does NOT start with this stand's prefix `Usr`/.test(out)
+      && /the app will land in `UsrFooBarFreedom` instead/.test(out)
+      && appCode.mismatch === true && appCode.pkg === "UsrFooBarFreedom" && appCode.code === "FooBarFreedom"
+      // the deliberate divergence nothing pinned: the executor's own arithmetic REFUSES this target
+      // (`requiredAppCode` → null, its `target-package-not-producible` stop) while the plan keeps the whole target
+      // as the stem so it can NAME the package `create-app` would really make. The ⚠ decide line is the plan-side
+      // half of that same stop, and it must not quietly become a derivation.
+      && requiredAppCode("FooBarFreedom", "Usr") === null
+      && units.applicationCode === "FooBarFreedom" && units.applicationPackage === "UsrFooBarFreedom"; },
+  () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8")); m.targetPackage = "FooBarFreedom";
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(m), encoding: "utf8" });
+    return (r.stdout || "").split("\n").filter((l) => /decide|Application code/.test(l)); });
 check("ENG-96457 (item 3): an UNREAD prefix BLOCKS the plan like every other on-stand signal — 'never read' cannot pass, because the plan's app code is unverifiable without it",
   () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
     delete m.signals.schemaNamePrefix;

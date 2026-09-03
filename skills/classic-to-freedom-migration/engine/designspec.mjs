@@ -3223,19 +3223,33 @@ function resolveStructuralVk(vk, ctx) {
 //     rather than passing it off as checked. This is also every payload produced before this field existed, so an
 //     older `--built` file keeps its previous verdict instead of failing on evidence it could not have carried.
 //
-// ⚠ ONE UNVERIFIED ASSUMPTION, stated because it decides whether this gate is sound: that clio `get-page`'s merged
-// `bundle.viewConfig` returns each component's `layoutConfig.row`/`.column` in the SAME 1-based integer space the
-// engine emits. The engine emits per TARGET GRID, and one page can use two of them (a wide Header keeps the classic
-// 24-column grid → columns 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the coordinates,
-// or that returned a template-merged field's own cell instead of the built one, would fire ❌ on a correctly built
-// page. Only the `no layoutConfig at all` shape is defended against here. This needs ONE on-stand run to confirm
-// (build a 2-column header page, read it back, compare) — until then treat a placement ❌ as "look at the page"
-// rather than as proof, and if the space turns out to differ, normalise HERE rather than weakening the check.
+// ⚠ ONE UNVERIFIED ASSUMPTION, stated because it decides what this leg is ALLOWED to report: that clio `get-page`'s
+// merged `bundle.viewConfig` returns each component's `layoutConfig.row`/`.column` in the SAME 1-based integer space
+// the engine emits. The engine emits per TARGET GRID, and one page can use two of them (a wide Header keeps the
+// classic 24-column grid → columns 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the
+// coordinates, or that returned a template-merged field's own cell instead of the built one, would report a
+// deviation on a correctly built page. This needs ONE on-stand run to confirm (build a 2-column header page, read it
+// back, compare).
+//
+// SO THE WHOLE LEG IS ADVISORY UNTIL THAT READ-BACK LANDS (PR #156 review, finding 1). A cell deviation reports
+// `⚠ verify` / `unverified`, NOT `❌ MISSING` / `missing`: `missing` states "this deliverable is not on the built
+// page", which is a claim about the BUILD, and the only evidence for it here rests on an assumption nothing has
+// checked. `unverified` states what is actually known — "the cells did not line up and the comparison itself is not
+// yet trustworthy, look at the page". When the read-back confirms the space (normalise HERE if it differs), flip
+// the deviation arm back to `❌ MISSING` and delete this paragraph — the check is not being weakened, its verdict is
+// being matched to its evidence.
 function resolvePlacement(vk, ops, okText) {
   const want = (vk.layout || []).filter((e) => e && typeof e.name === "string" && Number.isInteger(e.row) && Number.isInteger(e.column));
   if (!want.length) return ["✅ Done", okText, "ok"];
   const byName = new Map(ops.filter((o) => o.name).map((o) => [o.name, o]));
   const checkable = want.filter((e) => byName.get(e.name)?.layoutConfig && typeof byName.get(e.name).layoutConfig === "object");
+  // NO layoutConfig AT ALL keeps its `ok` — and only this shape does. This is the payload EVERY build produced
+  // before the field existed, so failing it would fail a build on evidence it could not have carried, and the
+  // status text names the gap ("PLACEMENT not checked") rather than claiming a check that did not happen.
+  // The SUBSET shape below is the opposite case and does NOT get this treatment (PR #156 review): there the text
+  // used to read "each at its planned cell" while some cells were never compared, so a re-paired field that
+  // happened to publish no `layoutConfig` was never in `off` and the exact ENG-96445 escape this leg exists to
+  // catch passed as a hard green.
   if (!checkable.length)
     return ["✅ Done", `${okText} — PLACEMENT not checked: no built component carries a \`layoutConfig\`, so the ${want.length} published cell(s) could not be compared (re-run get-page and pass \`bundle.viewConfig\` VERBATIM to check the grid too)`, "ok"];
   const off = [];
@@ -3244,9 +3258,17 @@ function resolvePlacement(vk, ops, okText) {
     if (got.row !== e.row || got.column !== e.column)
       off.push(`\`${esc(e.name)}\` planned r${e.row}·c${e.column}, built r${got.row ?? "?"}·c${got.column ?? "?"}`);
   }
-  if (!off.length) return ["✅ Done", `${okText}, each at its planned cell (${checkable.length} of ${want.length} placement(s) checked)`, "ok"];
+  const partial = checkable.length < want.length
+    ? ` — but only ${checkable.length} of ${want.length} published cell(s) could be compared: the rest carry no \`layoutConfig\`, so their placement is UNKNOWN (re-run get-page and pass \`bundle.viewConfig\` VERBATIM)`
+    : "";
+  if (!off.length) {
+    if (partial) return ["⚠ verify", `${okText}, each COMPARED field at its planned cell${partial}`, "unverified"];
+    return ["✅ Done", `${okText}, each at its planned cell (${checkable.length} of ${want.length} placement(s) checked)`, "ok"];
+  }
   const overflow = off.length > 6 ? ` …and ${off.length - 6} more` : "";
-  return ["❌ MISSING", `every expected field is present BY NAME but ${off.length} sit(s) at a DIFFERENT cell than the plan published, so the built page does not carry the plan's layout: ${off.slice(0, 6).join("; ")}${overflow}. Re-place them, or — if the deviation was approved — record it and re-run`, "missing"];
+  // ADVISORY until the one on-stand read-back lands — see the coordinate-space paragraph above for why this is
+  // `unverified` and not `missing`.
+  return ["⚠ verify", `every expected field is present BY NAME but ${off.length} sit(s) at a DIFFERENT cell than the plan published, so the built page may not carry the plan's layout: ${off.slice(0, 6).join("; ")}${overflow}. Look at the page: re-place them, or — if the deviation was approved — record it and re-run. NOT read as proof of a wrong build: the coordinate space \`get-page\` reports in is not yet confirmed against the one the plan publishes${partial}`, "unverified"];
 }
 function resolveFieldsByIdentity(vk, names, ops) {
   const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));

@@ -640,6 +640,17 @@ export const FREEDOM_TEMPLATE_CAPABILITIES = Object.freeze({
     tabs: true, feed: false, attachments: false, topAreaColumns: 1, profileIsland: false,
     measuredIn: "ENG-96445 / ENG-96444 (2026-09-02, paired migration run)",
   }),
+  // NOT A STAND MEASUREMENT — a named fixture, kept in the table for one reason: every template measured so far
+  // ships NO Feed and NO Attachments, so the `provided` verdict (and the "ships … (measured); re-bind it, do not
+  // rebuild" Source cell it renders) is unreachable from any real manifest and therefore untested. The first stand
+  // template that DOES ship Feed would then exercise that rendering for the first time in production — reviving
+  // the very false-promise this feature removes. The `__` prefix is not a legal Creatio schema name, so no real
+  // manifest can name it by accident; delete this entry once a real feed-shipping template is measured into the
+  // table above and the tests point at that one instead.
+  __FixtureTemplateShippingFeed: Object.freeze({
+    tabs: true, feed: true, attachments: false, topAreaColumns: 1, profileIsland: false,
+    measuredIn: "NOT MEASURED — test fixture for the template-PROVIDED verdict (PR #156 review, finding 2)",
+  }),
 });
 
 // The capabilities of `name`, or `null` when this template has never been measured. `null` is a THIRD state, not a
