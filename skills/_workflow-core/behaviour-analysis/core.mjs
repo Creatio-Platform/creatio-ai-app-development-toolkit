@@ -28,6 +28,7 @@ import { rules, contextPrompt, describePrompt, repairNote, critiquePrompt, merge
 import {
   normalizeScopes, planBatches, packBatches, repairKeys, isComplete, wiringOnlyMixinKeys, coveredKeys, entriesOf,
   declaredNothingToDo, isCritiqueShape, critiqueDeathLine, retryOnDeath, stepOutcome, failureCause, itemId, partFile,
+  censusShortfall, mergeDeathLine,
   DEFAULT_ROWS_PER_AGENT, DEFAULT_MAX_DESCRIBE,
 } from './helpers.mjs'
 
@@ -129,6 +130,33 @@ function contextFailedReturn(contextOutcome, surface, log) {
   }
 }
 
+// A CONTEXT THAT CAME BACK SHORT is a failed run, not a small surface. The digest declares how many scopes it
+// carries; when the inventory names fewer, every count after this point is taken over the scopes that arrived and
+// presented as the whole surface — the fan-out plans for them, the coverage denominator counts them, and the
+// verdict reports `complete` over a fraction. Measured: a run that described 1 of 18 scopes and logged
+// `complete: 547/547`.
+//
+// STOPPED, not degraded. The scopes that did arrive could be described, but the deliverable would carry a
+// provenance header claiming a surface it never read, and the plan folds that index back in as if it were whole.
+// A named stop costs the operator one re-run with a split handoff; a partial report that reads as complete costs
+// whatever is built on it. `censusNote` is carried out verbatim because it is where the agent says WHY — on the
+// measured run it named the file holding the other 17 scopes.
+function censusShortfallReturn(shortfall, ctx, surface, log) {
+  const { declared, returned, missing } = shortfall
+  log(`the Context agent returned ${returned} of the ${declared} scope(s) the digest declares — ${missing} missing, so any coverage count here would be taken over part of the surface and reported as all of it`)
+  if (ctx.censusNote) log(`censusNote: ${ctx.censusNote}`)
+  return {
+    surface,
+    skipped: false,
+    stopped: 'census-short',
+    reason: `the Context phase returned ${returned} of ${declared} declared scope(s). This is a failed run, NOT a surface with fewer rows than the digest says: the missing ${missing} scope(s) would be counted as described. Re-run the analysis over the missing scopes with their own digest (\`--stubs\`) and hand the parts to separate runs; nothing was written.`,
+    coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
+    scopes: (ctx.scopes || []).map((s) => ({ role: s.role, schema: s.schema ?? null })),
+    censusNote: ctx.censusNote || null,
+    conflicts: [], settledElsewhere: [], gaps: [], refusals: ctx.refusals || [],
+  }
+}
+
 // Coverage alone is not completion: the report and the index are the DELIVERABLES, and a Merge item that returned
 // nothing wrote neither. Returns `mergeOk` so the caller keeps computing the verdict from it.
 function reportMerge(merged, mergeOutcome, log) {
@@ -202,6 +230,11 @@ export function* run(rawInput, io = {}) {
   if (!ctx) return contextFailedReturn(contextOutcome, SURFACE, log)
 
   const scopes = normalizeScopes(ctx.scopes)
+
+  // Before any count is taken over them: did the census cover the whole surface? See `censusShortfallReturn`.
+  const shortfall = censusShortfall(input.totals, scopes)
+  if (shortfall) return censusShortfallReturn(shortfall, ctx, SURFACE, log)
+
   const worked = scopes.filter((s) => s.rows > 0)
   const empty = scopes.filter((s) => s.rows === 0)
   const totalRows = worked.reduce((n, s) => n + s.rows, 0)
@@ -348,9 +381,20 @@ export function* run(rawInput, io = {}) {
   // Same gap as the Context yield: a rejecting Merge threw out of `run()` and discarded the deliberate
   // `mergeOk === false` handling immediately below it, which is what tells the caller the coverage
   // numbers stand but there is no deliverable.
-  const mergeOutcome = yield* stepOutcome(step({
+  //
+  // RETRIED, like Critique, and for a stronger reason. Merge is the ONLY phase whose death costs the run its
+  // deliverable: coverage can be complete and the report still not exist, which is the one outcome an operator
+  // cannot work around without redoing the analysis. Describe already has a recovery path — a dead item's rows
+  // fall into `uncoveredKeys` and the repair round re-describes them, scoped to the owning scopes — and Merge has
+  // none. Measured: three consecutive runs died here, all with full coverage, all with no file.
+  //
+  // Same no-delay caveat as `retryOnDeath`'s: the core may not use a timer, so attempt 2 fires immediately. On a
+  // terminal death the host has already exhausted its own retries and this is a real second chance; on a rejection
+  // from an overloaded host it may buy nothing. Accepted — the alternative is what happened, which is no retry.
+  let mergeError = null
+  const mergeStep = (attempt) => step({
       items: [{
-        id: itemId('merge', 'report-index'),
+        id: itemId('merge', 'report-index', attempt > 1 ? `retry${attempt}` : ''),
         phase: 'Merge',
         role: 'general-purpose',
         prompt: mergePrompt({
@@ -368,17 +412,22 @@ export function* run(rawInput, io = {}) {
         inputFiles: [sharedCorePath, ...described.map((r) => r.reportPart).filter(Boolean)],
         responseSchema: MERGE_SCHEMA,
         access: ACCESS.STAND_READ_ONLY,
-        label: 'merge:report+index',
+        label: attempt > 1 ? 'merge:report+index-retry' : 'merge:report+index',
       }],
       requires: ['subAgents', 'structuredOutput'],
       note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
-    }))
-  const merged = mergeOutcome.value
+    })
+  const { result: merged } = yield* retryOnDeath(mergeStep, (attempt, error, willRetry) => {
+    // Kept for `reportMerge`, which names the CAUSE in the caller-visible line. The last attempt's error is the
+    // one that ended the phase; an earlier one is already logged in full by the line below.
+    mergeError = error
+    log(mergeDeathLine(attempt, error, willRetry))
+  })
 
   // The verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after the repair
   // round, so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
   // DELIVERABLES, and a Merge item that returned nothing wrote neither.
-  const mergeOk = reportMerge(merged, mergeOutcome, log)
+  const mergeOk = reportMerge(merged, { error: mergeError }, log)
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
   log(verdictLine({ complete, covered: covered.size, total: allKeys.size, uncoveredKeys, wiringOnly }))
 

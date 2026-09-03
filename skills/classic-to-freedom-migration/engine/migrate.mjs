@@ -497,6 +497,31 @@ function stubScope(role, schema, changeSet, standardMethodsFiltered) {
   };
 }
 
+// SCOPE FAN-IN. One page reachable from several parents is folded once (the memo hands the same `res` to every
+// parent that references it) and then appended once per parent, so `stubIndex` carried the identical scope two or
+// three times: measured on a real section, 18 entries where one child page appeared three times and four more
+// twice. Nothing downstream in the engine noticed — `scopeDigestKeys` and the three index checks all reduce to a
+// Set — but `--stubs` publishes `totals.scopes` / `totals.stubs` as the surface's size, and a behaviour-analysis
+// run compares its own census against those numbers. Double-counted rows there mean the handoff overstates the
+// work and the census can never agree with it.
+//
+// Identity is the ROW SET, not the label: same role, same schema, same methods, same member keys. Two scopes that
+// merely share a name still differ in rows and both survive. First occurrence wins, so the two position contracts
+// this array carries hold — `stubIndex[0]` is the record page, the section scope stays last.
+export function dedupeStubScopes(scopes) {
+  const seen = new Set();
+  return scopes.filter((s) => {
+    const key = [
+      s.role, s.schema || "",
+      (s.stubs || []).map((st) => st.method).sort().join(","),
+      (s.members || []).map((m) => m.key).sort().join(","),
+    ].join("\u0000");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 // The RETURN leg of the step-5.1 handoff: answers the behaviour-analysis run established, folded back into the
 // worklist rows. Two distinct things arrive per method and they are kept apart on purpose:
 //
@@ -2262,7 +2287,7 @@ export function runMigration(manifest, opts = {}) {
   const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
   // The step-5.1 handoff index — assembled once every scope has folded, so a `behaviourIndex` key can be checked
   // against the WHOLE surface before it is reported as matching nothing.
-  const stubIndex = [
+  const stubIndex = dedupeStubScopes([
     // No schema NAME for this scope on purpose: the engine parses layer BODIES (keyed by package), so the record
     // page's own schema name is not something it knows. `planMeta.sectionSchema` names the SECTION, a different
     // schema — putting it here would label record-page rows with the list page's name.
@@ -2276,7 +2301,7 @@ export function runMigration(manifest, opts = {}) {
     // behaviour analysis structurally cannot see list-page behaviour. Placed LAST: consumers take stubIndex[0]
     // as the record page and nested runs slice(1) for child scopes — a section entry must not shift those.
     ...sectionScopes,
-  ];
+  ]);
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
   behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);

@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -9596,6 +9596,35 @@ const n2TreeManifest = (titleA, titleB) => ({
     refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
+}
+
+// --- stubIndex fan-in ------------------------------------------------------
+// One page reachable from several parents folds once and is then appended once per parent, so the SAME scope
+// rode the handoff two or three times. Measured on a real section: 18 entries, one child page three times and
+// four more twice, which inflated the `--stubs` totals the behaviour-analysis census is compared against.
+{
+  const scope = (role, schema, methods, members = []) => ({
+    role, schema, counts: { stubs: methods.length, members: members.length },
+    stubs: methods.map((m) => ({ method: m, triggers: [] })),
+    members: members.map((k) => ({ key: k })),
+  });
+  const child = scope("child page", "ASPSchemaPage", ["init", "onSaved"], ["ASPSchemaPage::mixin:M"]);
+  const deduped = dedupeStubScopes([
+    scope("main page", null, ["init"]),
+    child, { ...child }, { ...child },
+    scope("typed page", "TypedPage", ["init"]),
+    scope("section", "DealSection", ["onCardSaved"]),
+  ]);
+  check("dedupeStubScopes: a child page reached from three parents rides the handoff ONCE — `totals.scopes` and `totals.stubs` are what a behaviour-analysis census is compared against, so a repeated scope makes agreement impossible",
+    deduped.length === 4, () => deduped.map((s) => `${s.role}/${s.schema}`).join(", "));
+  check("dedupeStubScopes: the two POSITION contracts this array carries survive — `stubIndex[0]` is the record page (consumers read it directly) and the section scope stays last (nested runs `slice(1)`)",
+    deduped[0].role === "main page" && deduped[deduped.length - 1].role === "section",
+    () => deduped.map((s) => s.role).join(", "));
+  check("dedupeStubScopes: identity is the ROW SET, not the label — a typed page and the record page both declaring `init` are two different scopes and both survive",
+    deduped.filter((s) => (s.stubs || []).some((st) => st.method === "init")).length === 3,
+    () => deduped.map((s) => `${s.role}/${s.schema}`).join(", "));
+  check("dedupeStubScopes: two scopes that share a role and a schema but NOT their rows are kept apart — collapsing them would drop real work from the handoff",
+    dedupeStubScopes([scope("child page", "P", ["a"]), scope("child page", "P", ["b"])]).length === 2);
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

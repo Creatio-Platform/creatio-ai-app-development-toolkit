@@ -174,6 +174,15 @@ export function critiqueDeathLine(attempt, error, willRetry) {
   return `critique agent died on attempt ${attempt} — ${cause}${willRetry ? ' — retrying once' : ''}`
 }
 
+// The line a dead MERGE attempt logs. Same two failure shapes as Critique, different stakes: Critique dying
+// leaves the run without an adversarial pass, Merge dying leaves it without a deliverable at all — the report and
+// the index are the only things step 5.1 produces. Measured: three consecutive runs (one fresh, two resumes)
+// where Merge was the last thing to die and every one of them returned full coverage and no file.
+export function mergeDeathLine(attempt, error, willRetry) {
+  const cause = failureCause(error, true)
+  return `merge agent died on attempt ${attempt} — ${cause}${willRetry ? ' — retrying once' : ''}`
+}
+
 // What the caller is TOLD is stronger than what stopped the retry loop.
 // `critiqueRan: true` sells `conflicts`/`settledElsewhere` as verified-empty, so
 // a non-nullish value that is not a critique satisfies the first question and
@@ -197,16 +206,48 @@ export function declaredNothingToDo(totals) {
   return !!declaredTotals && zeroCount(declaredTotals.stubs) && zeroCount(declaredTotals.members)
 }
 
-// The scope inventory, normalised once: row counts and the label every later
-// decision (batch packing, prompts, logs) keys on.
+// A row key QUALIFIED with the scope that owns it. Member keys already arrive scoped from the engine
+// (`<schema>::<kind>:<name>`); method keys do not, and `CONTEXT_SCHEMA` accepts either form, so an agent
+// returning the bare name is answering within its schema.
+//
+// WHY THIS IS NOT COSMETIC. `allKeys` is a Set. On a real section eight scopes declared `onSaved` six times and
+// `init`, `save`, `destroy`, `publishMosaicsSum` and five more twice each — 24 rows collapsing to 10 keys, so the
+// coverage denominator read 399 for 413 real rows and ONE agent describing ONE `onSaved` marked the other five
+// described. The rows were never dispatched and nothing in the arithmetic could see it.
+//
+// A scope with NO schema keeps the bare form: the record page's schema name is not something the engine knows
+// (see `stubScope` in engine/migrate.mjs — the null there is deliberate), and that scope owns the bare key form
+// on the engine side too, so inventing a label here would stop the two sides matching.
+export const qualifyKey = (schema, key) =>
+  schema && typeof key === 'string' && key !== '' && !key.includes('::') ? `${schema}::${key}` : key
+
+// The scope inventory, normalised once: row counts, the qualified key forms, and the label every later
+// decision (batch packing, prompts, logs) keys on. Qualifying HERE — rather than at each reader — is what keeps
+// the prompt an agent is handed, the coverage denominator, the repair round's owner lookup and `digestKeyOf`'s
+// suffix resolution all reading the same spelling of the same row.
 export function normalizeScopes(rawScopes) {
   return (rawScopes || []).map((s) => ({
     ...s,
-    methodKeys: s.methodKeys || [],
-    memberKeys: s.memberKeys || [],
+    methodKeys: (s.methodKeys || []).map((k) => qualifyKey(s.schema, k)),
+    memberKeys: (s.memberKeys || []).map((k) => qualifyKey(s.schema, k)),
     rows: (s.methodKeys || []).length + (s.memberKeys || []).length,
     label: s.schema || s.role,
   }))
+}
+
+// DID CONTEXT REPORT THE WHOLE SURFACE? The digest states how many scopes it carries; the Context agent returns
+// the inventory. When it returns FEWER, every later number in this run is computed over a fraction of the surface
+// and reports itself as whole — measured once at 547/547 "complete" on 1 of 18 scopes, after 1h51m and 9.3M
+// weighted tokens, because the agent could not fit 18 scopes' keys in one structured answer and said so in
+// `censusNote` (a field nothing reads). The count is the only part of that a machine can check, so it is checked.
+//
+// Only a SHORTFALL is a finding. More scopes than declared means the census found something the digest missed —
+// the Context prompt asks for exactly that, and it is reported through `refusals`, not stopped here.
+export function censusShortfall(totals, scopes) {
+  const declared = totals && typeof totals === 'object' ? totals.scopes : null
+  if (typeof declared !== 'number' || !Number.isFinite(declared) || declared <= 0) return null
+  const returned = (scopes || []).length
+  return returned < declared ? { declared, returned, missing: declared - returned } : null
 }
 
 // Batch sizing. THEORETICAL DEFAULTS — no measured profile exists yet: the only

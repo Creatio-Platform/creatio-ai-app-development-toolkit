@@ -122,7 +122,68 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "Write these cards to `out/customizations-shared-core.md`",
       why: "a literal `<outDir>` placeholder in a prompt is unexpandable; the run's actual migration folder is interpolated instead",
     },
+    {
+      // The inventory now qualifies a bare method key with the scope that owns it (`qualifyKey`). The baseline
+      // listed the bare name, so two scopes declaring the same method reduced to ONE key in `allKeys` and one
+      // description closed both rows — measured at 24 rows collapsing to 10 on a real section. The prompt shows
+      // the agent the same spelling the coverage arithmetic counts, which is the point of the change.
+      baseline: "    methods: initMini",
+      shipped: "    methods: DealMini::initMini",
+      why: "method keys are qualified with their scope so two scopes declaring the same name are two rows, not one (ENG-96529)",
+    },
+    {
+      // The SAME change, seen from the Critique prompt: it is handed `allKeys`, so the qualified spelling shows
+      // up there too. Listed separately rather than as a looser pattern — the two prompts are different contracts
+      // and a change to one must not be waved through by a rule written for the other.
+      baseline: "onSaved, reload, mixin:LeadMixin, initMini",
+      shipped: "onSaved, reload, mixin:LeadMixin, DealMini::initMini",
+      why: "the critique's key list carries the same qualified inventory keys (ENG-96529)",
+    },
+    {
+      // And once more in the critique's uncovered list, for the same reason as the two entries above.
+      baseline: "ROWS THIS RUN COMPUTED AS UNCOVERED (no index entry): mixin:LeadMixin, initMini",
+      shipped: "ROWS THIS RUN COMPUTED AS UNCOVERED (no index entry): mixin:LeadMixin, DealMini::initMini",
+      why: "the uncovered list is the same qualified inventory keys (ENG-96529)",
+    },
+    {
+      // And in the repair round's own row list — the last place the inventory keys are spelled out to an agent.
+      baseline: "no `bodyCard`: mixin:LeadMixin, initMini",
+      shipped: "no `bodyCard`: mixin:LeadMixin, DealMini::initMini",
+      why: "the repair round targets the same qualified inventory keys (ENG-96529)",
+    },
   ],
+}
+
+// DECLARED, REVIEWED DIVERGENCES IN THE FINGERPRINT — the dispatch list and the return value. Same rule as the
+// prompt list and deliberately stricter in form: a divergence is a REWRITE of the baseline's own text, applied to
+// the named scenario and field only, and the rewritten baseline must then match the shipped side EXACTLY. So an
+// intended change is stated as what it turns into, not as permission for the two sides to differ — a second,
+// unrelated change to the same field still fails.
+const ALLOWED_FINGERPRINT_DIVERGENCES = {
+  "classic-behaviour-analysis": [
+    {
+      scenario: "REJECTING Describe agent in a single-item parallel batch — absorbed as a null hole, run still returns a verdict",
+      field: "result",
+      from: '"initMini"',
+      to: '"DealMini::initMini"',
+      why: "the uncovered row is reported under the qualified key the inventory now carries (ENG-96529)",
+    },
+    {
+      scenario: "dead Merge — coverage stands, run not complete",
+      field: "calls",
+      from: "Merge/merge:report+index/general-purpose/cardCount+indexPath+reportPath",
+      to: "Merge/merge:report+index/general-purpose/cardCount+indexPath+reportPath | Merge/merge:report+index-retry/general-purpose/cardCount+indexPath+reportPath",
+      why: "Merge is retried once on death: it is the only phase whose failure leaves the run with full coverage and no deliverable (ENG-96529)",
+    },
+  ],
+}
+
+// The baseline's fingerprint field, with every divergence declared for THIS scenario and field applied. Unlisted
+// scenarios come back untouched, so the comparison stays byte-for-byte everywhere it is not explicitly relaxed.
+function rewriteBaseline(pairName, scenario, field, value) {
+  return (ALLOWED_FINGERPRINT_DIVERGENCES[pairName] || [])
+    .filter((d) => d.scenario === scenario && d.field === field)
+    .reduce((acc, d) => acc.split(d.from).join(d.to), value)
 }
 
 const PAIRS = [
@@ -229,11 +290,23 @@ function declared(pairName, baselineLine, shippedLine) {
 
 // The first prompt that differs, with the first differing LINE named — a prompt is thousands of characters and
 // "they differ" is not actionable on one.
-function promptDiff(a, b, pairName) {
+// A dispatch the shipped script makes and the baseline does not is a declared `calls` divergence (a retry). Its
+// prompt is not exempt: a retry re-sends the SAME work, so it must equal the prompt of the last call the baseline
+// made in that phase. An added dispatch carrying a different prompt is a different agent wearing a retry's label,
+// and still fails.
+function repeatsPhase(baselineCalls, shippedCall) {
+  const prior = baselineCalls.filter((c) => c.phase === shippedCall.phase).pop();
+  return !!prior && prior.prompt === shippedCall.prompt;
+}
+
+function promptDiff(a, b, pairName, scenario) {
+  const extraAllowed = (ALLOWED_FINGERPRINT_DIVERGENCES[pairName] || [])
+    .some((d) => d.scenario === scenario && d.field === "calls");
   const n = Math.max(a.calls.length, b.calls.length);
   for (let i = 0; i < n; i++) {
     const pa = a.calls[i]?.prompt, pb = b.calls[i]?.prompt;
     if (pa === pb) continue;
+    if (pa === undefined && extraAllowed && repeatsPhase(a.calls, b.calls[i])) continue;
     if (pa === undefined || pb === undefined) return { i, why: `call ${i + 1} exists on only one side (${a.calls[i]?.label || "—"} / ${b.calls[i]?.label || "—"})` };
     const la = pa.split("\n"), lb = pb.split("\n");
     if (la.length !== lb.length) return { i, why: `call ${i + 1} (${a.calls[i].label}) has ${la.length} prompt line(s) in the baseline and ${lb.length} in the shipped script` };
@@ -258,12 +331,14 @@ for (const pair of PAIRS) {
     const fa = fingerprint(a), fb = fingerprint(b);
     check(`${sc.name} — the PHASE sequence is identical`, fa.phases === fb.phases,
       () => `baseline: ${fa.phases}\n      shipped:  ${fb.phases}`);
+    const expectedCalls = rewriteBaseline(pair.name, sc.name, "calls", fa.calls);
     check(`${sc.name} — every AGENT dispatched is identical (phase / label / agentType / schema keys, in order)`,
-      fa.calls === fb.calls, () => `baseline: ${fa.calls}\n      shipped:  ${fb.calls}`);
-    const pd = promptDiff(a, b, pair.name);
+      expectedCalls === fb.calls, () => `baseline: ${expectedCalls}\n      shipped:  ${fb.calls}`);
+    const pd = promptDiff(a, b, pair.name, sc.name);
     check(`${sc.name} — every PROMPT is identical byte for byte, apart from the declared divergences`, pd === null, () => pd?.why);
-    check(`${sc.name} — the RETURN VALUE is identical`, fa.result === fb.result && fa.error === fb.error,
-      () => firstJsonDiff(a.result, b.result) + (fa.error !== fb.error ? `\n      error: baseline=${fa.error} shipped=${fb.error}` : ""));
+    const expectedResult = rewriteBaseline(pair.name, sc.name, "result", fa.result);
+    check(`${sc.name} — the RETURN VALUE is identical`, expectedResult === fb.result && fa.error === fb.error,
+      () => firstJsonDiff(JSON.parse(expectedResult), b.result) + (fa.error !== fb.error ? `\n      error: baseline=${fa.error} shipped=${fb.error}` : ""));
     // NON-VACUITY. Every check above compares the two runs against EACH OTHER, so two scripts that both throw at
     // the same line agree perfectly and prove nothing — which is exactly what a half-applied port looks like from
     // here. A scenario that does not declare `expectError` must therefore have RUN to a return value on both sides.

@@ -483,6 +483,95 @@ const happyAnswer = (item) => {
     result.coverage.complete === false && result.coverage.described === 4, () => JSON.stringify(result.coverage));
 }
 
+console.log("\n===== the census gate, the qualified inventory and the Merge retry =====");
+// A SECOND scope declaring the SAME method name. `init` on two pages is two rows with two bodies; the inventory
+// keyed them bare and `allKeys` is a Set, so they were one row and one description closed both. Measured on a
+// real section: `onSaved` six times, nine more names twice, 24 rows arriving as 10 keys.
+const CTX_COLLIDING = {
+  ...CTX,
+  scopes: [
+    { role: "record page", schema: "DealPage", methodKeys: ["init", "onSaved"], memberKeys: [], unresolvedCount: 0 },
+    { role: "mini page", schema: "DealMini", methodKeys: ["init"], memberKeys: [], unresolvedCount: 0 },
+  ],
+};
+check("qualifyKey: a BARE method key is qualified with the scope that owns it — two scopes declaring `init` are two rows, which a Set of bare names silently made one",
+  () => helpers.qualifyKey("DealMini", "init") === "DealMini::init");
+check("qualifyKey: an ALREADY qualified key is left alone, and a scope with no schema keeps the bare form the engine keys that scope by",
+  () => helpers.qualifyKey("DealMini", "DealPage::init") === "DealPage::init" && helpers.qualifyKey(null, "init") === "init");
+check("normalizeScopes: the qualification happens ONCE, in the inventory — so the prompt, the coverage denominator and the repair round all read the same spelling of the same row",
+  () => {
+    const [a, b] = helpers.normalizeScopes(CTX_COLLIDING.scopes);
+    return a.methodKeys.join(",") === "DealPage::init,DealPage::onSaved" && b.methodKeys.join(",") === "DealMini::init";
+  });
+{
+  const described = {
+    reportPart: "out/part.md", gaps: [], refusals: [],
+    indexEntries: [
+      { key: "DealPage::init", card: "c1" }, { key: "DealPage::onSaved", card: "c2" }, { key: "DealMini::init", card: "c3" },
+    ],
+  };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_COLLIDING };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: described };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: two scopes declaring the same method are THREE rows in the denominator, not two — the coverage count is over rows, and a shared name is not a shared body",
+    result.coverage.total === 3 && result.coverage.described === 3, () => JSON.stringify(result.coverage));
+}
+{
+  // The same surface, described only under ONE scope's `init`. The other scope's row must stay uncovered.
+  const halfDescribed = {
+    reportPart: "out/part.md", gaps: [], refusals: [],
+    indexEntries: [{ key: "DealPage::init", card: "c1" }, { key: "DealPage::onSaved", card: "c2" }],
+  };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_COLLIDING };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: halfDescribed };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: describing ONE scope's `init` leaves the OTHER scope's `init` uncovered — under bare keys this run reported itself complete with a row nobody had read",
+    result.coverage.uncovered.join(",") === "DealMini::init", () => JSON.stringify(result.coverage));
+}
+check("censusShortfall: FEWER scopes than the digest declares is a finding; the same number is not, and MORE is not — a census that found something the digest missed is reported through `refusals`, not stopped",
+  () => helpers.censusShortfall({ scopes: 18 }, new Array(1)).missing === 17
+    && helpers.censusShortfall({ scopes: 2 }, new Array(2)) === null
+    && helpers.censusShortfall({ scopes: 2 }, new Array(3)) === null);
+check("censusShortfall: a digest that declares NO scope count cannot be checked, and an unchecked count must not read as a shortfall — an older digest still runs",
+  () => helpers.censusShortfall(undefined, []) === null && helpers.censusShortfall({ stubs: 5 }, []) === null);
+{
+  const { result, asked, logs } = await runCba({ ...INPUT, totals: { scopes: 18, stubs: 791, members: 739 } }, happyAnswer);
+  check("core: a Context that returns FEWER scopes than the digest declares STOPS the run — measured once at `complete: 547/547` over 1 of 18 scopes, after 1h51m, because every later count was taken over the part that arrived",
+    result.stopped === "census-short" && result.coverage.complete === false && result.coverage.total === null,
+    () => JSON.stringify(result));
+  check("core: the stop happens BEFORE any Describe item is spent — the fan-out would plan for the scopes that arrived, so there is nothing to gain by dispatching it",
+    asked.length === 1 && asked[0].phase === "Context", () => asked.map((i) => i.phase).join(","));
+  check("core: the run carries the agent's own `censusNote` out — on the measured run it named the file holding the 17 scopes that did not fit the structured answer",
+    result.censusNote === CTX.censusNote && logs.some((l) => /2 of the 18 scope/.test(l)), () => JSON.stringify({ note: result.censusNote, logs }));
+}
+{
+  let mergeCalls = 0;
+  const { result, asked, logs } = await runCba(INPUT, (i) => {
+    if (i.phase !== "Merge") return happyAnswer(i);
+    mergeCalls++;
+    return mergeCalls === 1 ? { outcome: OUTCOME.DEATH } : { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a DEAD Merge is retried once and the run still produces its deliverable — Merge is the only phase whose death leaves full coverage and no report, which is what three consecutive real runs ended as",
+    mergeCalls === 2 && result.coverage.complete === true && result.reportPath === MERGED.reportPath,
+    () => JSON.stringify({ mergeCalls, coverage: result.coverage }));
+  check("core: the retry is a work item of its OWN id and label, so the journal replays it and a reader can tell the second attempt from the first",
+    asked.filter((i) => i.phase === "Merge").map((i) => i.id).join(",") === "merge.report-index,merge.report-index.retry2",
+    () => asked.filter((i) => i.phase === "Merge").map((i) => i.id).join(","));
+  check("core: the dead attempt NAMES its cause — a retry that hides why the first attempt died leaves the operator with nothing to fix when the second dies too",
+    logs.some((l) => /merge agent died on attempt 1 .*terminal death/.test(l)), () => JSON.stringify(logs));
+}
+{
+  const { result } = await runCba(INPUT, (i) => (i.phase === "Merge" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("core: BOTH Merge attempts dying still returns the documented verdict — coverage stands, the run is not complete, and the caller is told there is no deliverable",
+    result.coverage.complete === false && result.coverage.described === 4, () => JSON.stringify(result.coverage));
+}
+
 console.log("\n===== the Critique retry, EXECUTED as a generator =====");
 // `retryOnDeath` is a DELEGATING generator now: it asks the driver for one more
 // attempt rather than calling an agent API. Driven here directly so the second
