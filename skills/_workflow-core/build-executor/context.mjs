@@ -171,7 +171,7 @@ export function makeContext(input, selfPath) {
   // open the built page on the stand and look, then re-runs to continue. `auto` never stops; `checkpoints` stops
   // after the units named in `checkpointAfter`; `guided` stops after every unit.
   //
-  // WHY A PAUSE IS WORTH ITS COMPLEXITY. `Form — Logic` handler rows carry NO verification key (`designspec.mjs`
+  // WHY A PAUSE IS WORTH ITS COMPLEXITY. `Form — Custom methods` handler rows carry NO verification key (`designspec.mjs`
   // pushes them with a label and nothing else), so a ported handler is the ONE deliverable class `--verify` does
   // not gate: a page can be machine-green with the imperative behaviour absent or wrong. A human opening the page
   // is currently the only check that category has. That is also why `findings` (below) must be able to re-open a

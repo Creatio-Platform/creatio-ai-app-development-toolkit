@@ -665,7 +665,7 @@ function headerTemplateRecommendation(cs, opts) {
 // checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
 // appears in the Business rules table: it does not. Removing it from this Set puts every method in two worklists at once.
 // ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
-// The ⚠ Imperative members worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
+// The ⚠ Other declared logic worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
 // methods: each is a port unit that must end up ported / dropped / blocked, not a question with an on-stand answer.
 // `attribute-dependency` is deliberately absent — it is the trigger of a method that already has its own row.
 // What each kind IS, stated ONCE above the table instead of repeated verbatim on every row of that kind.
@@ -883,7 +883,7 @@ function triggerText(t) {
 // type from prose instead of from the engine's own output. `attribute-*` joins them for the same reason: the
 // declaration is here, the behaviour it drives is not. Lives here (not in migrate.mjs) because both the renderer and
 // the handoff digest key off it, and migrate.mjs already imports this module.
-// DERIVED, not re-spelled: every kind the ⚠ Imperative members worklist renders must also be requested in the
+// DERIVED, not re-spelled: every kind the ⚠ Other declared logic worklist renders must also be requested in the
 // step-5.1 handoff digest. Hand-keeping a second identical list means a kind added to `MEMBER_KIND_NOTE` reaches the
 // table and prints a `⚠ not described` cell that no run can ever fill, because the digest never asked for it.
 export const HANDOFF_MEMBER_KINDS = MEMBER_WORKLIST_KINDS;
@@ -2306,8 +2306,11 @@ export function checklistGroups(result, opts = {}) {
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
   G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
-  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
-  const logicItems = [];
+  // Form — Business rules: the page's business rules folded to ONE count row (carrying a `rule` vk). Form — Custom
+  // methods: ONE row per handler (the dropped-in-prose case). Split into two groups to MIRROR the plan's two
+  // behaviour sections (`Business rules` / `⚠ Custom methods`) — same rows, same vks, two headings instead of one.
+  // Both Agent-confirmed.
+  const ruleItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
   // The rule IDENTITIES — each rule's target element/attribute, the column its logic governs (a page rule's
   // `element`, an entity rule's `targetAttribute`). Published in the vk so `--verify` and `--units` have the same
@@ -2320,29 +2323,31 @@ export function checklistGroups(result, opts = {}) {
     ...(cs.pageBusinessRules || []).map((r) => r.element),
     ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
   ].filter(Boolean))];
-  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  if (ruleN) ruleItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
   // artifact and the two documents would disagree about what "done" means for it.
+  const methodItems = [];
   const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
   for (const h of cs.handlerStubs || []) {
     const parent = foldedUnder.get(h.sourceMethod);
-    logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
+    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
   }
-  G("Form — Logic", logicItems);
+  G("Form — Custom methods", methodItems);
   // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
   const acts = cs.cardActions || [];
   const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
   const natives = acts.filter((a) => !/process|print/i.test(a));
   if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
   G("Card actions", actItems);
-  // ⚠ Imperative members worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
+  // ⚠ Other declared logic worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
   // like the `Handler — …` rows above and unlike the evidence rows below: work to record, not open questions closed
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Imperative members worklist", (cs.needsDecision || [])
+  G("⚠ Other declared logic worklist", (cs.needsDecision || [])
     .filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
     .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.

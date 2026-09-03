@@ -489,7 +489,7 @@ export const BUILD_PROPERTIES = {
   // WHAT A HUMAN SHOULD EXERCISE on this page, asked for only at a checkpoint. Sourced from the behaviour
   // card's ACCEPTANCE CRITERIA for each imperative row the builder ported — including the negative ones, which
   // are the half a quick look never covers. This is what turns "open it and see if it works" into a scripted
-  // check, and it is the only check the `Form — Logic` rows get at all, since they carry no verification key.
+  // check, and it is the only check the `Form — Custom methods` rows get at all, since they carry no verification key.
   checkFirst: {
     type: 'array',
     items: {

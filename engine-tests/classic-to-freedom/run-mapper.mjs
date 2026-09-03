@@ -5333,13 +5333,22 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   && /ConfigurationConstants/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "module-dep").item)
   && impLedger("module-dep").find((r) => r.name === "terrasoft")?.disposition === "context");
 {
-  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows.map((r) => r.label) || [];
+  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows.map((r) => r.label) || [];
   const impPlan = renderPlan(impRun, {});
-  check("⚠ Imperative members worklist: checklist carries every member kind, including module-dep and all attribute rows",
+  check("⚠ Other declared logic worklist: checklist carries every member kind, including module-dep and all attribute rows",
     () => ["[attribute-lookup-filter] Owner", "[attribute-dependency] Amount ← Quantity, Price", "[attribute-virtual] CanEdit",
       "[attribute-imperative] Computed", "[message] CalcTotal", "[mixin] PrintUtils", "[module-dep] ConfigurationConstants, VisaHelper"]
       .every((label) => memberRows.includes(label)),
     () => memberRows);
+  // ENG-96327: the checklist's `Form — Logic` group was SPLIT to mirror the plan's two behaviour sections —
+  // handlers land under `Form — Custom methods`, the business-rule count under `Form — Business rules`, and no
+  // combined `Form — Logic` group remains (same rows and vks as before, two headings instead of one).
+  check("checklist: Form — Logic is split into Form — Custom methods (handlers) + Form — Business rules; no combined group",
+    () => { const groups = checklistGroups(impRun, {}); const titles = groups.map((g) => g.title);
+      const methods = groups.find((g) => g.title === "Form — Custom methods");
+      return !titles.includes("Form — Logic") && titles.includes("Form — Custom methods")
+        && (methods?.rows || []).some((r) => /^Handler — /.test(r.label)); },
+    () => checklistGroups(impRun, {}).map((g) => g.title));
   check("⚠ Imperative members table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
     () => /^\| Owner \| attribute-lookup-filter \| 1 filter\(s\), keys: ownerFilter on Contact \|/m.test(impPlan)
       && /^\| CanEdit \| attribute-virtual \| \(dataValueType 12\) · default false \|/m.test(impPlan)
@@ -5372,10 +5381,10 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   const refPlan = renderPlan(refRun, {});
   check("⚠ Imperative members: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
     () => /^\| CasesEstimateLabel \| referenced-module \|/m.test(refPlan)
-      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || [])
+      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || [])
         .some((r) => r.label === "[referenced-module] CasesEstimateLabel"),
     () => ({ rows: refPlan.split("\n").filter((l) => /CasesEstimateLabel/.test(l)),
-      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || []).map((r) => r.label) }));
+      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || []).map((r) => r.label) }));
   // Every kind the members table can render must also be requested in the step-5.1 digest, or its row prints a
   // `⚠ not described` cell no run can fill. Pinned as a set relation so a new kind cannot satisfy one and not the other.
   check("⚠ Imperative members: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",

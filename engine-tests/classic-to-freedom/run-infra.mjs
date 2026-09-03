@@ -569,7 +569,7 @@ check("ENG-95469 RC-17: the round loop renders the discrepancy via `selfCheckDis
   && !/reported the in-context completeness gate did NOT run \(ran:false\)'\s*\n\s*log\(/.test(wfSrc));
 
 // --- ENG-94975 modes: auto / checkpoints / guided. A checkpoint stops the run at a PAGE BOUNDARY so a human can
-// open the built page and exercise it — the only check the `Form — Logic` handler rows get, since they carry no
+// open the built page and exercise it — the only check the `Form — Custom methods` handler rows get, since they carry no
 // verification key. Every failure mode below is silent-in-the-wrong-direction if it regresses: the operator asked
 // to be stopped, and a run that does not stop writes the whole section before they find out.
 check("buildMode: an absent mode is `auto` — the pre-existing behaviour, unchanged",

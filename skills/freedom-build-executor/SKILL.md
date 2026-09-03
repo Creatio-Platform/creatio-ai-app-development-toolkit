@@ -132,7 +132,7 @@ negative ones ("does NOT fire when …"). That turns "open it and see" into a sc
 
 **What the human hands back.** `findings: [{ unit, problem }]` on the next run. It **re-opens that
 unit even when the gate calls it complete**, and the words reach that unit's builder as required
-repairs. This is not a convenience: `Form — Logic` handler rows carry no verification key, so a
+repairs. This is not a convenience: `Form — Custom methods` handler rows carry no verification key, so a
 ported handler that is absent or wrong is invisible to `--verify` — a human report is the only
 signal that exists for it. Findings are the OPERATOR's words, not stand-derived text, so they are
 instructions to act on; the untrusted-data rule in contract rule 8 does not apply to them. A unit

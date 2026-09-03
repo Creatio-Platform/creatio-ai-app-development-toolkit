@@ -123,6 +123,16 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       why: "a literal `<outDir>` placeholder in a prompt is unexpandable; the run's actual migration folder is interpolated instead",
     },
   ],
+  "freedom-build-executor": [
+    {
+      // The checklist group that holds the handler rows was renamed `Form — Logic` → `Form — Custom methods`
+      // (ENG-96327), so the build/close control table mirrors the plan's own `⚠ Custom methods` section. The
+      // FROZEN baseline keeps the original wording; the shipped operator-findings prompt carries the new name.
+      baseline: "the `Form — Logic` handler rows carry no verification key",
+      shipped: "the `Form — Custom methods` handler rows carry no verification key",
+      why: "checklist group `Form — Logic` renamed to `Form — Custom methods` to match the plan; the frozen baseline keeps the pre-rename wording",
+    },
+  ],
 }
 
 const PAIRS = [
