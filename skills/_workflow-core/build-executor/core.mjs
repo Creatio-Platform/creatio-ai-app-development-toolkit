@@ -37,14 +37,32 @@ import {
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, shortfallOf, shortfallText, parkableKeys, planInvalidNextAll,
-  preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, repairBlock, requeueDecisions, resolutionAttribution, resolutionsBlockText,
-  resolutionsForUnit,
+  preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
+  resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
+  // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
+  // import, while the inlined Claude artifact shares one scope and would not have noticed a missing name. The core
+  // suite caught exactly that: `reconcileUnconsumed is not defined` on a green baseline the artifact ran fine.
+  buildSchemaWithResolutions, capCarryText, completionLine, encodedAsciiBytes, grantPairsToPersist, hasUnconsumedPair, idKey, missIdList, owedResolutionPairs,
+  pairKey, pairParts, publishedResolutionIds, reconcileUnconsumed, releasedResolutionPairs, resolutionAccountingMiss,
+  resolutionClaimCount, resolutionClaimRows, resolutionContradictions, runComplete, seedGrantPairs,
+  tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause,
+  unnamedRuleSurfaceChecks, unnamedRuleSurfaceLogLine, unsettledResolutionClaims,
+  verifierSchemaWithChecks,
+  unconsumedResolutions,
+  UNCONSUMED_CARRY_WARN,
 } from './helpers.mjs'
 import {
   BUILD_SCHEMAS, JUDGE_SCHEMA, PACKAGE_RECORD_SCHEMA, PERSIST_SCHEMA,
   PREFLIGHT_SCHEMA, RECONCILE_SCHEMA, REFS_SCHEMA, VERIFIER_SCHEMA,
+  // Round 17b — the two unconsumed-source tags moved to `schemas.mjs` with the other shared contract
+  // literals, to break the `helpers <-> schemas` cycle the ENG-95930 merge created. See that file.
+  // Only the DISPATCH tag is READ in this module — the per-unit clear in `reportResolutionAccounting` scopes on
+  // it. The verifier tag is applied by `resolutionContradictions` in `helpers.mjs` and reaches this file only as
+  // `c.source`, so naming it here bought an unused binding (S1128). It is still named in the comments below,
+  // which is where the invariant about it belongs.
+  UNCONSUMED_FROM_DISPATCH,
 } from './schemas.mjs'
 
 export { normalizeInput, resolveEngineCli, resolveSkillsRoot } from './context.mjs'
@@ -198,6 +216,33 @@ export function* run(rawInput, io = {}, opts = {}) {
   // because `applyReboundOrphan` appends to it and the carry persists whatever it holds; declared here for the same
   // reason `standWrites` is — every `runReturn` reads it.
   let orphanedPages = []
+// ENG-95503 — ANSWERS THAT REACHED A BUILD AND PRODUCED NOTHING: `{ unit, id, kind, item, answer, why }`. The run's
+// standing report of the failure this ticket is about, and the one thing that keeps it from being silent: an entry
+// here makes the run NOT `complete`, exactly like a park does. It is NOT a `--verify` row and never becomes one —
+// an answer closes no row, and this only refuses to call a run finished while an answer it was given went nowhere.
+// DECLARED HERE, with `standWrites` and `orphanedPages`, and for the identical reason: `runReturn` reads it and is
+// reachable from the earliest stop in the script, so a declaration down with the round state is a temporal-dead-zone
+// throw on exactly the run that stops first.
+let unconsumed = []
+// The running record of what the verifier has SETTLED per answer, for the vague-verifier signal. Declared HERE,
+// beside `unconsumed`, rather than next to the round-loop state it is written from: `runReturn` reads it,
+// `runReturn` is defined above that state, and every early return (a hard stop, `reconcile-failed`, the
+// prologue) calls it before the round loop exists. Declared late it was a TDZ throw on all four modes of the
+// run's own prologue — the same class as the missing-import defect this PR opened with, from the other side.
+// PER-INVOCATION ONLY, AND DELIBERATELY SO (PR #128 review, round 18). Every sibling round-crossing field on this
+// channel -- `unconsumed`, `resolutionsReopened`, `resolutionsPending`, `blockedItems` -- rides `carryNow()` and is
+// re-seeded on resume, and a reader who assumed parity here would be right to: this one does NOT, and resets to an
+// empty Map on every fresh `run()`. A build that stops after several `unknown` rounds and resumes reports the
+// unsettled count as if verification had just started.
+// WHY IT IS NOT CARRIED, measured rather than asserted: re-seeding means the value comes back through Reconcile's
+// answer, i.e. a new REQUIRED key on `RECONCILE_SCHEMA`. That schema serialises to 3820 bytes against a stated
+// budget of 3900 and the host's HARD 4096-byte classifier cap -- 80 bytes of headroom, and a required key costs
+// double because it appears in `properties` AND in `required`. It does not fit, and a schema over the cap is a
+// phase that cannot start at all (ENG-95930), which is a strictly worse failure than a diagnostic that restarts.
+// THE COST IS BOUNDED because this signal is NON-GATING: `unsettledResolutionClaims` feeds operator-facing text
+// only, never the `complete` decision, so a reset loses accumulated evidence and never changes a build verdict.
+// An operator reading a resumed run should treat the unsettled count as "since this process started".
+let resolutionCheckTally = new Map()
 
   // ---------------------------------------------------------------------------
 
@@ -219,6 +264,16 @@ export function* run(rawInput, io = {}, opts = {}) {
       // Answers recorded there that matched NO question this plan asks. Reported on EVERY return, because an inert
       // answer is silent by nature: the run behaves exactly as if the operator had never recorded it.
       resolutionsUnmatched: state?.resolutionsUnmatched || [],
+    // ENG-95503 — answers that DID match a question, reached the build, and produced nothing. The other half of the
+    // same silence: `resolutionsUnmatched` catches an answer that never reached a builder, this catches one that
+    // did. On every return, and never defaulted away — a caller reads one field to know whether an answer was lost.
+    unconsumedResolutions: unconsumed,
+    // PR #128 review round 17 — THE VAGUE-VERIFIER SIGNAL. A verifier that lands every check on `unknown` files no
+    // contradiction and no unconsumed row, so the original defect shape reproduces through a channel that looks
+    // compliant. NON-GATING on purpose (`unknown` is a legitimate answer and honest uncertainty must not fail a run)
+    // — reported so an operator can see a verifier that never settles anything, which nothing but a human reading the
+    // report could catch before.
+    unsettledResolutionClaims: unsettledResolutionClaims(resolutionCheckTally),
       complete: false,
       skipped: false,
       reason: null,
@@ -339,6 +394,37 @@ export function* run(rawInput, io = {}, opts = {}) {
     if (carry.proposals.length || carry.blocked.length || carry.discrepancies.length) {
       out.push(`\nALSO PERSIST these lists, verbatim — each already INCLUDES whatever the file held when this run read it, so write them as given:\n- \`proposals\`: ${j(carry.proposals)}\n- \`blocked\`: ${j(carry.blocked)}\n- \`discrepancies\`: ${j(carry.discrepancies)}\nA plan deviation, a blocker or a builder-vs-stand disagreement that lives only in a process is lost to the first usage limit; these are the run's answer to the caller.`)
     }
+      // ENG-95503 / PR #128 review -- ITS OWN BLOCK, and written even when EMPTY, unlike every list above. An emptied
+      // list is load-bearing here: it is how a resumed run learns the last session's unconsumed answer was finally
+      // built. Folding it into the conditional above would leave the file holding a stale non-empty list for ever,
+      // which holds a FINISHED folder open -- the opposite failure and just as silent.
+      // PR #128 review (round 8) -- AN OVERSIZED CARRY IS REPORTED, NOT TRIMMED. The review asked for a ceiling on
+      // this block. It cannot be a silent one: this text is the PERSIST INSTRUCTION, not a display, so rendering a
+      // subset makes the writer persist a subset and the omitted rows leave the folder for ever -- trading a context
+      // cost for the exact silent loss this ticket exists to end. `id` cannot be capped either: it is the match key
+      // the operator's `resolutions.json`, the published preflight row and the verifier's echoed `resolutionChecks`
+      // all compare byte for byte. What is left is to make the growth VISIBLE, so it is an operator-facing fact
+      // instead of a slowly-rising bill nobody is told about. The real fix is to bound `item` where the id is
+      // composed, which changes the published id contract and belongs in its own change.
+      // MEASURED WITH `encodedAsciiBytes` (PR #128 review, round 19), like the ceiling it warns about. `.length`
+      // counted UTF-16 units against a byte budget, so on a Cyrillic stand the warning fired at a sixth of the real
+      // cost -- silent right up to the size fault that stops the run.
+      const unconsumedBytes = encodedAsciiBytes(j(carry.unconsumed))
+      if (unconsumedBytes > UNCONSUMED_CARRY_WARN) {
+        log(`the unconsumed-answer carry is ${unconsumedBytes} bytes across ${(carry.unconsumed || []).length} entr(ies) and is re-sent every round — nothing is dropped, but each of these answers must be built or withdrawn to stop paying for it`)
+      }
+      out.push(`\nUNCONSUMED OPERATOR ANSWERS — persist under the ROOT key \`unconsumedResolutions\`, copying the JSON EXACTLY, and write it EVEN WHEN IT IS \`[]\`: ${j(carry.unconsumed)}\nEach row is an answer that reached a build agent and produced no build action; \`[]\` means every answer this folder was given has now been built or withdrawn. RETURN \`unconsumedWritten\` = \`{unit, id}\` for every row you wrote, copying BOTH fields from the row -- the PAIR, not the id alone: one id can appear under two different units, and an id-only report confirms the wrong row. This is the ONLY persisted trace of a builder that DECLINED an answer cleanly — a clean decline files no \`blocked\` row and no \`discrepancies\` row — so dropping it is what let the NEXT run report this folder complete over an answer that went nowhere.`,
+      // ONE `push` FOR BOTH BLOCKS (S7778). They are unconditional neighbours in the same list and `out` is joined
+      // at the end, so two calls and one two-argument call produce the identical array — the comment below stays
+      // attached to the block it explains rather than being hoisted away from it.
+      // PR #128 review (N2) — THE ANSWER-CHANNEL REPAIR GRANTS RIDE THE CARRY TOO. The grant markers used to be derived
+      // from `unconsumedResolutions` on resume, but a transient build death (`!res`) files an unconsumed row WITHOUT
+      // spending the grant, so the derivation over-marked those units and denied them their one repair round. Persisted
+      // directly, the fact is exact: `resolutionsReopened` = the `(unit, id)` PAIRS that HAVE spent their one round (never re-grant them),
+      // `resolutionsPending` ⊆ it = the subset still owed that round's dispatch (keep them open until it runs). Written
+      // EVEN WHEN `[]`, for the same reason the list above is — an emptied set is how a resumed run learns a grant was
+      // finally consumed, and a stale non-empty one would strand a settled unit.
+      `\nANSWER-CHANNEL REPAIR GRANTS — persist under the ROOT keys \`resolutionsReopened\` and \`resolutionsPending\`, copying each array EXACTLY and writing it EVEN WHEN \`[]\`: reopened ${j(carry.resolutionsReopened)}, pending ${j(carry.resolutionsPending)}. These are process bookkeeping, not operator content — do NOT judge, filter or tidy them. \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, not every unit: two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question. A dropped entry re-grants a spent round on the next resume. \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch; a dropped entry strands a unit that was owed its repair.`)
     if (carry.preflightEvidence && Object.keys(carry.preflightEvidence).length) {
       out.push(`\nPREFLIGHT EVIDENCE — merge these id/value pairs into \`${BUILT_FILE}.evidence\` exactly. A DIFFERENT FILE from the queue merge above, so it needs its own answer: RETURN \`evidenceWritten\` = every id you actually merged there. \`queueWritten\` says nothing about this write, and this run drops exactly the ids you name — one you file but do not report is re-sent to the next writer (harmless, the merge is idempotent); one you report but do not file is lost. A record object goes in as that object; the literal \`false\` goes in as \`false\`, NOT as \`{}\`. Keep existing evidence and judge entries that are already in the file:\n${j(carry.preflightEvidence)}`)
     }
@@ -384,6 +470,8 @@ DO SIX THINGS, in order:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
    - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
+   - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
+   - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
 
 4. REFRESH THE BUILT FILE AND RUN THE GATE.
@@ -429,6 +517,14 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
   let preflightEvidence = {}
   let parked = []                    // park RECORDS: { key, kind, rounds, parkedWhy, shortRows }
   let parkedSet = new Set()
+// The one repair attempt an unaccounted answer buys its unit, and the set that makes that terminate. Same shape and
+// the same reason as `findingsPending`, and deliberately a SEPARATE set: `findings` is the operator re-opening a unit
+// the gate called complete, and overloading it as the answers channel is the workaround this ticket exists to end.
+// A key is added when the build did not account for its answers, consumed on the next dispatch, and never re-added
+// for the same unit — so a builder that keeps failing the contract parks on the round budget instead of looping.
+const resolutionsPending = new Set()
+const resolutionsReopened = new Set()
+// The target-package state, seeded from Reconcile and updated by the app unit the moment the package really
   // The target-package state, seeded from Reconcile and updated by the app unit the moment the package really
   // exists. Held in this process as well as in the queue file because the app unit closes MID-round: the units
   // scheduled after it must see the new state without waiting for the next Reconcile, which is the whole reason
@@ -458,7 +554,7 @@ It validates the raw file and writes an equivalent ASCII-only encoding — every
     }
   }
   const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas,
-    dispatched: [...dispatched], continuations, preflightEvidence, standWrites })
+    dispatched: [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, resolutionsReopened: grantPairsToPersist(resolutionsReopened), resolutionsPending: [...resolutionsPending] })
 
   // RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later phase depends on
   // it, so a failure here costs the whole run. The budget covers three failures a second dispatch can clear: a host
@@ -946,6 +1042,35 @@ Return the schema. Nothing else.`
   blockedItems = [...(state.blocked || [])]
   discrepancies = [...(state.discrepancies || [])]
   pageSchemas = { ...state.pageSchemas }
+// ENG-95503 / PR #128 review -- AN UNCONSUMED ANSWER SURVIVES THE PROCESS THAT FOUND IT. It did not, and that made
+// AC5 hold for exactly one session: a well-formed `applied: false` + `why` -- the ticket's own `entity-filter` shape
+// -- leaves NO other persisted trace (an accounting miss leaves a `blocked` row and a contradiction leaves a
+// `discrepancies` row; a clean decline leaves neither), so on a re-run in the same folder `unconsumed` was `[]`, and
+// with a green engine gate the zero-work early return reported `complete: true` and the answer was silently dropped.
+// Which is the failure this whole ticket exists to end, arriving one session boundary later.
+// RECONCILED AS IT IS SEEDED, not merely copied: a persisted entry whose question the operator has since withdrawn,
+// or whose id a re-plan has shifted, must not come back from the dead and hold a finished folder open for ever.
+// FAILS CLOSED PER ENTRY on an under-reported item list (PR #128 review, N1 + finding 1): `preflightItems` is
+// agent-transcribed, and an omitted, empty OR PARTIAL list would leave the missing item's answer out of the owed set
+// and erase it into a `complete: true` over a lost answer. The reconcile now drops only an entry whose id is STILL
+// published (a genuine withdrawal keeps the ⚠ item with `resolution: null`); an id absent from the published set is
+// kept. No verifier this session yet, so the release set is empty.
+unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
+  owedResolutionPairs(state.preflightItems, state.unitKeys), new Set(), publishedResolutionIds(state.preflightItems))
+// THE ONCE-PER-UNIT REPAIR GRANT SURVIVES THE PROCESS TOO (PR #128 review, RC-8 + N2). `resolutionsReopened` is the ONLY
+// gate against re-granting a unit its single answer-channel repair round (`reportResolutionAccounting` returns early on
+// `.has(unit.key)`), and `resolutionsPending` ⊆ it is the subset still owed that round's dispatch. Both now RIDE THE
+// CARRY and are seeded straight from the queue, EXACTLY like `unconsumed`. The earlier RC-8 fix derived `reopened` from
+// the reconciled `unconsumed` instead — but the `!res` path files an unconsumed row WITHOUT spending the grant (RC-4),
+// so the derivation over-marked those units and denied them their one repair round (N2). Seeding the real persisted
+// sets makes the fact exact in both directions: no resume re-grants a spent round, and no transient death loses one.
+// PR #128 review (round 6) -- NORMALISED ON THE WAY IN, because these two Sets are seeded from the AGENT-WRITTEN
+// queue file. RC-13 called the id asymmetry latent "prevented only by convention"; for a UNIT key round-tripping
+// through a transcription the convention is weaker still, and the failure is worse than a missed dedup: a padded
+// `resolutionsReopened` entry misses `.has(unit.key)` and RE-GRANTS a repair round already spent, while a padded
+// `resolutionsPending` entry never matches its `.delete(unit.key)` and forces its unit open for ever.
+for (const k of seedGrantPairs(state.resolutionsReopened)) resolutionsReopened.add(k)
+for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
 
   packageState = state.packageState || null
   let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity, state.sectionHost))
@@ -975,8 +1100,47 @@ Return the schema. Nothing else.`
     .sort((a, b) => a.localeCompare(b))
   // `isUnitOpen` is the SHARED openness predicate (pure block) — the same one the park arithmetic uses, so the
   // schedule and `parkableKeys` cannot disagree about what "open" means.
-  const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
-    isUnitOpenWithFindings(u, state.verify, state.reachabilityState, findingsPending, packageState))
+  // ENG-95503 — the answers channel re-opens a unit through the SAME predicate the findings channel does, and for the
+  // same reason: the engine gates on deliverables and has no row for "the answer you were handed produced nothing".
+  // Two sets, one union — kept separate at the source so `findings` stays exactly what it is (the operator re-opening
+  // a unit the gate called complete) rather than becoming the answer channel this ticket exists to replace.
+  // A REOPEN GRANT IS BOUNDED BY THE ROUND BUDGET — THE ANSWER CHANNEL'S, NOT THE FINDINGS ONE (PR #128 review,
+  // round 17 Major 6, corrected in round 20 Major 1). The two openness notions disagreed on purpose — `openNow()`
+  // admits a unit a reopen key holds open, while `parkableKeys` filters on `isUnitOpen`, which for a page the gate
+  // calls green is `false`. So a gate-green unit held open ONLY by a reopen key was admitted to every round and was
+  // a park candidate in none of them, and `driveRounds` is `while (true)` with no global cap. Since the answer
+  // channel's grant is released at DISPATCH (correctly — a builder that died must not be charged for its repair
+  // round) AND RE-ADDED by `reportResolutionAccounting`, a build agent returning `null` DETERMINISTICALLY left the
+  // key set for ever: one full Build + Verify + Judge + Reconcile round per iteration, on a unit the gate already
+  // calls complete, until the host's own limits stopped it.
+  // Released rather than parked: parking would take the findings channel's ONE extra dispatch away from a unit that
+  // is already at the budget, which is a different feature's contract. Releasing the key ends the loop and leaves
+  // the answer in `unconsumed`, so it is still reported to the operator — the fail-closed direction this channel
+  // takes everywhere else. `chargeBuildAttempt` runs on the `!res` path too, so the count that bounds this always
+  // advances and termination does not depend on the builder cooperating.
+  // `findingsPending` IS EXEMPT, and round 17 wrongly folded it in: it is seeded ONCE and never re-added, so it
+  // cannot produce the loop the cap exists for — while capping it silently dropped an operator finding filed against
+  // a unit that had already spent its rounds. The reasoning and the truth table live in `reopenKeySet`, which is
+  // pure and executed by the offline suite; this closure only supplies the budget predicate and the once-per-key log.
+  const exhaustedReopen = new Set()
+  const reopenKeys = () => {
+    const { keys, exhausted } = reopenKeySet(findingsPending, resolutionsPending,
+      (k) => roundsRun(state.roundOf, localRounds, k) >= MAX_ROUNDS)
+    for (const k of exhausted) {
+      if (exhaustedReopen.has(k)) continue
+      exhaustedReopen.add(k)
+      log(`\`${k}\` has spent its ${MAX_ROUNDS}-round budget — its reopen grant no longer forces the unit open. Anything still unaccounted for is reported rather than retried.`)
+    }
+    return keys
+  }
+  // PR #128 review (round 6) -- the union is built ONCE PER CALL, not once per schedule element. It is still rebuilt
+  // on EVERY `openNow()` because both Sets mutate between calls (a grant is spent, a contradiction files one), so it
+  // cannot be hoisted out of the function -- only out of the filter callback.
+  const openNow = () => {
+    const keys = reopenKeys()
+    return schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
+      isUnitOpenWithFindings(u, state.verify, state.reachabilityState, keys, packageState))
+  }
 
   const unitOf = (key) => schedule.find((u) => u.key === key) || { key, kind: 'page' }
 
@@ -1071,7 +1235,7 @@ Return the schema. Nothing else.`
   // inside the round and left to a LATER phase to write, so a kill during Build took the whole round's answer
   // with it. This fingerprint is what makes "is there anything unwritten?" a question with an answer, so the
   // round-close write below can run when there is something to write and be skipped when there is not.
-  const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites])
+  const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending]])
   let carryPersisted = carryFingerprint()
   function* persistPending(why) {
     const unpersistedParks = parked.filter((p) => !parksPersisted.has(p.key))
@@ -1101,6 +1265,31 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
       // Evidence FIRST, then the carry: both recompute the fingerprint, so settling the carry while unfiled records are
       // still in it would record them as durable. Only the ids this agent reported are dropped.
       markEvidenceFiled(persisted.evidenceWritten)
+      // ENG-95503 (PR #128 review, approving round, Minor 1) -- `unconsumedWritten` is DEMANDED, so it is READ.
+      // `written: true` says the agent wrote the file, not that it wrote THIS key: a multi-part merge that
+      // dropped `unconsumedResolutions` still returned `written: true`, and `markCarryPersisted()` then recorded
+      // the carry as durable over rows that never landed -- the same silent loss for the record whose entire
+      // purpose is surviving a resume. Reported ids are compared against what was handed over; a shortfall does
+      // not withhold the carry (the write DID happen, and re-sending it next round is harmless and idempotent),
+      // but it is named, because an operator reading a green close is otherwise told nothing.
+      // PAIR-KEYED (PR #128 review, round 16). `(unit, id)` is the identity of an unconsumed answer everywhere
+      // else in this channel, and it has to be here too: `resolutionOwner` hands a `list-*` answer to the list
+      // unit while one is published and to `main` while none is, so the SAME id can sit in the carry under TWO
+      // units -- `hasUnconsumedPair` deliberately keeps both. Keyed on the id alone, a writer confirming one of
+      // those rows cleared the warning for the other one too, which had never been confirmed written.
+      const owedWrite = unconsumed.map((u) => pairKey(u.unit, u.id))
+      // A writer that returns the OLD bare-string shape yields `pairKey(undefined, undefined)`, which matches
+      // nothing -- so it warns about every row rather than silently confirming one. Fail loud, not fail silent.
+      const confirmedWrite = new Set((persisted.unconsumedWritten || []).map((w) => pairKey(w?.unit, w?.id)))
+      const unconfirmedWrite = owedWrite.filter((k) => !confirmedWrite.has(k))
+      if (unconfirmedWrite.length) {
+        // Pair list rendered BEFORE the message, so no template nests inside a template (S4624). Same bytes out.
+        const unconfirmedPairs = unconfirmedWrite.map((k) => {
+          const p = pairParts(k)
+          return `${JSON.stringify(p.unit)}/${JSON.stringify(p.id)}`
+        }).join(', ')
+        log(`WARNING: the queue-file write confirmed, but did NOT report writing ${unconfirmedWrite.length} unconsumed-answer row(s): ${capCarryText(unconfirmedPairs)} — they are re-sent on the next close, and until one is confirmed a resume may not see it`)
+      }
       markCarryPersisted()
     }
     else log(`WARNING: the queue-file write did not confirm — ${unpersistedParks.length} park(s) and this round's proposals / blockers / discrepancies are in this return only; a resumed run will re-derive the parks from the round counters but the lists are lost`)
@@ -1132,14 +1321,28 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
   // they live beside it: a green gate with nothing open and a stand where everything is closed-or-parked are
   // different facts, and the operator has to be told which one they got.
   function zeroWorkReason() {
-    return state.verify?.complete === true
+    // PR #128 review (round 17) — THE HELD ANSWER IS NAMED IN THE REASON. Without the suffix this path reported
+    // "nothing to build" on a folder that is NOT finished: the gate is green, the page is genuinely built, and an
+    // answer the operator gave still produced nothing. `complete` was already correct here; the operator-facing
+    // sentence was the half that said the opposite of what the run had decided.
+    const held = unconsumed.length
+      ? ` — but ${unconsumed.length} operator answer(s) reached a build agent and produced NO build action, so this run is NOT complete`
+      : ''
+    return (state.verify?.complete === true
       ? 'the engine gate is already green on this stand and no unit is open — nothing to build'
-      : 'every published unit is either already closed on this stand or parked — nothing left this run can build'
+      : 'every published unit is either already closed on this stand or parked — nothing left this run can build') + held
   }
   function zeroWorkNext() {
-    return parked.length
-      ? `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
-      : `present ${VERIFY_TABLE} verbatim as the completion report`
+    // PR #128 review (round 17) — `unconsumedNextClause` IS APPENDED HERE TOO. It was on the terminal close only, so
+    // the one shape this scenario can take once the grant is spent — queue holds the row, `resolutionsPending` empty,
+    // `openNow()` empty, gate green — told the orchestrating agent to "present the completion report" while the run
+    // was holding an answer that went nowhere. `references/02-queue-and-built-files.md` promises the opposite.
+    // Three outcomes as three statements rather than a nested ternary (S3358). The ORDER carries the meaning: a
+    // park outranks a held answer, which outranks the clean report, so the strongest claim is assigned LAST.
+    let base = `present ${VERIFY_TABLE} verbatim as the completion report`
+    if (unconsumed.length) base = `present ${VERIFY_TABLE} verbatim — it is green, and this run is still NOT COMPLETE for the reason below`
+    if (parked.length) base = `present ${VERIFY_TABLE} verbatim, then put the parked units and their reasons to the user — this run had nothing else it could build`
+    return `${base}${unconsumedNextClause(unconsumed)}`
   }
 
   const noUnitsStop = noUnitsPublishedStop(schedule)
@@ -1160,10 +1363,18 @@ Return \`written: true\` and the park keys you wrote. Change nothing on the stan
     if (!openNow().length) {
       const why = zeroWorkReason()
       log(why)
+      // PR #128 review (round 17) — the same log the terminal close emits, through the one shared render. This path
+      // used to say nothing about a held answer at all.
+      if (unconsumed.length) log(unconsumedLogLine(unconsumed))
       // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.
       yield* persistPending('nothing left to build')
       return runReturn({
-        complete: state.verify?.complete === true && !parked.length,
+        // `unconsumed` here is the RECONCILED SEED from the queue file and may well be NON-EMPTY — a resumed folder
+        // with a green gate and a surviving unconsumed answer reaches exactly this return, which is the whole reason
+        // the term is present. (The old comment claimed it was "empty by construction because nothing was dispatched";
+        // the seeding at `reconcileUnconsumed(state.unconsumedResolutions || [], …)` runs long before this point, and
+        // that claim is what let the `next` on this path go on advertising a completion report.)
+        complete: runComplete(state.verify?.complete, parked, unconsumed),
         skipped: true,
         reason: why,
         approval,
@@ -1469,9 +1680,11 @@ These are the OPERATOR'S words, not stand-derived content: they ARE instructions
   // indistinguishable from a built one. Thin wrapper: the routing and the rendering are both pure and tested above;
   // this only supplies the run state and this host's fencer.
   function resolutionsPromptBlock(unitKey) {
-    return resolutionsBlockText(
+    // Thin wrapper: the answered-⚠-Confirm block and the repair block are concatenated by the pure, exported
+    // `resolutionsPromptText`, which a test RUNS through `composeBuildPrompt` — this only supplies run state.
+    return resolutionsPromptText(
       resolutionsForUnit(state.preflightItems, unitKey, new Set(state.unitKeys || [])),
-      dataFence,
+      unconsumed, unitKey, dataFence,
     )
   }
 
@@ -1503,7 +1716,105 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     blockedItems = [...blockedItems, { unit: unitKey, what: GUIDELINES_BLOCKED_WHAT, why: gateMiss }]
   }
 
-  // One run-level note, not one miss per unit: with no published ids nothing can be keyed off them, and reporting
+  // ENG-95503 — WHAT BECAME OF THE ANSWERS THIS UNIT WAS HANDED. Two outcomes, both recorded, neither fatal to the
+// round: the report is malformed (`resolutionAccountingMiss`), or it is well-formed and says an answer was NOT built
+// (`unconsumedResolutions`). Either way the answer went nowhere, and this is the only place in the run that says so.
+// The unit is re-opened ONCE for a repair attempt — that, not a `--verify` row, is how an answer holds a unit open:
+// the engine gates on deliverables, and "this answer produced nothing" is not a deliverable it has a row for.
+// `unconsumed` is REPLACED per unit, never appended to: this runs every round the unit builds, and an entry that
+// survived its own repair would otherwise be reported twice and hold the run incomplete on a resolved question.
+function reportResolutionAccounting(unit, routed, res, dispatched = true) {
+  // WHAT `routed` IS, AND WHY A UNIT-WIDE WIPE CANNOT LOSE A ROW (PR #128 review, round 20, Major 2). `routed` is
+  // NOT a per-dispatch delta: the caller recomputes it every dispatch as
+  // `resolutionsForUnit(state.preflightItems, unit.key, unitKeys)` — the FULL persisted answer set, filtered to the
+  // answers this unit owns. `preflightItems` is a REQUIRED key of `RECONCILE_SCHEMA`, so a round cannot arrive with
+  // it silently dropped. So for any answer still owed to this unit, `routed` carries it, the early return below is
+  // not reached, and `unconsumedResolutions(routed, res, unit.key)` re-adds the row the wipe just cleared.
+  // `routed` is empty for this unit ONLY when nothing is owed any more — a withdrawn answer, a `list-*` item
+  // re-routed to another unit by a newly published `list` key, an id a regenerated manifest shifted — which is
+  // exactly the state whose stale row must be cleared, and the reason this wipe was hoisted above the guard in the
+  // first place. A verifier-sourced row is NOT dispatch-sourced and is never touched here (see the `source` scoping
+  // below), so the higher-trust record survives regardless.
+  // HOISTED ABOVE THE GUARD (PR #128 review). This clear used to sit BELOW `if (!routed.length) return`, so the one
+  // condition that empties `routed` -- a withdrawn answer, a `list-*` item re-routed by a newly published `list` key,
+  // an id a regenerated manifest shifted -- was the one condition under which the unit's own entries could never be
+  // cleared. `resolutionsReopened` already held the key so no further round arrived either: the entry was immortal
+  // and `complete` was unreachable for that folder, with no operator action that helped.
+  // SCOPED TO DISPATCH-SOURCED ROWS, because a verifier-confirmed row must SURVIVE the next dispatch: this runs
+  // right after a builder returns, and a builder that says `applied: true` again must not be able to erase the
+  // independent read that disbelieved its last claim. `reconcileUnconsumed` clears those, after the verifier.
+  // PR #128 review (round 6) -- `idKey` ON BOTH SIDES, like every id comparison in this file. `u.unit` comes off the
+  // persisted, agent-transcribed `unconsumedResolutions`, so a padded key here means the clear silently never fires.
+  // FAILS CLOSED ON `source` (PR #128 review, round 9). This used to erase anything NOT spelled `verifier`, so an
+  // absent or mangled `source` on a rehydrated row -- the queue file is agent-transcribed -- silently became
+  // erasable, and the next builder's untrusted `applied: true` deleted the independent read that disbelieved its
+  // last claim. Only an EXACT `dispatch` is cleared now: an unrecognised source is held, which at worst keeps a
+  // settled row one round too long and at best preserves the record this whole mechanism is built to protect.
+  unconsumed = unconsumed.filter((u) => !(idKey(u.unit) === idKey(unit.key) && u.source === UNCONSUMED_FROM_DISPATCH))
+  if (!(routed || []).length) return
+  const miss = resolutionAccountingMiss(routed, res)
+  // NO BLOCKED ROW FOR A DISPATCH THAT NEVER RAN (PR #128 review, approving round, Minor 2). On the `!res` path
+  // `resolutionAccountingMiss(routed, null)` always yields a miss, so this filed a contract-breach row against a
+  // builder that never answered — and `blockedItems` is what the operator reads. Self-correcting on the next
+  // dispatch, but not when the round budget or a usage limit ends the run on that very round.
+  if (miss && dispatched) {
+    // DEDUPED ON `(unit, what)` (PR #128 review), exactly as `reportGuidelinesMiss` does it and for the reason that
+    // one states: "a row repeated each round is re-billed". `RESOLUTIONS_BLOCKED_WHAT` was introduced here so the
+    // report and any dedup would match on one literal, and then no dedup followed -- while `blockedItems` is
+    // persisted AND re-seeded, so the duplicates accumulated across every round and every resume.
+    if (blockedItems.some((b) => idKey(b.unit) === idKey(unit.key) && b.what === RESOLUTIONS_BLOCKED_WHAT)) {
+      // REFRESH THE PERSISTED REASON (PR #128 review, RC-5). The dedup above keeps ONE row per `(unit, what)`, but the
+      // specific unaccounted id can change between rounds — and `blockedItems` is persisted AND re-seeded, so a stale
+      // round-1 `why` would outlive the miss it named and mislead the operator across a resume. Rewrite it in place.
+      blockedItems = blockedItems.map((b) =>
+        (idKey(b.unit) === idKey(unit.key) && b.what === RESOLUTIONS_BLOCKED_WHAT && b.why !== miss) ? { ...b, why: miss } : b)
+      log(`answers NOT accounted for AGAIN on \`${unit.key}\`: ${miss}`)
+    } else {
+      log(`answers NOT accounted for on \`${unit.key}\`: ${miss}`)
+      blockedItems = [...blockedItems, { unit: unit.key, what: RESOLUTIONS_BLOCKED_WHAT, why: miss }]
+    }
+  }
+  // WHAT GATES vs WHAT IS ONLY SURFACED (PR #128 review, Minor 3). The `miss` above files a visibility-only `blocked`
+  // row — and one miss shape, an `applied: true` with no `how`, is DELIBERATELY not carried into `gone` below and so
+  // does not gate `complete` or buy a repair. `how` is the builder's PROSE about what it built; its absence is a
+  // report-quality signal, not proof the answer went nowhere. `unconsumedResolutions` (→ `gone`) filters `applied !==
+  // true`, so it holds exactly the answers that produced nothing — and the AUTHORITATIVE check on an `applied: true`
+  // is the read-only verifier's `resolutionChecks`, which is handed a claim row for the answer regardless of `how`.
+  // Gating on the prose would conflate a missing description with a lost answer AND block `complete` for ever on a
+  // rule-shaped answer whose effect the page body can never positively show — the immortality class finding 2 removed.
+  // DEDUPED AGAINST A SURVIVING VERIFIER ROW (PR #128 review, RC-9). The clear above drops only THIS unit's
+  // DISPATCH-sourced rows, so a verifier-confirmed contradiction for the same `(unit, id)` from an earlier round is
+  // still here — and it is the higher-trust record (an independent read of the page, not the builder's own word).
+  // Re-appending a dispatch row for that pair would carry TWO rows for one answer into the operator report and hold
+  // the run short of `complete` twice on one question. The verifier append site already dedups the other direction
+  // (line ~3780); this closes the dispatch→verifier direction the per-unit clear structurally cannot.
+  const gone = unconsumedResolutions(routed, res, unit.key)
+    .filter((g) => !hasUnconsumedPair(unconsumed, g.unit, g.id))
+  if (!gone.length) return
+  unconsumed = [...unconsumed, ...gone]
+  log(`${gone.length} answered ⚠ Confirm item(s) reached \`${unit.key}\` and produced NO build action: ${capCarryText(missIdList(gone.map((g) => g.id)))} — the run cannot report complete while that stands`)
+  // ONE re-open per ANSWER, not per unit (PR #128 review, round 7). The bound exists because a second round for
+  // THE SAME question is a loop -- the same builder, the same prompt, the same refusal -- and that argument is
+  // about the question, not the page. Keyed on the unit alone it also swallowed a DIFFERENT answer's first and
+  // only round: a unit that spent its grant declining answer A could never be re-opened for a verifier
+  // contradiction that landed later on answer B, and B's verifier-sourced row is releasable only by a fresh read
+  // that now never comes -- so `complete` was unreachable for that folder with no operator action that helped.
+  // The repair prompt is already per-answer (`unconsumedRepairText` renders THIS unit's entries), so a round
+  // bought by B genuinely says something a round bought by A did not. `MAX_ROUNDS` still bounds the total.
+  // NOT ON A BUILD THAT NEVER RAN (PR #128 review, RC-4). A `!res` dispatch — a transient death this file documents
+  // (`401 OAuth access token has expired`) — records the rows above for the report, but must NOT spend the answer's
+  // one repair grant: the builder never got its genuine first attempt. The unit stays open on the gate (a page that
+  // never built is never green), so it comes back next round, where a real miss then earns the reopen.
+  if (!dispatched) return
+  const ungranted = gone.filter((g) => !resolutionsReopened.has(pairKey(unit.key, g.id)))
+  if (!ungranted.length) return
+  for (const g of ungranted) resolutionsReopened.add(pairKey(unit.key, g.id))
+  resolutionsPending.add(idKey(unit.key))
+}
+// The `what` string for the blocked entry, a constant so the report and any dedup match on one literal.
+const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
+
+// One run-level note, not one miss per unit: with no published ids nothing can be keyed off them, and reporting
   // every page as owing an unpublished record would be the false negative this gate exists to remove.
   function logMissingEvidenceIds() {
     if (!(state.evidenceIds || []).length) log('no evidence ids were published this round — the UI-guidelines close row is inert; check that Reconcile returned `evidenceIds`')
@@ -1672,7 +1983,7 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
   }
 
   // ONE BUILDER'S CLAIM, assembled. Out of the dispatch loop so the loop carries none of these fallbacks (Sonar S3776).
-  function claimFor(unit, res) {
+  function claimFor(unit, res, routed) {
     return {
       unit: unit.key, kind: unit.kind,
       schemaName: res.schemaName || pageSchemas[unit.key] || null,
@@ -1680,6 +1991,9 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
       template: res.template || null,
       claimedBuilt: res.claimedBuilt || [],
       guidelines: res.guidelines || null,
+    // ENG-95503 — the answers this unit was handed, paired with what the builder says it did about each.
+    // The verifier is handed this and checks the PAGE against it; a claim is not evidence.
+    resolutionClaims: resolutionClaimRows(routed, res),
       // The close row's decision, computed ONCE and carried: the verifier instruction renders this and re-derives
       // nothing, so a returned id that failed validation is never handed on as a filing target.
       guidelinesMiss: guidelinesCloseMiss(unit, res, state.evidenceIds, earnedEvidenceIds()),
@@ -1747,6 +2061,10 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     // `roundOf` either — so the SAME unit comes back next round at the SAME `nth`. The journal replays by id, so two
     // items sharing one id would replay the second as the first's recorded answer. The continuations already spent on
     // this unit are the discriminator, and a unit that has never continued keeps exactly the id it always had.
+    // THE ANSWERS THIS DISPATCH HANDS OVER (ENG-95503). The SAME pure call `resolutionsPromptBlock` makes inside
+    // `buildPrompt`, on the same state, so the obligation the schema imposes and the questions the prompt asks
+    // cannot come apart — recomputing is deliberate, and cheaper than threading the list through the assembly.
+    const routed = resolutionsForUnit(state.preflightItems, unit.key, new Set(state.unitKeys || []))
     const continuationsSpent = continuations[unit.key] ?? 0
     const itemId = continuationsSpent ? `build.${unit.key}.r${nth}.c${continuationsSpent}` : `build.${unit.key}.r${nth}`
     const res = yield* dispatch(itemId, buildPrompt(unit, nth), {
@@ -1760,11 +2078,15 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
       // no page and must not be asked for one; the APP unit must return the package it produced; and `guidelines` is
       // required only of a page that OWES the record — an unfolded or reuse child publishes no quality-gates id, so
       // requiring it there would force the builder to fabricate the one thing it must copy.
-      schema: BUILD_SCHEMAS[buildSchemaKind(unit, state.evidenceIds)],
+      // `resolutionsApplied` is added on top for a unit that was handed answers, and only for one.
+      schema: buildSchemaWithResolutions(BUILD_SCHEMAS[buildSchemaKind(unit, state.evidenceIds)], routed.length),
     })
     if (!res) {
       chargeBuildAttempt(unit.key)
       log(`build agent returned nothing for ${unit.key} — it stays open`)
+      // A builder that answered nothing consumed nothing either. Recorded now rather than inferred later: the routed
+      // answers are in scope here and nowhere else, and an absent report is not a report of "no answers to apply".
+      reportResolutionAccounting(unit, routed, null, false)
       // An ABSENT claim is recorded as absent. Dropping the unit here would let the verifier read "this unit
       // claimed nothing" off a silence that actually means "the builder never answered" — two different facts.
       r.claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true, owesGuidelines: owesGuidelines(unit, state.evidenceIds) })
@@ -1776,8 +2098,16 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
     // The finding has now had its repair attempt. Consumed here, at dispatch, rather than after the verifier: the
     // machine verdict cannot confirm a fix it could not see the defect in, so waiting for it would never consume.
     if (findingsPending.delete(unit.key)) log(`operator finding for \`${unit.key}\` has had its repair round — it no longer forces the unit open`)
-    r.claims.push(claimFor(unit, res))
+    // The answer channel's repair attempt is spent HERE, at dispatch, for the same reason the findings one is: the
+    // machine verdict cannot confirm a consumption it has no row for, so waiting for it would never consume.
+    // BELOW the `!res` return, beside `findingsPending` (PR #128 review). It used to sit ABOVE it, between the
+    // dispatch and the guard, so a build agent that died returning `null` — a transient this file documents
+    // (`401 OAuth access token has expired`) — spent the answer's ONE repair attempt on a dispatch where no builder
+    // ever ran, and with a green gate no later round touched the unit again.
+    if (resolutionsPending.delete(idKey(unit.key))) log(`unaccounted answers on \`${unit.key}\` have had their repair round — they no longer force the unit open`)
+    r.claims.push(claimFor(unit, res, routed))
     reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
+    reportResolutionAccounting(unit, routed, res)
     if (unit.kind === 'app') applyAppUnitResult(unit, res)
     if (unit.kind === 'reach') applyWorkplaceBindings(unit, res)
     if (unit.kind === 'page') applyReboundOrphan(unit, res)
@@ -1877,7 +2207,10 @@ ${orphanBlock()}Then report \`discrepancies\`: where a builder CLAIMED a compone
 
 Do not build, repair or re-bind anything. If a page is wrong, the next round's build agent fixes it; you report.`,
       {
-        schema: VERIFIER_SCHEMA, phase: 'Verify', label: `verify:round-${round}`, role: 'verifier',
+        // ROUND 17 — `resolutionChecks` is REQUIRED on a round that handed out answers (Major 3). Computed from the
+        // SAME claims array the prompt renders from, so the obligation cannot drift from the question.
+        schema: verifierSchemaWithChecks(VERIFIER_SCHEMA, resolutionClaimCount(claims)),
+        phase: 'Verify', label: `verify:round-${round}`, role: 'verifier',
         inputFiles: [ctx.BUILT_FILE],
         // A DIFFERENT context from the one that built these pages — a builder filing its own evidence is grading its
         // own work. A host that cannot isolate the two is STOPPED rather than allowed to merge them.
@@ -2267,6 +2600,80 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     pendingJudgeIds.clear()   // whatever the judge skipped comes back as `unjudgedEvidenceIds` next reconcile
   }
 
+  // ENG-95503 / PR #128 review (round 20, Sonar S3776) — THREE FOLDS LIFTED OUT OF `oneRound`.
+  // `oneRound` had a cognitive complexity of 23 against the repo's pinned limit of 15, and the excess was three
+  // self-contained "fold what an agent just returned into run state" passes, each with its own nested branching.
+  // They are plain functions, not generators: none of them yields, which is exactly why they could be lifted at
+  // all — the round's dispatch sequence is untouched and still reads top-to-bottom in `oneRound`. They mutate the
+  // same closure state they always did (`discrepancies`, `unconsumed`, the two grant sets, `resolutionCheckTally`),
+  // so this is a move, not a rewrite: no call order, no condition and no rendered string changes.
+
+  // WHERE THE BUILDER'S "I APPLIED IT" MEETS THE VERIFIER'S READ OF THE PAGE.
+  function foldResolutionEvidence(claims) {
+    // ENG-95503 — THE INDEPENDENT CHECK ON "I APPLIED THE OPERATOR'S ANSWER". Run here for the same reason the
+    // self-check cross-check above is: this is where the READ-ONLY verifier's observation of the page it fetched is
+    // fresh, and a builder's `applied: true` is its own word until something that did not build the page looks. A
+    // contradiction makes the answer UNCONSUMED — the claim is not evidence the answer produced anything — so it is
+    // recorded, it holds the run short of `complete`, and it buys the unit the same one repair round.
+    resolutionCheckTally = tallyResolutionChecks(resolutionCheckTally, lastVerifier?.resolutionChecks)
+    for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
+      log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
+      // DEFENSE-IN-DEPTH, matching `resolutionClaimsLine` (PR #128 review, O3). `c.id` is stand-derived and `c.how` is
+      // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
+      // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
+      // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
+      // DEDUPED ON `(unit, id, kind)` (PR #128 review, round 19). `discrepancies` is re-seeded from the queue file
+      // and rendered into EVERY close prompt via `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention
+      // is deliberate (`helpers.mjs`: the historical row the `no` filed stays regardless). So a refutation repeated
+      // across rounds and across resumes appended a fresh ~900-byte row every time, all of them counted against
+      // `RECONCILE_ANSWER_MAX_BYTES`. Same fix, same reason, as the `blockedItems` `(unit, what)` dedup above: keep
+      // ONE row per refuted answer and REFRESH it in place, so the operator reads the CURRENT `found` rather than a
+      // stale round-1 one. The per-round history of a repeated refutation is already in the round logs and in
+      // `unconsumedResolutions`; what is lost here is presentational.
+      // `how` clause first, then a single-level claim string (S4624). Byte-identical to what it replaced, which
+      // matters here beyond tidiness: `claim` is the DEDUP KEY two lines down, so any drift in it re-appends.
+      const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
+      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+        claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
+      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
+        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
+      discrepancies = seenAt >= 0
+        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
+        : [...discrepancies, notApplied]
+      if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
+        // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
+        // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
+        // next dispatch's untrusted `applied: true` erased the independent read that recorded the contradiction, the
+        // exact erase this round's own `source`-scoping was added to prevent. `reconcileUnconsumed` also keys on it, so
+        // without the tag a verifier-confirmed row could never be retracted by a later `shows: "yes"` either.
+        unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
+      }
+      // PER `(unit, id)` (PR #128 review, round 7): keyed on the unit alone, a contradiction on answer B was denied
+      // its one round whenever answer A had already spent the unit's grant -- and a verifier-sourced row is released
+      // only by a fresh read, which a unit that is never re-scheduled never gets.
+      if (!resolutionsReopened.has(pairKey(c.unit, c.id))) { resolutionsReopened.add(pairKey(c.unit, c.id)); resolutionsPending.add(idKey(c.unit)) }
+    }
+  }
+
+  // THE ROWS THE NARROW `unknown` ESCAPE REFUSED, reported before the reconcile consumes the pre-reconcile list.
+  function reportUnnamedRuleSurface() {
+    // PR #128 review (round 18) -- SAY WHICH ROWS THE NARROW ESCAPE REFUSED, before the reconcile consumes the
+    // pre-reconcile list. A rule-shaped row whose `unknown` named no surface is held on a DIFFERENT ground from a
+    // row nobody verified, and the two used to be indistinguishable in the report. Read here because both halves —
+    // this round's checks and the rows as they stand before release — are in hand at exactly this point.
+    const unnamedSurface = unnamedRuleSurfaceChecks(lastVerifier?.resolutionChecks, unconsumed)
+    if (unnamedSurface.length) log(unnamedRuleSurfaceLogLine(unnamedSurface))
+  }
+
+  // WHERE A UNIT'S OWN IN-CONTEXT GATE DISAGREES WITH THE INDEPENDENT POST-HOC VERIFIER.
+  function foldSelfCheckMismatches(selfChecks) {
+    for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
+      const { label, claim } = selfCheckDiscrepancyText(m.kind)
+      log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
+      discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
+    }
+  }
+
   function* oneRound(open) {
       const { built: builtThisRound, claims, pausedAfter, continued, deferred, checkFirst,
         selfCheckShort, selfChecks } = yield* buildRound(open)
@@ -2316,6 +2723,28 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         yield* persistPending(`recording what round ${round}'s builders reported after verify`)
       }
       absorbVerifier(lastVerifier, builtThisRound, claims)
+
+      // MOVED ABOVE THE ROUND-CLOSE PERSIST (PR #128 review, round 19 Blocker). This block is the ONLY place the
+      // verifier's answer check becomes state -- `resolutionCheckTally`, the `resolution-not-applied` discrepancy, the
+      // unconsumed row and the `(unit, id)` repair grant -- and it used to run at the TAIL of the round, below every
+      // `persistPending` in it. A `--mode checkpoint` pause returns from `checkpointPauseReturn` with no persist of its
+      // own, so a verifier-refuted answer lived exactly one process: the next run seeded `unconsumedResolutions` from an
+      // absent key, `reopenKeys()` never re-opened the unit, and a green gate reported `complete: true` over the dropped
+      // answer -- AC5's founding incident restored by a process boundary. The three reads it needs (`claims`,
+      // `lastVerifier.resolutionChecks`, `unconsumed`) are all in hand HERE, so the round-close persist below now carries
+      // it, and so do the `reconcile-failed` / guarantee / plan-gap stops that follow. `reconcileUnconsumed` deliberately
+      // stays at the tail: it only REMOVES rows, it reads the post-Reconcile `state.preflightItems`, and holding a row
+      // one extra round is the fail-closed direction. This is the rule the comment below already states for the round's
+      // other decisions -- CLOSE THE ROUND ON DISK, before the next one starts.
+      foldResolutionEvidence(claims)
+      // AND NOW RECONCILE THE WHOLE SET, once, against what is still actually owed and what THIS verifier RELEASED
+      // (PR #128 review). The only place a verifier-sourced entry is cleared, and the only place an entry whose question
+      // has gone away is dropped -- both jobs the per-dispatch clear structurally could not do. FAILS CLOSED per entry on
+      // an under-reported item list (N1 + finding 1): an id absent from the published set is kept, not erased. And a
+      // verifier row is released by a FRESH non-refuting read this round -- `yes` OR `unknown` (finding 2): a rule-shaped
+      // answer whose effect the page body cannot show can only ever score `unknown` after its rebuild, so requiring a `yes`
+      // to clear it would block `complete` for ever once the unit went green and stopped being re-verified.
+      reportUnnamedRuleSurface()
 
       // CLOSE THE ROUND ON DISK, before the next one starts — the same rule the round counter already follows.
       // Everything this round learned (proposals, blockers, discrepancies, the Freedom schemas) is written now,
@@ -2377,11 +2806,10 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // self-report the independent verifier contradicts (claimed complete but the verifier finds it open; or the gate
       // never ran and the unit is still open) as a discrepancy — it changes no verdict (the post-hoc verifier still
       // governs), it removes the "nothing independently checks the gate ran" gap by recording where the two disagree.
-      for (const m of selfCheckMismatches(selfChecks, unitOf, state.verify, state.reachabilityState, packageState)) {
-        const { label, claim } = selfCheckDiscrepancyText(m.kind)
-        log(`in-context gate ${label}: \`${m.key}\` — ${claim}, but the INDEPENDENT post-hoc verifier finds the unit still OPEN. The self-report is not trusted; the post-hoc verifier governs and the unit stays open.`)
-        discrepancies = [...discrepancies, { round, unit: m.key, kind: m.kind, claim, found: 'the independent post-hoc verifier finds the unit still open' }]
-      }
+      foldSelfCheckMismatches(selfChecks)
+      unconsumed = reconcileUnconsumed(unconsumed,
+        owedResolutionPairs(state.preflightItems, state.unitKeys),
+        releasedResolutionPairs(lastVerifier?.resolutionChecks), publishedResolutionIds(state.preflightItems))
       // IN-CONTEXT PARKS FIRST (ENG-95469): a unit whose builder spent its one bounded fix and stayed short parks after
       // ONE round, with its own gate's open rows as the reason — before the round-budget park runs, so the same unit is
       // never double-parked and its reason names the bounded fix rather than a round count. Confirmed against the fresh
@@ -2475,16 +2903,33 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // loses the question. One short agent, and only when there is something unpersisted.
   yield* persistPending('closing the run')
 
-  // The closing line, as a function: the two sentences report different facts and neither is the verdict itself.
-  function completionLine(isComplete) {
-    return isComplete
-      ? `COMPLETE after ${round} round(s): the engine gate is green`
-      : `NOT COMPLETE after ${round} round(s): ${shortfallText(state.verify)} + ${state.verify?.unverified ?? '?'} unconfirmed · ${parked.length} parked unit(s)`
+  // ENG-95503 — an UNCONSUMED ANSWER blocks `complete` exactly as a park does. Not because it makes a deliverable
+  // short: the gate can be green and the page genuinely built, and an answer the operator gave can still have gone
+  // nowhere (a real run's `entity-filter` did). The whole point of the answers channel is that such an answer is never
+  // dropped in silence, and a run that reported itself finished while holding one would be that silence.
+  const complete = runComplete(state.verify?.complete, parked, unconsumed)
+  if (unconsumed.length) {
+    log(unconsumedLogLine(unconsumed))
   }
-  const complete = state.verify?.complete === true && parked.length === 0
-  log(completionLine(complete))
+  {
+    // The vague-verifier signal, logged as well as returned: an operator watching the run sees it without opening
+    // the return. Non-gating — this never changes `complete`.
+    const vague = unsettledResolutionClaims(resolutionCheckTally)
+    if (vague.length) {
+      // Pair list first, then the one-level message (S4624).
+      const vaguePairs = vague.map((v) => `${JSON.stringify(v.unit)}/${JSON.stringify(v.id)} (${v.unknownRounds}x)`).join(", ")
+      log(`WARNING: ${vague.length} answer claim(s) were never SETTLED by the verifier — it returned \`unknown\` on every round for ${capCarryText(vaguePairs)}. Neither confirmed nor refuted, so nothing was filed against them: check the page yourself before trusting the build.`)
+    }
+  }
 
-  // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it.
+  // The verdict is arithmetic over the engine's own numbers. No agent's closing sentence reaches it. ONE close-out
+  // line (PR #128 review): `completionLine` carries the unconsumed-answer count in its NOT COMPLETE branch, so there
+  // is no second, near-duplicate verdict `log` beside it; the detail list above names WHICH answers, not just a count.
+  log(completionLine(complete, {
+    round, missing: state.verify?.missing, buildMissing: state.verify?.buildMissing, unverified: state.verify?.unverified,
+    parkedCount: parked.length, unconsumedCount: unconsumed.length,
+  }))
+
   return runReturn({
     complete,
     rounds: round,
@@ -2507,6 +2952,6 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     planVersion: state.planVersion || null,
     next: complete
       ? `present ${VERIFY_TABLE} verbatim as the completion report — it is the only sanctioned close report`
-      : `present ${VERIFY_TABLE} verbatim (it names every unmet row), then put the parked units — each with its \`parkedWhy\` — and the proposals to the user; record their answers in the migration folder before re-running`,
+      : `present ${VERIFY_TABLE} verbatim (it names every unmet row), then put the parked units — each with its \`parkedWhy\` — and the proposals to the user; record their answers in the migration folder before re-running.${unconsumedNextClause(unconsumed)}`,
   })
 }

@@ -1,5 +1,34 @@
 // build-executor/schemas.mjs — the response contracts of the build run.
 //
+// ENG-95503 — the answers channel's design literals come from `helpers.mjs`: one declaration, read by the
+// record-time cap AND by the bounds below. The generator drops this import (helpers is inlined ahead of this
+// module); the module path, which Codex and the CLI use, needs it.
+// ENG-95503 / PR #128 review -- THE THREE THINGS A VERIFIER CAN SAY ABOUT AN ANSWER'S EFFECT, as literals rather
+// than a boolean plus a convention. `SHOWS_UNKNOWN` is the one this review added: "I read the page and it cannot
+// tell me" is not "the builder lied", and collapsing the two made a FALSE contradiction the expected outcome for
+// every answer whose effect is not in the page body. Literals because a live verifier echoes them back, so a copy
+// re-typed in a test would pass while the run compared against something else.
+// DECLARED ABOVE EVERY SCHEMA, deliberately: `VERIFIER_SCHEMA` builds its `shows` enum from these, and a `const`
+// read before its own declaration is a temporal-dead-zone THROW at module load -- the same class of defect the
+// prologue-execution tests exist for, and it takes the run out before its first agent.
+export const SHOWS_YES = 'yes'
+export const SHOWS_NO = 'no'
+export const SHOWS_UNKNOWN = 'unknown'
+// WHERE AN UNCONSUMED ENTRY CAME FROM. A dispatch-sourced row is the builder's own account of its own work and is
+// replaced whenever that unit builds again; a verifier-sourced row is the INDEPENDENT read that disbelieves such an
+// account, so a later dispatch must not be able to erase it. One literal, because the clear-scope and the tag have
+// to match and two copies of that rule drift.
+export const UNCONSUMED_FROM_VERIFIER = 'verifier'
+// The other half of the same two-value vocabulary, as a literal rather than a string typed at each site
+// (PR #128 review, round 9). The clear below keys on it EXACTLY, so a re-typed copy is a silent reclassification.
+export const UNCONSUMED_FROM_DISPATCH = 'dispatch'
+
+// A DESIGN LITERAL, declared here with `MAX_ROUNDS` and the `shows` vocabulary rather than beside
+// `capCarryText` in the pure block: `RECONCILE_SCHEMA` below reads it for its `maxLength` bounds and is
+// evaluated at module load, so a `const` in the block would be in its temporal dead zone. One literal,
+// read by the record-time cap AND by the schema that rejects an oversized value a writer sends back.
+export const CARRY_TEXT_CAP = 400
+//
 // Structured output everywhere a later phase or the core COMPUTES on the answer; prose only in fields a human
 // reads. A host without structured output cannot run this workflow at all, which is why `structuredOutput` is a
 // REQUIRED capability rather than a degradable one.
@@ -53,11 +82,20 @@ export const RECONCILE_SCHEMA = {
     // omitted it left the row inert — the gate silently off on the run that needs it. `evidenceFiled` and
     // `evidenceRejected` are required because the close row's overwrite guard reads them: absent, it cannot tell
     // an unfiled id from an earned one, and it then fails closed on every honest `ran: false`.
+    // `preflightItems` is REQUIRED (PR #128 review, N1): the two reconciles filter `unconsumed` against
+    // `owedResolutionPairs(state.preflightItems, …)`, and the routing helper on an `undefined` list returns `[]`
+    // rather than throwing — so an OMITTED list yields an empty owed set and silently ERASES every unconsumed
+    // answer, which then reports `complete: true` over a lost answer. `resolutionsReopened`/`resolutionsPending`
+    // are REQUIRED (N2) so a dropped repair-grant set cannot silently re-grant a spent round.
+    // `unconsumedResolutions` is REQUIRED (round 17) — the one field whose omission is DESTRUCTIVE rather than
+    // merely lossy, because its carry block is the one written EVEN WHEN EMPTY: an omitted key seeds `[]` and the
+    // next close persists that `[]` OVER the stored rows.
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
     // The empty-prefix flag is REQUIRED so it can never be silently dropped: `{ schemaNamePrefix: null }` alone is
     // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
     // CLI-enforced), never an empty prefix quietly decoding as unreadable and switching the identity gate off.
-    'schemaNamePrefixEmpty'],
+    'schemaNamePrefixEmpty',
+    'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
@@ -176,12 +214,19 @@ export const RECONCILE_SCHEMA = {
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
     reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
-    // `--units.preflight[]`, verbatim: `{ id, pageKey, kind, item, requires, resolution }`, `id`/`pageKey`
-    // required. `resolution` is THE OPERATOR'S ANSWER as the engine published it — `{ answer, decidedBy, date }`,
-    // or the literal `null` on an unanswered item. `null` is LEGAL and `RECONCILE_SHAPE` accepts it: an
-    // object-only rule pushes the agent to omit the field instead, and an omitted field cannot be told apart
-    // from an engine that publishes no answers at all.
+    // ENG-95930 (mode A) — `preflightItems` takes the compacted form like every other object array on this
+    // contract: the expanded per-property declaration is what pushed this schema past the host's 4096-byte
+    // classifier cap. Its insides are enforced by `RECONCILE_SHAPE.preflightItems` on arrival instead.
     preflightItems: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    // The two answer-channel repair-grant sets, read back off the queue file (PR #128 review, N2). Persisted
+    // directly rather than derived from `unconsumedResolutions`, because the `!res` path files an unconsumed row
+    // WITHOUT spending the grant, so the derivation mis-marked exactly those units and denied them their repair.
+    // `resolutionsReopened` is per `(unit, id)` and therefore an OBJECT array: the grant is per ANSWER, because the
+    // "a second round is a loop" bound is about the question, not the page. `resolutionsPending` stays a UNIT-key
+    // array — it feeds `reopenKeys()`, and what a round re-opens is a unit.
+    // COMPACTED for the ENG-95930 reason above; `RECONCILE_SHAPE` carries the required keys and the types.
+    resolutionsReopened: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    resolutionsPending: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
     // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
     // the operator believes is applied.
@@ -219,6 +264,17 @@ export const RECONCILE_SCHEMA = {
     blocked: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // Each `{ unit, claim, found, round }`, `unit`/`claim`/`found` required.
     discrepancies: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    // ENG-95503 / PR #128 review — ANSWERS AN EARLIER SESSION SAW REACH A BUILDER AND PRODUCE NOTHING. Read back
+    // for the same reason `blocked` and `discrepancies` are, and it matters MORE than either: a well-formed decline
+    // is the one outcome that leaves no row in either of those, so without this the record died with its process and
+    // a resumed run reported `complete: true` over a dropped answer.
+    // Each `{ unit, id, kind, answer, why, source }`, `unit`/`id`/`source` required — enforced by
+    // `RECONCILE_SHAPE.unconsumedResolutions`. `source` is typed but no longer ENUM-constrained here — see the note
+    // on that entry for why, and for what enforces it instead. `item` and `how` are deliberately NOT part of this
+    // contract: nothing in the
+    // run decides on them (`item` is recoverable from `id`, and a refuted builder's `how` is preserved in its
+    // `discrepancies` row), so they stay in the queue file rather than being transcribed back through an agent.
+    unconsumedResolutions: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
     // the run; trusting it silently builds a page nothing gates.
     staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
@@ -292,6 +348,21 @@ export const RECONCILE_SHAPE = {
   blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
   discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
     types: { unit: 'string', claim: 'string', found: 'string', round: 'integer' } },
+  // ENG-95503 — the answers channel's three round-trip fields. Their insides moved here with everyone else's when
+  // ENG-95930 compacted the schema; the required keys and types are unchanged.
+  // WHAT THIS TABLE CANNOT CARRY, stated rather than lost: `source` used to be a JSON Schema `enum` of the two
+  // tags, because it decides whether a row survives the next dispatch — as a free string, a transcription slip made
+  // a verifier-confirmed contradiction read as dispatch-sourced. The compacted form cannot express a per-property
+  // enum (`additionalProperties` applies one rule to every key), and this table's vocabulary is CLOSED to
+  // `kind`/`required`/`types`/`nested`/`map` — an invented `enums` key would be silently ignored, which is worse
+  // than no check because it reads as one. The constraint is instead enforced by FAIL-CLOSED behaviour at the
+  // reconcile: only the literal `UNCONSUMED_FROM_VERIFIER` opens the reasoned-`unknown` release, so a garbled tag
+  // means the row is RETAINED, never released on a claim nobody confirmed. Widening `SHAPE_TYPES` to carry enums is
+  // the real fix and is bigger than this merge.
+  // `item`/`how` are absent by design — see `RECONCILE_SCHEMA` above.
+  unconsumedResolutions: { kind: 'array', required: ['unit', 'id', 'source'],
+    types: { unit: 'string', id: 'string', kind: 'string', answer: 'string', why: 'string', source: 'string' } },
+  resolutionsReopened: { kind: 'array', required: ['unit', 'id'], types: { unit: 'string', id: 'string' } },
   // ENG-95930 (mode B) — COUNTS-ONLY. The central verify Reconcile carries used to nest each page's full `openRows`
   // prose (`deliverable`/`status`/`evidence` for every open row); on a fresh stand nothing is complete, so that was
   // ~21 KB the run's FIRST agent had to transcribe into ONE structured answer, which truncated at the host's ~20 KB
@@ -453,6 +524,25 @@ export const BUILD_PROPERTIES = {
       properties: { deviation: { type: 'string' }, why: { type: 'string' } },
     },
   },
+  // ENG-95503 — WHAT THE BUILDER DID WITH EACH ANSWER IT WAS HANDED. One row per ⚠ Confirm id this unit's prompt
+  // carried, and the script checks the SET of ids against what `resolutionsForUnit` routed here — never the wording,
+  // which it cannot judge. Delivery already worked (the answer reaches the prompt verbatim); a real run still lost a
+  // fully-specified `entity-filter` answer because nothing asked the builder what became of it. `applied: false` is a
+  // LEGAL outcome and needs `why`; what is not legal is silence, indistinguishable from an answer never read.
+  // NOT evidence, and not a substitute for one: this says what the builder DID, the verifier still reads the page.
+  resolutionsApplied: {
+    type: 'array',
+    items: {
+      type: 'object',
+      required: ['id', 'applied'],
+      properties: {
+        id: { type: 'string' },        // COPIED from the question handed to you, never composed
+        applied: { type: 'boolean' },
+        how: { type: 'string' },       // what you built because of it — the components / columns / filter you added
+        why: { type: 'string' },       // REQUIRED when `applied` is false: why the answer could not be built
+      },
+    },
+  },
   // WHAT A HUMAN SHOULD EXERCISE on this page, asked for only at a checkpoint. Sourced from the behaviour
   // card's ACCEPTANCE CRITERIA for each imperative row the builder ported — including the negative ones, which
   // are the half a quick look never covers. This is what turns "open it and see if it works" into a scripted
@@ -530,6 +620,36 @@ export const VERIFIER_SCHEMA = {
     schemasConfirmed: { type: 'object', additionalProperties: { type: 'string' } },
     reachabilityWritten: { type: 'object', additionalProperties: { type: 'string' } },
     evidenceWritten: { type: 'array', items: { type: 'string' } },   // evidence ids filed
+    // ENG-95503 — WHETHER THE PAGE SHOWS WHAT EACH OPERATOR ANSWER ASKED FOR. An OBSERVATION, not a verdict: the run
+    // compares it against the builder's own `applied` claim and records where the two disagree. Not required IN THIS
+    // STATIC BASE — a round with no answered items has nothing to report, and a verifier that could not fetch a page
+    // must not be forced to invent a row about it; an absent row reads as unconfirmed, which is what it is.
+    // IT IS REQUIRED ON A ROUND THAT HANDED OUT ANSWERS, and the obligation is ADDED rather than declared here:
+    // `verifierSchemaWithChecks(VERIFIER_SCHEMA, resolutionClaimCount(claims))` (helpers.mjs) appends it to
+    // `required` for exactly those dispatches. That is what `references/02-queue-and-built-files.md` describes when
+    // it says the verifier returns `resolutionChecks` for the answers it was handed — the doc and this comment are
+    // about the two halves of one conditional, not in conflict.
+    resolutionChecks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['unit', 'id', 'shows'],
+        // THREE STATES, NOT TWO (PR #128 review). `shows` was a BOOLEAN and the verifier was told that an effect it
+        // could not determine was `false`, while every `false` was read as "the builder lied". So an honest builder
+        // plus an honest "I cannot tell from here" produced a contradiction that is not one -- and this ticket's own
+        // new `lookup-value` id is the systematic case, because its effect lands in `BusinessRule_*` schemas that are
+        // invisible to `viewConfig`. `unknown` is that state, and it reads exactly like an absent row.
+        // `found` is CAPPED like every other agent-authored free-text field that can ride into another agent's
+        // prompt (`unconsumedResolutions.item/answer/why/how` above). `reconcileUnconsumed`/`resolutionContradictions`
+        // already run it through `capCarryText` at record time, but that binds only what this process records --
+        // the SCHEMA is what bounds the verifier's own output before any of that runs. An uncapped declaration
+        // here is the same gap earlier rounds closed on the sibling fields, left open on the one that carries a
+        // page-read description into the repair prompt.
+        properties: { unit: { type: 'string' }, id: { type: 'string' },
+          shows: { type: 'string', enum: [SHOWS_YES, SHOWS_NO, SHOWS_UNKNOWN] },
+          found: { type: 'string', maxLength: CARRY_TEXT_CAP } },
+      },
+    },
     // Where the builder's claim and the stand disagree. Kept, not reconciled.
     discrepancies: {
       type: 'array',
@@ -571,6 +691,17 @@ export const PERSIST_SCHEMA = {
     written: { type: 'boolean' },
     parkedKeys: { type: 'array', items: { type: 'string' } },
     evidenceWritten: { type: 'array', items: { type: 'string' } },   // preflight evidence ids merged into the built file
+    // ENG-95503 / PR #128 review -- the ids actually persisted for `unconsumedResolutions`. Reported for the same
+    // reason `evidenceWritten` is: this list is the ONLY record of a well-formed `applied: false`, and a write
+    // nobody confirmed is exactly how it went missing across a resume.
+    // PR #128 review (round 16) -- `{unit, id}` PAIRS, not bare ids. The pair is the identity of an unconsumed
+    // answer everywhere else in this channel (`pairKey`, `hasUnconsumedPair`, `resolutionsReopened`), and for a
+    // reason: `resolutionOwner` routes a `list-*` answer to the list unit when one is published and to `main`
+    // when none is, so ONE id can sit in the carry under TWO units across rounds. Reported as bare ids, a writer
+    // confirming one unit's row silenced the warning for the other unit's row as well -- the silent loss this
+    // channel exists to close, in the one check that was id-only.
+    unconsumedWritten: { type: 'array', items: { type: 'object', required: ['unit', 'id'],
+      properties: { unit: { type: 'string' }, id: { type: 'string' } } } },
     notes: { type: 'string' },
   },
 }
