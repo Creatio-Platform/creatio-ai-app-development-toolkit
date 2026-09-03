@@ -116,3 +116,44 @@ listed word is `unrecognised`, which stops.
 **Migration path.** A caller or driving skill that records `"go"` — which is what every document
 and every stop has always prescribed — is unaffected. One that recorded free text must now record
 one of the listed words; the stop names them.
+
+## DR-4 (ENG-96204) — the round-boundary stop reports open COUNTS and a pointer, never the open rows
+
+**Status:** accepted, shipped in ENG-96204.
+
+**The change.** The stop's `openRanked` field is gone, and with it the ranked row table that
+`run-status.md` inlined. The stop now returns `openCounts` — one entry per still-open unit with its
+`missing` / `unverified` tallies (or a one-line `why` for a unit whose deliverable is a package or a
+configuration record rather than a verified page), plus `unitsOpen`, `open` and the severity tally
+`correctness` / `fidelity` / `unstamped` — and both the return and the status document POINT at
+`verify.md` and `verify.json`, where the engine stamps every open row with `rowSeverity`. The
+helpers that served the old payload (`rankOpenItems`, `openItemsFor`) were removed rather than left
+unused.
+
+**Why.** ENG-95930 had already decided this about this exact boundary: the central verify Reconcile
+transcribes the counts-only `verify-summary.json`, `VERIFY_RESULT` was deleted, and the whole answer
+is capped at `RECONCILE_ANSWER_MAX_BYTES` because per-row prose crossing the Reconcile → script
+boundary truncated a real run's first structured answer before it built anything. So
+`verify.pages[*]` carries counts and no `openRows` at all — `RECONCILE_SHAPE.verify` names none and
+the prompt forbids transcribing them. The row-carrying stop was therefore reading a field that
+structurally never arrives: on an ordinary run it reported an EMPTY open list, and on a large open
+set the answer that could have carried the rows is refused over the ceiling and the run dies
+`reconcile-failed` with nothing built and nothing reported. Counts plus a pointer is the shape
+ENG-95930 already applied to `parkWhy`, `parkRecord.shortRows` and `dryRunReport`.
+
+**What this costs.** AC 2 asked for open items *ranked by severity* at the stop. The stop now
+reports the severity tally rather than an ordered list, and the ordering is read one hop away, in
+the artifacts that hold the per-row stamp. The `unstamped` count is the honest reading for page
+rows: their band is in `verify.json` and is deliberately not re-derived here, because a second copy
+of the engine's fidelity discrimination is a second thing to drift.
+
+**What was rejected.** *Capping the rows instead of dropping them.* There is no cap at which per-row
+prose fits: the fixture that measured this is 40 open rows on one page, whose answer encodes to
+36,298 wire bytes against a 16,000-byte ceiling, and the cap the first cut applied was on the
+STATUS DOCUMENT — downstream of an answer that never arrives. *Publishing severity counts from the
+engine's `verifySummary`.* That is the clean long-term fix and it is an engine change; this rework
+deliberately left the engine half untouched.
+
+**Migration path.** A caller reading `openRanked` reads `openCounts` instead: `openCounts.open` for
+the total, `openCounts.units` for the per-unit numbers, and `verify.json` for the rows. `built`,
+`parked`, `remainingOpen`, `next` and `runStatusFile` are unchanged.

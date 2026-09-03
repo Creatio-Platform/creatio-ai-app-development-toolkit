@@ -51,7 +51,7 @@ migrations/<app-or-section-slug>/
   roadmap.md           # living execution tracker (status of every task)
   decisions.md         # decision and approval log (append-only; the plan approval lives here at BOTH scopes)
   resolutions.json     # the operator's ANSWERS — the ⚠ Confirm questions AND the run-level decisions, machine-read by the build
-  run-status.md        # engine-written: the CURRENT status at a round-boundary stop (overwritten each stop)
+  run-status.md        # engine-written: the CURRENT status at a round-boundary stop, counts + a pointer (overwritten each stop)
   worklog.md           # session log and runtime read-back evidence (append-only)
 ```
 
@@ -85,8 +85,11 @@ channel, no exceptions:** there is no second state file for either decision, and
 re-opens a unit the gate called complete, which is a different job.
 
 **`run-status.md` is ENGINE-WRITTEN, and it is the only one of these documents that is.** A round-boundary stop
-writes it: what was built, the open rows ranked correctness-first, the parked units with their reasons, and the one
-next step — every line computed from the gate's own numbers, never composed by an agent. It is the CURRENT status
+writes it: what was built, the open COUNTS per unit with the severity tally, the parked units with their reasons,
+the one next step, and a pointer to the verify artifacts — every line computed from the gate's own numbers, never
+composed by an agent. **It carries no open rows.** Those are in `verify.md` (the table) and `verify.json`, where
+every open row is stamped `rowSeverity` correctness-first; the stop reports how many are open and sends you there,
+because per-row prose cannot cross the capped Reconcile boundary the build's own numbers travel on. It is the CURRENT status
 and is overwritten at each stop; the history stays in `worklog.md`. Do not hand-edit it, and do not treat its
 absence as a failed run: a run that never stopped at a round boundary never writes it.
 

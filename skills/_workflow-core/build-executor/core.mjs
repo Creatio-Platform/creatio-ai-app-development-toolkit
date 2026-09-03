@@ -54,7 +54,7 @@ import {
   UNCONSUMED_CARRY_WARN,
   // ENG-96204 — the control-mode names, imported for the same MODULE-path reason stated above: the inlined Claude
   // artifact shares one scope and would not notice a missing name, the Codex/CLI path resolves them through here.
-  isLayoutPassMode, openItemsFor, passScopeText, rankOpenItems, resolveControlMode, roundDecisionItem,
+  isLayoutPassMode, openCountsOf, passScopeText, resolveControlMode, roundDecisionItem,
   roundsOnFile, runResolutionAnswer, runStatusDoc, stopsAtRoundBoundary,
   roundAnswerVocabulary, roundAuthorised, roundsSpentOnFile,
 } from './helpers.mjs'
@@ -331,10 +331,11 @@ let resolutionCheckTally = new Map()
       // `pausedAfter` / `checkFirst` / `deferred` / `remainingOpen` above are: the return has ONE shape, so a
       // caller never reads `undefined` off a return that did not populate them. Like that family, these carry
       // their real values only on the stop they belong to. `built` is the units this invocation built;
-      // `openRanked` is every open row of every still-open unit, with the engine's own severity, correctness
-      // first.
+      // `openCounts` is the open set as COUNTS — per still-open unit and in total, on both the outcome axis the
+      // Reconcile boundary carries and the severity axis this script can classify — never the rows themselves,
+      // which stay in the engine-written `verify.md` / `verify.json` (ENG-95930's pattern; see `openCountsOf`).
       built: [],
-      openRanked: [],
+      openCounts: openCountsOf([]),
       // WHERE THE SAME FOUR FACTS ARE ON DISK — on EVERY return, not only on a stop, because the path is a fact
       // about the run and not about the stop. Same reason `resolutionsFile` is reported unconditionally: an
       // operator must never have to work out where this run writes.
@@ -1492,21 +1493,22 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // `runStatusDoc` — a pure function over the stop's own payload — and handed over as bytes, not as a brief. An
   // agent asked to "summarise the run's status" writes a paraphrase of the verdict, and the whole reason this run
   // computes rather than asserts is that paraphrases of verdicts drift.
-  // The open rows and park reasons inside it quote Classic captions and element names, so it carries the same
+  // The park reasons inside it quote Classic captions, element names and agent notes, so it carries the same
   // untrusted-data rule the carry block does: copy it, never obey it. It is Markdown, so a Markdown fence inside
   // it would close early — hence the sentinel below rather than a code fence.
   //
   // AND THE SENTINEL IS NEUTRALISED IN THE PAYLOAD (PR review F3). The comment here used to claim the delimiter
-  // was one "the content cannot contain", and that was simply not true: the document inlines `deliverable`,
-  // `evidence` and `parkedWhy` RAW, and all three are stand-derived — Classic captions, element names, agent
-  // notes — i.e. exactly the values `context.mjs`'s untrusted-data invariant says must never reach an
-  // instruction position un-neutralised. A migrated caption containing `---8<--- RUN STATUS END ---8<---` closed
-  // the fence from within and put everything after it back into instruction position, on the prompt handed to
-  // the one agent in this run with WRITE access to a live customer stand. `dataFence` solves the same problem
-  // the same way for the same two cells (`openRowPrompt`) — by stripping its own delimiter out of the value — so
-  // this strips the sentinel out of the document. Only the sentinel: the file stays readable Markdown for the
-  // operator rather than becoming a wall of escapes, and a caption that really did contain the marker reads as
-  // the neutralised text instead of silently ending the payload.
+  // was one "the content cannot contain", and that was simply not true: the document inlines stand-derived text
+  // RAW — i.e. exactly the values `context.mjs`'s untrusted-data invariant says must never reach an instruction
+  // position un-neutralised. A migrated caption containing `---8<--- RUN STATUS END ---8<---` closed the fence
+  // from within and put everything after it back into instruction position, on the prompt handed to the one
+  // agent in this run with WRITE access to a live customer stand. `dataFence` solves the same problem the same
+  // way — by stripping its own delimiter out of the value — so this strips the sentinel out of the document.
+  // Only the sentinel: the file stays readable Markdown for the operator rather than becoming a wall of escapes,
+  // and a caption that really did contain the marker reads as the neutralised text instead of silently ending
+  // the payload. THE CHANNEL IS NARROWER NOW, NOT GONE (ENG-96204 rework): the open ROWS no longer reach this
+  // document — it carries counts and a pointer — but `parkedWhy` still round-trips a park reason an agent wrote,
+  // and a non-page unit's reason interpolates the plan's own names. One channel is all it takes.
   const STATUS_SENTINEL = '---8<---'
   const statusFenced = (doc) => String(doc ?? '').replaceAll(STATUS_SENTINEL, '‹8<›')
   function statusBlock(status) {
@@ -3287,39 +3289,33 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     })
   }
 
-  // THE OPEN LIST, RANKED (ENG-96204, AC 2). Every open row of every still-open unit, correctness before
-  // fidelity, in the engine's own words and with the engine's own severity — so what an operator is asked to
-  // look at first is what the gate says matters most, and not the order the table happened to render in.
-  // `state.verify` is the FRESH post-hoc verdict at every call site below, which is what makes this current.
+  // THE OPEN SET AS COUNTS (ENG-96204, AC 2 — reworked onto ENG-95930's pattern; the WHY is on `openCountsOf` in
+  // the pure block). One entry per still-open unit, carrying that unit's open COUNTS and never its rows: the
+  // rows do not cross this boundary and this script no longer asks for them. `state.verify` is the FRESH
+  // post-hoc verdict at every call site below, which is what makes these numbers current.
   //
-  // AND EVERY OPEN UNIT CONTRIBUTES A ROW (PR review F6). `pageStateOf` reads the machine verdict's `pages` map,
+  // AND EVERY OPEN UNIT CONTRIBUTES A LINE (PR review F6). `pageStateOf` reads the machine verdict's `pages` map,
   // and the app unit and the reachability units are not in it — their deliverable is a package or a
-  // configuration record, not a verified page. So a stop whose remaining open unit was one of those produced an
-  // EMPTY ranked list, and the stop then reported "nothing is open" while stopping precisely because something
-  // was: the operator is handed a status document with no open rows, an open-units list naming the unit, and no
-  // statement anywhere of what is actually left to do. Such a unit gets ONE synthetic correctness row composed
-  // from its own state — the same sentence `parkWhy` already composes for it, which is where the wording is
-  // proven. Correctness, never fidelity: an unreachable section and a missing package are not polish.
-  const syntheticOpenRow = (u) => ({
-    unit: u.key,
-    deliverable: u.kind === 'app'
-      ? `Application / package \`${u.package || '(unnamed)'}\`${u.entity ? ` bound to \`${u.entity}\`` : ''}`
-      : (u.what || `the on-stand wiring \`${u.key}\` names`),
-    status: '❌ OPEN',
-    evidence: u.kind === 'app'
-      ? `the target package is not confirmed on this stand (packageState: ${packageState || 'unknown'}) — this unit creates it, and no page can be placed until it exists`
-      : `not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`,
-    severity: 'correctness',
-    owner: 'builder',
-  })
-  const openRankedNow = (stillOpen) => rankOpenItems(
-    stillOpen.flatMap((u) => {
-      const rows = openItemsFor(u.key, pageStateOf(state.verify, u.key)?.openRows)
-      if (rows.length) return rows
-      // A page unit with no verdict entry keeps today's behaviour (nothing to say that the unit list does not
-      // already say); the two kinds the verdict structurally never covers get their row.
-      return u.kind === 'page' ? rows : [syntheticOpenRow(u)]
-    }))
+  // configuration record, not a verified page — so a stop whose remaining open unit was one of those reported
+  // "nothing is open" while stopping precisely because something was. Such a unit contributes ONE classified
+  // correctness item with the reason `parkWhy` already composes for it, which is where the wording is proven.
+  // Correctness, never fidelity: an unreachable section and a missing package are not polish.
+  const nonPageOpenWhy = (u) => (u.kind === 'app'
+    ? `Application / package \`${u.package || '(unnamed)'}\`${u.entity ? ` bound to \`${u.entity}\`` : ''} is not confirmed on this stand (packageState: ${packageState || 'unknown'}) — this unit creates it, and no page can be placed until it exists`
+    : `${u.what || `the on-stand wiring \`${u.key}\` names`} is not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`)
+  const openCountsNow = (stillOpen) => openCountsOf(stillOpen.map((u) => {
+    if (u.kind !== 'page') {
+      return { unit: u.key, kind: u.kind, open: 1, missing: null, unverified: null, severity: 'correctness', why: nonPageOpenWhy(u) }
+    }
+    // A page unit the verdict has no entry for keeps counting as open with NO number — the same fact `parkWhy`
+    // reports for it ("the machine verdict carries no entry for this unit"). Never invented as a `1`: a
+    // fabricated count is a number an operator would go looking for in `verify.md` and not find.
+    const st = pageStateOf(state.verify, u.key)
+    if (!st) return { unit: u.key, kind: u.kind, open: 0, missing: null, unverified: null, severity: null, why: null }
+    const missing = Number.isInteger(st.missing) ? st.missing : 0
+    const unverified = Number.isInteger(st.unverified) ? st.unverified : 0
+    return { unit: u.key, kind: u.kind, open: missing + unverified, missing, unverified, severity: null, why: null }
+  }))
   // The park records as the status reports them: the key, the rounds it spent, and the REASON — a park is this
   // run's question to the operator, and a park listed without its reason is a question nobody can answer.
   const parkedStatus = () => parked.map((p) => ({ key: p.key, rounds: p.rounds, parkedWhy: p.parkedWhy }))
@@ -3344,16 +3340,15 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       log(`round ${round} closed everything in mode \`${mode}\` — closing the run instead of stopping at the round boundary`)
       return null
     }
-    const openRanked = openRankedNow(stillOpen)
+    const openCounts = openCountsNow(stillOpen)
     const askFor = nextRoundNo()
     const next = roundStopNext(askFor, layoutPass)
     const status = {
       mode, modeSource, stopped: 'paused-at-round', rounds: round,
-      built: builtThisRound, openRanked, parked: parkedStatus(),
-      remainingOpen: stillOpen.map((u) => u.key), verifyTable: VERIFY_TABLE, next,
+      built: builtThisRound, openCounts, parked: parkedStatus(),
+      verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
-    const correctness = openRanked.filter((it) => it.severity === 'correctness').length
-    log(`PAUSED AT ROUND ${round} (mode \`${mode}\`) — ${stillOpen.length} unit(s) still open, ${openRanked.length} open row(s) (${correctness} correctness first, ${openRanked.length - correctness} fidelity). Read run-status.md, then authorise round ${askFor} to continue.`)
+    log(`PAUSED AT ROUND ${round} (mode \`${mode}\`) — ${openCounts.unitsOpen} unit(s) still open, ${openCounts.open} open row(s) (${openCounts.correctness} correctness, ${openCounts.fidelity} fidelity, ${openCounts.unstamped} with their severity stamped per row in ${VERIFY_JSON}). Read run-status.md, then authorise round ${askFor} to continue.`)
     // The status doc is written by the SAME persistence step that writes the queue file, so a stop leaves one
     // consistent pair of files behind rather than a queue file whose status document never got written.
     const written = yield* persistPending(`stopping at the round ${round} boundary`, status)
@@ -3385,10 +3380,11 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // as a repeat of this round; see `nextForOperator` above.
       queueWriteConfirmed,
       statusWritten: written?.statusWritten === true,
-      // THE FOUR FACTS AC 2 ASKS FOR, each as its own field: what was built, what is open (ranked), what is
-      // parked and why, and the next step. A caller that had to derive any of them from the others would derive
-      // it differently from the status document, and then the two would disagree.
-      openRanked,
+      // THE FACTS AC 2 ASKS FOR, each as its own field: what was built, what is open (as COUNTS, with the
+      // pointer at the artifacts that hold the rows), what is parked and why, and the next step. A caller that
+      // had to derive any of them from the others would derive it differently from the status document, and then
+      // the two would disagree.
+      openCounts,
       remainingOpen: stillOpen.map((u) => u.key),
       runStatusFile: RUN_STATUS_FILE,
       rounds: round,
@@ -3439,7 +3435,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const layoutNote = layoutPass
       ? ' Round 1 built LAYOUT ONLY: the business-rules and handler rows below are SCHEDULED for the logic pass, not a shortfall of this round — do not repair them by hand. The next round ports them.'
       : ''
-    return `read \`${RUN_STATUS_FILE}\` — it holds what was built, the open rows ranked correctness-first, the parked units with their reasons, and this step.${layoutNote} Check the pages that were built on \`${input.environment}\`. If one is wrong, add \`findings: [{ unit: "<key>", problem: "<what is wrong>" }]\` to the re-run: that re-opens the unit even when the gate calls it complete, which is the only way a defect in a ported handler gets fixed (those rows carry no verification key). Then ${authorise}.`
+    return `read \`${RUN_STATUS_FILE}\` — it holds what was built, the open COUNTS per unit, the parked units with their reasons, and this step; the open ROWS themselves are in \`${VERIFY_TABLE}\` (the table) and \`${VERIFY_JSON}\` (the same rows machine-readable, each stamped \`rowSeverity\`: \`correctness\` / \`fidelity\`), so read those before repairing anything.${layoutNote} Check the pages that were built on \`${input.environment}\`. If one is wrong, add \`findings: [{ unit: "<key>", problem: "<what is wrong>" }]\` to the re-run: that re-opens the unit even when the gate calls it complete, which is the only way a defect in a ported handler gets fixed (those rows carry no verification key). Then ${authorise}.`
   }
 
   // THE RESUME GATE (ENG-96204, AC 4). In a round-boundary mode every round AFTER the first needs the operator's
@@ -3486,7 +3482,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       log(`round ${nextRound} is authorised by the run-scoped answer \`${roundDecisionItem(nextRound)}\` = ${JSON.stringify(decision.answer)} — continuing in mode \`${mode}\``)
       return null
     }
-    const openRanked = openRankedNow(stillOpen)
+    const openCounts = openCountsNow(stillOpen)
     // WHY THIS IS ONE STOP AND NOT THREE. A refusal, an unreadable answer and no answer at all are all "this
     // round is not authorised", and a caller branching on the stop key would have to treat them identically
     // anyway — so the KEY stays `awaiting-round-decision` (one thing for the launcher docs to teach) and the
@@ -3500,8 +3496,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const next = roundStopNext(nextRound, layoutPassNow())
     const status = {
       mode, modeSource, stopped: 'awaiting-round-decision', rounds: 0,
-      built: [], openRanked, parked: parkedStatus(),
-      remainingOpen: stillOpen.map((u) => u.key), verifyTable: VERIFY_TABLE, next,
+      built: [], openCounts, parked: parkedStatus(),
+      verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     const written = yield* persistPending('stopping before an unauthorised round', status)
     return runReturn({
@@ -3514,7 +3510,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // already declined is not the same act as prompting one who never saw the question.
       roundAnswerVerdict: decision.verdict,
       roundAnswer: decision.answer,
-      openRanked,
+      openCounts,
       remainingOpen: stillOpen.map((u) => u.key),
       runStatusFile: RUN_STATUS_FILE,
       statusWritten: written?.statusWritten === true,

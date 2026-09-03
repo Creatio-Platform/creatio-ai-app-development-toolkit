@@ -692,96 +692,111 @@ export function roundsSpentOnFile(state) {
   const declared = Number.isInteger(state?.roundsSpent) && state.roundsSpent > 0 ? state.roundsSpent : 0
   return Math.max(declared, roundsOnFile(state?.roundOf))
 }
-// EVERY CORRECTNESS ITEM BEFORE ANY FIDELITY ONE, and the engine's own order kept inside each band (ENG-96204,
-// AC 2). A STABLE sort, so two rows of one severity stay in table order and the ranked list still reads as the
-// table an operator has in front of them. The severity itself is the engine's (`rowSeverity`), never re-derived
-// here — and an item with no severity ranks as correctness, the same fail-loud default the engine applies.
-export function rankOpenItems(items) {
-  const band = (it) => (it?.severity === 'fidelity' ? 1 : 0)
-  return (items || []).map((it, i) => ({ it, i }))
-    .sort((a, b) => band(a.it) - band(b.it) || a.i - b.i)
-    .map((x) => x.it)
-}
-// ONE OPEN ITEM for the stop payload: the engine's own three cells, plus the unit it belongs to and the two axes
-// the engine already decided (who closes it, and whether it is worth closing first). Composed rather than passed
-// through whole so the payload carries no field a caller might mistake for a verdict of its own.
-export function openItemsFor(unitKey, openRows) {
-  return (openRows || []).map((r) => ({
-    unit: unitKey,
-    deliverable: r.deliverable,
-    status: r.status,
-    evidence: r.evidence,
-    severity: r.severity === 'fidelity' ? 'fidelity' : 'correctness',
-    owner: r.owner === 'verifier' ? 'verifier' : 'builder',
-    ...(r.id ? { id: r.id } : {}),
-  }))
+// THE OPEN SET AS COUNTS (ENG-96204, reworked onto ENG-95930's pattern). This replaces `rankOpenItems` +
+// `openItemsFor`, a per-ROW payload the stop carried whole and inlined into `run-status.md`.
+//
+// WHY. ENG-95930 decided the opposite deliberately, about THIS boundary: the central verify is counts-only
+// (`--verify-summary`), `VERIFY_RESULT` is gone, and the answer is capped at `RECONCILE_ANSWER_MAX_BYTES` because
+// transcribing open rows across the Reconcile -> script boundary was itself a run-killer (21 KB of row prose
+// truncated the run's FIRST structured answer at the host's cap). `verify.pages[*]` therefore carries counts and
+// flags and NO `openRows` — `RECONCILE_SHAPE.verify` names none, the prompt forbids them — so the per-row read
+// this stop used to do returned nothing on a real run, while a large open set that DID carry them is refused over
+// the ceiling and dies `reconcile-failed` instead of stopping honestly.
+//
+// SO: COUNTS PLUS A POINTER, as `parkWhy`, `parkRecord.shortRows: []` and `dryRunReport` already do. One entry per
+// still-open unit — `{ unit, kind, open, missing, unverified, severity, why }`: `missing`/`unverified` are the two
+// outcome counts the boundary does carry (`null` where the verdict has no entry), `why` is a one-line reason for a
+// unit whose openness is not a row count at all, `severity` is set ONLY where the CALLER classified the item.
+// THE SEVERITY AXIS IS NOT RE-DERIVED HERE: the engine stamps `rowSeverity` on every open row into `verify.json`
+// and the digest, that is where it lives, and a second copy of its fidelity discrimination is a second thing to
+// drift. Page rows arrive as a number with no band and are tallied as `unstamped`, pointing there; a non-page unit
+// is `correctness` by its own state. Both bands are counted because both are the axis — today only `correctness`
+// can be non-zero at a stop.
+export function openCountsOf(units) {
+  const list = (units || []).filter((u) => u && typeof u === 'object')
+  const num = (n) => (Number.isInteger(n) && n > 0 ? n : 0)
+  const band = (s) => list.reduce((n, u) => n + (u.severity === s ? num(u.open) : 0), 0)
+  const open = list.reduce((n, u) => n + num(u.open), 0)
+  const correctness = band('correctness')
+  const fidelity = band('fidelity')
+  return { units: list, unitsOpen: list.length, open, correctness, fidelity, unstamped: open - correctness - fidelity }
 }
 // THE STATUS DOCUMENT (ENG-96204, AC 5). A stop's payload is a return value, and a return value reaches whoever
 // launched the run and nobody else: the operator who comes back to the migration folder an hour later — or the
-// next session, on the other route — has only the files. So the same four facts the stop reports are also written
-// down: what was built, what is open (RANKED), what is parked and why, and the one next step.
+// next session, on the other route — has only the files. So the same facts the stop reports are also written
+// down: what was built, what is open (as COUNTS), what is parked and why, and the one next step. COMPOSED HERE,
+// as a pure function over the payload, and handed to the persistence agent as literal text to write — a status
+// document an agent writes in its own words is a paraphrase of the verdict, and the whole reason this run
+// computes rather than asserts is that paraphrases of verdicts drift.
 //
-// COMPOSED HERE, as a pure function over the payload, and handed to the persistence agent as literal text to
-// write. Not left for an agent to assemble: a status document an agent writes in its own words is a paraphrase of
-// the verdict, and the whole reason this run computes rather than asserts is that paraphrases of verdicts drift.
+// COUNTS AND A POINTER, NOT AN INLINED ROW TABLE (why: `openCountsOf`). Every byte of it is inlined into the
+// persistence prompt for verbatim transcription, so it is bounded the way `verify-summary.json` is — one
+// fixed-shape line per open unit, linear in the UNIT count and INVARIANT in the number of open rows.
 //
-// AND IT IS CAPPED (PR review F8). Every byte of this document is INLINED into the persistence agent's prompt for
-// verbatim transcription, so an uncapped open-row corpus is paid twice — once in the prompt and once in the
-// answer — at the one moment in the run when the context is already fullest, and the failure mode is not a slow
-// stop but a truncated transcription of the operator's own record. The caps follow the two the run already
-// applies to agent-facing text (`dryRunReport` takes `openRows.slice(0, 8)` per unit; `cap()` below truncates a
-// note at `NOTE_CAP` with an ellipsis): a bounded number of rows, each cell bounded, and a computed "+K more"
-// line pointing at the engine-written verify table that holds all of them. Nothing is LOST by this — the full
-// uncapped `openRanked` still travels in the stop's own return payload, where no agent has to retype it, and
-// every row is already on disk in `verify.md`. What is genuinely new here — the ranking, what was built, the
-// park reasons and the next step — is never elided.
+// AND NO TWO SECTIONS OF IT CAN DISAGREE ABOUT WHETHER ANYTHING IS OPEN (PR review F6) — the defect the ranked
+// list had, printing "nothing is open" three lines above a "Still open (units)" list naming a unit. Both sections
+// render from the SAME list (`openCounts.units`), so agreement is structural rather than a conditional
+// empty-text string somebody has to keep in step with a second field.
 export function runStatusDoc(status = {}) {
   const L = []
-  // Declared inside the function, like every other self-contained decision in this file. `ROW_CAP` is generous
-  // enough that an ordinary stop shows its whole open list and only a pathological one is trimmed.
-  const ROW_CAP = 24
+  // Declared inside the function, like every other self-contained decision in this file. `UNIT_CAP` is generous
+  // enough that an ordinary stop shows every open unit and only a pathological plan is trimmed; `CELL_CAP`
+  // bounds the free text (a park reason, a unit's own `why`), which is the only unbounded thing left in here.
+  const UNIT_CAP = 24
   const CELL_CAP = 300
   const cell = (s) => {
     const flat = String(s ?? '').replace(/\s+/g, ' ').trim()
     return flat.length <= CELL_CAP ? flat : flat.slice(0, CELL_CAP - 1).trimEnd() + '…'
   }
-  // The capped variant of `list`: renders at most `ROW_CAP` entries and, when it elided any, closes with the
+  // The capped variant of `list`: renders at most `UNIT_CAP` entries and, when it elided any, closes with the
   // COUNT it elided and where the full set is. A silent truncation would read as a shorter open list.
   const cappedList = (items, render, empty, more) => {
     if (!items?.length) return [`- ${empty}`]
-    const shown = items.slice(0, ROW_CAP).map(render)
-    if (items.length > ROW_CAP) shown.push(`- +${items.length - ROW_CAP} more ${more}`)
+    const shown = items.slice(0, UNIT_CAP).map(render)
+    if (items.length > UNIT_CAP) shown.push(`- +${items.length - UNIT_CAP} more ${more}`)
     return shown
   }
   const list = (items, render, empty) => (items?.length ? items.map(render) : [`- ${empty}`])
+  const counts = status.openCounts || {}
+  const openUnits = counts.units || []
+  const table = status.verifyTable || 'verify.md'
+  const json = status.verifyJson || 'verify.json'
+  // ONE OPEN UNIT AS A LINE. A unit whose openness is a row count reads as the count on both outcome axes — the
+  // same `N MISSING + M unconfirmed` idiom `parkWhy` composes; a unit whose openness is its own state (the app
+  // unit, a reachability key) reads as its classified severity and its one-line reason, because there is no row
+  // to count for it and never was.
+  const unitLine = (u) => {
+    const head = `- \`${u.unit}\``
+    if (u.why) return `${head} — ${u.open} open item(s)${u.severity ? ` [${u.severity}]` : ''} — ${cell(u.why)}`
+    if (!Number.isInteger(u.missing) && !Number.isInteger(u.unverified)) {
+      return `${head} — open, and the machine verdict carries no entry for this unit`
+    }
+    return `${head} — ${u.open} open row(s): ${u.missing ?? 0} MISSING + ${u.unverified ?? 0} unconfirmed`
+  }
   L.push('# Build run status', '')
   L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)
   L.push(`- **Stopped at:** ${status.stopped || '(not stopped)'}${Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''}`)
   if (status.pausedAfter) L.push(`- **Paused after unit:** \`${status.pausedAfter}\``)
   L.push('', '## Built this round', '')
   L.push(...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'))
-  L.push('', '## Open, ranked — every correctness item before any fidelity one', '')
-  // THE TWO SECTIONS MUST NOT DISAGREE (PR review F6). `openRanked` is built from the per-page open rows, so a
-  // stop whose remaining open unit is NOT a page (the app unit, a reachability key) used to print "nothing is
-  // open" three lines above a "Still open (units)" list naming it — the run stopped BECAUSE something is open,
-  // and its own record said otherwise. The empty text is therefore conditional on there being nothing open at
-  // all; when rows are missing for units that ARE open, the document says exactly that instead.
-  const noRowsText = status.remainingOpen?.length
-    ? 'no ranked row was published for the open unit(s) below — they are open on their own state (a package or a '
-      + 'configuration record, not a verified page row), so read `Still open (units)` for what remains'
-    : 'nothing is open'
-  L.push(...cappedList(status.openRanked,
-    (it) => `- [${it.severity}] \`${it.unit}\` — ${cell(it.deliverable)} — ${cell(it.status)} — ${cell(it.evidence)}`,
-    noRowsText, `open row(s) — the full list is in the engine-written verify table (\`${status.verifyTable || 'verify.md'}\`)`))
+  L.push('', '## Open — counts, and where the rows are', '')
+  L.push(...cappedList(openUnits, unitLine, 'nothing is open',
+    `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`))
+  if (openUnits.length) {
+    L.push(`- **Total:** ${openUnits.length} unit(s) still open · ${counts.open ?? 0} open row(s)`
+      + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
+      + `${counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''}`)
+    L.push(`- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
+      + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.')
+  }
   L.push('', '## Parked, and why', '')
   L.push(...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
     'nothing is parked', 'parked unit(s) — the full list is in the queue file'))
   L.push('', '## Still open (units)', '')
-  L.push(...list(status.remainingOpen, (k) => `- \`${k}\``, 'no unit is still open'))
+  L.push(...list(openUnits, (u) => `- \`${u.unit}\``, 'no unit is still open'))
   L.push('', '## Next step', '', status.next || '(none recorded)', '')
   return L.join('\n')
 }
-
 // THE VERIFICATION SURFACE the migration skill's preflight resolved for this section BEFORE the first stand
 // write (ENG-95855) — `automatic:2` (headless Playwright), `automatic:3` (real Chrome), or `manual` (no
 // automatic surface; `--verify` alone). An ABSENT value is never guessed into one of the three: a caller that

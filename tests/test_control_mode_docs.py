@@ -154,6 +154,14 @@ class ControlModeDocTests(unittest.TestCase):
             content,
             [
                 "stopped: 'paused-at-round'",
+                # ENG-96204 rework: the stop reports COUNTS and points at the artifacts that hold the
+                # rows. A relayer told to relay "the open rows" would relay an empty list, because the
+                # rows do not cross the capped Reconcile boundary the build's numbers travel on.
+                "`openCounts`",
+                "the open set as COUNTS",
+                "The open ROWS are on disk, not in the stop",
+                "`verify.json`",
+                # The severity axis survives — as the engine's per-row stamp, read where it is stamped.
                 "correctness before fidelity",
                 "run-status.md",
                 '{ "kind": "run", "item": "round-<N>", "answer": "go" }',
@@ -163,6 +171,32 @@ class ControlModeDocTests(unittest.TestCase):
             ],
         )
         self.assertFalse(missing, f"the round-boundary stop and its resume must be documented for the relayer; missing {missing}")
+
+    def test_executor_contract_reports_counts_and_points_at_the_verify_artifacts(self):
+        """ENG-96204 rework — the stop reports counts plus a pointer, following ENG-95930.
+
+        The first cut of this ticket carried every open row in the stop's return and inlined them
+        into ``run-status.md``. That contract cannot be honoured on this boundary: the central verify
+        Reconcile is counts-only and its answer is capped, so a large open set never arrives at all.
+        The contract the build runs under has to say where the rows actually are, or a driving agent
+        relays "nothing is open" off a stop that stopped precisely because something was.
+        """
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "`openCounts`",
+                "the open set as **counts, not rows**",
+                "The open ROWS are not in the return and not in `run-status.md`",
+                # Where they are, and which end of the axis to repair first.
+                "`verify.json` is the same rows",
+                "`rowSeverity`",
+                "read the correctness rows first",
+                # And WHY, so nobody re-adds the rows: the ceiling is the reason, not a preference.
+                "capped at 16000 wire bytes",
+            ],
+        )
+        self.assertFalse(missing, f"the counts-plus-pointer contract must be stated where the build runs; missing {missing}")
 
     def test_executor_contract_states_the_refusal_and_both_stop_mechanisms(self):
         content = read_text(EXECUTOR_SKILL)
@@ -279,6 +313,15 @@ class ControlModeDocTests(unittest.TestCase):
             self.assertNotIn("omit them only when the user chose `auto`", content, str(path))
             self.assertNotIn("do not assume `auto` because it is the default in the script", content, str(path))
             self.assertNotIn("Three modes, one mechanism", content, str(path))
+
+    def test_the_superseded_ranked_open_rows_claim_is_gone(self):
+        # ENG-96204's own first cut. `openRanked` was removed from the return and the ranked row list
+        # from `run-status.md`; a doc that still promises either sends a relayer looking for a field
+        # that does not exist, or tells an operator the rows are in a file that does not carry them.
+        for path in PINNED:
+            content = flat(read_text(path))
+            self.assertNotIn("openRanked", content, str(path))
+            self.assertNotIn("the open rows ranked correctness-first", content, str(path))
 
 
 if __name__ == "__main__":

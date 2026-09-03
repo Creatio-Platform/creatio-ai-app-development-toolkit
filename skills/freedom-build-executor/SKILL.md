@@ -165,11 +165,22 @@ At `stopped: 'paused-at-round'` the return carries four things, and the run writ
 `run-status.md` in the migration folder so they survive the session:
 
 - `built` — the units this invocation built.
-- `openRanked` — every open row of every still-open unit, **correctness before fidelity**. The
-  severity is the engine's own (`--verify-json` stamps each open row `correctness` or `fidelity`),
-  so a layout polish is never presented above a missing field.
+- `openCounts` — the open set as **counts, not rows**: `units[]` (one entry per still-open unit with
+  its `missing` / `unverified` tallies, or a one-line `why` for a unit whose deliverable is a package
+  or a configuration record rather than a verified page), plus `unitsOpen`, `open` and the severity
+  tally `correctness` / `fidelity` / `unstamped`.
 - `parked` — each parked unit with its `parkedWhy`.
 - `next` — the concrete action, naming the exact entry that authorises the next round.
+
+**The open ROWS are not in the return and not in `run-status.md`; they are on disk and the stop
+points at them.** `verify.md` is the table an operator reads and `verify.json` is the same rows
+machine-readable, each stamped by the engine with `rowSeverity` (`correctness` / `fidelity`) — so
+**read the correctness rows first**, and a layout polish is never repaired above a missing field.
+That split is this boundary's existing rule, not a new one: the central verify Reconcile transcribes
+the counts-only `verify-summary.json`, its answer is capped at 16000 wire bytes, and per-row prose
+crossing this boundary is what truncated a real run's first structured answer before it built
+anything. `unstamped` in the tally is therefore the normal reading for page rows — their band is
+stamped per row in `verify.json`, and the stop reports the count rather than re-deriving the band.
 
 **Every round after the first needs the operator's word**, and that word travels as a run-scoped
 answer in `resolutions.json` — the same single answer channel everything else uses:

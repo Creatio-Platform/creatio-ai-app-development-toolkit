@@ -24,8 +24,9 @@ export const meta = {
 //   `checkpointAfter` so a human can open that page on the stand and exercise it · `guided` stops after every unit.
 //   ROUND-boundary stops (`stopped: 'paused-at-round'`): `round1` runs ONE round per invocation and stops while
 //   anything is open · `layout-first` builds LAYOUT only in round 1, stops, and ports the business logic on the
-//   next invocation. Both report `built`, `openRanked` (correctness before fidelity), `parked` and `next`, and
-//   write the same four facts to `<outDir>/run-status.md`.
+//   next invocation. Both report `built`, `openCounts` (the open set as COUNTS per unit plus the severity tally —
+//   the rows stay in `verify.md` / `verify.json`, where the engine stamps each one's `rowSeverity`), `parked` and
+//   `next`, and write the same facts to `<outDir>/run-status.md`.
 //   `auto` stops at neither.
 // A stop is always a BOUNDARY and never `complete`. Re-running with the same args continues from the queue file;
 // in a round-boundary mode the re-run also needs `{ "kind": "run", "item": "round-<N>" }` in `resolutions.json`,
