@@ -534,6 +534,39 @@ check("normalizeScopes: the qualification happens ONCE, in the inventory — so 
   check("core: describing ONE scope's `init` leaves the OTHER scope's `init` uncovered — under bare keys this run reported itself complete with a row nobody had read",
     result.coverage.uncovered.join(",") === "DealMini::init", () => JSON.stringify(result.coverage));
 }
+{
+  // THE OTHER DIRECTION of the qualification change, and the one the fix must not hide: an agent answers `init`
+  // BARE while two scopes declare it. Before, that resolved to the single bare key and closed BOTH rows off one
+  // description. Now `digestKeyOf` finds two suffix matches, resolves to neither, and the answer is evidence
+  // about no row — correct, and invisible in the coverage numbers, which is why it gets its own log line.
+  const bareAnswer = {
+    reportPart: "out/part.md", gaps: [], refusals: [],
+    indexEntries: [{ key: "init", card: "c1" }, { key: "DealPage::onSaved", card: "c2" }],
+  };
+  const { result, logs, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_COLLIDING };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: bareAnswer };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a BARE answer for a method two scopes declare closes NEITHER row — an answer that could be about either body is evidence about neither, and closing both is the defect this change exists to remove",
+    result.coverage.uncovered.slice().sort().join(",") === "DealMini::init,DealPage::init",
+    () => JSON.stringify(result.coverage));
+  check("core: the unattributable answer is NAMED, with the key form to use — in the coverage numbers it is indistinguishable from a row nobody answered, and those two need opposite repairs",
+    logs.some((l) => /name a method more than one scope declares/.test(l) && /init/.test(l)), () => JSON.stringify(logs));
+  check("core: an unattributable answer still sends the rows through the REPAIR round — it is not silently accepted as coverage, and it is not left for the operator to notice",
+    asked.some((i) => i.id.startsWith("repair.")), () => asked.map((i) => i.id).join(","));
+}
+check("ambiguousEntryKeys: only a key that matches SEVERAL inventory rows is listed — a key matching exactly one is coverage, and one matching none is the unmatched-key problem the engine reports against the merged index",
+  () => {
+    const keys = new Set(["A::init", "B::init", "A::onSaved"]);
+    const listed = helpers.ambiguousEntryKeys(
+      [{ key: "init", card: "c" }, { key: "onSaved", card: "c" }, { key: "nowhere", card: "c" }], keys);
+    return listed.join(",") === "init";
+  });
+check("ambiguousEntryKeys: an entry with NO card is not listed — a blank card is not coverage anywhere else in this arithmetic, so it cannot be reported as coverage that failed to attribute",
+  () => helpers.ambiguousEntryKeys([{ key: "init", card: "" }], new Set(["A::init", "B::init"])).length === 0);
+
 check("censusShortfall: FEWER scopes than the digest declares is a finding; the same number is not, and MORE is not — a census that found something the digest missed is reported through `refusals`, not stopped",
   () => helpers.censusShortfall({ scopes: 18 }, new Array(1)).missing === 17
     && helpers.censusShortfall({ scopes: 2 }, new Array(2)) === null

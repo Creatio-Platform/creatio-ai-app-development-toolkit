@@ -28,7 +28,7 @@ import { rules, contextPrompt, describePrompt, repairNote, critiquePrompt, merge
 import {
   normalizeScopes, planBatches, packBatches, repairKeys, isComplete, wiringOnlyMixinKeys, coveredKeys, entriesOf,
   declaredNothingToDo, isCritiqueShape, critiqueDeathLine, retryOnDeath, stepOutcome, failureCause, itemId, partFile,
-  censusShortfall, mergeDeathLine,
+  censusShortfall, mergeDeathLine, ambiguousEntryKeys,
   DEFAULT_ROWS_PER_AGENT, DEFAULT_MAX_DESCRIBE,
 } from './helpers.mjs'
 
@@ -149,7 +149,7 @@ function censusShortfallReturn(shortfall, ctx, surface, log) {
     surface,
     skipped: false,
     stopped: 'census-short',
-    reason: `the Context phase returned ${returned} of ${declared} declared scope(s). This is a failed run, NOT a surface with fewer rows than the digest says: the missing ${missing} scope(s) would be counted as described. Re-run the analysis over the missing scopes with their own digest (\`--stubs\`) and hand the parts to separate runs; nothing was written.`,
+    reason: `the Context phase returned ${returned} of ${declared} declared scope(s). This is a failed run, NOT a surface with fewer rows than the digest says: the missing ${missing} scope(s) would be counted as described. TWO causes, in this order: (1) the digest is STALE — regenerate it with \`node engine/migrate.mjs <manifest> --stubs --out <file>\` on this version, because a digest written before scope de-duplication counts one page several times and its \`totals.scopes\` is higher than the surface has; (2) the inventory did not fit one structured answer — see \`censusNote\`, then split the surface and hand the parts to separate runs. Nothing was written.`,
     coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
     scopes: (ctx.scopes || []).map((s) => ({ role: s.role, schema: s.schema ?? null })),
     censusNote: ctx.censusNote || null,
@@ -298,6 +298,15 @@ export function* run(rawInput, io = {}) {
   // body-elsewhere kinds cannot be judged from the inventory, and which one the engine backstops instead).
   let wiringOnly = wiringOnlyMixinKeys(entriesOf(described), allKeys)
   log(`coverage after round 1: ${covered.size}/${allKeys.size} row(s) carry a card · ${uncoveredKeys.length} uncovered · ${wiringOnly.length} mixin row(s) missing the body card`)
+  // Said out loud, because the coverage numbers cannot say it: an answer keyed with a bare name two scopes both
+  // declare is evidence about neither body, so it drops out of `covered` and its rows read exactly like rows
+  // nobody answered. The repair those two need is opposite — re-key the answer, versus describe the row — and
+  // without this line the repair round dispatches for work that was already done and may come back keyed the
+  // same way.
+  const ambiguous = ambiguousEntryKeys(entriesOf(described), allKeys)
+  if (ambiguous.length) {
+    log(`⚠ ${ambiguous.length} answer(s) name a method more than one scope declares and give no scope, so they describe neither row: ${ambiguous.join(', ')} — the repair round asks for these again, keyed \`<schema>::<method>\` as the inventory lists them`)
+  }
 
   phase('Critique')
 

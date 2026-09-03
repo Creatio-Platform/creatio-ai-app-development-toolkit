@@ -728,6 +728,22 @@ function wiringOnlyMixinKeys(entries, allKeys) {
   return [...new Set(resolved.filter((r) => named(r.e.card) && !hasBody.has(r.k)).map((r) => r.k))]
 }
 
+// AN ANSWER THAT NAMES A ROW BUT CANNOT BE ATTRIBUTED TO ONE. `digestKeyOf` resolves a bare key through the
+// UNIQUE inventory key ending in `::<key>`; when two scopes declare the same method there is no unique one, so it
+// resolves to nothing and the entry counts as coverage of neither row. That is the correct arithmetic — an answer
+// that could be about either body is evidence about neither — but it is indistinguishable in the coverage numbers
+// from a row nobody answered, and the two need opposite repairs: one asks the agent to re-key its answer, the
+// other asks for the work to be done.
+//
+// Only AMBIGUOUS keys are listed. A key that matches no inventory row at all is the unmatched-key problem (the
+// engine reports it against the merged index), and a key resolving to exactly one row is coverage.
+function ambiguousEntryKeys(entries, allKeys) {
+  const bare = (entries || []).filter((e) => e && hasCard(e) && typeof e.key === 'string' && !allKeys.has(e.key))
+  return [...new Set(bare
+    .filter((e) => [...allKeys].filter((k) => k.endsWith(`::${e.key}`)).length > 1)
+    .map((e) => e.key))]
+}
+
 // The repair round's target set: every row the arithmetic says is not described YET — uncovered by this run's own
 // count, called uncovered by the critique, or naming only a wiring card. Deduplicated, so a row that two of the
 // three name is described once rather than dispatched twice to the same scope.
@@ -958,8 +974,12 @@ const SCOPE = {
   properties: {
     role: { type: 'string' },              // 'main page' | 'mini page' | 'typed page' | 'child page'
     schema: { type: 'string' },            // null on the main page: the engine parses layers by package
-    methodKeys: { type: 'array', items: { type: 'string' } },  // '<method>' or '<schema>::<method>'
-    memberKeys: { type: 'array', items: { type: 'string' } },  // '<kind>:<name>'
+    // '<method>' or '<schema>::<method>' — either is accepted here and `qualifyKey` normalises a bare one to the
+    // scoped form, because two scopes of one surface may declare the same method and a Set of bare names makes
+    // those one row. What the DESCRIBE phase answers with is not free the same way: it must key an entry exactly
+    // as the inventory lists it (see INDEX_ENTRY), which after normalisation is the scoped form.
+    methodKeys: { type: 'array', items: { type: 'string' } },
+    memberKeys: { type: 'array', items: { type: 'string' } },  // '<kind>:<name>', or '<schema>::<kind>:<name>'
     unresolvedCount: { type: 'integer' },  // rows whose trigger the engine could not trace
   },
 }
@@ -1008,7 +1028,9 @@ const INDEX_ENTRY = {
   type: 'object',
   required: ['key', 'card'],
   properties: {
-    key: { type: 'string' },               // EXACTLY as the digest keys it
+    key: { type: 'string' },               // EXACTLY as the inventory listed it in this agent's own prompt — for a
+                                           // method two scopes declare, the bare name is attributable to neither
+                                           // row and closes neither (see `ambiguousEntryKeys`)
     card: { type: 'string' },              // namespaced: '<scope>/C03'
     ac: { type: 'array', items: { type: 'string' } },
     bodyCard: { type: 'string' },          // the body's OWN card, when the behaviour is defined outside this scope
@@ -1355,7 +1377,7 @@ function censusShortfallReturn(shortfall, ctx, surface, log) {
     surface,
     skipped: false,
     stopped: 'census-short',
-    reason: `the Context phase returned ${returned} of ${declared} declared scope(s). This is a failed run, NOT a surface with fewer rows than the digest says: the missing ${missing} scope(s) would be counted as described. Re-run the analysis over the missing scopes with their own digest (\`--stubs\`) and hand the parts to separate runs; nothing was written.`,
+    reason: `the Context phase returned ${returned} of ${declared} declared scope(s). This is a failed run, NOT a surface with fewer rows than the digest says: the missing ${missing} scope(s) would be counted as described. TWO causes, in this order: (1) the digest is STALE — regenerate it with \`node engine/migrate.mjs <manifest> --stubs --out <file>\` on this version, because a digest written before scope de-duplication counts one page several times and its \`totals.scopes\` is higher than the surface has; (2) the inventory did not fit one structured answer — see \`censusNote\`, then split the surface and hand the parts to separate runs. Nothing was written.`,
     coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
     scopes: (ctx.scopes || []).map((s) => ({ role: s.role, schema: s.schema ?? null })),
     censusNote: ctx.censusNote || null,
@@ -1504,6 +1526,15 @@ function* run(rawInput, io = {}) {
   // body-elsewhere kinds cannot be judged from the inventory, and which one the engine backstops instead).
   let wiringOnly = wiringOnlyMixinKeys(entriesOf(described), allKeys)
   log(`coverage after round 1: ${covered.size}/${allKeys.size} row(s) carry a card · ${uncoveredKeys.length} uncovered · ${wiringOnly.length} mixin row(s) missing the body card`)
+  // Said out loud, because the coverage numbers cannot say it: an answer keyed with a bare name two scopes both
+  // declare is evidence about neither body, so it drops out of `covered` and its rows read exactly like rows
+  // nobody answered. The repair those two need is opposite — re-key the answer, versus describe the row — and
+  // without this line the repair round dispatches for work that was already done and may come back keyed the
+  // same way.
+  const ambiguous = ambiguousEntryKeys(entriesOf(described), allKeys)
+  if (ambiguous.length) {
+    log(`⚠ ${ambiguous.length} answer(s) name a method more than one scope declares and give no scope, so they describe neither row: ${ambiguous.join(', ')} — the repair round asks for these again, keyed \`<schema>::<method>\` as the inventory lists them`)
+  }
 
   phase('Critique')
 

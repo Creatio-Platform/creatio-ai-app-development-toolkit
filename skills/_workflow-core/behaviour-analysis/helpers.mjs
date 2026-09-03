@@ -75,6 +75,22 @@ export function wiringOnlyMixinKeys(entries, allKeys) {
   return [...new Set(resolved.filter((r) => named(r.e.card) && !hasBody.has(r.k)).map((r) => r.k))]
 }
 
+// AN ANSWER THAT NAMES A ROW BUT CANNOT BE ATTRIBUTED TO ONE. `digestKeyOf` resolves a bare key through the
+// UNIQUE inventory key ending in `::<key>`; when two scopes declare the same method there is no unique one, so it
+// resolves to nothing and the entry counts as coverage of neither row. That is the correct arithmetic — an answer
+// that could be about either body is evidence about neither — but it is indistinguishable in the coverage numbers
+// from a row nobody answered, and the two need opposite repairs: one asks the agent to re-key its answer, the
+// other asks for the work to be done.
+//
+// Only AMBIGUOUS keys are listed. A key that matches no inventory row at all is the unmatched-key problem (the
+// engine reports it against the merged index), and a key resolving to exactly one row is coverage.
+export function ambiguousEntryKeys(entries, allKeys) {
+  const bare = (entries || []).filter((e) => e && hasCard(e) && typeof e.key === 'string' && !allKeys.has(e.key))
+  return [...new Set(bare
+    .filter((e) => [...allKeys].filter((k) => k.endsWith(`::${e.key}`)).length > 1)
+    .map((e) => e.key))]
+}
+
 // The repair round's target set: every row the arithmetic says is not described YET — uncovered by this run's own
 // count, called uncovered by the critique, or naming only a wiring card. Deduplicated, so a row that two of the
 // three name is described once rather than dispatched twice to the same scope.

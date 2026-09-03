@@ -11,8 +11,12 @@ export const SCOPE = {
   properties: {
     role: { type: 'string' },              // 'main page' | 'mini page' | 'typed page' | 'child page'
     schema: { type: 'string' },            // null on the main page: the engine parses layers by package
-    methodKeys: { type: 'array', items: { type: 'string' } },  // '<method>' or '<schema>::<method>'
-    memberKeys: { type: 'array', items: { type: 'string' } },  // '<kind>:<name>'
+    // '<method>' or '<schema>::<method>' — either is accepted here and `qualifyKey` normalises a bare one to the
+    // scoped form, because two scopes of one surface may declare the same method and a Set of bare names makes
+    // those one row. What the DESCRIBE phase answers with is not free the same way: it must key an entry exactly
+    // as the inventory lists it (see INDEX_ENTRY), which after normalisation is the scoped form.
+    methodKeys: { type: 'array', items: { type: 'string' } },
+    memberKeys: { type: 'array', items: { type: 'string' } },  // '<kind>:<name>', or '<schema>::<kind>:<name>'
     unresolvedCount: { type: 'integer' },  // rows whose trigger the engine could not trace
   },
 }
@@ -61,7 +65,9 @@ export const INDEX_ENTRY = {
   type: 'object',
   required: ['key', 'card'],
   properties: {
-    key: { type: 'string' },               // EXACTLY as the digest keys it
+    key: { type: 'string' },               // EXACTLY as the inventory listed it in this agent's own prompt — for a
+                                           // method two scopes declare, the bare name is attributable to neither
+                                           // row and closes neither (see `ambiguousEntryKeys`)
     card: { type: 'string' },              // namespaced: '<scope>/C03'
     ac: { type: 'array', items: { type: 'string' } },
     bodyCard: { type: 'string' },          // the body's OWN card, when the behaviour is defined outside this scope
