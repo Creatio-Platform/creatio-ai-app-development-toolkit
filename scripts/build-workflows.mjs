@@ -104,7 +104,7 @@ function inlineOne(rel) {
   // Normalising the assembled text at the END fixes the line endings but CANNOT undo a collapse that never
   // fired, so the artifact still depended on the checkout -- in whitespace instead of in every line. Normalise
   // the bytes as they arrive and every transform sees the same input on every machine.
-  const src = readFileSync(path.join(CORE, rel), 'utf8').replace(/\r\n/g, '\n')
+  const src = readFileSync(path.join(CORE, rel), 'utf8').replaceAll('\r\n', '\n')
   const out = []
   let skipping = false
   for (const line of src.split('\n')) {
@@ -176,130 +176,172 @@ function topLevelNames(text) {
 // both sides of that identity comparison identically and pass for ever, and the failure would surface as an agent
 // misbehaving on instructions nobody could see were wrong. So the tokeniser is testable directly.
 export const KEEP_COMMENT = /GENERATED FILE|build-workflows\.mjs|OPERATOR FINDINGS from an earlier checkpoint/
-export function stripComments(src) {
-  let out = ''
-  let i = 0
-  const n = src.length
-  // `${` inside a template literal opens a code context that can contain another template literal, so the state is
-  // a STACK rather than a flag. `depth` counts braces inside the current interpolation so the matching `}` is the
-  // one that closes it.
-  const stack = []
-  let mode = 'code'
-  let depth = 0
-  // Whether a `/` starts a regex literal or is division: decided by the last significant token, which is the
-  // standard heuristic. `prev` is the last non-space character emitted in code context.
-  let prev = ''
 
-  const regexAllowedAfter = (c) => c === '' || '=(,:[!&|?{};+-*%~^<>'.includes(c) || c === '\n'
+// ONE SCANNER PER LEXICAL STATE (PR #128 review, round 20, Sonar S3776). This was a single `while` with every mode
+// inlined into it: cognitive complexity 116 against the repo's pinned 15, and unreadable in exactly the place it
+// most needs to be readable — a stripper bug inside a prompt literal corrupts both sides of the `--check` identity
+// comparison and passes for ever. The decomposition is a MOVE, not a rewrite: the same branches in the same order,
+// against one explicit state record instead of six loop-scoped `let`s, and the mode table replaces the chain of
+// `if (mode === …)` tests rather than adding a dispatch of its own. Byte-identity of both shipped artifacts is what
+// proves it (`--check`), and the 92-check offline suite exercises the tokeniser directly.
+//
+// `st` is that state record: `out` the emitted text, `i` the cursor, `mode` the lexical state, `stack`/`depth` the
+// template-interpolation nesting, `prev` the last significant character emitted in code context.
+const regexAllowedAfter = (c) => c === '' || '=(,:[!&|?{};+-*%~^<>'.includes(c) || c === '\n'
 
-  while (i < n) {
-    const c = src[i]
-    const c2 = src[i + 1]
+// EMIT-AND-ADVANCE, for the branches that copy one character and change state without touching `prev`. The
+// original spelled this `out += c; i += 1; continue` at nine sites, and `prev` being left alone at each of them is
+// deliberate: a quote or a `/` that OPENS a literal is not a significant code token.
+const emit = (st, c) => { st.out += c; st.i += 1 }
 
-    if (mode === 'code') {
-      // ---- line comment
-      if (c === '/' && c2 === '/') {
-        let j = src.indexOf('\n', i)
-        if (j === -1) j = n
-        const text = src.slice(i, j)
-        if (text.includes('---8<---') || KEEP_COMMENT.test(text)) {   // machine-meaningful: see the note above
-          out += text
-        } else {
-          // Drop the comment. If the line is now only whitespace, drop the line's indentation and its newline too,
-          // so a stripped file has no ragged blank lines where prose used to be.
-          const lineStart = out.lastIndexOf('\n') + 1
-          if (out.slice(lineStart).trim() === '') {
-            out = out.slice(0, lineStart)
-            i = j + 1                            // consume the newline as well
-            continue
-          }
-          // A trailing comment after code: drop it, keep the code and the newline.
-          out = out.replace(/[ \t]+$/, '')
-        }
-        i = j
-        continue
-      }
-      // ---- block comment
-      if (c === '/' && c2 === '*') {
-        const j = src.indexOf('*/', i + 2)
-        const end = j === -1 ? n : j + 2
-        const text = src.slice(i, end)
-        if (text.includes('---8<---') || text.includes('@INLINE@')) {
-          out += text
-        } else {
-          const lineStart = out.lastIndexOf('\n') + 1
-          const wasAlone = out.slice(lineStart).trim() === ''
-          // A block comment that occupied whole lines: take its trailing newline with it.
-          let k = end
-          if (wasAlone) {
-            while (k < n && (src[k] === ' ' || src[k] === '\t')) k += 1
-            if (src[k] === '\n') k += 1
-            out = out.slice(0, lineStart)
-            i = k
-            continue
-          }
-          out = out.replace(/[ \t]+$/, '')
-        }
-        i = end
-        continue
-      }
-      // ---- string / template starts
-      if (c === "'" || c === '"') { mode = c; out += c; i += 1; continue }
-      if (c === '`') { stack.push({ mode, depth }); mode = '`'; out += c; i += 1; continue }
-      // ---- regex literal
-      if (c === '/' && regexAllowedAfter(prev)) { mode = '/'; out += c; i += 1; continue }
-      // ---- closing an interpolation
-      if (c === '{' && stack.length) { depth += 1 }
-      if (c === '}' && stack.length && depth === 0) {
-        const s = stack.pop()
-        mode = s.mode; depth = s.depth
-        out += c; i += 1; continue
-      }
-      if (c === '}' && stack.length) { depth -= 1 }
-      out += c
-      if (!/\s/.test(c)) prev = c
-      i += 1
-      continue
+// TRAILING BLANKS OFF THE TAIL, without a regex over the whole accumulated output (S8786). `out.replace(/[ \t]+$/,
+// '')` re-scanned every byte emitted so far on each stripped comment — quadratic on a 570KB assembly, and flagged
+// for super-linear backtracking besides. Walking back from the end is the same result in time proportional to the
+// whitespace actually removed.
+const trimTrailingBlanks = (s) => {
+  let end = s.length
+  while (end > 0 && (s[end - 1] === ' ' || s[end - 1] === '\t')) end -= 1
+  return end === s.length ? s : s.slice(0, end)
+}
+
+// A `//` comment. Machine-meaningful ones survive verbatim (the `---8<---` sentinels and the KEEP_COMMENT header);
+// otherwise, if the comment was the only thing on its line, the line's indentation and newline go with it, so a
+// stripped file carries no ragged blank lines where prose used to be.
+function scanLineComment(st, src, n) {
+  let j = src.indexOf('\n', st.i)
+  if (j === -1) j = n
+  const text = src.slice(st.i, j)
+  if (text.includes('---8<---') || KEEP_COMMENT.test(text)) {
+    st.out += text
+  } else {
+    const lineStart = st.out.lastIndexOf('\n') + 1
+    if (st.out.slice(lineStart).trim() === '') {
+      st.out = st.out.slice(0, lineStart)
+      st.i = j + 1                            // consume the newline as well
+      return
     }
-
-    // ---- inside a single- or double-quoted string
-    if (mode === "'" || mode === '"') {
-      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
-      out += c
-      if (c === mode) { mode = 'code'; prev = c }
-      i += 1
-      continue
-    }
-
-    // ---- inside a template literal
-    if (mode === '`') {
-      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
-      if (c === '`') { const s = stack.pop(); mode = s.mode; depth = s.depth; prev = c; out += c; i += 1; continue }
-      if (c === '$' && c2 === '{') { stack.push({ mode: '`', depth }); mode = 'code'; depth = 0; out += '${'; i += 2; continue }
-      out += c
-      i += 1
-      continue
-    }
-
-    // ---- inside a regex literal
-    if (mode === '/') {
-      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
-      if (c === '[') { mode = '/['; out += c; i += 1; continue }
-      if (c === '/') { mode = 'code'; prev = c; out += c; i += 1; continue }
-      out += c
-      i += 1
-      continue
-    }
-    // ---- inside a regex character class, where `/` is literal
-    if (mode === '/[') {
-      if (c === '\\') { out += c + (c2 ?? ''); i += 2; continue }
-      if (c === ']') { mode = '/' }
-      out += c
-      i += 1
-      continue
-    }
+    // A trailing comment after code: drop it, keep the code and the newline.
+    st.out = trimTrailingBlanks(st.out)
   }
-  return out
+  st.i = j
+}
+
+// A `/* */` comment. Same rule, plus: one that occupied whole lines takes its trailing newline with it.
+function scanBlockComment(st, src, n) {
+  const j = src.indexOf('*/', st.i + 2)
+  const end = j === -1 ? n : j + 2
+  const text = src.slice(st.i, end)
+  if (text.includes('---8<---') || text.includes('@INLINE@')) {
+    st.out += text
+  } else {
+    const lineStart = st.out.lastIndexOf('\n') + 1
+    if (st.out.slice(lineStart).trim() === '') {
+      let k = end
+      while (k < n && (src[k] === ' ' || src[k] === '\t')) k += 1
+      if (src[k] === '\n') k += 1
+      st.out = st.out.slice(0, lineStart)
+      st.i = k
+      return
+    }
+    st.out = trimTrailingBlanks(st.out)
+  }
+  st.i = end
+}
+
+// CODE CONTEXT: the only state a comment can be removed from, and the only one that opens the others.
+function scanCode(st, src, n) {
+  const c = src[st.i]
+  const c2 = src[st.i + 1]
+  if (c === '/' && c2 === '/') return scanLineComment(st, src, n)
+  if (c === '/' && c2 === '*') return scanBlockComment(st, src, n)
+  if (c === "'" || c === '"') { st.mode = c; return emit(st, c) }
+  if (c === '`') { st.stack.push({ mode: st.mode, depth: st.depth }); st.mode = '`'; return emit(st, c) }
+  if (c === '/' && regexAllowedAfter(st.prev)) { st.mode = '/'; return emit(st, c) }
+  // Closing an interpolation: `depth` counts braces inside it, so the `}` that pops the stack is the matching one.
+  if (c === '{' && st.stack.length) {
+    st.depth += 1
+  } else if (c === '}' && st.stack.length) {
+    if (st.depth === 0) {
+      const s = st.stack.pop()
+      st.mode = s.mode
+      st.depth = s.depth
+      return emit(st, c)
+    }
+    st.depth -= 1
+  }
+  st.out += c
+  if (!/\s/.test(c)) st.prev = c
+  st.i += 1
+}
+
+// Inside a single- or double-quoted string. `st.mode` IS the closing quote.
+function scanQuoted(st, src) {
+  const c = src[st.i]
+  if (c === '\\') { st.out += c + (src[st.i + 1] ?? ''); st.i += 2; return }
+  st.out += c
+  if (c === st.mode) { st.mode = 'code'; st.prev = c }
+  st.i += 1
+}
+
+// Inside a template literal, which can open a code context that contains another template literal — hence a stack.
+function scanTemplate(st, src) {
+  const c = src[st.i]
+  const c2 = src[st.i + 1]
+  if (c === '\\') { st.out += c + (c2 ?? ''); st.i += 2; return }
+  if (c === '`') {
+    const s = st.stack.pop()
+    st.mode = s.mode
+    st.depth = s.depth
+    st.prev = c
+    return emit(st, c)
+  }
+  if (c === '$' && c2 === '{') {
+    st.stack.push({ mode: '`', depth: st.depth })
+    st.mode = 'code'
+    st.depth = 0
+    st.out += '${'
+    st.i += 2
+    return
+  }
+  st.out += c
+  st.i += 1
+}
+
+// Inside a regex literal.
+function scanRegex(st, src) {
+  const c = src[st.i]
+  if (c === '\\') { st.out += c + (src[st.i + 1] ?? ''); st.i += 2; return }
+  if (c === '[') { st.mode = '/['; return emit(st, c) }
+  if (c === '/') { st.mode = 'code'; st.prev = c; return emit(st, c) }
+  st.out += c
+  st.i += 1
+}
+
+// Inside a regex character class, where `/` is literal and only `]` closes.
+function scanRegexClass(st, src) {
+  const c = src[st.i]
+  if (c === '\\') { st.out += c + (src[st.i + 1] ?? ''); st.i += 2; return }
+  if (c === ']') { st.mode = '/' }
+  st.out += c
+  st.i += 1
+}
+
+// THE MODE TABLE. Both quote characters share one scanner because `st.mode` carries which quote is open, which is
+// what the original `mode === "'" || mode === '"'` test said.
+const SCANNERS = {
+  code: scanCode,
+  "'": scanQuoted,
+  '"': scanQuoted,
+  '`': scanTemplate,
+  '/': scanRegex,
+  '/[': scanRegexClass,
+}
+
+export function stripComments(src) {
+  const n = src.length
+  const st = { out: '', i: 0, mode: 'code', depth: 0, prev: '', stack: [] }
+  while (st.i < n) SCANNERS[st.mode](st, src, n)
+  return st.out
 }
 
 // THE ASSEMBLY, exported (PR #128 review, round 19). `stripComments` runs over THIS text -- the template with every
@@ -308,7 +350,7 @@ export function stripComments(src) {
 // is only meaningful if it is the SAME string `build` strips. One assembly path, so the two cannot drift.
 export function assembleTarget(target) {
   // Same reason as `inlineOne`: the template is concatenated with the inlined block and scanned for sentinels.
-  const template = readFileSync(path.join(CORE, target.template), 'utf8').replace(/\r\n/g, '\n')
+  const template = readFileSync(path.join(CORE, target.template), 'utf8').replaceAll('\r\n', '\n')
   if (!template.includes(PLACEHOLDER)) throw new Error(`${target.template}: no ${PLACEHOLDER} placeholder`)
   if (!template.includes(BEGIN) || !template.includes(END)) throw new Error(`${target.template}: the pure-helper sentinels are missing — the offline suite slices the shipped file on them`)
 
@@ -351,7 +393,7 @@ function build(target) {
   // pass and the sentinels are the only ones that survive (see `stripComments`). `--check` compares the
   // shipped file against this same output, so the stripping is part of the contract rather than a
   // post-processing step something could skip.
-  return stripComments(text).replace(/\r\n/g, '\n')
+  return stripComments(text).replaceAll('\r\n', '\n')
 }
 
 // RUN THE BUILD ONLY WHEN THIS FILE IS THE ENTRY POINT. It used to run at module scope, which made the script
