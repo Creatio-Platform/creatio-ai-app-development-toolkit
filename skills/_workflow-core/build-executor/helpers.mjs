@@ -73,6 +73,23 @@ export function unitStem(unit, pageNo) {
 }
 export const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
+// ENG-95901 (reopened) — the shortfall split behind every "N MISSING" line. Rationale: designspec.mjs `verifyTally`.
+// A verdict predating `buildMissing` falls back to `missing` — over-report, never a false zero.
+export function shortfallOf(st) {
+  const missing = st?.missing ?? 0
+  const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
+  return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
+}
+// PR review — an UNMEASURED run reads `?`, never `0 MISSING`. `shortfallOf(undefined)` legitimately returns zeros
+// (its callers need arithmetic), but rendering those zeros as prose put a false zero on the one axis this helper's own
+// comment forbids one on: the close line could read `NOT COMPLETE after 3 round(s): 0 MISSING + ? unconfirmed`, the
+// `?` beside it proving no verdict had been read. `parkWhy` already guards `!st` first; these two call sites did not.
+export function shortfallText(st) {
+  if (st == null) return '? MISSING'
+  const { buildMissing, rejected } = shortfallOf(st)
+  return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
+}
+
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:
 // a key ABSENT from the verdict is open, because absent means nothing confirmed it — most often that
 // `--verify` never ran (the baseline round, before a built file exists) or that the page could not be
@@ -2035,10 +2052,13 @@ export function unconsumedNextClause(entries) {
 // lives here rather than in a second, near-duplicate `log(...)` call beside it — two verdict lines let a log-scraper
 // read the one without the count and miss it. `complete` implies zero unconsumed (`runComplete` gates on it), so the
 // count is stated only on the NOT COMPLETE branch, where it can be non-zero.
-export function completionLine(complete, { round, missing, unverified, parkedCount, unconsumedCount } = {}) {
+export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount } = {}) {
+  // ENG-95901 — the shortfall half of the line goes through `shortfallText`, so a judge-rejected record is named as
+  // such instead of being folded into one "N MISSING" count. A caller that knows only `missing` still reads the same.
+  const shortfall = missing == null && buildMissing == null ? '?' : shortfallText({ missing, buildMissing })
   return complete
     ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${missing ?? '?'} MISSING + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
+    : `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }
 
 // ENG-95503 — THE ACCOUNTABILITY OBLIGATION IS CONDITIONAL, so it is ADDED to the schema rather than baked into it.

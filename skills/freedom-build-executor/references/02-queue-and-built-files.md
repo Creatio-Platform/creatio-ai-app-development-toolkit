@@ -342,11 +342,11 @@ report, `verify.json` is the verdict.
 
 ```json
 {
-  "complete": false, "missing": 1, "unverified": 4,
+  "complete": false, "missing": 1, "buildMissing": 1, "rejected": 0, "unfiled": 3, "unverified": 4,
   "planGaps": ["structure INCOMPLETE (2 missing input(s))"],
   "pages": {
-    "main": { "missing": 0, "unverified": 0, "complete": true, "buildComplete": true, "openRows": [] },
-    "child:Education": { "missing": 1, "unverified": 2, "complete": false, "buildComplete": false,
+    "main": { "missing": 0, "buildMissing": 0, "unverified": 0, "complete": true, "buildComplete": true, "openRows": [] },
+    "child:Education": { "missing": 1, "buildMissing": 1, "unverified": 2, "complete": false, "buildComplete": false,
       "openRows": [ { "n": 31, "deliverable": "Fields — 7 expected", "status": "⚠ verify",
                       "evidence": "5/7 expected fields present — missing: Amount, Owner",
                       "outcome": "unverified", "owner": "builder" } ] }
@@ -361,6 +361,15 @@ builder). `complete` (shown above) stays the COMBINED signal — `missing === 0 
 in-context single-unit gate (`--verify --page <key> --verify-json <file>`) and the builder's own
 `selfCheck` report gate on, so a page whose only open rows are unfiled evidence is not told its
 build is short.
+
+ENG-95901 (reopened) — the ❌ side splits the same way. `missing` still counts every ❌ row, and `buildMissing` is the
+half the BUILDER owns; the difference is `rejected` — rows where the judge ruled a filed record `convincing: false`,
+or the verifier filed it as `false`. Those are re-FILED by the verifier/judge, never built, so a page can read
+`missing: 3, buildMissing: 0, buildComplete: true` and that is not a contradiction. Top-level the summary also
+carries `unfiled` (the ⚠ rows waiting on the verifier), which is smaller than `unverified` because `unverified` also
+counts a partially-built page. **`buildMissing` is REQUIRED on every page entry of the Reconcile answer**, for the
+same reason `buildComplete` is: dropped, the arithmetic falls back to the conflated `missing` and a re-filing job is
+reported as a build gap.
 
 Read this file — never the table — for anything you compute on: which units are open, how many
 rounds are left, what a repair round is handed. The table has no per-page counts at all, and the

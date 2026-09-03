@@ -2955,6 +2955,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // — MY BUILD is short — and it IS repairable on-stand. Until now `--verify` exited 2 with no stderr line at all,
   // so the two were indistinguishable.
   if (verifyIncomplete) {
+    // Per page, the same distinction as the headline: `missing` folds the judge-rejected rows in, so a page whose
+    // build is whole but whose evidence was rejected read "3 missing" and sent a reader hunting for absent fields.
+    const pageShortfall = (p) => {
+      // PR review — `?? p.missing` and not `?? 0`, matching `shortfallOf` (`helpers.mjs`), whose comment states the
+      // rule this copy has to follow too: an absent `buildMissing` OVER-reports the build axis, never a false zero.
+      // With `?? 0` a page entry that predates the field read `rejected = missing`, i.e. "0 missing" on a page whose
+      // build really is short. Unreachable today (the object is the in-process tally), but this is the copy a future
+      // reader imitates.
+      const buildMissing = p.buildMissing ?? p.missing ?? 0;
+      const rejected = (p.missing ?? 0) - buildMissing;
+      return rejected > 0 ? `${buildMissing} missing + ${rejected} judge-rejected` : `${p.missing ?? 0} missing`;
+    };
     // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
     // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
     // breakdown, and the repair advice — must talk about the builder's own rows for that caller. Surfacing the
@@ -2967,7 +2979,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // narrows.
     const pageGaps = pageArg
       ? Object.entries(verifyRes.pages).filter(([, p]) => p.buildComplete !== true).map(([k, p]) => `${k}: ${p.builderOpen} open`)
-      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
+      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${pageShortfall(p)} / ${p.unverified} unconfirmed`);
     // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
     // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
     let overflow = "";
@@ -2975,11 +2987,34 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const where = verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict";
       overflow = ` | …and ${pageGaps.length - 6} more (${where})`;
     }
-    const repairAdvice = pageArg ? "build / complete the pieces named in the rows, then re-verify" : "build the missing pieces / file the on-stand evidence, then re-verify";
+    // ENG-95901 (reopened) — the UNSCOPED headline said "YOUR BUILD is incomplete: N MISSING" while every one of
+    // those N was an evidence row the judge rejected, i.e. a record filed unconvincingly by a SEPARATE read-only
+    // agent and not one deliverable short on the page. The exit code and the gating predicate are untouched (AC7/AC8
+    // — for a human, a rejected record is still a reason not to call it done); what changes is that the line names
+    // WHICH of the two it hit, so the close report and a reader stop calling a re-filing job a build gap.
+    const rejectedNote = verifyRes.rejected > 0
+      ? ` + ${verifyRes.rejected} evidence row(s) REJECTED by the judge (re-FILE the record — not a build gap)`
+      : "";
+    // The BANNER and the advice follow the same number. Leaving them fixed would have the line say "YOUR BUILD is
+    // incomplete … build the missing pieces" on a run whose build is whole and whose only ❌ rows are records the
+    // judge rejected — the very sentence the reopened ticket quotes as what sent a reader hunting for absent fields.
+    // PR review — the claim keys on `builderOpen`, NOT on `buildMissing`. `buildMissing` is `missing` narrowed by
+    // owner, so it inherits `missing`'s blind spot: a partially built page resolves `unverified`
+    // (`resolveFieldsByIdentity` returns it for ANY field count below expected, including `0/N`; `resolveCountVk` for
+    // any partial component count; "no `--built.pages` entry" too), which leaves `buildMissing === 0` on the most
+    // common intermediate state of a run — and the line then read "YOUR BUILD is not short … nothing here is built"
+    // while fields were genuinely absent, routing a repair round away from real build work. `builderOpen ===
+    // buildMissing + builder-owned unverified` covers BOTH halves of the builder's own work, so the pure-rejection
+    // case this ticket targets still yields `builderOpen === 0` and keeps its new banner.
+    const buildIsShort = pageArg || (verifyRes.builderOpen ?? 0) > 0;
+    const banner = buildIsShort ? "YOUR BUILD is incomplete" : "the RUN is not done — but YOUR BUILD is not short";
+    let repairAdvice = "build the missing pieces / file the on-stand evidence, then re-verify";
+    if (pageArg) repairAdvice = "build / complete the pieces named in the rows, then re-verify";
+    else if (!buildIsShort) repairAdvice = "the open rows are the read-only verifier's / judge's to file or re-file — re-run the evidence pass, then re-verify; nothing here is built";
     const headline = pageArg
       ? `${verifyRes.builderOpen} open deliverable(s) YOU OWN across ${pageGaps.length} page(s)`
-      : `${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
-    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
+      : `${verifyRes.buildMissing} MISSING from the build${rejectedNote} + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
+    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — ${banner}: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }

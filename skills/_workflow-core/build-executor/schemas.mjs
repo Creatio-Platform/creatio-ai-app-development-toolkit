@@ -280,10 +280,11 @@ export const RECONCILE_SCHEMA = {
     staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
-    // pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO `openRows`. The FILE
-    // also carries its own `planGaps`; this channel deliberately does NOT transcribe it (ENG-95857 — the
-    // plan-level verdict has ONE home, `--units.planGaps` below, and this channel is the BUILD verdict), which is
-    // why `RECONCILE_SHAPE.verify` names no `planGaps` either and the step-4 prompt says so in as many words.
+    // planGaps, buildMissing, rejected, pages["<key>"] = { complete, buildComplete, builderOpen, missing,
+    // buildMissing, unverified } }`, NO `openRows`. The FILE also carries its own `planGaps`; this channel
+    // deliberately does NOT transcribe it (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`
+    // below, and this channel is the BUILD verdict), which is why `RECONCILE_SHAPE.verify` names no `planGaps`
+    // either and the step-4 prompt says so in as many words.
     // The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
     // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
     // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
@@ -373,12 +374,32 @@ export const RECONCILE_SHAPE = {
   // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. Per
   // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
   // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
-  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
+  // ENG-95901 (reopened) — `buildMissing` is the builder-owned half of `missing` (rationale: designspec.mjs
+  // `verifyTally`), REQUIRED per page for the same reason `buildComplete` is: an agent drops a field nothing asks
+  // for, and a dropped one sends the arithmetic back to the conflated `missing`. `rejected` stays an optional total —
+  // derivable (`missing - buildMissing`, both top-level), so an old answer degrades to arithmetic rather than to a
+  // wrong number.
+  //
+  // PR review — `buildMissing` is REQUIRED at the TOP LEVEL too, and that is the level the run's own close line reads:
+  // `shortfallText(state.verify)` feeds `completionLine` and the after-preflight log, and `verdictOf` fills the
+  // returned `buildMissing`/`rejected` from the same object. `reconcileShapeErrors` faults only on `required` and
+  // skips any key that is `undefined`, so an answer copying the summary faithfully except for this one field was
+  // ACCEPTED, `shortfallOf` fell back to `missing`, and the run closed with the conflated `3 MISSING` — the exact
+  // defect this ticket was reopened for, on the exact sentence the close report presents. This is the PR's own
+  // argument one level up: the contract only holds when the asker (the prompt) and the refuser (this shape) both
+  // carry the field. Zero wire cost — `verifySummary` already publishes it and the prompt already orders it copied.
+  //
+  // PR review — `unfiled` is gone from `types` and from the prompt's copy list. Nothing in `skills/**` read it, and
+  // the "derivable, so it degrades to arithmetic" justification that covers `rejected` does NOT cover it: its stated
+  // derivation (`unverified - (builderOpen - buildMissing)`) needs a top-level `builderOpen` that this channel
+  // deliberately does not carry. It was one more field name the Reconcile agent had to transcribe with the right type
+  // on the run's largest structured answer — a type fault away from a full retry — for a number nothing reads.
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'buildMissing', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer' },
-    map: { pages: { required: ['complete', 'buildComplete'],
-      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer' },
+    map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {
