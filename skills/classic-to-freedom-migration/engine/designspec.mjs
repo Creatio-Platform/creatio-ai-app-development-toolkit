@@ -827,12 +827,16 @@ export function renderDesignSpec(result, opts = {}) {
   //    These three worklists together are "the ⚠ worklist" the SKILL's rules refer to.
   //  • child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist — GENUINE open
   //    decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed.
-  //  • the member ledger, which is the completeness proof.
+  //  • the member ledger (the completeness proof) — kept on the standalone `--spec` surface only (ENG-96327), see below.
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
     ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
-    ...renderMemberLedger(result.coverage),
+    // ENG-96327: the Member ledger is dense per-kind coverage accounting (mapped/decision/resolved/context/decoration/
+    // unaccounted) a non-technical approver cannot act on. Keep it on the standalone `--spec` surface (QA / the build
+    // agent) but OUT of the human approval plan (`embedded`). The coverage GATE is unaffected (computed in migrate.mjs),
+    // and any `unaccounted` gap is still surfaced by the ⛔ COVERAGE INCOMPLETE banner renderPlan prints.
+    ...(opts.embedded ? [] : renderMemberLedger(result.coverage)),
   );
 
 

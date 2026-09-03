@@ -5355,12 +5355,12 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm → Member ledger",
+  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm (Member ledger is --spec-only, ENG-96327)",
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
       const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
-        "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
+        "#### ⚠ Confirm before I build"].map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
     },
     () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));
@@ -5625,8 +5625,9 @@ check("⚠ Imperative logic: EVERY client method has a row — the defect was me
   () => impSpecSection);
 check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
   /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
-check("member ledger: rendered with per-kind dispositions AND counted zeros (a kind with no members is recorded, not omitted)",
-  /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec));
+check("member ledger: kept on --spec (per-kind dispositions + counted zeros) but NOT in the human approval plan (ENG-96327)",
+  /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec)
+  && !/#### Member ledger/.test(renderPlan(impRun, {})));
 
 // ---- the ⛔ COVERAGE GATE: blocks on an unaccounted member, clears on a recorded disposition ----
 // A schema whose ONLY content is an unmappable member: the mapper produces no artifact for a bare `rules` block
