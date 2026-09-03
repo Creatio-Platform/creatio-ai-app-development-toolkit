@@ -676,5 +676,45 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => ({ calls: advanceCalls.length, withoutRequires: withoutRequires.map((c) => c.slice(0, 120)) }));
 }
 
+/* ENG-96483 REVIEW (Major) — THE MODULE'S VERIFICATION CONTRACT HAS ONE SOURCE OF TRUTH, AND THIS PINS IT.
+   There were three competing declarations of what verifying this module means — the CI job's enumerated steps,
+   `engine/package.json` `scripts.test`, and this directory's README — and only the CI one was enforced, i.e. the
+   one a contributor cannot see from inside the module. Someone following the documented path ran roughly half the
+   gate and pushed a branch that failed checks they had no way to know to run, the drift check included.
+
+   `scripts.test` is now the declaration. CI still runs the same commands as SEPARATE steps on purpose (each with
+   `if: always()`, so one runner's failure does not hide another's), which a single `npm test` step would lose — so
+   the guarantee is this assertion instead: the two lists must name the same runners, in the same order. */
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const enginePkg = JSON.parse(readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/engine/package.json"), "utf8"));
+  const prYml = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8");
+  // The engine-goldens job only — the file carries other jobs whose `run:` lines are none of this contract's
+  // business (the upstream-drift job runs `verify-vendor-upstream.mjs`, which is not part of the module's gate).
+  // Sliced from the job's `name:` to the next line at job indentation, so a step added to a LATER job cannot
+  // silently join this list.
+  const jobAt = prYml.indexOf("name: Classic\u2192Freedom engine goldens");
+  const nextJob = jobAt < 0 ? -1 : prYml.slice(jobAt).search(/\n {2}[A-Za-z0-9_-]+:\n/);
+  const jobSrc = jobAt < 0 ? "" : prYml.slice(jobAt, nextJob < 0 ? undefined : jobAt + nextJob);
+  // Both sides reduced to the same vocabulary: the basename each command actually executes, plus `--check`.
+  const runnersIn = (text) => (text.match(/[A-Za-z0-9_-]+\.mjs(?:\s+--check)?/g) || [])
+    .map((m) => m.replace(/\s+/g, " ").trim())
+    .filter((m) => !/_testkit|strip-comments/.test(m));
+  const fromPkg = runnersIn(enginePkg.scripts?.test || "");
+  const fromCi = runnersIn(jobSrc);
+  check("ENG-96483 review (Major): the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
+    fromCi.length > 0 && fromPkg.length === fromCi.length && fromPkg.every((r, i) => r === fromCi[i]),
+    () => ({ scriptsTest: fromPkg, ciSteps: fromCi }));
+  check("ENG-96483 review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, all four runners and the drift check are all in it",
+    ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs"]
+      .every((r) => fromPkg.includes(r)),
+    () => fromPkg);
+  // And the README no longer states a claim nothing enforces.
+  const readme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
+  check("ENG-96483 review (Major): the README no longer prescribes its own two-runner subset, nor claims it is 'exactly what the CI job runs' — it points at the one declaration instead",
+    !/This is exactly what the CI job/.test(readme) && /scripts\.test/.test(readme) && /npm test/.test(readme),
+    () => readme.split("\n").filter((l) => /CI job|npm test|scripts\.test/.test(l)).slice(0, 5).join("\n"));
+}
+
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

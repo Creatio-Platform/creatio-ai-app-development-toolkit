@@ -148,6 +148,16 @@ const CLIO_TYPE_ALIAS = {
 // ONE normalization for both the control choice and the reader-facing type label — they diverged before on the
 // numeric codes, and a label reading `Currency2` next to a control chosen for `money` is the same class of bug.
 const normalizeDvt = (t) => CLIO_TYPE_ALIAS[t] || DATAVALUETYPE_CODE[t] || t;
+// ENG-96483 review (Blocker) — the two types whose VALUE must never reach an editable cleartext field. They are
+// IDENTIFIED precisely (DVT_TYPE_NAME has entries for HASH_TEXT / SECURE_TEXT), so the generic `field-control`
+// bucket — whose reason says the type "was not recognized" — was factually wrong about them AND truncated its
+// column list at 12 entries, so on a dense page the secret column could be the one that is not named. Their own
+// decision kind, and their own emitted control, keep the exposure legible instead of relying on that.
+const SECRET_DVT = new Set(["hashtext", "securetext"]);
+const secretTypeOf = (type) => {
+  const t = normalizeDvt(String(type ?? "").toLowerCase());
+  return SECRET_DVT.has(t) ? t : null;
+};
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
@@ -240,6 +250,12 @@ function fieldTypeLabel(col, meta, ctl) {
   if (ctl.type === "crt.Checkbox" || t === "boolean") return "Boolean";
   if (ctl.picker === "datetime" || t === "datetime") return "Date/time";
   if (ctl.picker === "date" || t === "date") return "Date";
+  // ENG-96483 review (Blocker) — the two SECRET types get their own label. `scalarControl` withholds a control
+  // for them on purpose, but the label fell through to plain `Text`, so the Layout table in `plan.md` — the
+  // verbatim operator deliverable — rendered an encrypted or hashed column indistinguishably from any other text
+  // column. The Type cell must never be able to read `Text` for one of these.
+  if (t === "hashtext") return "Hashed text (not migrated)";
+  if (t === "securetext") return "Encrypted text (not migrated)";
   if (t === "integer") return "Integer";
   if (["decimal", "float", "money"].includes(t)) return "Decimal";
   if (ctl.multiline) return t === "richtext" ? "Rich text" : "Long text";
@@ -689,6 +705,7 @@ function mapFields(ctx, containers) {
   // after the loop. The relocation / control-defaulting / naming behavior is unchanged — only the reporting folds.
   const collisionByContainer = new Map(); // parent -> { count, gridCols, sample: [] }
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
+  const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -815,8 +832,15 @@ function mapFields(ctx, containers) {
     // the nearest existing columns only as a secondary hint for the rarer renamed/typo case.
     const nearMissing = missingColumn ? nearestColumns(col, cols) : [];
     const ctl = control(meta.type, f.contentType, meta.ref);
-    if (!ctl && !missingColumn) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
-    const c = ctl || { type: "crt.Input" };
+    // ENG-96483 review (Blocker) — a HASH_TEXT / SECURE_TEXT column is FAIL-CLOSED here. `scalarControl` withheld
+    // the control deliberately, and the caller used to undo that one line later by defaulting to an editable
+    // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
+    // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
+    // than folded into the "type was not recognized" bucket, which was untrue for these two.
+    const secretType = (!ctl && !missingColumn) ? secretTypeOf(meta.type) : null;
+    if (!ctl && !missingColumn && !secretType) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
+    if (secretType) secretCols.push({ col, type: secretType });
+    const c = ctl || (secretType ? { type: "crt.Input", readOnly: true } : { type: "crt.Input" });
     // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
     // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
     nameCount[col] = (nameCount[col] || 0) + 1;
@@ -1103,6 +1127,14 @@ function mapFields(ctx, containers) {
     const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
     needsDecision.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
       reason: `${fieldControlCols.length} field(s): the entity column exists but its TYPE was not recognized (an unmapped/exotic DataValueType code that get-entity-schema-properties returned as a number), OR no \`manifest.entityColumns\` was supplied to resolve types — defaulted to \`crt.Input\`. Confirm the control on-stand: ${shown}` });
+  }
+  // ENG-96483 review (Blocker) — the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
+  // here on purpose: the whole point is that the operator can see every column whose value the classic page put
+  // on screen and that this migration is NOT carrying over.
+  if (secretCols.length) {
+    const named = secretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
+    needsDecision.push({ kind: "secret-column", item: `(${secretCols.length} fields)`,
+      reason: `${secretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
   }
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
   // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.

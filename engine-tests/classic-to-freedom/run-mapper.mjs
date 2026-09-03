@@ -8292,6 +8292,32 @@ try {
   check("ENG-95543: a named-but-unreadable registry file is reported as `unreadable-export`, not silently replaced by the vendored index",
     strip(resolveRunIndex({ componentRegistry: { file: "/no/such.json" } }, { readFile: () => { throw new Error("ENOENT"); } })).source === "unreadable-export",
     () => strip(resolveRunIndex({ componentRegistry: { file: "/no/such.json" } }, { readFile: () => { throw new Error("ENOENT"); } })));
+  // ENG-96483 review (Blocker) — THE PARSED-BUT-NOT-A-REGISTRY-EXPORT CASES. The `file` branch used to accept
+  // anything whose bytes parsed as JSON and report it as `stand-export`, the strongest of the three evidence
+  // levels, while `indexFromRegistryExport` defaulted `components` to `[]`. Every emitted `crt.*` type then read as
+  // `unknown-component` and the operator was told "your stand does not carry crt.Input" instead of "that file is
+  // not a registry export". The only negative the suite had was `readFile` throwing, which is why this survived
+  // four review rounds — nothing here threw.
+  const asFile = (payload) => strip(resolveRunIndex(
+    { componentRegistry: { file: "/x.json" } }, { readFile: () => payload }));
+  check("ENG-96483 review: a file that PARSES but carries no `components` array never resolves to `stand-export` — it is `unreadable-export`, and the reason says the file is not a registry export rather than accusing the stand",
+    asFile("{}").source === "unreadable-export" && /not a registry export/.test(asFile("{}").error)
+      && asFile(JSON.stringify({ name: "some-package" })).source === "unreadable-export"
+      && asFile(JSON.stringify({ components: { "crt.Button": {} } })).source === "unreadable-export",
+    () => [asFile("{}"), asFile(JSON.stringify({ name: "some-package" })), asFile(JSON.stringify({ components: {} }))]);
+  check("ENG-96483 review: a well-formed export carrying ZERO components is refused too — validating a run against an empty registry reports every type as absent, which is a wholesale wrong diagnosis rather than a weak one",
+    asFile(JSON.stringify({ components: [] })).source === "unreadable-export"
+      && /NO components/.test(asFile(JSON.stringify({ components: [] })).error),
+    () => asFile(JSON.stringify({ components: [] })));
+  check("ENG-96483 review: the raw `JSON.parse` message never reaches the reported error — it embeds a snippet of the offending input on Node 20+, and `migrate.mjs` renders `reg.error` verbatim into `plan.md`, so file bytes would land in the operator deliverable",
+    asFile("{ this is not json").source === "unreadable-export"
+      && asFile("{ this is not json").error === "the file's bytes are not JSON"
+      && !/this is not json/.test(asFile("{ this is not json").error),
+    () => asFile("{ this is not json"));
+  check("ENG-96483 review (positive control): a REAL export through the same `file` branch still resolves to `stand-export` — the guard refuses non-exports, it does not close the branch",
+    asFile(JSON.stringify(exportJson)).source === "stand-export",
+    () => asFile(JSON.stringify(exportJson)));
+
   // The export shape (what a clio registry export / the CDN registry looks like) converts into the index shape, so
   // ONE validator serves both the vendored index and a stand's answer.
   const exportIdx = indexFromRegistryExport(exportJson);
@@ -9024,11 +9050,36 @@ try {
   // `field-control` is emitted as ONE aggregated row naming its columns in the reason, so assert against that.
   // The field still defaults to `crt.Input` in the ChangeSet — the invariant is that the DECISION fires, so a human
   // confirms the control on-stand rather than the engine quietly claiming it knows one.
+  //
+  // ENG-96483 review (Blocker): the two SECRET types are NO LONGER in this bucket. Its reason says the type "was
+  // not recognized", which is untrue for HASH_TEXT / SECURE_TEXT — the engine knows them precisely — and it caps
+  // its column list at 12, so on a dense page the secret column could be the one that is not named. They get their
+  // own decision kind, their own emitted control and their own label, all asserted below.
   const secCtl = secRun.changeSet.needsDecision.find((d) => d.kind === "field-control");
-  check("ENG-95412: HASH_TEXT / SECURE_TEXT / STAGE_INDICATOR / BLOB are identified but keep raising the loud `field-control` decision — never silently mapped to a control the engine claims to know (this pins the ENGINE's rule; only BLOB is a type Classic itself refuses to render)",
-    !!secCtl && ["H", "S", "I", "B"].every((n) => new RegExp(String.raw`\b${n}\b`).test(secCtl.reason)),
+  const secVals = (n) => secRun.changeSet.viewConfigDiff.find((o) => o.name === n)?.values;
+  check("ENG-95412: STAGE_INDICATOR / BLOB are identified but keep raising the loud `field-control` decision — never silently mapped to a control the engine claims to know (this pins the ENGINE's rule; only BLOB is a type Classic itself refuses to render)",
+    !!secCtl && ["I", "B"].every((n) => new RegExp(String.raw`\b${n}\b`).test(secCtl.reason))
+      && !/\bH\b|\bS\b/.test(secCtl.reason),
     () => ({ needsDecision: secRun.changeSet.needsDecision.filter((d) => d.kind === "field-control"),
       emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I", "B"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
+
+  // ENG-96483 review (Blocker), the FAIL-CLOSED half: an encrypted or hashed column must not reach the ChangeSet as
+  // an editable cleartext input, and the only reader-facing surface must not call it ordinary text. Both were true
+  // before this: `scalarControl` withheld the control on purpose and the caller undid that one line later with
+  // `ctl || { type: "crt.Input" }`, while `fieldTypeLabel` had no arm for either type.
+  const secOwn = secRun.changeSet.needsDecision.find((d) => d.kind === "secret-column");
+  check("ENG-96483 review: a HASH_TEXT / SECURE_TEXT column is NOT emitted as an editable cleartext input — it is read-only in the ChangeSet, which is the technical control the aggregated decision row could not be",
+    secVals("H")?.readOnly === true && secVals("S")?.readOnly === true,
+    () => ({ H: secVals("H"), S: secVals("S") }));
+  check("ENG-96483 review: and the Layout table's Type cell can never read `Text` for one of them — `typeLabel` is what the design spec renders, and it now names what the column actually is instead of being indistinguishable from an ordinary text column",
+    secVals("H")?.typeLabel === "Hashed text (not migrated)"
+      && secVals("S")?.typeLabel === "Encrypted text (not migrated)",
+    () => ({ H: secVals("H")?.typeLabel, S: secVals("S")?.typeLabel }));
+  check("ENG-96483 review: the two secret columns get their OWN decision kind, naming both columns IN FULL and stating that the type IS recognized — not the `field-control` bucket whose reason says it was not",
+    !!secOwn && /\bH\b/.test(secOwn.reason) && /\bS\b/.test(secOwn.reason)
+      && /hashed/i.test(secOwn.reason) && /encrypted/i.test(secOwn.reason)
+      && !/was not recognized/.test(secOwn.reason),
+    () => ({ secretColumn: secOwn, fieldControl: secCtl?.reason }));
 
   // ---- ENG-95412: clio's friendly type names, which the control table did not accept ----
   // OBSERVED, not inferred: on a live stand Contact.Phone/MobilePhone/HomePhone report `type: PhoneNumber`,

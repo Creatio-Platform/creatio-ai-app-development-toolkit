@@ -17,7 +17,7 @@
 // HELPERS ---8<---` sentinels, so the offline suite that slices that block out of
 // the SHIPPED artifact and imports it keeps testing what actually ships.
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -204,13 +204,33 @@ function build(target) {
 
 // Only when run as a program. Importing this module (the offline suite does, to reach
 // `stripImports`) must not write the shipped files or call `process.exit`.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+//
+// ENG-96483 review (Major) — COMPARE AGAINST THE REAL PATH. Node resolves the ESM main entry to its REAL path for
+// `import.meta.url` (symlinks resolved, unless `--preserve-symlinks-main`), while `process.argv[1]` keeps the path
+// as it was invoked. Any checkout reached through a symlinked path component — a macOS `/tmp`, a symlinked home, a
+// container image that links the workspace, a pnpm/worktree layout, a bin shim — made the two hrefs differ, so this
+// file executed NOTHING and exited 0. Both failure modes are silent successes: `--check` printed nothing and passed
+// the CI drift gate without checking anything, and a plain run wrote no files while a developer believed the
+// artifact was regenerated. That is a fail-open in the one gate that stops the shipped artifact from diverging from
+// the core. `isMain` below therefore resolves argv[1] first, and the run asserts it actually did something.
+const isMain = (() => {
+  if (!process.argv[1]) return false
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+  } catch {
+    // An argv[1] that cannot be resolved is not this module — degrade to not-main rather than throwing at import.
+    return false
+  }
+})()
+if (isMain) {
   const check = process.argv.includes('--check')
   let failed = 0
+  let handled = 0
   for (const target of TARGETS) {
     const outPath = path.join(ROOT, target.out)
     const next = build(target)
     const current = safeRead(outPath)
+    handled++
     if (check) {
       if (current !== next) {
         failed++
@@ -223,6 +243,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       writeFileSync(outPath, next, 'utf8')
       process.stdout.write(`${current === next ? '=' : '→'} ${target.out} (${next.split('\n').length} lines)\n`)
     }
+  }
+  // A zero-target run can never pass as green: if the loop above emitted no per-target line there is nothing to
+  // conclude from an exit 0, and that is exactly what the symlinked-main defect looked like from CI.
+  if (!handled) {
+    process.stderr.write('❌ build-workflows: no targets were processed — nothing was checked or written, so this run proves nothing\n')
+    process.exit(1)
   }
   process.exit(failed ? 1 : 0)
 }
