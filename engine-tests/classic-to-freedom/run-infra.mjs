@@ -5317,6 +5317,11 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
      unrelated branch, with no warning on the PR that spent the margin. The band makes the squeeze visible one PR
      before it blocks one; it never fails the suite, because a file inside its budget is not a defect. */
   const WORKFLOW_SCRIPT_INLINE_CAP = 524288;
+  // Briefly raised to 492000 in ENG-95857, while the generated `freedom-build-executor.workflow.js` sat at
+  // ~482 KB and left under 2 KB of headroom, so any prompt edit tripped this check. Reverted once the
+  // remedy that raise pointed at landed on the base branch: `engine-tests/build-workflows/strip-comments.mjs`
+  // strips comments from the generated artifact, which brought it to ~280 KB. The original, tighter guard
+  // stands. Figures are approximate on purpose — run this check for the current number.
   const WORKFLOW_SCRIPT_BUDGET = 480000;
   const WORKFLOW_SCRIPT_WARN_AT = Math.floor(WORKFLOW_SCRIPT_BUDGET * 0.97);
   for (const file of wfFiles) {
