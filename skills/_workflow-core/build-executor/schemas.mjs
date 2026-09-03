@@ -280,8 +280,11 @@ export const RECONCILE_SCHEMA = {
     staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
-    // planGaps, pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO
-    // `openRows`. The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
+    // pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO `openRows`. The FILE
+    // also carries its own `planGaps`; this channel deliberately does NOT transcribe it (ENG-95857 — the
+    // plan-level verdict has ONE home, `--units.planGaps` below, and this channel is the BUILD verdict), which is
+    // why `RECONCILE_SHAPE.verify` names no `planGaps` either and the step-4 prompt says so in as many words.
+    // The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
     // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
     // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
     // open rows from its own scoped `--verify --page` gate instead. `RECONCILE_SHAPE.verify` REQUIRES `buildComplete`
@@ -289,8 +292,9 @@ export const RECONCILE_SCHEMA = {
     // `complete`, which folds in unfiled evidence a builder cannot clear.
     verify: { type: 'object' },
     exitCode: { type: 'integer' },
-    // D12 — the PLAN-level legs of exit 2, each named by its own stderr line. Empty means the only
-    // problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
+    // D12 — the PLAN-level legs of exit 2: `--units.planGaps` copied VERBATIM (ENG-95857), all FOUR checks the
+    // engine performs. A machine verdict, NOT a set an agent assembled from stderr lines it retyped. Empty means
+    // the only problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
     planGaps: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
     continuationOf: { type: 'object', additionalProperties: { type: 'integer' } },
@@ -372,7 +376,7 @@ export const RECONCILE_SHAPE = {
   verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', planGaps: 'string[]' },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer' },
     map: { pages: { required: ['complete', 'buildComplete'],
       types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
 }

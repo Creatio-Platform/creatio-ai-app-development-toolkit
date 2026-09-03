@@ -57,8 +57,10 @@ export const meta = {
 // JSON — `{ complete, missing, unverified, builderOpen, planGaps, pages: { "<key>":
 // { complete, buildComplete, builderOpen, missing, unverified, openRows } } }` — and
 // `RECONCILE_SHAPE.verify` below mirrors the COUNTS-ONLY `--verify-summary` cut of it
-// (ENG-95930): same per-page fields, no `openRows`, and no TOP-LEVEL `builderOpen` —
-// that one is `--verify-json`'s alone. The rest of the table is field for field (the host schema
+// (ENG-95930): same per-page fields, no `openRows`, no TOP-LEVEL `builderOpen` —
+// that one is `--verify-json`'s alone — and, since ENG-95857, no `planGaps` either:
+// the plan-level verdict has ONE home, `--units.planGaps`, and this channel is the
+// BUILD verdict. The rest of the table is field for field (the host schema
 // declares the properties; their insides live in that table). The reconcile agent copies the file; it does not read the
 // Markdown table and it does not re-derive a number. Before that file existed the
 // only per-page counts were in a table an agent had to transcribe, which put a

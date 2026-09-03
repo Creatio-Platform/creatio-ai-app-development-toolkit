@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -2684,6 +2684,102 @@ check("placement: `--units` publishes the approved applicationCode for `existing
   && unitsFor(pagesOnlyPlacement).applicationCode === null
   && unitsFor(undefined).applicationCode === null,
   () => ({ existing: unitsFor(FULL_PLACEMENT).applicationCode, newApp: unitsFor(newAppPlacement).applicationCode }));
+
+/* ---- ENG-95857 — the PUBLISHED plan-gap set covers ALL FOUR plan-level checks -------------------------------
+   `planGaps()` is the engine's OWN classification of "the PLAN is short, and no amount of building clears it".
+   It named three checks — a blocked correctness gate, incomplete structure, unaccounted coverage — and silently
+   omitted the fourth the CLI already gates `--plan` on: plan COMPLETENESS (unfilled required planMeta,
+   unresolved on-stand signals, unsettled placement). The build executor's HARD STOP 2 reads this set, so the
+   omission is what let a build start on a plan `--plan` had already refused.
+   Applicability is carried EXPLICITLY (`planCompleteness`), never inferred from whether the fields are empty: an
+   absent `planMeta` is exactly what a legitimate `--spec` run looks like AND what an unfilled `--plan` run looks
+   like, so emptiness cannot tell them apart. `--plan` / `--units` are the plan-governed modes — the same pair
+   `--resolved-gates` rides, for the same reason: this is a PLAN/RUN-time fact about the manifest, not a
+   `--verify` verdict — and `--spec` / `--verify` are deliberately left exactly as they were. */
+const gapsOf = (manifest, opts) => planGaps(runMigration(manifest, { baseDir: FIX }), opts);
+// The gate-clean, structure-complete, coverage-complete SU manifest of the `--plan` golden above, so the ONLY
+// variable below is which plan-completeness leg is left unanswered.
+const pgBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU" };
+// T1 — the planMeta leg reaches the published set.
+const pgNoPlanMeta = gapsOf({ ...pgBase, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }, { planCompleteness: true });
+check("ENG-95857 T1: an unfilled required planMeta key reaches the PUBLISHED plan-gap set as its own `plan INCOMPLETE` kind, naming the check that fired",
+  pgNoPlanMeta.length === 1 && /^plan INCOMPLETE/.test(pgNoPlanMeta[0]) && /planMeta/.test(pgNoPlanMeta[0]) && /scope/.test(pgNoPlanMeta[0]),
+  () => pgNoPlanMeta);
+// T2 — the other two legs, each on its own.
+const pgNoSignals = gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, placement: FULL_PLACEMENT }, { planCompleteness: true });
+check("ENG-95857 T2: an unresolved on-stand signal key reaches the published set, naming `signals` (the remedy is a stand check recorded in the manifest, not a rebuild)",
+  pgNoSignals.length === 1 && /^plan INCOMPLETE/.test(pgNoSignals[0]) && /signals/.test(pgNoSignals[0]) && /dcm/.test(pgNoSignals[0]),
+  () => pgNoSignals);
+const pgNoPlacement = gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS }, { planCompleteness: true });
+check("ENG-95857 T2: a placement blocker reaches the published set, naming `placement`",
+  pgNoPlacement.length === 1 && /^plan INCOMPLETE/.test(pgNoPlacement[0]) && /placement/.test(pgNoPlacement[0]),
+  () => pgNoPlacement);
+const pgLockedTarget = gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  placement: { ...FULL_PLACEMENT, targetPackageEditable: { resolved: true, value: false, evidence: "InstallType 1" }, sectionHost: { resolved: true, mode: "pages-only-no-menu" } } }, { planCompleteness: true });
+check("ENG-95857 T2: a LOCKED target package (a resolved placement that still blocks) reaches the published set — the gate is on the blockers, not on the keys being present",
+  pgLockedTarget.length === 1 && /placement/.test(pgLockedTarget[0]), () => pgLockedTarget);
+// All four clear ⇒ still empty. A widened classification that fired on a clean plan would stop every build.
+check("ENG-95857 T1: a plan with all four checks clear publishes an EMPTY set even with the plan-completeness legs applicable",
+  gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }, { planCompleteness: true }).length === 0,
+  () => gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }, { planCompleteness: true }));
+// T4 — THE NEGATIVE CONTROL, and the whole reason applicability is carried rather than inferred. `checklistOpts`
+// computes planMetaMissing / signalsMissing / placementBlockers on EVERY run, so an ungated widening would report
+// all three on a `--spec` run that was never asked to satisfy them — newly stopping runs that pass today.
+check("ENG-95857 T4: the same manifest with NOTHING answered publishes an EMPTY set when the plan-completeness legs do not apply (a `--spec`/`--verify` run)",
+  gapsOf(pgBase, {}).length === 0 && gapsOf(pgBase, undefined).length === 0, () => gapsOf(pgBase, {}));
+const pgSpecRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
+  input: JSON.stringify(pgBase), encoding: "utf8" });
+check("ENG-95857 T4: a `--spec` run over a manifest with no planMeta / signals / placement still exits 0 and says nothing about plan gaps",
+  pgSpecRun.status === 0 && !/PLAN INCOMPLETE/.test(pgSpecRun.stderr || "") && !/plan INCOMPLETE/.test(pgSpecRun.stdout || ""),
+  () => ({ status: pgSpecRun.status, stderr: (pgSpecRun.stderr || "").slice(0, 200) }));
+// …and the `--verify` verdict files the executor also copies stay untouched: they are the BUILD verdict, and a
+// `--verify` run over a manifest that legitimately carries no planMeta must not newly stop a run (R3).
+check("ENG-95857 T4: the `--verify` summary/report keep publishing an EMPTY plan-gap set for a planMeta-less manifest — the build verdict is not where plan completeness is decided",
+  () => { const r = runMigration(pgBase, { baseDir: FIX });
+    const v = { complete: true, missing: 0, unverified: 0, builderOpen: 0, pages: {} };
+    return verifySummary(r, v).planGaps.length === 0 && verifyReport(r, v).planGaps.length === 0 },
+  () => verifySummary(runMigration(pgBase, { baseDir: FIX }), { complete: true, missing: 0, unverified: 0, builderOpen: 0, pages: {} }).planGaps);
+// The MACHINE-READABLE publication the build executor reads. `--units` is the plan-governed run the executor
+// makes before its first stand write, so this — not a stderr line an agent retypes — is where its HARD STOP 2
+// gets the classification from.
+check("ENG-95857 R1/R2: `--units` PUBLISHES the plan-gap set, so the executor's stop reads the engine's own verdict instead of transcribed stderr",
+  () => { const u = unitsFor(undefined); return Array.isArray(u.planGaps) && u.planGaps.length === 1 && /placement/.test(u.planGaps[0]) },
+  () => unitsFor(undefined).planGaps);
+check("ENG-95857 R1: `--units` publishes `[]` for a clean plan — REQUIRED and never omitted, so a reader can tell a clean plan from an engine that publishes nothing",
+  () => { const u = unitsFor(FULL_PLACEMENT); return Array.isArray(u.planGaps) && u.planGaps.length === 0 },
+  () => unitsFor(FULL_PLACEMENT).planGaps);
+// PR review (F5) — the four kinds were asymmetric on stderr IN THIS MODE: `gate`/`structure`/`coverage` write
+// their ⛔ line in every mode, while the three plan-completeness lines are `--plan`-only, so a `--units` run
+// published the fourth kind in the artifact and said nothing on the channel the other three already use. The line
+// added for it is INFORMATIONAL — the exit code stays 0 by design ("read the array, not the exit code") — and it
+// reports the entries the artifact carries, so the two channels cannot disagree about the same run.
+const unitsGapRun = runWithPlacement(undefined, "--units");
+check("ENG-95857 F5: a `--units` run over a plan-incomplete manifest ALSO reports the gap on stderr, naming the published set, while the exit code deliberately stays 0",
+  unitsGapRun.status === 0 && /plan-completeness gap\(s\) — carried in `units.planGaps`/.test(unitsGapRun.stderr || "")
+  && /placement/.test(unitsGapRun.stderr || ""),
+  () => ({ status: unitsGapRun.status, stderr: (unitsGapRun.stderr || "").slice(0, 300) }));
+const unitsCleanRun = runWithPlacement(FULL_PLACEMENT, "--units");
+check("ENG-95857 F5: a `--units` run over a CLEAN plan says nothing on stderr — the line reports the PUBLISHED set, so silence and `[]` can never disagree",
+  unitsCleanRun.status === 0 && !/plan-completeness gap/.test(unitsCleanRun.stderr || ""),
+  () => (unitsCleanRun.stderr || "").slice(0, 300));
+// PR review — THE SLICE'S OMISSION IS AN INVARIANT, so it is pinned rather than only asserted in a comment.
+// `pageUnitsSlice` carries every OTHER run-level field (`planVersion`, `sectionHost`, `applicationCode`) and
+// deliberately leaves `planGaps` out: a slice reaches a builder only after the run-level plan-gap stop has passed,
+// so carrying it would hand a build agent a plan gap it cannot close. Nothing made that fail if someone added it
+// "for symmetry" — the very thing the comment above `pageUnitsSlice` tells the next reader not to do.
+const sliceGapUnits = unitsFor(undefined);
+check("ENG-95857 PR review: the `--units --page` SLICE carries NO `planGaps` own-property even when the run-level set is non-empty — a builder is never handed a plan gap it cannot close",
+  () => { const slice = pageUnitsSlice(sliceGapUnits, "main");
+    return sliceGapUnits.planGaps.length > 0 && slice !== null && !Object.hasOwn(slice, "planGaps")
+      && Object.hasOwn(slice, "planVersion") && Object.hasOwn(slice, "sectionHost") },
+  () => ({ runLevel: sliceGapUnits.planGaps, sliceKeys: Object.keys(pageUnitsSlice(sliceGapUnits, "main") || {}) }));
+
+// R1 AC5 — the plan document a human approves against names the SAME kind the machine set does, so the two can
+// never be read as disagreeing.
+check("ENG-95857 R1: the plan document's ⛔ banner names the plan-completeness kind whenever the published set does",
+  /PLAN INCOMPLETE — placement not settled/.test(planWithPlacement(undefined).stdout || ""),
+  () => (planWithPlacement(undefined).stdout || "").split("\n").filter((l) => /INCOMPLETE/.test(l)).join("\n"));
+
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -7524,7 +7620,11 @@ const PG_MANIFEST = {
   signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
-const pgOpts = checklistOpts(PG_MANIFEST);
+// `planCompleteness: true` mirrors what the `--units` CLI passes (the literal in migrate.mjs's `--units` branch,
+// which is where the reasoning for it being a literal rather than a shared constant lives) — `--units` is a
+// plan-governed run, and the byte-identity check below compares this object against that CLI's output, so the two
+// callers must supply the same opts or the drift detector fires on the opts rather than on the producer.
+const pgOpts = { ...checklistOpts(PG_MANIFEST), planCompleteness: true };
 const pgUnits = pageUnits(pgRun, pgOpts);
 // The page keys the ROWS are stamped with — derived, never hardcoded, so this stays honest under a key-format change.
 const pgRowKeys = [];

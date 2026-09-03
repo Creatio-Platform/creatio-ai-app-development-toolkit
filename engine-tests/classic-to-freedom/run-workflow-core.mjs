@@ -40,9 +40,15 @@ import * as bex from "../../skills/_workflow-core/build-executor/core.mjs";
 import { makeContext, makePaths } from "../../skills/_workflow-core/build-executor/context.mjs";
 import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
   packagePreconditionStop, selfCheckStillShort, inContextParkableKeys, selfCheckMismatches,
-  planInvalidNext, componentReplanClause, componentTypeMismatches,
+  planInvalidNext, componentReplanClause, componentTypeMismatches, planGapKinds, planGapNext,
 } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
+// The ENGINE's own producer of the plan-gap entries. This suite otherwise knows the engine only by path, but
+// the plan-gap vocabulary is a string-typed contract BETWEEN the two modules (PR review, F1): the engine writes
+// the entries and `planGapKinds` above re-derives their taxonomy by containment. Asserting each side against
+// its own hand-written strings, in its own suite, is exactly what let a reword pass green while every stop
+// degraded to the unclassified fallback — so the producer is imported here and fed to the real consumer.
+import { planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { CLAUDE_HOST, makeExecute, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
 import { codexHost, codexSingleAgentHost } from "../../skills/_workflow-core/adapters/codex.mjs";
 import { genericHost, explainMissing } from "../../skills/_workflow-core/adapters/generic-cli.mjs";
@@ -1109,7 +1115,10 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       schemaNamePrefixEmpty: false,
-      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } },
+      // No `verify.planGaps`: the Reconcile prompt now names the fields to copy from the counts-only summary and
+      // that is not among them (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`). Keeping it here
+      // would make the suite's model answer describe a shape the contract no longer asks for.
+      verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, pages: { main: { complete: true, buildComplete: true } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     };
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));
@@ -1129,6 +1138,142 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
     check("build-executor cli: the return names the artifacts an operator has to read, on every exit",
       done.result.verifyTable === "/mig/verify.md" && done.result.queueFile === "/mig/build-queue.json" && done.result.mode === "auto");
 
+    /* ENG-95857 (T3) — HARD STOP 2 must fire from the ENGINE'S OWN ARTIFACT and from nothing else.
+       The answer below carries `planGaps` exactly as `--units.planGaps` published it: no plan-level stderr line
+       is quoted anywhere in it, `notes` is empty, and the verify summary's own `planGaps` is still `[]` (it is
+       the BUILD verdict and is not where plan completeness is decided). The stop must still happen, before the
+       first stand write, and must name WHICH check fired — until this change the reconcile agent was told to top
+       the set up from stderr lines it retyped, so omitting or paraphrasing one silently suppressed the stop. */
+    {
+      const gapRun = path.join(tmp, "plangap.json");
+      cli("start", gapRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      cli("next", gapRun);
+      const gapFile = path.join(tmp, "plangap-answer.json");
+      writeFileSync(gapFile, JSON.stringify({ ...green, notes: "",
+        planGaps: ["plan INCOMPLETE — on-stand signals not resolved (4): dcm, processes, printables, deduplication"] }));
+      const subGap = cli("submit", gapRun, "reconcile.baseline", gapFile);
+      check("build-executor T3: a Reconcile answer whose ONLY plan-level input is the engine's published set is accepted",
+        subGap.status === 0, () => subGap.stderr);
+      const gapDone = JSON.parse(cli("next", gapRun).stdout);
+      check("build-executor T3: the run STOPS on `plan-gap` with no plan-level stderr text anywhere in the answer — the stop is driven by the artifact, and a build that is otherwise green (verify complete, planGaps empty in the verify summary) does not proceed",
+        gapDone.status === "done" && gapDone.result.stopped === "plan-gap" && gapDone.result.rounds === 0,
+        () => JSON.stringify(gapDone.result).slice(0, 400));
+      // `result.planGaps` alone proves nothing here — it is the SUBMITTED answer echoed back through
+      // `planGaps: state.planGaps`, a line this change does not touch, so asserting it passes on the unfixed
+      // tree too. `result.next` is the field `planGapNext` actually produces, and it is what an operator reads.
+      check("build-executor T3: the stop's `next` REPORTS which plan-level check fired and sends the operator to the MANIFEST for a plan-completeness gap",
+        () => /plan INCOMPLETE/.test(gapDone.result.next || "") && /in the manifest/.test(gapDone.result.next)
+          && !/fixed in the stand/.test(gapDone.result.next),
+        () => gapDone.result.next);
+    }
+    // …and the OTHER remedy, which is the whole reason the kind is named: a BLOCKED correctness gate is a fact
+    // about the stand or the input schemas, and telling that operator to "fix the manifest" sends them to the
+    // wrong file. Until this fixture existed no test exercised the gate branch at all.
+    {
+      const gateRun = path.join(tmp, "plangap-gate.json");
+      cli("start", gateRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      cli("next", gateRun);
+      const gateFile = path.join(tmp, "plangap-gate-answer.json");
+      writeFileSync(gateFile, JSON.stringify({ ...green, notes: "",
+        planGaps: ["gate BLOCKED (2 correctness signal(s))"] }));
+      cli("submit", gateRun, "reconcile.baseline", gateFile);
+      const gateDone = JSON.parse(cli("next", gateRun).stdout);
+      check("build-executor T3: a BLOCKED correctness gate sends the operator to the STAND / input schemas, NOT the manifest — the per-kind remedy is the point of naming the kind",
+        () => gateDone.result.stopped === "plan-gap" && /gate BLOCKED/.test(gateDone.result.next || "")
+          && /fixed in the stand or the input schemas/.test(gateDone.result.next)
+          && !/answered in the manifest/.test(gateDone.result.next),
+        () => gateDone.result.next);
+    }
+    // The entry is MEANT to be `--units.planGaps` verbatim, but the field is typed only as `string[]` — nothing
+    // structurally stops a paraphrase or a pasted stderr line. A leading-token parse read `migrate.mjs: ⛔ GATE
+    // BLOCKED …` as the kind `migrate.mjs: ⛔` and routed a blocked gate to the manifest remedy: confidently
+    // wrong, which is worse than not classifying. These three shapes must all reach the STAND remedy, and an
+    // entry in no known vocabulary must fall back to naming both remedies rather than picking one.
+    check("build-executor T3: kind recognition survives a paraphrase — the uppercase stderr headline and a whole pasted stderr line both classify as `gate BLOCKED` and get the stand remedy",
+      () => ["GATE BLOCKED", "migrate.mjs: ⛔ GATE BLOCKED — do NOT build. Broken merge.", "gate BLOCKED (2 correctness signal(s))"]
+        .every((g) => planGapKinds([g]).join() === "gate BLOCKED" && /fixed in the stand/.test(planGapNext([g]))),
+      () => ["GATE BLOCKED", "migrate.mjs: ⛔ GATE BLOCKED — do NOT build."].map((g) => planGapKinds([g])));
+    check("build-executor T3: an entry in NO published vocabulary yields no kind and falls back to naming BOTH remedies with the engine's own text — never one half guessed",
+      () => { const n = planGapNext(["something the engine never published"]);
+        return planGapKinds(["something the engine never published"]).length === 0
+          && /could not classify/.test(n) && /something the engine never published/.test(n)
+          && /fixed in the stand or the input schemas/.test(n) && /in the manifest/.test(n) },
+      () => planGapNext(["something the engine never published"]));
+    /* PR REVIEW (F1) — THE VOCABULARY IS A CONTRACT, AND BOTH SIDES OF IT ARE PINNED HERE.
+       `planGaps()` in the engine PRODUCES the entries; `PLAN_GAP_KINDS` in the executor's helpers RE-DERIVES their
+       taxonomy by containment. Until this block the two literal sets were asserted only against their own suite's
+       hand-written strings — `run-mapper` checks the engine's output with its own regexes, the cases above check
+       `planGapKinds` with strings typed out here — and NOTHING fed an engine-produced entry into the executor's
+       recogniser. A reword on either side therefore left every golden green while every stop degraded to the
+       unclassified fallback: the kind name (R2's third criterion) and the per-kind remedy, this change's whole
+       operator-facing value, lost silently. `run-mapper`'s T1/T2 own the manifest -> entry direction; this owns
+       entry -> kind, and the two together close the loop. */
+    {
+      const engineEntries = {
+        "gate BLOCKED": planGaps({ gate: { blocked: true, reasons: ["broken merge", "effect not representable"] } }),
+        "structure INCOMPLETE": planGaps({ structure: { complete: false, issues: ["detail schema not supplied"] } }),
+        "coverage INCOMPLETE": planGaps({ coverage: { complete: false, issues: ["UsrOne", "UsrTwo"] } }),
+        "plan INCOMPLETE": planGaps({ planMetaMissing: ["scope"], signalsMissing: ["dcm"],
+          placementBlockers: ["target package `UsrSU` is locked (InstallType 1)"] }, { planCompleteness: true }),
+      };
+      check("build-executor F1: EVERY entry the engine's `planGaps()` publishes classifies as exactly the kind the engine named — the contract is pinned ACROSS the module boundary, not inside one side of it",
+        () => Object.entries(engineEntries).every(([kind, entries]) => entries.length > 0
+          && entries.every((e) => planGapKinds([e]).join() === kind)),
+        () => Object.fromEntries(Object.entries(engineEntries).map(([k, v]) => [k, v.map((e) => planGapKinds([e]))])));
+      check("build-executor F1: the four kinds the engine emits are four DISTINCT kinds to the executor — a renamed or dropped word on either side turns this red instead of downgrading a stop in silence",
+        () => planGapKinds(Object.values(engineEntries).flat()).length === 4,
+        () => planGapKinds(Object.values(engineEntries).flat()));
+      /* PR REVIEW (F2) — a SINGLE entry naming two kinds. The engine publishes joined strings on this same
+         vocabulary (`planGapBanner` joins the active gaps with ` · ` into one sentence, and so does the
+         `verifyIncomplete` stderr line), so an entry quoting one names two kinds at once. `gapKind`'s first-match
+         read collapsed it to whichever word sits earliest in `PLAN_GAP_KINDS` and printed ONE remedy while BOTH
+         halves were broken; the both-remedies fallback covered entries matching NO kind, not MULTIPLE. */
+      const joined = [...engineEntries["gate BLOCKED"], ...engineEntries["coverage INCOMPLETE"]].join(" · ");
+      check("build-executor F2: one entry carrying the engine's own ` · ` join classifies as BOTH kinds and reports BOTH remedies — the stand for the gate, the manifest for the rest, never one half of the answer",
+        () => { const n = planGapNext([joined]);
+          return planGapKinds([joined]).length === 2 && /gate BLOCKED/.test(n) && /coverage INCOMPLETE/.test(n)
+            && /fixed in the stand or the input schemas/.test(n) && /the rest are in the manifest/.test(n) },
+        () => ({ kinds: planGapKinds([joined]), next: planGapNext([joined]) }));
+      /* PR REVIEW (F3) — and the same shape as an ARRAY, which is the mixed-kind branch `planGapNext` reasons
+         about explicitly (`the rest are …`, reachable only when a gate clause precedes it) and the likeliest real
+         shape, since one manifest can fire a gate and a coverage gap at once. Every case above carries ONE kind. */
+      const mixed = [...engineEntries["gate BLOCKED"], ...engineEntries["coverage INCOMPLETE"]];
+      check("build-executor F3: a planGaps ARRAY carrying a gate entry AND a non-gate entry names both kinds and both remedies — the mixed-kind branch, previously untested",
+        () => { const n = planGapNext(mixed);
+          return /gate BLOCKED · coverage INCOMPLETE/.test(n) && /fixed in the stand or the input schemas/.test(n)
+            && /the rest are in the manifest/.test(n) },
+        () => planGapNext(mixed));
+      /* PR REVIEW (F6) — THE PLACEMENT LEG, COMPOSED: the string the ENGINE publishes for an unsettled placement,
+         travelling through the run state into HARD STOP 2. Both halves were pinned separately (`run-mapper` proves
+         the leg reaches the published set, the cases above prove the stop fires on a published entry) but nothing
+         exercised the composition — which is the actual behaviour change this ticket makes: a placement-less plan
+         that used to proceed past this stop into `placementAndComponentStop` is now a RE-PLAN, and the evidence for
+         it was a one-off manual check of the archived Applicant plan rather than a guard. The false-positive
+         direction is covered where it belongs, by `run-mapper`'s T4 negative controls: a run the plan-completeness
+         checks do not govern, and a clean plan, both keep publishing an EMPTY set. */
+      const placementEntries = planGaps({ placementBlockers: ["target package `UsrSU` is locked (InstallType 1)"] },
+        { planCompleteness: true });
+      const placeRun = path.join(tmp, "plangap-placement.json");
+      cli("start", placeRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
+      cli("next", placeRun);
+      const placeFile = path.join(tmp, "plangap-placement-answer.json");
+      writeFileSync(placeFile, JSON.stringify({ ...green, notes: "", planGaps: placementEntries }));
+      cli("submit", placeRun, "reconcile.baseline", placeFile);
+      const placeDone = JSON.parse(cli("next", placeRun).stdout);
+      check("build-executor F6: the engine's own PLACEMENT entry stops the run at `plan-gap` with zero rounds — no stand write — and the report names placement and sends the operator to the MANIFEST",
+        () => placeDone.status === "done" && placeDone.result.stopped === "plan-gap" && placeDone.result.rounds === 0
+          && /plan INCOMPLETE/.test(placeDone.result.next || "") && /placement/.test(placeDone.result.next)
+          && /in the manifest/.test(placeDone.result.next) && !/fixed in the stand/.test(placeDone.result.next),
+        () => ({ entries: placementEntries, stopped: placeDone.result.stopped, next: placeDone.result.next }));
+    }
+    // …and the prompt no longer asks for the transcription at all. This is the regression boundary: as long as the
+    // instruction to "add any PLAN-level stderr line" survives, the set the stop reads is partly hand-retyped
+    // prose, and the fourth kind — which has no stderr line in that enumeration — can never reach it.
+    check("build-executor T3: the Reconcile prompt sources `planGaps` from `--units.planGaps` VERBATIM and no longer instructs the agent to top it up from stderr lines",
+      next1.items[0].prompt.includes("`--units.planGaps`")
+        && !/add any PLAN-level stderr line/.test(next1.items[0].prompt)
+        && !/STRUCTURE INCOMPLETE`, `COVERAGE INCOMPLETE/.test(next1.items[0].prompt),
+      () => (next1.items[0].prompt.match(/^.*planGaps.*$/gm) || []).join("\n---\n").slice(0, 900));
     /* AC5 AT THE RUN LEVEL, EXECUTED (PR #128 review, round 17, Major 9).
        Every consumption DECISION was executed by the offline helper suite, but the RUN-level guarantee — a
        persisted unconsumed answer plus a green gate must NOT report `complete`, must hand the row back, and must
