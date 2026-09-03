@@ -860,6 +860,26 @@ console.log("\n===== the migration-workflow CLI =====");
       stopState.status === "stopped" && stopState.stop.missing.join(",") === "independentRoles" && /Critique/.test(stopState.stop.where),
       () => JSON.stringify(stopState.stop));
 
+    // The RUN-level gate, on every replay path. `next` passed WORKFLOW_REQUIRES and `submit`/`status`
+    // did not, so negotiateRun ran against `requires = []` there and always answered ok: a run-level
+    // guarantee no step happens to repeat was refused on one path and silently accepted on the other
+    // two. `subAgents` is in WORKFLOW_REQUIRES and on no step's own `requires`, so it isolates the
+    // run-level gate from the step-level one.
+    const runGateRun = path.join(tmp, "run-gate.json");
+    cli("start", runGateRun, "--workflow", "classic-behaviour-analysis", "--input", inputFile, "--host", "codex", "--no-sub-agents");
+    const gateNext = cli("next", runGateRun);
+    const gateSubmit = cli("submit", runGateRun, "context.census-shared-core", write("ctx-gate.json", CTX));
+    const gateStatus = cli("status", runGateRun);
+    // NOTE on what this pins and what it does not: `subAgents` is BOTH in WORKFLOW_REQUIRES and on the
+    // steps' own `requires`, so the stop it proves on `submit`/`status` is reachable through the
+    // step-level gate too. What it does pin is that `status` now routes through advanceOrExplain -
+    // exit 3 and the operator remedy, instead of the raw message stuffed into `pending.error`.
+    // Isolating the run-level gate behaviourally needs a workflow whose WORKFLOW_REQUIRES names a
+    // capability no step repeats; the static assertion in run-infra.mjs guards the wiring until then.
+    check("cli: a capability stop is reported the same way on `next`, `submit` AND `status` — exit 3 with the remedy, so a REFUSED host never looks like a broken CLI on whichever path the operator took",
+      [gateNext, gateSubmit, gateStatus].every((r) => r.status === 3 && /subAgents/.test(r.stderr) && /Nothing was executed/.test(r.stderr)),
+      () => [gateNext, gateSubmit, gateStatus].map((r) => `${r.status}:${r.stderr.slice(0, 120)}`).join(" || "));
+
     // A TAIL-PARTIAL BATCH, one `cli submit` per item. The only shape the CLI/Codex path can produce for a
     // multi-item batch, and the one every scenario above missed: the 2-scope INPUT yields ONE describe item, so
     // no test ever submitted item 2 of a batch. `rowsPerAgent: 1` packs the same two scopes into two batches.
@@ -872,17 +892,23 @@ console.log("\n===== the migration-workflow CLI =====");
     cli("start", batchRun, "--workflow", "classic-behaviour-analysis", "--input", batchInput, "--host", "codex");
     cli("submit", batchRun, "context.census-shared-core", write("ctx3.json", CTX));
     const batch1 = JSON.parse(cli("next", batchRun).stdout);
-    check("cli: `rowsPerAgent: 1` packs the two scopes into a TWO-item Describe batch — the precondition every earlier scenario lacked",
-      batch1.status === "pending" && batch1.items.length === 2,
+    // The host was started at the CLI default --parallelism 1, so the negotiated width is 1 and the
+    // payload advertises exactly one item with `remaining: 1` behind it. Advertising both would
+    // contradict the driver's own "waves of 1" log and hand a serial host a two-wide fan-out.
+    check("cli next: an N-item batch on a --parallelism 1 host advertises ONE item and reports the rest as remaining — the negotiated width binds on the payload, not only in the log",
+      batch1.status === "pending" && batch1.items.length === 1
+        && batch1.width === 1 && batch1.remaining === 1 && batch1.submit.length === 1,
       () => JSON.stringify(batch1).slice(0, 300));
-    const [firstId, secondId] = batch1.items.map((i) => i.id);
+    const firstId = batch1.items[0].id;
     const afterFirst = cli("submit", batchRun, firstId, write("desc-b1.json", FULL_DESCRIBE));
     check("cli submit: item 1 of a two-item batch is accepted — a partial batch is a normal state, not a corrupt journal",
       afterFirst.status === 0, () => afterFirst.stderr);
     const batch2 = cli("next", batchRun);
+    const batch2Json = JSON.parse(batch2.stdout);
+    const secondId = batch2Json.items[0]?.id;
     check("cli next: with item 1 recorded and item 2 not, the run still ADVANCES and names exactly the remaining id — a journal that merely runs short is not drift",
-      batch2.status === 0 && JSON.parse(batch2.stdout).status === "pending"
-        && JSON.parse(batch2.stdout).items.map((i) => i.id).join(",") === secondId,
+      batch2.status === 0 && batch2Json.status === "pending"
+        && batch2Json.items.length === 1 && batch2Json.remaining === 0 && secondId && secondId !== firstId,
       () => batch2.stdout + batch2.stderr);
     const batchStatus = cli("status", batchRun);
     check("cli status: a run stopped mid-batch is still INSPECTABLE — the operator can see what was done before deciding what to do next",
@@ -891,6 +917,15 @@ console.log("\n===== the migration-workflow CLI =====");
     check("cli submit: item 2 completes the batch and the run moves on to Critique — the batch is finishable, so a multi-batch surface is analysable at all",
       afterSecond.status === 0 && /critique/.test(JSON.parse(cli("next", batchRun).stdout).items.map((i) => i.id).join(",")),
       () => afterSecond.stderr);
+
+    // The same batch on a host that CAN run both at once: the cap must widen, not stay at 1.
+    const wideRun = path.join(tmp, "wide-run.json");
+    cli("start", wideRun, "--workflow", "classic-behaviour-analysis", "--input", batchInput, "--host", "codex", "--parallelism", "4");
+    cli("submit", wideRun, "context.census-shared-core", write("ctx4.json", CTX));
+    const wide = JSON.parse(cli("next", wideRun).stdout);
+    check("cli next: the SAME batch on a --parallelism 4 host advertises both items — the cap is the negotiated width, not a fixed one",
+      wide.status === "pending" && wide.items.length === 2 && wide.width === 2 && wide.remaining === 0,
+      () => JSON.stringify(wide).slice(0, 300));
 
     // Resume: a killed process comes back and re-reads the journal.
     const resumed = JSON.parse(cli("status", runFile).stdout);

@@ -11,6 +11,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from runtime.scripts.mcp_client import (
+    TOOL_TREE_ROOT,
+    PathOutsideStore,
+    PathStore,
     PersistentMcpClient,
     USAGE,
     _HelpRequested,
@@ -206,29 +209,57 @@ class McpClientTests(unittest.TestCase):
                 {"environment-name": "local"},
             )
 
-    def test_load_cli_arguments_reads_a_file_beside_the_checkout(self):
-        # The SECOND base. On Windows a checkout is routinely on a different volume from the
-        # profile, so a home-only store refused a fixture sitting next to the repo — which is
-        # exactly where a tool's own inputs live.
-        with tempfile.TemporaryDirectory(dir=os.getcwd()) as temp:
+    def test_load_cli_arguments_reads_a_file_under_the_tool_tree(self):
+        # The SECOND base, and the home store is patched to somewhere unrelated so this test can
+        # only pass if the TOOL-TREE store is the one that resolved. Previously the fixture went
+        # under os.getcwd(), which on a Linux CI runner is itself inside $HOME — so the home store
+        # served it on the first iteration and the second base was never exercised at all.
+        with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
             args_file = os.path.join(temp, "args.json")
             with open(args_file, "w", encoding="utf-8") as handle:
                 handle.write('{"environment-name":"local"}')
 
-            self.assertEqual(
-                load_cli_arguments(args_file=args_file),
-                {"environment-name": "local"},
-            )
+            with tempfile.TemporaryDirectory() as unrelated_home:
+                with patch("runtime.scripts.mcp_client.home_store",
+                           return_value=PathStore(unrelated_home)):
+                    self.assertEqual(
+                        load_cli_arguments(args_file=args_file),
+                        {"environment-name": "local"},
+                    )
 
     def test_load_cli_arguments_refuses_a_file_under_neither_base(self):
-        # Refused BEFORE any read, and the message names both bases so the caller can see where to
-        # move the input. A system directory is under neither the profile nor a checkout.
+        # PathOutsideStore specifically, not the base ValueError: PathOutsideStore subclasses it,
+        # but so does json.JSONDecodeError, so `assertRaises(ValueError)` stayed green with the
+        # whole containment loop deleted — /etc/hosts reads fine and simply fails to parse.
         outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
         traversal = os.path.join(os.path.expanduser("~"), "..", "..", "etc", "hosts")
         for requested in (outside, traversal):
             with self.subTest(requested=requested):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(
+                    PathOutsideStore, "under neither your home directory nor the tool tree"
+                ):
                     load_cli_arguments(args_file=requested)
+
+    def test_load_cli_arguments_refuses_before_reading_the_file(self):
+        # "Refused BEFORE any read" was a comment, not an assertion. Now it is one.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        with patch.object(Path, "read_text") as read_text:
+            with self.assertRaises(PathOutsideStore):
+                load_cli_arguments(args_file=outside)
+        read_text.assert_not_called()
+
+    def test_load_cli_arguments_is_not_widened_by_the_working_directory(self):
+        # The base must be a program constant. When it was derived from os.getcwd(), running from
+        # the filesystem root rooted the second store there and resolved every file on the volume,
+        # including other accounts' profiles.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        previous = os.getcwd()
+        try:
+            os.chdir(os.path.abspath(os.sep))
+            with self.assertRaises(PathOutsideStore):
+                load_cli_arguments(args_file=outside)
+        finally:
+            os.chdir(previous)
 
     def test_load_cli_arguments_rejects_multiple_sources(self):
         with self.assertRaisesRegex(ValueError, "exactly one argument source"):

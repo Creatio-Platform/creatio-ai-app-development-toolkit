@@ -61,7 +61,15 @@ const TARGETS = [
 // Is this line an `import` (single- or multi-line) or a RE-EXPORT? Both are dropped: the inlined modules share one
 // scope, so every name is already in it. Split out so `inlineOne` stays a loop over lines.
 const isImportStart = (line) => /^import\s/.test(line)
-const endsImport = (line) => /from\s+'[^']+'\s*$/.test(line.trim()) || /^\}\s+from\s+'[^']+'/.test(line.trim())
+// Both quote styles, an optional trailing semicolon, and an optional trailing line comment. The
+// previous single-quote-only shape failed OPEN: a `from "./y.mjs"` line left `skipping` armed and
+// every following line was discarded until something else happened to end with `from '...'`, so an
+// arbitrary span of the module vanished from the generated artifact with no error - and `--check`
+// could not catch it, because it compares two outputs of the same broken transform.
+const endsImport = (line) => {
+  const trimmed = line.trim().replace(/\s*(?:\/\/.*)?$/, '').replace(/;$/, '')
+  return /from\s+(['"])[^'"]+\1$/.test(trimmed) || /^\}\s+from\s+(['"])[^'"]+\1$/.test(trimmed)
+}
 // A re-export has nothing to inline. Stripping `export ` off one left a bare `{ a, b }` — a block of expression
 // statements that does nothing and reads like a mistake, which is what it was. Two questions, asked separately,
 // because one regex with an optional trailing group next to `\s*$` backtracks super-linearly.
@@ -75,20 +83,49 @@ function inlineOne(rel) {
   const src = readFileSync(path.join(CORE, rel), 'utf8')
   const out = []
   let skipping = false
-  for (const line of src.split('\n')) {
+  let importStartLine = 0
+  const lines = src.split('\n')
+  for (const [i, line] of lines.entries()) {
     if (skipping) {
-      if (endsImport(line)) skipping = false
+      if (endsImport(line)) {
+        skipping = false
+        continue
+      }
+      // A multi-line import that runs into a top-level declaration means endsImport did not
+      // recognise its specifier. Fail CLOSED here: consuming to EOF would delete the rest of the
+      // module from a generated, Sonar-excluded, un-line-reviewed artifact - the worst failure
+      // mode available to this tool.
+      if (/^(?:export\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s/.test(line)) {
+        throw new Error(
+          `${rel}: unterminated import starting at line ${importStartLine + 1} ` +
+            `(${lines[importStartLine].trim()}) - reached a top-level declaration at line ${i + 1}. ` +
+            'endsImport does not recognise that specifier form; fix the pattern rather than the source.',
+        )
+      }
       continue
     }
     if (isImportStart(line)) {
       // A single-line import ends on this line; a braced one continues.
-      if (!endsImport(line)) skipping = true
+      if (!endsImport(line)) {
+        skipping = true
+        importStartLine = i
+      }
       continue
     }
     if (isReExport(line)) continue
     out.push(line.replace(/^export\s+(default\s+)?/, ''))
   }
-  return `// ===== inlined from _workflow-core/${rel} =====\n${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`
+  if (skipping) {
+    throw new Error(
+      `${rel}: unterminated import starting at line ${importStartLine + 1} ` +
+        `(${lines[importStartLine].trim()}) - reached end of file.`,
+    )
+  }
+  // The blank-line collapse is deliberately NOT applied: it rewrote module text blindly, so two
+  // blank lines inside a prompt template literal would have made the Claude host and the CLI host
+  // send different bytes while each suite still passed against its own artifact. The generated
+  // file is not hand-read, so the cosmetic gain was not worth that.
+  return `// ===== inlined from _workflow-core/${rel} =====\n${out.join('\n').trim()}\n`
 }
 
 // Top-level identifier collisions would silently shadow one another once the

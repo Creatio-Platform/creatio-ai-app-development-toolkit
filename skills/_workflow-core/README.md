@@ -124,6 +124,16 @@ An adapter declares what it has; the core declares what each step needs.
 | `humanApproval` | no | explicit stop |
 | `persistentState` | no | explicit stop (no resume) |
 
+### Which adapter actually satisfies what
+
+A declaration is a promise, so it is worth recording where a promise is
+structural rather than incidental.
+
+| capability | `generic-cli` / `codex` | `claude-workflow` |
+|---|---|---|
+| `persistentState` | **yes** — `cli.mjs` writes the run journal to the state file after every replay, which is what `resume` reads | **no** — `driver.mjs` appends to an in-memory `run` and exposes no persistence hook, and the template is evaluated with no filesystem. Flipping this to yes needs an `io.saveRun(run)` seam so the journal can be folded into the Merge artifact |
+| `access` | declarative on both — the core records what an item is ALLOWED to touch; nothing enforces it at the tool boundary |
+
 Only wall-clock is negotiable. A host that cannot give the Critique phase a
 context that did not write the cards it is checking gets a `CapabilityError` —
 not a run that quietly self-reviews and reports the same green verdict. Every run

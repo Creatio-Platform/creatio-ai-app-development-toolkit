@@ -138,7 +138,13 @@ async function cmdNext(argv) {
     process.stdout.write(`${JSON.stringify({ status: 'done', result: res.result }, null, 2)}\n`)
     return
   }
-  const items = res.step.items.filter((i) => res.pending.includes(i.id))
+  // The advertised batch is capped at the width negotiation actually granted (min of the host's
+  // parallelism and the item count). Handing out all N commands while the driver logs "waves of W"
+  // let a host started at --parallelism 1 fan out N concurrent stand-reading agents; the extra
+  // `next` round-trip per wave is cheap next to one of those agents.
+  const width = Number(res.width) > 0 ? Number(res.width) : res.pending.length
+  const advertised = res.pending.slice(0, width)
+  const items = res.step.items.filter((i) => advertised.includes(i.id))
   if (outDir) {
     mkdirSync(outDir, { recursive: true })
     for (const item of items) {
@@ -150,6 +156,11 @@ async function cmdNext(argv) {
     status: 'pending',
     phase: items[0].phase,
     parallel: res.step.parallel,
+    // How many of these may be in flight at once, and how many are still queued behind this wave.
+    // Both are part of the machine-readable contract: `parallel: true` alone said nothing about
+    // the cap the host had already negotiated.
+    width,
+    remaining: res.pending.length - advertised.length,
     note: res.step.note || null,
     // Everything a host needs to perform the item, and nothing about HOW — the
     // how is the host's business, the what is the protocol's.
@@ -210,7 +221,17 @@ function missingRequired(schema, value) {
 // stack and exit 1 on the other) made a REFUSED host look like a broken CLI on whichever path the operator took.
 async function advanceOrExplain(run) {
   try {
-    return await advance({ core: coreFor(run, quietIo), run, host: run.host, io: quietIo })
+    // `requires` is what makes the comment above TRUE. Without it negotiateRun ran against the
+    // default `requires = []` and always answered ok, so a run-level guarantee that no step
+    // happens to repeat - persistentState and humanApproval are the obvious ones, and neither
+    // appears on any step - was refused by `next` and silently accepted by `submit` and `status`.
+    return await advance({
+      core: coreFor(run, quietIo),
+      run,
+      host: run.host,
+      io: quietIo,
+      requires: workflowOf(run).WORKFLOW_REQUIRES,
+    })
   } catch (e) {
     if (e instanceof CapabilityError) {
       process.stderr.write(`\nSTOPPED — this host cannot honour a guarantee this phase depends on:\n${explainMissing(e.missing)}\n\nNothing was executed. Re-run on a host that provides it, or declare the capability if the host does have it.\n`)
@@ -228,7 +249,10 @@ async function cmdStatus(argv) {
   let pending = null
   if (run.status !== 'done') {
     try {
-      const res = await advance({ core: coreFor(run, quietIo), run, host: run.host })
+      // Routed through advanceOrExplain so `status` meets the same run-level gate as `next` and
+      // `submit`, and so a capability stop reaches the operator as the remedy text plus exit 3
+      // rather than being stuffed into `pending.error` as a raw message.
+      const res = await advanceOrExplain(run)
       pending = res.status === 'pending' ? { phase: res.step.items[0].phase, items: res.pending } : null
       if (res.status === 'done') s.status = 'done'
     } catch (e) {

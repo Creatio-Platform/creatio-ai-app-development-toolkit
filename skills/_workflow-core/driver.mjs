@@ -60,9 +60,20 @@ export async function drive({ core, run, host, execute, io, requires = [], runBa
 export async function advance({ core, run, host, io, requires = [] }) {
   return loop({
     core, run, host, io, requires,
-    onPending: (step) => {
+    onPending: (step, gate) => {
       run.status = 'open'
-      return { stop: { status: 'pending', step, pending: pendingIds(run, step.items.map((i) => i.id)) } }
+      // `gate.width` is carried out so the CALLER can honour the negotiated concurrency. Dropping
+      // it here meant `cli next` advertised the whole batch at once while the driver's own log
+      // claimed waves of W - the payload contradicting the log is the machine-readable half, so
+      // the host acted on the wrong one.
+      return {
+        stop: {
+          status: 'pending',
+          step,
+          width: gate.width,
+          pending: pendingIds(run, step.items.map((i) => i.id)),
+        },
+      }
     },
     onDone: (result) => ({ status: 'done', result }),
   })

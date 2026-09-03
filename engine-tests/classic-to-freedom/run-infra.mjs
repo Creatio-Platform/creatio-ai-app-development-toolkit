@@ -585,5 +585,53 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
 }
 
+// ---------------------------------------------------------------------------
+// The generated workflow is Sonar-excluded and never line-reviewed, so a silently
+// LOSSY inline transform is the worst failure this build tool can have. Pin the
+// property directly: every top-level name each core module declares has to survive
+// into the artifact. This holds regardless of what shape `endsImport` grows into,
+// which the earlier quote-style-specific regex did not - an unrecognised `import`
+// left `skipping` armed and deleted an arbitrary span with no error, and `--check`
+// could not see it because it compares two outputs of the same broken transform.
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const coreDir = path.join(repoRoot, "skills/_workflow-core");
+  const generated = readFileSync(
+    path.join(repoRoot, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
+  const declRe = /^export\s+(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+  // The module list is read out of the build script itself, so this check follows the target's
+  // declared dependency order rather than every file under _workflow-core (the CLI-only adapters
+  // are deliberately not inlined into the Claude artifact).
+  const buildSrc = readFileSync(path.join(repoRoot, "scripts/build-workflows.mjs"), "utf8");
+  const modulesBlock = /modules:\s*\[([^\]]*)\]/.exec(buildSrc)?.[1] || "";
+  const inlined = [...modulesBlock.matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
+  const missing = [];
+  const modulesRead = inlined.length;
+  for (const rel of inlined) {
+    const src = readFileSync(path.join(coreDir, rel), "utf8");
+    for (const m of src.matchAll(declRe)) {
+      if (!new RegExp(`(?:^|[^\\w$])${m[1]}\\b`).test(generated)) missing.push(`${rel}:${m[1]}`);
+    }
+  }
+  check("build-workflows: every top-level export declared by a core module survives into the generated workflow — the inline transform is lossless, not merely self-consistent",
+    modulesRead > 0 && missing.length === 0, () => ({ modulesRead, missing: missing.slice(0, 20) }));
+}
+// Every replay path in the CLI must carry the workflow's run-level requirements. `next` did and
+// `advanceOrExplain` (used by `submit`) did not, so negotiateRun ran there against the default
+// `requires = []` and always answered ok - a run-level guarantee that no step happens to repeat
+// (`persistentState`, `humanApproval`) was refused on one path and silently accepted on the others.
+// Asserted statically because isolating it behaviourally needs a workflow whose WORKFLOW_REQUIRES
+// names a capability no step repeats, which `behaviour-analysis` does not.
+{
+  const cliSrc = readFileSync(path.join(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/_workflow-core/cli.mjs"), "utf8");
+  const advanceCalls = [...cliSrc.matchAll(/await advance\(\{[\s\S]{0,400}?\}\)/g)].map((m) => m[0]);
+  const withoutRequires = advanceCalls.filter((c) => !/requires:/.test(c));
+  check("cli.mjs: every `advance(...)` replay carries the workflow's WORKFLOW_REQUIRES — a run-level gate enforced on one command and not the others is a guarantee in name only",
+    advanceCalls.length >= 2 && withoutRequires.length === 0,
+    () => ({ calls: advanceCalls.length, withoutRequires: withoutRequires.map((c) => c.slice(0, 120)) }));
+}
+
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

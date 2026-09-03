@@ -651,6 +651,33 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
 
             self.assertEqual(installer.workflow_meta_name(script), "creatio-real")
 
+    def test_reads_the_name_when_the_meta_block_comment_contains_an_apostrophe(self):
+        # The meta block opens with a multi-line prose comment, and prose carries apostrophes and
+        # backticks. Treating `//` as code flipped the scanner's quote state at the apostrophe, so
+        # every later quote was out of phase and each phases[] `{` was swallowed as string content:
+        # the block then read as unterminated (a hard failure on every install and every unattended
+        # update) or ended at a wrong index that ran past `meta` into the inlined prompt text.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            script = skill_dir / "build.workflow.js"
+            script.write_text(
+                "export const meta = {\n"
+                "  // Named so it matches the host's own scope, and the `phases` below\n"
+                "  /* mirror the driver's phase list - don't reorder them. */\n"
+                "  name: 'creatio-real',\n"
+                "  phases: [{ title: 'Describe' }, { title: 'Merge' }],\n"
+                "}\n"
+                "const agentSpec = {\n"
+                "name: 'creatio-../../evil',\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(installer.workflow_meta_name(script), "creatio-real")
+
     def test_provisions_every_bundled_workflow(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

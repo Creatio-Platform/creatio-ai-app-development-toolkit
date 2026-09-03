@@ -436,6 +436,7 @@ function summary(run) {
 //             hole — including a batch of ONE — because `parallel()` never rejects
 //             and the core is written against that contract.
 
+
 // `execute(item)` must resolve `{ outcome, value?, error? }` — never throw. An
 // adapter that lets an exception escape would abort the whole run on a failure
 // the core is written to survive, so the driver normalises here rather than
@@ -464,9 +465,20 @@ async function drive({ core, run, host, execute, io, requires = [], runBatch }) 
 async function advance({ core, run, host, io, requires = [] }) {
   return loop({
     core, run, host, io, requires,
-    onPending: (step) => {
+    onPending: (step, gate) => {
       run.status = 'open'
-      return { stop: { status: 'pending', step, pending: pendingIds(run, step.items.map((i) => i.id)) } }
+      // `gate.width` is carried out so the CALLER can honour the negotiated concurrency. Dropping
+      // it here meant `cli next` advertised the whole batch at once while the driver's own log
+      // claimed waves of W - the payload contradicting the log is the machine-readable half, so
+      // the host acted on the wrong one.
+      return {
+        stop: {
+          status: 'pending',
+          step,
+          width: gate.width,
+          pending: pendingIds(run, step.items.map((i) => i.id)),
+        },
+      }
     },
     onDone: (result) => ({ status: 'done', result }),
   })
@@ -1177,6 +1189,7 @@ PRODUCE:
 // everything" is not evidence, and that is exactly how a real run left the child
 // pages at 0-of-8 described while the plan showed nothing wrong.
 
+
 const WORKFLOW = 'creatio-classic-behaviour-analysis'
 
 // What a host must be able to do before the run starts. `parallelism` is
@@ -1567,6 +1580,7 @@ function* run(rawInput, io = {}) {
 // that is deliberately all it does, so a second host cannot end up with a
 // different rule for what "the phase died" means.
 
+
 // The Claude Workflow contract, stated as capabilities:
 //  - sub-agents and independent roles: `agent()` spawns a fresh context, so a
 //    verifier genuinely cannot see the builder's reasoning;
@@ -1574,8 +1588,19 @@ function* run(rawInput, io = {}) {
 //  - parallelism: `parallel()`, capped by the host at min(16, cpus-2). 8 is
 //    declared because the workflows' own fan-out cap is 8 and the number only
 //    has to be a truthful lower bound of what the host will run at once;
-//  - persistent state: the runtime's own resume (`resumeFromRunId`) — the run
-//    journal is written by the CLI adapter, not needed here;
+//  - persistent state: DECLARED FALSE. The runtime has its own resume
+//    (`resumeFromRunId`), but that is not the guarantee `capabilities.mjs`
+//    names — "the run journal survives the process (resume)". `driver.mjs`
+//    appends to an in-memory `run` and exposes no persistence hook; the only
+//    component that ever writes a journal is `cli.mjs`. On this host that is
+//    structural: `claude-template.js` builds the run inside a script the
+//    runtime evaluates with only `args`/`log`/`phase`/`agent`/`parallel`
+//    injected — no filesystem. Declaring it true would have let negotiateRun
+//    answer ok for a guarantee this adapter cannot keep, which is exactly the
+//    failure `capabilities.mjs` exists to prevent, and the build-side leg that
+//    will carry ACCESS.STAND_WRITE is the one that needs a durable trail.
+//    Giving `drive()` an `io.saveRun(run)` seam would let this adapter fold
+//    the journal into the Merge artifact and flip this back to true;
 //  - human approval: the workflow cannot block on a person mid-run, so the
 //    approval gates are enforced as data (a recorded approval of an exact plan
 //    version), never as an interactive prompt.
@@ -1584,7 +1609,7 @@ const CLAUDE_HOST = declareHost({
   parallelism: 8,
   subAgents: true,
   structuredOutput: true,
-  persistentState: true,
+  persistentState: false,
   humanApproval: false,
   independentRoles: true,
   notes: 'Claude Code Workflow runtime (agent/parallel/phase/log injected as globals)',

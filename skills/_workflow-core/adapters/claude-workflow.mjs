@@ -23,8 +23,19 @@ import { drive } from '../driver.mjs'
 //  - parallelism: `parallel()`, capped by the host at min(16, cpus-2). 8 is
 //    declared because the workflows' own fan-out cap is 8 and the number only
 //    has to be a truthful lower bound of what the host will run at once;
-//  - persistent state: the runtime's own resume (`resumeFromRunId`) — the run
-//    journal is written by the CLI adapter, not needed here;
+//  - persistent state: DECLARED FALSE. The runtime has its own resume
+//    (`resumeFromRunId`), but that is not the guarantee `capabilities.mjs`
+//    names — "the run journal survives the process (resume)". `driver.mjs`
+//    appends to an in-memory `run` and exposes no persistence hook; the only
+//    component that ever writes a journal is `cli.mjs`. On this host that is
+//    structural: `claude-template.js` builds the run inside a script the
+//    runtime evaluates with only `args`/`log`/`phase`/`agent`/`parallel`
+//    injected — no filesystem. Declaring it true would have let negotiateRun
+//    answer ok for a guarantee this adapter cannot keep, which is exactly the
+//    failure `capabilities.mjs` exists to prevent, and the build-side leg that
+//    will carry ACCESS.STAND_WRITE is the one that needs a durable trail.
+//    Giving `drive()` an `io.saveRun(run)` seam would let this adapter fold
+//    the journal into the Merge artifact and flip this back to true;
 //  - human approval: the workflow cannot block on a person mid-run, so the
 //    approval gates are enforced as data (a recorded approval of an exact plan
 //    version), never as an interactive prompt.
@@ -33,7 +44,7 @@ export const CLAUDE_HOST = declareHost({
   parallelism: 8,
   subAgents: true,
   structuredOutput: true,
-  persistentState: true,
+  persistentState: false,
   humanApproval: false,
   independentRoles: true,
   notes: 'Claude Code Workflow runtime (agent/parallel/phase/log injected as globals)',

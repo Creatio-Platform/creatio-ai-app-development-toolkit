@@ -450,6 +450,14 @@ def _matching_brace(text: str, opening: int) -> int:
 
     Braces inside string literals are skipped, which is the only reason this is a scan rather than
     a regex: a prompt or a description in the block may contain either character.
+
+    Comments are skipped for the same reason and with more urgency. The meta block opens with a
+    multi-line prose comment, and prose carries apostrophes. Treating ``// the host\'s own scope``
+    as code flipped the quote state at that apostrophe and put every later quote out of phase, so
+    each ``phases[]`` entry\'s ``{`` was swallowed as string content: the scan then either returned
+    -1 (a hard "block is unterminated" on every install and every unattended update) or a wrong
+    index whose slice ran past ``meta`` into the inlined prompt text, re-opening the "first
+    line-initial ``name:`` anywhere in the file wins" hole this function exists to close.
     """
     depth = 0
     quote = ""
@@ -462,6 +470,16 @@ def _matching_brace(text: str, opening: int) -> int:
                 continue
             if char == quote:
                 quote = ""
+        elif char == "/" and text.startswith("//", index):
+            newline = text.find("\n", index)
+            if newline < 0:
+                return -1
+            index = newline
+        elif char == "/" and text.startswith("/*", index):
+            closer = text.find("*/", index + 2)
+            if closer < 0:
+                return -1
+            index = closer + 1
         elif char in "'\"`":
             quote = char
         elif char == "{":

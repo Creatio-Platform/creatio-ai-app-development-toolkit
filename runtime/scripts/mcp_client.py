@@ -20,7 +20,8 @@ import time
 
 # `path_store` lives one directory up (runtime/), and this script is run directly rather than
 # imported as part of a package, so the parent has to be on the path before it can be imported.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TOOL_TREE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, TOOL_TREE_ROOT)
 from path_store import PathOutsideStore, PathStore, home_store  # noqa: E402  (needs the sys.path line above)
 
 USAGE = (
@@ -790,21 +791,28 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
         # traversal are inexpressible rather than merely rejected.
         #
         # TWO bases, tried in order, because one is not enough for this entry point. The home
-        # directory is where a session export or a downloaded payload lives; the working
-        # directory is where a checkout's own fixture lives, and on Windows a checkout is
-        # routinely on a different volume from the profile (a CI runner's `D:\a\...`), which a
-        # home-only store refuses outright. Both are bases the PROGRAM chooses, never the
-        # argument -- which is the property that matters; what is excluded is everything under
-        # neither, i.e. system directories and other accounts.
-        for store in (home_store(), PathStore(os.getcwd())):
+        # directory is where a session export or a downloaded payload lives; the tool tree is
+        # where a checkout's own fixture lives, and on Windows a checkout is routinely on a
+        # different volume from the profile (a CI runner's `D:\a\...`), which a home-only store
+        # refuses outright.
+        #
+        # The second base is derived from THIS FILE, not from `os.getcwd()`. path_store's contract
+        # says the base must be "fixed by the program, never by an argument the program was called
+        # with" -- and a working directory is ambient process state the caller picks, so it is not
+        # a program constant in any useful sense. Whoever can pass `--args-file` almost always also
+        # picks the cwd, and `cd / && ... --args-file etc/hosts` rooted the second store at the
+        # filesystem root, which resolved every file on the volume including other accounts'
+        # profiles. `TOOL_TREE_ROOT` still covers the different-volume CI case and cannot be moved
+        # by the caller.
+        for store in (home_store(), PathStore(TOOL_TREE_ROOT)):
             try:
                 resolved = store.resolve(args_file)
             except PathOutsideStore:
                 continue
             return json.loads(Path(resolved).read_text(encoding="utf-8"))
         raise PathOutsideStore(
-            f"--args-file {args_file!r} is under neither your home directory nor the current "
-            f"working directory ({os.getcwd()}); move the file under one of them.")
+            f"--args-file {args_file!r} is under neither your home directory nor the tool tree "
+            f"({TOOL_TREE_ROOT}); move the file under one of them.")
     data = sys.stdin.read() if stdin_text is None else stdin_text
     if not data.strip():
         raise ValueError("--args-stdin requires JSON on stdin")
