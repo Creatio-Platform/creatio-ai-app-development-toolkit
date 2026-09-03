@@ -270,7 +270,13 @@ primary package and could not host a section at all. What each mode changes here
   another app.
 - **`new-app`** — the `app` unit already does the whole job (`create-app` → `create-app-section` on
   the MIGRATED object → `delete-app-section` for the stub), provided the plan targets a package that
-  is not on the stand yet. `new-app` over a package that ALREADY exists is a **stop**
+  is not on the stand yet. **Pass `applicationCode` exactly as published, and do not prepend the
+  stand's prefix to it** (ENG-96457): the plan DERIVES that code as the target package minus the
+  stand's `SchemaNamePrefix`, which `--units` publishes beside it as `schemaNamePrefix` together with
+  the package the pair will produce (`applicationPackage`). `create-app` applies the prefix itself, so
+  a code "helpfully" prefixed here creates `UsrUsrBusinessRuleFreedom` — the ENG-95468 identifiers
+  gate then fires and the run is lost. If `applicationPackage` and the plan's target package disagree,
+  that is a plan defect: report it, do not adjust the code. `new-app` over a package that ALREADY exists is a **stop**
   (`new-app-over-existing-package`): `create-app` mints its own package and can never produce one
   that is already there, so the unit's name-equality could not pass. The two ways out — re-plan
   against a package that does not exist yet, or attach the existing package to an application and
@@ -423,7 +429,11 @@ entry for it, and a key with no gated row of its own would be a hole by construc
 Run `--units` on the manifest first (the engine path is resolved once and passed in — see "How to
 run it"). It publishes, per page: the role, the **Classic source** schema, `expectedTemplate`,
 `targetPackage` and `expect` (including `expect.fieldNames`, the element names the fields check
-matches on) — plus the reachability keys with `appliesWhen` already decided, the evidence-record
+matches on, and `expect.fieldLayout`, each field's CELL as `{ name, row, column, colSpan?, rowSpan? }`
+— **build every field AT its published cell**, ENG-96457: the plan's field order is not its layout, and
+pouring the Layout table top-to-bottom into a multi-column container is what shipped `City1 | Country1`
+where the Classic page had `City1 | City2`. `--verify` measures the built cells against these, so a page
+with every field present and the pairing wrong is ❌ MISSING, not ✅) — plus the reachability keys with `appliesWhen` already decided, the evidence-record
 ids, the ⚠ Confirm preflight items, and a leaf-first `buildOrder`. **An invented key is silently
 "not checked", never an error** — which is why keys are read, never constructed.
 

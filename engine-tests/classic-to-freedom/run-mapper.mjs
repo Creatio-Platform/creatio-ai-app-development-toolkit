@@ -11,8 +11,12 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, PLAN_AUTHORING_NOTE} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
+// ENG-96457 (item 3) — the BUILD-side arithmetic, imported so the plan's derivation can be pinned against the very
+// function the ENG-95468 identifiers gate compares it to. Two copies of "target package minus prefix" that are
+// allowed to drift is the whole defect; this import is what makes the drift a failing check.
+import { requiredAppCode } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -946,8 +950,8 @@ check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unr
 // feature labels). The engine emits the table itself; the skill presents it verbatim.
 check("design-spec: runMigration returns a Markdown design spec string",
   typeof cli.designSpec === "string" && cli.designSpec.startsWith("## Design spec"));
-check("design-spec: ONE Layout table (Region · Element · Type · Source · Rule · Additional) under the form-page heading",
-  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec) && /Region \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
+check("design-spec: ONE Layout table (Region · Placement · Element · Type · Source · Rule · Additional — `Placement` added by ENG-96457: the field cell the plan used to compute and then throw away) under the form-page heading",
+  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec) && /Region \| Placement \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
 check("design-spec: one Layout row (PDS attribute) per effective field — nothing dropped/invented",
   cli.designSpec.split("\n").filter(l => /\| PDS\./.test(l)).length === cli.effective.fields);
 check("design-spec: legacy split tables gone (no Region map / Fields / Details & standard features)",
@@ -1499,7 +1503,7 @@ check("ENG-95218: `--units` publishes a `list` build unit — role, the classic 
   () => JSON.stringify(lpList));
 check("ENG-95218: the FORM page's `expect` shape is untouched by the list vocabulary — an executor reading a form unit sees exactly what it saw before (plus the form-page `rules`/`ruleNames`, ENG-95470 — NOT list vocabulary)",
   () => { const m = lpUnits.pages.find((p) => p.key === "main");
-    return Object.keys(m.expect).join(",") === "fields,fieldNames,tabs,details,images,rules,ruleNames"; },
+    return Object.keys(m.expect).join(",") === "fields,fieldNames,fieldLayout,tabs,details,images,rules,ruleNames"; },
   () => JSON.stringify(lpUnits.pages.find((p) => p.key === "main")?.expect));
 check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — columns and filters are MEASURED off the built page (like a form field), while a command-bar action, whose Freedom container is unresolved until ENG-94714, stays an evidence row; closing a body-answerable row on a filed record would let the builder's own claim stand in for the page",
   () => { const ids = lpUnits.evidenceRows.filter((e) => e.pageKey === "list").map((e) => e.id);
@@ -1507,10 +1511,12 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
     const byKind = Object.fromEntries(rows.filter((r) => r.list).map((r) => [r.list.kind + ":" + r.list.item, r.vk.type]));
     // 4 deliverable rows (columns · 2 filters · 1 action) + the per-page `creatio-ui-guidelines` quality gate, which
     // applies to a list page's layout like any other page's — a published key must carry exactly one of those.
-    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4
+    // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 5
     // ⚠ Confirm items + the page's TWO quality-gate rows (ENG-95859: "design pass ran" and "independently judged"
-    // are different facts, reported as two rows sharing the ONE `list#quality-gates` id below)
-    return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 4
+    // are different facts, reported as two rows sharing the ONE `list#quality-gates` id below).
+    // The 5th ⚠ Confirm is ENG-96457's `list-add-routing` — every section migration raises it, because the
+    // ADD-purpose RelatedPage binding is object-level and re-points the CLASSIC section's `Add` too.
+    return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 5
       && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 2
       && byKind["columns:set"] === "listcolumns"
       && byKind["filter:QuickFilterByDueDate"] === "listfilter" && byKind["filter:QuickFilterByStage"] === "listfilter"
@@ -1519,7 +1525,8 @@ check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — co
       // page's quality gate, and its ⚠ Confirm items — never a column or a filter
       && ids.filter((i) => i.startsWith("list#listpage:")).length === 1
       && ids.includes("list#listpage:action:runBulkAssign") && ids.includes("list#quality-gates")
-      && ids.some((i) => i.startsWith("list#confirm:list-command-bar:")); },
+      && ids.some((i) => i.startsWith("list#confirm:list-command-bar:"))
+      && ids.some((i) => i.startsWith("list#confirm:list-add-routing:")); },
   () => ({ ids: lpUnits.evidenceRows.filter((e) => e.pageKey === "list"), rows: checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list").map((r) => r.label) }));
 check("ENG-95218: `list` appears in the BUILD ORDER (a leaf — `create-app-section` mints it before the form page) and carries a parent edge like every other published key",
   () => lpUnits.buildOrder.includes("list") && lpUnits.buildOrder.indexOf("list") < lpUnits.buildOrder.indexOf("main")
@@ -1632,7 +1639,7 @@ check("ENG-95218: an approved `pages-only-no-menu` plan publishes NO `list` unit
       && rows.some((r) => /Deliberately NOT built/.test(r.label))
       && rows.some((r) => r.label.startsWith("List columns") && !r.vk)
       // …and the FORM unit keeps its own vocabulary: the degraded rows carry no `list` marker
-      && Object.keys(u.pages.find((p) => p.key === "main").expect).join(",") === "fields,fieldNames,tabs,details,images,rules,ruleNames"; },
+      && Object.keys(u.pages.find((p) => p.key === "main").expect).join(",") === "fields,fieldNames,fieldLayout,tabs,details,images,rules,ruleNames"; },
   () => ({ keys: pageUnits(lpRun, lpNoMenuOpts).pages.map((p) => p.key),
     order: pageUnits(lpRun, lpNoMenuOpts).buildOrder,
     mainExpect: pageUnits(lpRun, lpNoMenuOpts).pages.find((p) => p.key === "main")?.expect }));
@@ -2589,15 +2596,22 @@ check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Ma
   && !/## Design spec/.test(cli.plan));
 check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)",
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
-check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
-  /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
+// ENG-96457 (item 6) — the guardrail is GENERATOR guidance, so it must NOT be in the artifact a human approves.
+// It used to be `plan.md`'s last line, which read as plan content ("Supply the plan values via `manifest.planMeta`
+// and re-run …" in a delivered plan). It now reaches the agent on stderr; `PLAN_AUTHORING_NOTE` is the one copy.
+check("ENG-96457 (item 6): the plan FILE carries no generator/authoring text — no `manifest.planMeta` instruction, no 'present … VERBATIM', no Adjustments rule",
+  !/present this VERBATIM/i.test(cli.plan) && !/present the plan VERBATIM/i.test(cli.plan)
+  && !/Supply the plan values/.test(cli.plan) && !/\*Adjustments\* list/.test(cli.plan));
+check("ENG-96457 (item 6): the authoring rule still REACHES the agent — `PLAN_AUTHORING_NOTE` carries both halves (supply planMeta + re-run, and do not edit the generated tables)",
+  /manifest\.planMeta` and re-run/.test(PLAN_AUTHORING_NOTE) && /present the plan VERBATIM/.test(PLAN_AUTHORING_NOTE)
+  && /\*Adjustments\* list/.test(PLAN_AUTHORING_NOTE) && /do NOT edit, reorder, or drop/.test(PLAN_AUTHORING_NOTE));
 check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
 // resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
 // (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
-const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } };
+const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false }, schemaNamePrefix: { resolved: true, value: "Usr" } };
 // settled PLACEMENT — the app-hosting facts a `--plan` run must carry: the target package is writable, and the
 // app that will host the section is decided. This shape is the `existing-app` happy path: the app's primary
 // package IS the target package and is editable, so `create-app-section` (which takes no package parameter)
@@ -2678,12 +2692,21 @@ check("placement: `--units` republishes the approved sectionHost so a fresh-cont
   () => ({ newApp: unitsFor(newAppPlacement).sectionHost, pagesOnly: unitsFor(pagesOnlyPlacement).sectionHost, none: unitsFor(undefined).sectionHost }));
 // …and the APPLICATION the section goes into. The agent that registered the section in the failing run had no
 // code in front of it and resolved one by name off the stand — landing on an app that could not host a section.
-check("placement: `--units` publishes the approved applicationCode for `existing-app`, and null wherever no app is approved yet",
+check("placement: `--units` publishes the approved applicationCode for `existing-app` (a stand fact, published verbatim), and null wherever no app is named at all",
   unitsFor(FULL_PLACEMENT).applicationCode === "UsrSUApp"
-  && unitsFor(newAppPlacement).applicationCode === null
   && unitsFor(pagesOnlyPlacement).applicationCode === null
   && unitsFor(undefined).applicationCode === null,
-  () => ({ existing: unitsFor(FULL_PLACEMENT).applicationCode, newApp: unitsFor(newAppPlacement).applicationCode }));
+  () => ({ existing: unitsFor(FULL_PLACEMENT).applicationCode, pagesOnly: unitsFor(pagesOnlyPlacement).applicationCode }));
+// ENG-96457 (item 3) — `new-app` USED to publish `null` here ("the app does not exist yet"), which is precisely how
+// the build agent came to type a code of its own: it minted `UsrBusinessRuleFreedom` on a `Usr`-prefixed stand and
+// asked for the package `UsrUsrBusinessRuleFreedom`. Under `new-app` the code is now DERIVED — the target package
+// minus the stand's `SchemaNamePrefix` — so `prefix + code` is the plan's own target package and there is nothing
+// left to invent. `existing-app` deliberately does NOT derive (above): that code is a fact read off the stand.
+check("ENG-96457 (item 3): under `new-app` the applicationCode is DERIVED so `SchemaNamePrefix` + code == the target package — never null, and never the code with the prefix already on it",
+  () => { const u = unitsFor(newAppPlacement);
+    return u.applicationCode === "SU" && u.schemaNamePrefix === "Usr" && u.applicationPackage === "UsrSU"; },
+  () => ({ code: unitsFor(newAppPlacement).applicationCode, prefix: unitsFor(newAppPlacement).schemaNamePrefix,
+    pkg: unitsFor(newAppPlacement).applicationPackage }));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -3513,7 +3536,7 @@ check("#4 Logic: multiple filters on one attribute collapse to a single row",
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — a new tab, not template-provided",
-  /\| Tab · Next steps \(new\) \| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
+  /\| Tab · Next steps \(new\) \| [^|]*\| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
 
 // #8 — Action Dashboard = TWO Freedom components (Case progress bar + Next steps); the default template ships
 // NEITHER, so each is flagged "ADD — not in the default template" and auto-populates from the object's case.
@@ -3529,7 +3552,7 @@ check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema Manag
   dcmCs.changeSet.widgets.every((w) => /DcmSchemaManager/.test(w.note || "") && /NOT 'CaseSchemaManager'/.test(w.note || ""))
   && /DcmSchemaManager/.test(dcmCs.designSpec) && !/ManagerName='CaseSchemaManager'\b(?!.*wrong)/.test(dcmCs.designSpec));
 check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
-  /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
+  /\| Tab · Next steps \(new\) \| [^|]*\| Next steps \|/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
@@ -5310,8 +5333,8 @@ const sigBase = {
   planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "L", formTemplate: "F" },
 };
 const sigUnresolved = runMigration({ ...sigBase });
-check("signals gate: absent manifest.signals → all four unresolved",
-  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,deduplication,printables,processes",
+check("signals gate: absent manifest.signals → all five unresolved (ENG-96457 added `schemaNamePrefix`: the stand value that silently produced a double-prefixed package)",
+  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,deduplication,printables,processes,schemaNamePrefix",
   () => sigUnresolved.signalsMissing);
 check("signals gate: --plan carries the ⛔ signals-incomplete banner when unresolved",
   /PLAN INCOMPLETE — on-stand signals not resolved/.test(sigUnresolved.plan));
@@ -5320,6 +5343,7 @@ const sigResolved = runMigration({ ...sigBase, signals: {
   processes: { resolved: true, present: false },
   printables: { resolved: true, present: true, items: ["Template"] },
   deduplication: { resolved: true, present: false },
+  schemaNamePrefix: { resolved: true, value: "Usr" },
 } });
 check("signals gate: all resolved → signalsMissing empty + resolved summary (present/none) rendered",
   (sigResolved.signalsMissing || []).length === 0
@@ -5328,7 +5352,7 @@ check("signals gate: all resolved → signalsMissing empty + resolved summary (p
   && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template"),
   () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables/i.test(l)));
 check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
-  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
+  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false }, schemaNamePrefix: { resolved: true, value: "Usr" } } }).signalsMissing || []).join(",") === "dcm");
 const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
@@ -5341,7 +5365,8 @@ check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagno
    Three states must behave differently, and the third one is the whole point of the signal. */
 const dedupSig = (dedup) => runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
-  printables: { resolved: true, present: false }, ...(dedup ? { deduplication: dedup } : {}),
+  printables: { resolved: true, present: false }, schemaNamePrefix: { resolved: true, value: "Usr" },
+  ...(dedup ? { deduplication: dedup } : {}),
 } });
 const dedupRows = (r) => (r.changeSet?.needsDecision || []).filter((d) => d.kind === "dedup-on-save");
 const dedupUnresolved = dedupSig(null);
@@ -6170,7 +6195,7 @@ check("ENG-93928 precision: the actions-dashboard module (masterColumnName under
 
 // (5) the design spec must SHOW the card as page content in the side profile (not only as a Confirm line).
 check("ENG-93928 design spec: a `Profile card` Layout row in the Side profile carries the component + referenceColumn",
-  /\| Side profile \| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
+  /\| Side profile \| [^|]*\| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
   () => pcRun.designSpec.split("\n").filter((l) => /Profile card/.test(l)));
 
 // (6) STRUCTURE GATE: a recognised card whose profile schema is missing blocks the plan (its contents are
@@ -6332,7 +6357,7 @@ check("typed template: Main-scope typed row names the form template (not a gener
 check("typed template: DCM present → note recommends PageWithTabsAndProgressBarTemplate (progress bar + top island) + re-bind",
   /\*\*Template:\*\*/.test(cmb.plan) && /PageWithTabsAndProgressBarTemplate/.test(cmb.plan) && /RE-BIND/i.test(cmb.plan));
 check("typed groups: field GROUPS surface in the per-type Layout Region (Tab · … › Group), not flattened to the tab",
-  /Tab · [^\n|›]*›[^\n|]*\| Acc \|/.test(cmb.plan),
+  /Tab · [^\n|›]*›[^\n|]*\|[^\n|]*\| Acc \|/.test(cmb.plan),
   () => cmb.plan.split("\n").filter((l) => /›/.test(l)).slice(0, 4));
 check("typed shared section: inherited base details/features are listed ONCE under 'Shared across all typed forms'",
   /### Shared across all typed forms/.test(cmb.plan) && /Attachments/.test(cmb.plan.slice(cmb.plan.indexOf("### Shared across all typed forms"), cmb.plan.indexOf("### Typed page mappings"))),
@@ -7771,8 +7796,8 @@ try {
         broken: { st: broken.status, err: (broken.stderr || "").slice(0, 160) },
         noAnswer: { st: noAnswer.status, err: (noAnswer.stderr || "").slice(0, 160) } }));
     const wrongMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--checklist", RES_FLAG, resPath], { encoding: "utf8" });
-    check("ENG-95503: `--resolutions` outside `--units` is refused rather than ignored — in any other mode there is no queue item to attach an answer to, and silently accepting it would leave a caller believing answers had been applied",
-      wrongMode.status === 1 && /only applies to `--units`/.test(wrongMode.stderr || ""),
+    check("ENG-95503 × ENG-96457: `--resolutions` outside `--units`/`--plan` is refused rather than ignored — in a mode with neither a queue item nor a ⚠ row to attach an answer to, silently accepting it would leave a caller believing answers had been applied",
+      wrongMode.status === 1 && /applies to `--units` and `--plan`/.test(wrongMode.stderr || ""),
       () => ({ status: wrongMode.status, err: (wrongMode.stderr || "").slice(0, 200) }));
   } finally {
     fs.rmSync(resPath, { force: true });
@@ -8287,10 +8312,12 @@ check("ENG-94975 P3 (D3, EXPECTED side) + ENG-95218: with a SECTION named in the
 const PG_EXPECT_LITERAL = {
   // `rules`/`ruleNames` (ENG-95470) — this fixture's pages carry no business rules, so both are empty; the KEY ORDER
   // matches `pageExpect` (fields…images then rules,ruleNames) because `sameJson` compares the serialized string.
-  main: { fields: 1, fieldNames: ["MainF"], tabs: 0, details: 3, images: 0, rules: 0, ruleNames: [] },
-  "child:C1@R1D": { fields: 1, fieldNames: ["C1F"], tabs: 0, details: 1, images: 0, rules: 0, ruleNames: [] },
-  "child:G1": { fields: 1, fieldNames: ["G1F"], tabs: 0, details: 0, images: 0, rules: 0, ruleNames: [] },
-  "child:U1": { fields: 0, fieldNames: [], tabs: 0, details: 0, images: 0, rules: 0, ruleNames: [] },   // never folded — nothing is derivable
+  // `fieldLayout` (ENG-96457, item 1) — each expected field's CELL, published beside its name for the same reason:
+  // a build unit sees one page, not the plan document, so a placement stated only in `plan.md` reaches nobody.
+  main: { fields: 1, fieldNames: ["MainF"], fieldLayout: [{ name: "MainF", row: 1, column: 1, colSpan: 1, rowSpan: 1 }], tabs: 0, details: 3, images: 0, rules: 0, ruleNames: [] },
+  "child:C1@R1D": { fields: 1, fieldNames: ["C1F"], fieldLayout: [{ name: "C1F", row: 1, column: 1, colSpan: 1, rowSpan: 1 }], tabs: 0, details: 1, images: 0, rules: 0, ruleNames: [] },
+  "child:G1": { fields: 1, fieldNames: ["G1F"], fieldLayout: [{ name: "G1F", row: 1, column: 1, colSpan: 1, rowSpan: 1 }], tabs: 0, details: 0, images: 0, rules: 0, ruleNames: [] },
+  "child:U1": { fields: 0, fieldNames: [], fieldLayout: [], tabs: 0, details: 0, images: 0, rules: 0, ruleNames: [] },   // never folded — nothing is derivable
 };
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 check("ENG-94975 P4 --units content: every page's `expect` is EXACTLY what this tree yields — per-page field names, field/tab/detail/image counts (an all-zero queue is not a queue: the executor's fields check matches by NAME and cannot run without them)",
@@ -11002,6 +11029,197 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
 }
+
+
+/* ================================================================================================================
+   ENG-96457 — THE PLAN MUST NOT ASSERT WHAT THE STAND OR THE TEMPLATE CANNOT DELIVER.
+
+   Asserted against `fixtures/businessrule1`, the INPUT of the 2026-09-02 paired run (ENG-96444 without the build
+   workflow, ENG-96445 with it): the real `BusinessRule1Section` / `BusinessRule1Page` bodies, recovered from that
+   run's own session transcript (its manifest lived in the OS temp directory and is gone). Provenance and the one
+   deliberate substitution — a minimal base-template `seed` instead of the ~350-method real chain — are in
+   `fixtures/businessrule1/README.md`. Using the page that produced the defects is the point: every item below was
+   reproduced on this manifest BEFORE the fix, in the exact wording the ticket quotes.
+   ================================================================================================================ */
+const BR1 = path.join(FIX, "businessrule1", "manifest.json");
+// The fixture's own facts, named once — each is compared or built in several checks below, and a bare repeat is
+// both a Sonar S1192 duplication and a place for a typo to make an assertion silently weaker.
+const BR1_PKG = "UsrBusinessRuleFreedom";
+const BR1_TPL = "PageWithTopAreaAndTabsFreedomTemplate";
+const BR1_UID = "11111111-1111-1111-1111-111111111111";
+const BR1_FIELD_TYPE = "crt.Input";
+const br1 = (args = []) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), BR1, ...args], { encoding: "utf8" });
+const br1Plan = br1(["--plan"]);
+const br1PlanOut = br1Plan.stdout || "";
+check("ENG-96457 fixture: `--plan` on the ENG-96445 manifest is gate-clean (exit 0) — the assertions below read an APPROVABLE plan, not a blocked one",
+  br1Plan.status === 0 && /## BusinessRule — Classic → Freedom UI/.test(br1PlanOut),
+  () => ({ status: br1Plan.status, stderr: (br1Plan.stderr || "").slice(0, 300) }));
+
+// ---- item 1: the multi-column Header keeps its pairing --------------------------------------------------------
+// The classic `diff` DECLARES City1, Country1, City2, Country2 while PLACING them (r6,c0) (r7,c0) (r6,c12)
+// (r7,c12) — two rows of two. The Layout table used to print the declaration order with no coordinates, so a
+// faithful 2-column build produced `City1 | Country1` / `City2 | Country2`.
+const br1Grid = br1PlanOut.slice(br1PlanOut.indexOf("##### Grid of `Header`"));
+check("ENG-96457 (item 1): the Header grid's last two rows read `City1 | City2` and `Country1 | Country2` — the pairing the classic page has, which the declaration order destroys (the ticket's first acceptance criterion, verbatim)",
+  /\| 7 \| City1 \| City2 \|/.test(br1Grid) && /\| 8 \| Country1 \| Country2 \|/.test(br1Grid),
+  () => br1Grid.split("\n").slice(0, 14));
+check("ENG-96457 (item 1): the Layout table carries a `Placement` column and each header field's cell, and it is SORTED by the cell — City1 and City2 are adjacent rows, which they were not in declaration order",
+  /\| Region \| Placement \| Element \| Type \| Source \| Rule \| Additional \|/.test(br1PlanOut)
+  && /\| Header \| r7 · c1 \(span 12\) \| City1 \|/.test(br1PlanOut)
+  && /\| Header \| r7 · c13 \(span 12\) \| City2 \|/.test(br1PlanOut)
+  && br1PlanOut.indexOf("| City2 |") - br1PlanOut.indexOf("| City1 |") > 0
+  && br1PlanOut.indexOf("| City2 |") < br1PlanOut.indexOf("| Country1 |"),
+  () => br1PlanOut.split("\n").filter((l) => /\| Header \| r[678]/.test(l)));
+const br1Units = JSON.parse(br1(["--units"]).stdout || "{}");
+const br1Expect = br1Units.pages?.[0]?.expect || {};
+const br1Cell = (n) => (br1Expect.fieldLayout || []).find((e) => e.name === n);
+check("ENG-96457 (item 1): `--units.expect.fieldLayout` publishes each field's CELL — the build unit sees one page and never the plan document, so a placement stated only in `plan.md` reaches nobody",
+  () => { const a = br1Cell("City1"), b = br1Cell("City2"), c = br1Cell("Country1"), d = br1Cell("Country2");
+    return a?.row === 7 && a?.column === 1 && b?.row === 7 && b?.column === 13
+      && c?.row === 8 && c?.column === 1 && d?.row === 8 && d?.column === 13
+      && (br1Expect.fieldLayout || []).length === br1Expect.fields; },
+  () => ({ n: (br1Expect.fieldLayout || []).length, fields: br1Expect.fields,
+    cells: ["City1", "City2", "Country1", "Country2"].map(br1Cell) }));
+// …and `--verify` MEASURES it. A page with every expected field present by name and the pairing wrong is not the
+// page the plan approved, and it used to read exactly like it.
+const br1Built = (mispair) => {
+  const items = (br1Expect.fieldNames || []).map((n) => {
+    const c = br1Cell(n) || { row: 1, column: 1 };
+    return { name: n, type: BR1_FIELD_TYPE, layoutConfig: { row: c.row, column: c.column, colSpan: c.colSpan, rowSpan: c.rowSpan } };
+  });
+  if (mispair) {   // the ENG-96445 build: declaration order poured into a 2-column grid
+    const by = Object.fromEntries(items.map((i) => [i.name, i]));
+    by.Country1.layoutConfig = { row: 7, column: 13, colSpan: 12, rowSpan: 1 };
+    by.City2.layoutConfig = { row: 8, column: 1, colSpan: 12, rowSpan: 1 };
+  }
+  return { pages: { main: { viewConfig: { items }, packageName: BR1_PKG,
+    parentSchemaName: BR1_TPL, schemaUId: BR1_UID } } };
+};
+const br1FieldsRow = (payload) => {
+  const f = path.join(os.tmpdir(), `c2f_br1_built_${process.pid}.json`);
+  try {
+    fs.writeFileSync(f, JSON.stringify(payload));
+    // `--verify --page <key>` without `--verify-json` is a pure slice READ, not the gate — the table (and the
+    // fields row this asserts on) comes from the whole-tree verify run.
+    const out = br1(["--verify", "--built", f]).stdout || "";
+    return out.split("\n").find((l) => /\| Fields — \d+ expected \|/.test(l)) || "";
+  } finally { fs.rmSync(f, { force: true }); }
+};
+check("ENG-96457 (item 1): `--verify` closes the fields row only when each field sits at its PLANNED cell — a correctly placed build says so and names how many placements it checked",
+  /✅ Done/.test(br1FieldsRow(br1Built(false))) && /each at its planned cell/.test(br1FieldsRow(br1Built(false))),
+  () => br1FieldsRow(br1Built(false)));
+check("ENG-96457 (item 1): the MIS-PAIRED build — every field present by name, City2/Country1 swapped, exactly what ENG-96445 shipped — is ❌ MISSING, and the message names both the planned and the built cell",
+  () => { const row = br1FieldsRow(br1Built(true));
+    return /❌ MISSING/.test(row) && /DIFFERENT cell/.test(row)
+      && /Country1.*planned r8·c1, built r7·c13/.test(row) && /City2.*planned r7·c13, built r8·c1/.test(row); },
+  () => br1FieldsRow(br1Built(true)));
+// A payload from BEFORE this field existed carries no `layoutConfig` at all. It must keep its previous verdict —
+// failing a build on evidence it could not have carried would be a new false gate, not a check.
+check("ENG-96457 (item 1): a built payload with NO `layoutConfig` is not failed — placement is reported as NOT CHECKED and the name-identity verdict stands (an older `--built` file keeps its meaning)",
+  () => { const bare = { pages: { main: { viewConfig: { items: (br1Expect.fieldNames || []).map((n) => ({ name: n, type: BR1_FIELD_TYPE })) },
+      packageName: BR1_PKG, parentSchemaName: BR1_TPL, schemaUId: BR1_UID } } };
+    const row = br1FieldsRow(bare);
+    return /✅ Done/.test(row) && /PLACEMENT not checked/.test(row); },
+  () => br1FieldsRow({ pages: { main: { viewConfig: { items: (br1Expect.fieldNames || []).map((n) => ({ name: n, type: BR1_FIELD_TYPE })) },
+    packageName: BR1_PKG, parentSchemaName: BR1_TPL, schemaUId: BR1_UID } } }));
+
+// ---- item 2: the plan does not promise what the template lacks ------------------------------------------------
+check("ENG-96457 (item 2): Feed is NEVER 'provided by the Freedom template' for `PageWithTopAreaAndTabsFreedomTemplate` — the measured capability table says it ships none, so the row reads ⚠ ADD and says it is not template context",
+  !/template context — provided by the Freedom template/.test(br1PlanOut)
+  && /Feed \(ESN\).*⚠ ADD — `PageWithTopAreaAndTabsFreedomTemplate` ships NO Feed \(ESN\) \(measured\)/.test(br1PlanOut)
+  && /NOT template context/.test(br1PlanOut),
+  () => br1PlanOut.split("\n").filter((l) => /Feed/.test(l)));
+check("ENG-96457 (item 2): …and it gets its own EXPECTED COUNT with a `crt.Feed` gate — while Feed was 'template context' it carried no criterion, so `--verify` could not miss it and the page's own `Tabs — 1 expected` argued against adding it",
+  () => { const rows = (br1(["--checklist"]).stdout || "").split("\n");
+    return rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l))
+      && (br1Units.pages?.[0]?.componentTypes || []).includes("crt.Feed"); },
+  () => ({ feedRow: (br1(["--checklist"]).stdout || "").split("\n").filter((l) => /Feed/.test(l)),
+    types: br1Units.pages?.[0]?.componentTypes }));
+check("ENG-96457 (item 2): the template RECOMMENDATION is checked against the template — a 2-column Classic Header against a measured ONE-column top area is stated as a decision AT the recommendation, not discovered by the build",
+  /top area has 1 column\(s\) and this Classic Header has 2/.test(br1PlanOut) && /decide before building/i.test(br1PlanOut),
+  () => br1PlanOut.split("\n").filter((l) => /Template recommendation|top area has/.test(l)));
+check("ENG-96457 (item 2): an UNMEASURED template is 'confirm on-stand', never a claim in either direction — the capability table's third state is what keeps it honest",
+  () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
+    m.planMeta = { ...m.planMeta, formTemplate: "PageWithTabsFreedomTemplate" };
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(m), encoding: "utf8" });
+    const out = r.stdout || "";
+    return /capabilities are NOT measured/.test(out) && !/ships NO Feed/.test(out)
+      && !/template context — provided by the Freedom template/.test(out); },
+  () => "see the Feed row under formTemplate=PageWithTabsFreedomTemplate");
+
+// ---- item 3: the application code accounts for SchemaNamePrefix ----------------------------------------------
+check("ENG-96457 (item 3): the plan states the app code AND the package it will create — the manifest's own `UsrBusinessRuleFreedom` would have created `UsrUsrBusinessRuleFreedom`, so the code is derived from the target package and the correction is stated, not applied silently",
+  /\*\*Application code:\*\* `BusinessRuleFreedom` → package `UsrBusinessRuleFreedom` \(prefix `Usr` \+ code\)/.test(br1PlanOut)
+  && /would have created `UsrUsrBusinessRuleFreedom` — a double prefix/.test(br1PlanOut),
+  () => br1PlanOut.split("\n").filter((l) => /Application code|prefix/.test(l)));
+check("ENG-96457 (item 3): `prefix + applicationCode` equals the target package, and `--units` publishes all three so the unit that mints the app re-derives nothing",
+  br1Units.applicationCode === "BusinessRuleFreedom" && br1Units.schemaNamePrefix === "Usr"
+  && br1Units.applicationPackage === "UsrBusinessRuleFreedom"
+  && br1Units.schemaNamePrefix + br1Units.applicationCode === JSON.parse(fs.readFileSync(BR1, "utf8")).targetPackage,
+  () => ({ code: br1Units.applicationCode, prefix: br1Units.schemaNamePrefix, pkg: br1Units.applicationPackage }));
+// …and the SECOND half of the ticket's third acceptance criterion: "the ENG-95468 identifiers gate does not fire on
+// a plan the engine produced itself." That gate (`app-code-contradicts-target-package`, in the build executor's
+// `_workflow-core/build-executor/helpers.mjs`) compares the plan's `applicationCode` against `requiredAppCode`,
+// its OWN target-package-minus-prefix arithmetic. Pin the two together rather than eyeballing that they agree: if
+// either side's arithmetic ever changes alone, this fails instead of a run failing after its first write.
+check("ENG-96457 (item 3): the plan's derived `applicationCode` IS the executor's `requiredAppCode`, so the ENG-95468 identifiers gate cannot fire on a plan the engine produced itself — and the code the manifest recorded WOULD have fired it",
+  () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
+    const required = requiredAppCode(m.targetPackage, m.signals.schemaNamePrefix.value);
+    return required === "BusinessRuleFreedom"
+      && br1Units.applicationCode === required                 // the plan agrees with the gate → no stop
+      && m.placement.application.code !== required;            // …and the hand-typed code did not → the ENG-96445 stop
+  },
+  () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
+    return { planCode: br1Units.applicationCode, required: requiredAppCode(m.targetPackage, m.signals.schemaNamePrefix.value),
+      manifestCode: m.placement.application.code }; });
+check("ENG-96457 (item 3): an UNREAD prefix BLOCKS the plan like every other on-stand signal — 'never read' cannot pass, because the plan's app code is unverifiable without it",
+  () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
+    delete m.signals.schemaNamePrefix;
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(m), encoding: "utf8" });
+    return r.status === 2 && /on-stand signals not resolved: schemaNamePrefix/.test(r.stderr || "")
+      && /Schema name prefix:\*\* ⚠ not resolved/.test(r.stdout || ""); },
+  () => "prefix signal removed from the fixture manifest");
+
+// ---- item 4: the Classic side effect is stated ----------------------------------------------------------------
+check("ENG-96457 (item 4): the plan carries a ⚠ Confirm row for the Classic `Add` routing side effect — 'the Classic section stays untouched' is false, and confirmed false on the stand (Classic `ДОБАВИТЬ` began opening the Freedom page)",
+  /\*\*\[list-add-routing\]\*\*/.test(br1PlanOut) && /Classic section is NOT left untouched/.test(br1PlanOut)
+  && /ADD-purpose RelatedPage binding on the OBJECT/.test(br1PlanOut),
+  () => br1PlanOut.split("\n").filter((l) => /list-add-routing/.test(l)));
+check("ENG-96457 (item 4): it is a QUESTION with a published id, not a note — `--units.preflight` carries it, so the answer has somewhere to be recorded and the row cannot be read past",
+  (br1Units.preflight || []).some((p) => p.kind === "list-add-routing")
+  && (br1Units.evidenceRows || []).some((e) => /#confirm:list-add-routing:/.test(e.id || "")),
+  () => ({ preflight: (br1Units.preflight || []).map((p) => p.kind) }));
+
+// ---- item 5: plan.md is regenerated with the answers ----------------------------------------------------------
+check("ENG-96457 (item 5): `--plan --resolutions` renders each answered ⚠ row AS its answer and says how many are answered — every question could be answered and `plan.md` still showed the unanswered worklist, so the approved document and the payload the builder acted on said different things",
+  () => { const f = path.join(os.tmpdir(), `c2f_br1_res_${process.pid}.json`);
+    try {
+      fs.writeFileSync(f, JSON.stringify({ resolutions: [
+        { kind: "list-columns", item: "no list columns resolved", answer: "Name, City1, Country1", decidedBy: "Alex", date: "2026-09-03" },
+        { kind: "list-add-routing", item: "Classic `Add` will open the Freedom page", answer: "Accepted — switch-over" },
+        { kind: "layout-type", item: "Header", answer: "Yes — a 2-column header grid in the top area" },
+      ] }));
+      const r = br1(["--plan", "--resolutions", f]);
+      const out = r.stdout || "";
+      return r.status === 0
+        && /⚠ Confirm before I build \(3, 2 answered\)/.test(out)          // the list page's two
+        && /⚠ Confirm before I build \(3, 1 answered\)/.test(out)          // the form page's one
+        && /\*\*\[list-add-routing\]\*\*.*\*\*✅ answered:\*\* Accepted — switch-over/.test(out)
+        // …and the unresolved COLUMN LINE is superseded by the answer rather than still reading as a fallback
+        && /\*\*List columns:\*\* \*\*✅ answered:\*\* Name, City1, Country1 _\(Alex, 2026-09-03\)_/.test(out);
+    } finally { fs.rmSync(f, { force: true }); }
+  },
+  () => "see --plan --resolutions on the fixture");
+
+// ---- item 6: no generator instructions in the delivered plan --------------------------------------------------
+check("ENG-96457 (item 6): the delivered plan file carries no authoring text and no `<FILL:` placeholder — a plan is what a human approves, not a note telling its reader to fill `manifest.planMeta`",
+  !/Supply the plan values/.test(br1PlanOut) && !/VERBATIM/i.test(br1PlanOut)
+  && !/<FILL:/.test(br1PlanOut) && !/\*Adjustments\* list/.test(br1PlanOut),
+  () => br1PlanOut.split("\n").filter((l) => /FILL|VERBATIM|Adjustments|planMeta/.test(l)));
+check("ENG-96457 (item 6): the rule still reaches the AGENT — `--plan` writes it to stderr on every run, complete or not, because the 'do not hand-edit the generated tables' half applies to a complete plan too",
+  /ℹ Supply the plan values via `manifest\.planMeta`/.test(br1Plan.stderr || "")
+  && /do NOT edit, reorder, or drop/.test(br1Plan.stderr || ""),
+  () => (br1Plan.stderr || "").slice(0, 300));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

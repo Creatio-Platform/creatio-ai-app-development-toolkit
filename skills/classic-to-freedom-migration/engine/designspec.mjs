@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
-import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf, templateCapabilities, templateProvides } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -147,6 +147,57 @@ const addModeText = (am) => {
   return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
 };
 
+// ENG-96457 (item 1) — THE COORDINATES, IN THE TABLE. The mapper has always computed each field's Freedom cell
+// (`values.layoutConfig` = { column, row, colSpan, rowSpan }, converted from the classic 24-column grid), and the
+// Layout table has always thrown it away and printed the fields in the classic `diff`'s DECLARATION order. On the
+// ENG-96445 page the classic `Header` declares City1, Country1, City2, Country2 while placing them at
+// (r6,c0) (r7,c0) (r6,c12) (r7,c12) — two rows of two. A builder that read the table in order and filled a
+// 2-column grid produced `City1 | Country1` / `City2 | Country2`: the plan's own field pairing, wrong, and
+// faithfully built. So the table now (a) SORTS by the coordinates and (b) PRINTS them, and `--units` publishes them
+// per field. `null` for an element with no computed cell (a card action, a placed widget) — a dash, never a guess.
+// ENG-96457 (item 1) — THE PAIRING, SHOWN. Coordinates in a column are correct but still have to be assembled by
+// the reader; the failure being fixed is a builder reading the table top-to-bottom. So every MULTI-COLUMN region
+// also renders as its grid: one line per row, the row's fields in column order. On the ENG-96445 header the last
+// two lines read `City1 | City2` and `Country1 | Country2`, which is the pairing the classic page has and the
+// declaration order destroys. Single-column regions are skipped — a one-per-line grid restates the table above it.
+function gridMapTables(order, byRegion) {
+  const out = [];
+  for (const region of order) {
+    const placed = byRegion.get(region).filter((r) => r.layout && Number.isInteger(r.layout.row) && Number.isInteger(r.layout.column));
+    if (placed.length < 2) continue;
+    const cols = [...new Set(placed.map((r) => r.layout.column))].sort((a, b) => a - b);
+    if (cols.length < 2) continue;                       // one column ⇒ the table above already reads in order
+    const rows = [...new Set(placed.map((r) => r.layout.row))].sort((a, b) => a - b);
+    out.push(`##### Grid of \`${region}\` — ${cols.length} columns, ${rows.length} rows (build the fields at THESE cells)`,
+      "| Row | " + cols.map((c) => `Column ${c}`).join(" | ") + " |",
+      "| --- | " + cols.map(() => "---").join(" | ") + " |");
+    for (const r of rows) {
+      const cells = cols.map((c) => {
+        const hit = placed.filter((p) => p.layout.row === r && p.layout.column === c);
+        return hit.length ? hit.map((h) => h.cells[0]).join(" + ") : DASH;
+      });
+      out.push(`| ${r} | ${cells.join(" | ")} |`);
+    }
+    out.push("");
+  }
+  if (out.length) out.unshift("> **The grid below is the placement contract.** A field's row/column comes from the Classic page, NOT from the order of the Layout table above — build each field at its cell. Reading the table top-to-bottom into a multi-column container re-pairs the fields (that is exactly how `City1 | Country1` shipped instead of `City1 | City2`).", "");
+  return out;
+}
+// The published shape of a cell — exactly the four numbers, so `--units` carries no framework noise and a diff
+// against a built page's `layoutConfig` compares like with like.
+function pickCell(l) {
+  if (!l || typeof l !== "object") return {};
+  const out = {};
+  for (const k of ["row", "column", "colSpan", "rowSpan"]) if (Number.isInteger(l[k])) out[k] = l[k];
+  return out;
+}
+function placementCell(layoutConfig) {
+  const l = layoutConfig;
+  if (!l || !Number.isInteger(l.row) || !Number.isInteger(l.column)) return null;
+  const span = Number.isInteger(l.colSpan) && l.colSpan > 1 ? ` (span ${l.colSpan})` : "";
+  const rowSpan = Number.isInteger(l.rowSpan) && l.rowSpan > 1 ? ` (rows ${l.rowSpan})` : "";
+  return `r${l.row} · c${l.column}${span}${rowSpan}`;
+}
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
 function rowsForFields(fields, regionOf) {
@@ -161,7 +212,9 @@ function rowsForFields(fields, regionOf) {
     const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
-    return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
+    const lc = v.layoutConfig || null;
+    return { region: regionOf(f.parentName), sort: 0, layout: lc, place: placementCell(lc),
+      cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
   });
 }
 function rowsForDetails(details, tabRegion) {
@@ -178,31 +231,75 @@ function rowsForDetails(details, tabRegion) {
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
 }
-function rowsForFeatures(standardFeatures, tabRegion) {
+function rowsForFeatures(standardFeatures, tabRegion, opts) {
   return (standardFeatures || []).map((s) => {
     const isList = s.uiShape === "list";
     const type = isList ? "Related list" : esc(s.feature);
-    const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
+    // ENG-96457 (item 2) — `templateProvided` on the mapping row says "SOME Freedom form template ships this", which
+    // is not the same claim as "the template THIS plan chose ships it". Attachments carries that flag and
+    // `PageWithTopAreaAndTabsFreedomTemplate` ships none, so the flat "template-provided" cell was the same false
+    // promise the Feed row made. Route it through the measured capability table instead.
+    const nativeSrc = s.templateProvided
+      ? templateContextCell(opts, FEATURE_CAPABILITY[s.feature] || null, s.feature)
+      : "native — confirm component on-stand";
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
     const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
   });
 }
-function widgetSource(w) {
+// ENG-96457 (item 2) — THE FORM TEMPLATE THIS PLAN ASSERTS, and what it is known to ship. One reader for both the
+// Layout table's Source cells and the coverage rows, so the plan cannot say "provided by the template" in one place
+// and gate it as an explicit build in the other. `planMeta.formTemplate` is the plan's own choice;
+// `manifest.template` is the older single-value form of the same thing.
+// Which capability key a standard FEATURE needs from the template. Only the two the capability table tracks are
+// listed; every other feature resolves to `null` and therefore to "confirm on-stand", which is the truthful state.
+const FEATURE_CAPABILITY = { Feed: "feed", Attachments: "attachments" };
+// …and back: the capability key → the FEATURE name whose `crt.*` gate type the shared mapping table already holds.
+// Used to give a template-absent element its own machine-checkable expected count.
+const CAPABILITY_FEATURE = { feed: "Feed", attachments: "Attachments" };
+const formTemplateOf = (opts) => opts?.planMeta?.formTemplate || opts?.template || null;
+// The verdict for ONE base-declared element, given the capability key it needs:
+//   PROVIDED    the template was MEASURED and ships it → genuine template context
+//   ABSENT      the template was MEASURED and does NOT ship it → an explicit build step, with its own count
+//   UNCONFIRMED this template has never been measured (or no capability key) → confirm on-stand, never assert
+// Named, not bare strings: the three are compared in four places, and one typo'd comparison would silently turn an
+// unmeasured template back into an assertion — the very defect this replaces (and it keeps Sonar's S1192 quiet).
+const TPL = Object.freeze({ PROVIDED: "provided", ABSENT: "absent", UNCONFIRMED: "unconfirmed" });
+function templateVerdict(opts, capability) {
+  const tpl = formTemplateOf(opts);
+  if (!tpl || !capability) return TPL.UNCONFIRMED;
+  const p = templateProvides(tpl, capability);
+  if (p === true) return TPL.PROVIDED;
+  if (p === false) return TPL.ABSENT;
+  return TPL.UNCONFIRMED;
+}
+// The Source cell for a base-declared element the template may or may not ship. Replaces the flat
+// "template context — provided by the Freedom template" that was asserted without looking at the template.
+function templateContextCell(opts, capability, what) {
+  const tpl = formTemplateOf(opts);
+  const verdict = templateVerdict(opts, capability);
+  if (verdict === TPL.PROVIDED) return `template context — \`${esc(tpl)}\` ships ${what} (measured); re-bind it, do not rebuild`;
+  if (verdict === TPL.ABSENT) return `⚠ ADD — \`${esc(tpl)}\` ships NO ${what} (measured): build it explicitly. This is NOT template context, and it needs its own expected count`;
+  return tpl
+    ? `⚠ confirm on-stand — \`${esc(tpl)}\`'s capabilities are NOT measured, so whether it ships ${what} is unknown. Check the template before approval; if it ships none, this is an explicit build step`
+    : `⚠ confirm on-stand — no form template is named yet, so whether ${what} is template-provided is unknown`;
+}
+function widgetSource(w, opts) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
   if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed) — build the form on that template + RE-BIND to the case; hand-adding to `MainContainer` is the fallback";
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
-  if (w.base) return "template context — provided by the Freedom template";
+  // ENG-96457 (item 2) — a base-declared widget is template context only if the CHOSEN template really ships it.
+  if (w.base) return templateContextCell(opts, w.capability, w.widget);
   return "native — confirm on-stand";
 }
-function rowsForWidgets(widgets) {
+function rowsForWidgets(widgets, opts) {
   return (widgets || []).map((w) => {
     const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
-    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
+    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w, opts), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
 const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
@@ -273,7 +370,8 @@ function rowsForImages(images, regionOf) {
     if (im.crossDs) note = "→ `crt.ImageInput`, `value` bound through the lookup READ-ONLY (related-object photo); must be an IMAGELOOKUP column";
     else if (im.column) note = "→ `crt.ImageInput` bound via `value` to this IMAGELOOKUP column";
     else note = "→ `crt.ImageInput` — bind `value` to the entity's IMAGELOOKUP (16) column (add it to `entityColumns`); if the photo is from a related object bind through its lookup read-only; if none exists, create an ImageLookup column";
-    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
+    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, layout: im.layoutConfig || null, place: placementCell(im.layoutConfig || null),
+      cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
   });
 }
 
@@ -374,6 +472,29 @@ function stripNoteTail(note) {
   let end = note.length;
   while (end > 0 && (note[end - 1] === "." || note[end - 1] === ";" || /\s/.test(note[end - 1]))) end--;
   return note.slice(0, end);
+}
+// Which `list-columns` item the answer is filed under. The mapper publishes a FIXED literal per shape (an empty set
+// and a fallback set are answered separately), so the plan has to ask for the same one — a mismatch here would show
+// an answered question as unanswered, which is exactly the drift item 5 is about.
+// ENG-96457 (item 5) — the column line ONCE THE OPERATOR HAS ANSWERED IT. This is the line the ENG-96445 plan still
+// showed as an unresolved 1-column fallback after all four questions were answered, so the answer LEADS: the
+// approved document must state the decision, not re-ask it. The original question is kept behind the answer (in
+// parentheses) rather than dropped — an answer whose question is invisible cannot be audited, and a reader has no
+// way to tell a recorded decision from a guessed default.
+function answeredListColumnLine(section, resolutions) {
+  const line = listColumnLine(section);
+  const r = matchResolution(resolutions, { kind: "list-columns", item: listColumnsAnsweredItem(section) });
+  if (!r) return line;
+  const who = [r.decidedBy, r.date].filter(Boolean).map(esc).join(", ");
+  // Strip the leading `- **List columns:** ` so the answer takes its place; whatever the line said becomes the
+  // parenthetical. The prefix is this module's own literal, so the slice is safe.
+  const asked = line.replace(/^- \*\*List columns:\*\* /, "");
+  return `- **List columns:** **✅ answered:** ${esc(r.answer)}${who ? ` _(${who})_` : ""} — supersedes the engine's unresolved reading (${asked})`;
+}
+function listColumnsAnsweredItem(section) {
+  if (section?.listColumnSource === "entity-default") return "fallback list column set";
+  if (section?.listColumnSource === "profile") return "profile-sourced list column set";
+  return "no list columns resolved";
 }
 function listColumnLine(section) {
   // Notes arrive from several producers (the on-stand resolver, the disagreement note), so their trailing
@@ -509,7 +630,7 @@ function renderListPageBlock(result, section, opts = {}) {
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-    L.push(listColumnLine(section));
+      L.push(answeredListColumnLine(section, opts.resolutions || null));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
@@ -517,7 +638,7 @@ function renderListPageBlock(result, section, opts = {}) {
   const lcs = result.listChangeSet;
   // …and its own ⚠ Confirm section, from the SAME `needsDecision` mechanism the form page uses: a list-page decision
   // is an open question with an owner, not a note in prose.
-  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs));
+  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs, opts));
   L.push("");
   return L;
 }
@@ -619,7 +740,21 @@ function childFormRecommendation(cs, fields, opts) {
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
 function headerTemplateRecommendation(cs, opts) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
-  return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
+  const L = [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`];
+  // ENG-96457 (item 2) — the recommendation is made on ONE fact ("the Header is populated") and used to be stated
+  // with no reference to what the recommended template can actually hold. Check it against the MEASURED top-area
+  // column count: a 2-column Classic Header does not fit a one-column top area, and the plan has to say so here —
+  // at the point of the recommendation — rather than let a faithful build discover it.
+  const tpl = formTemplateOf(opts);
+  const caps = templateCapabilities(tpl);
+  const cols = Number.isInteger(cs.headerColumns) ? cs.headerColumns : null;
+  if (caps && cols && Number.isInteger(caps.topAreaColumns) && caps.topAreaColumns < cols) {
+    L.push(`> ⚠ **but \`${esc(tpl)}\`'s top area has ${caps.topAreaColumns} column(s) and this Classic Header has ${cols}** (both measured). The header's column pairing does NOT survive as-is: either add a \`crt.GridContainer\` with ${cols} columns inside the top area and place the fields by the coordinates in the Layout table, or accept a single-column header — **decide before building**, because a faithful ${caps.topAreaColumns}-column build re-pairs the fields.`);
+  } else if (cols && !caps && tpl) {
+    L.push(`> ⚠ \`${esc(tpl)}\`'s top-area column count is NOT measured, and this Classic Header has ${cols} columns — confirm on-stand that the top area can hold ${cols} before approving, or the header's pairing is lost.`);
+  }
+  L.push("");
+  return L;
 }
 
 // Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
@@ -658,7 +793,19 @@ const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget",
   "attribute-dependency"]);
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
-function renderConfirmWorklist(cs) {
+// ENG-96457 (item 5) — THE ANSWER, IN THE DOCUMENT. `resolutions.json` used to reach only `--units`, so after all
+// four ⚠ questions were answered `plan.md` still showed the unanswered worklist (and the 1-column fallback table):
+// the artifact a human had approved and the payload the builder acted on said different things. With
+// `--plan --resolutions <file>` each answered row is rendered as its answer, with the question kept beneath it —
+// an answer with its question is auditable; an answer that replaces its question is not. Unanswered rows are
+// unchanged, so a partially answered plan still reads as partially answered.
+function resolutionSuffix(resolutions, kind, item) {
+  const r = matchResolution(resolutions, { kind, item });
+  if (!r) return "";
+  const who = [r.decidedBy, r.date].filter(Boolean).map(esc).join(", ");
+  return ` · **✅ answered:** ${esc(r.answer)}${who ? ` _(${who})_` : ""}`;
+}
+function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
   // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
@@ -667,14 +814,26 @@ function renderConfirmWorklist(cs) {
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
   // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-    (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
+  // ENG-96457 (item 5) — the operator's recorded answer, rendered after the question it answers.
+  const res = opts.resolutions || null;
+  let answered = 0;
+  const confirm = nd.map((d) => {
+    const suffix = resolutionSuffix(res, d.kind, d.item);
+    if (suffix) answered++;
+    return `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
+      (d.describedIn ? ` · **described in** ${describedInText(d)}` : "") + suffix;
+  });
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
   // now raised by `mapRules` as a `lookup-value` `needsDecision` entry (ENG-95503) and arrives through `nd` above
   // like every other kind, so it has an evidence id, a `--units.preflight` row, and a key an answer can bind to.
   // Do not re-add a render-time push: a question the renderer invents is a question with nowhere to record an answer.
+  // (It also means every kind that reaches this worklist can carry an answer — including this one.)
   if (!confirm.length) return [];
-  return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+  // The heading states BOTH numbers: "(4)" on a fully answered worklist reads as four open questions.
+  const head = answered
+    ? `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`
+    : `#### ⚠ Confirm before I build (${confirm.length})`;
+  return [head, ...confirm, ""];
 }
 
 export function renderDesignSpec(result, opts = {}) {
@@ -707,8 +866,8 @@ export function renderDesignSpec(result, opts = {}) {
   const rows = [
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
-    ...rowsForFeatures(cs.standardFeatures, tabRegion),
-    ...rowsForWidgets(cs.widgets),
+    ...rowsForFeatures(cs.standardFeatures, tabRegion, opts),
+    ...rowsForWidgets(cs.widgets, opts),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
     ...rowsForTableElements(cs.tableElements, regionOf),
@@ -747,14 +906,19 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
     "#### Layout",
-    "| Region | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| Region | Placement | Element | Type | Source | Rule | Additional |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const region of order) {
-    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-    for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
+    // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
+    // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
+    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
+      || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
+      || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
+      || a.i - b.i);
+    for (const it of items) L.push(`| ${region} | ${it.place || DASH} | ${it.cells.join(" | ")} |`);
   }
-  L.push("");
+  L.push("", ...gridMapTables(order, byRegion));
   // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
   // paragraph in every linked field's Additional cell.
   if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
@@ -792,7 +956,7 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
-    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
+    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs, opts),
     ...renderMemberLedger(result.coverage),
   );
 
@@ -1578,6 +1742,41 @@ function renderMiniPageMapping(result) {
   return lines;
 }
 
+// ENG-96457 (item 3) — THE IDENTIFIERS BLOCK. The plan used to name an application code and never say what package
+// that code would actually create, so the two could disagree without the document ever showing it (`create-app` is
+// handed a code and the stand prepends `SchemaNamePrefix`). Every line here is derived, not typed: the code is the
+// plan's own target package minus the stand's prefix, and the package is what that code will produce. A correction
+// is stated rather than applied silently, and a target package the prefix cannot produce is a ⚠ decision, because
+// no `create-app` code reaches it. Empty when the run records no app at all (a mini/child fold, `pages-only-no-menu`
+// with no app, or a plan whose placement was never recorded).
+function renderIdentifiers(opts) {
+  const a = opts.appCode;
+  if (!a || (!a.code && !a.supplied)) return [];
+  const L = ["### Identifiers"];
+  // Not the minting case: the app already exists (`existing-app`), so its code is a FACT read off the stand and
+  // nothing prepends anything to it. State it, and say that — a prefix note here would read as arithmetic to apply.
+  if (!a.mints) {
+    L.push(`- **Application code:** \`${esc(a.code)}\` — an EXISTING app read off the stand; the section is registered into it and no code is minted, so \`SchemaNamePrefix\` does not apply to this value.`, "");
+    return L;
+  }
+  if (a.prefix == null) {
+    L.push(`- **Application code:** \`${esc(a.code || a.supplied)}\` — ⚠ the package it produces is UNKNOWN until \`signals.schemaNamePrefix\` is read: the stand prepends its \`SchemaNamePrefix\` to this code.`, "");
+    return L;
+  }
+  const pkgPart = a.prefix === "" ? "" : ` (prefix \`${esc(a.prefix)}\` + code)`;
+  L.push(`- **Application code:** \`${esc(a.code)}\` → package \`${esc(a.pkg)}\`${pkgPart}. Pass the CODE to \`create-app\`; the stand adds the prefix.`);
+  if (a.corrected) L.push(`  - ⚠ the manifest recorded \`${esc(a.supplied)}\`, which on this stand would have created \`${esc(a.prefix + a.supplied)}\` — a double prefix. The code above is derived from the target package and is what the plan asserts.`);
+  if (a.mismatch) L.push(`  - ⚠ **decide:** the target package \`${esc(opts.targetPackage || "")}\` does NOT start with this stand's prefix \`${esc(a.prefix)}\`, so NO \`create-app\` code can produce it — the app will land in \`${esc(a.pkg)}\` instead. Either accept that package name, or place the pages in an existing package instead of minting an app.`);
+  L.push("");
+  return L;
+}
+// ENG-96457 (item 6) — the AUTHORING guidance for the agent that RUNS the engine. It used to be the last line of
+// `plan.md` itself, where it read as plan content: a delivered plan ended by telling its reader to fill
+// `manifest.planMeta` and "present this VERBATIM". A plan is the artifact a human approves; instructions to the
+// generator are not part of it. `migrate.mjs --plan` writes this to STDERR (and the worklog) instead, so the agent
+// still gets the rule and the file stays free of it. Exported so there is exactly ONE copy of the text.
+export const PLAN_AUTHORING_NOTE = "Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present the plan VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).";
+
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
   const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
@@ -1678,7 +1877,16 @@ export function renderPlan(result, opts = {}) {
     }
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"), "");
+  // ENG-96457 (item 3) — the prefix is an on-stand signal like the four above (a value that lives on the stand and
+  // appears in no schema body), but it carries a STRING rather than present/absent, so it gets its own line shape.
+  const prefixSig = signals.schemaNamePrefix;
+  const prefixLine = prefixSig?.resolved !== true || typeof prefixSig.value !== "string"
+    ? "- **Schema name prefix:** ⚠ not resolved — read it on-stand (`query-sys-settings` code `SchemaNamePrefix`, or `odata-read SysSettings`) and record `signals.schemaNamePrefix = { resolved: true, value: \"<prefix>\" }`. Until then the app code below cannot be checked against the target package, and the build-time identifiers gate is the only thing left to catch a double prefix"
+    : (prefixSig.value === ""
+      ? "- **Schema name prefix:** none (checked on-stand → a code is used verbatim as the schema/package name)"
+      : `- **Schema name prefix:** \`${esc(prefixSig.value)}\` (checked on-stand) — the stand PREPENDS it to every code \`create-app\`/\`create-page\` is given, so a code that already carries it produces a DOUBLE prefix`);
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"), prefixLine, "");
+  P.push(...renderIdentifiers(opts));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -1721,7 +1929,7 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs));
   return P.join("\n");
 }
 
@@ -1755,7 +1963,7 @@ function buildLayoutGroupRows(cs, regionOf) {
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
-function buildCoverageRows(cs, pm, result) {
+function buildCoverageRows(cs, pm, result, opts = {}) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
@@ -1769,7 +1977,13 @@ function buildCoverageRows(cs, pm, result) {
   // them deliberately) all sharing `control: "$col"`, so keying on the stripped control would collapse the
   // Set below and the gate could never reach ✅ for such a page. `o.name` is `col` / `col_2` — distinct and
   // identical to the built element names.
-  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
+  // ENG-96457 (item 1) — the vk carries each field's CELL beside its name. The plan states the coordinates, so the
+  // queue must publish them (a builder that owns one unit sees only its row) and `--verify` must be able to check
+  // them: a page whose fields are all present but re-paired is not the page the plan approved.
+  const fieldLayout = fieldOps
+    .map((o) => ({ name: o.name, ...pickCell(o.values?.layoutConfig) }))
+    .filter((e) => Number.isInteger(e.row) && Number.isInteger(e.column));
+  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name), layout: fieldLayout } });
   // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
   // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
@@ -1792,6 +2006,19 @@ function buildCoverageRows(cs, pm, result) {
   for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
     cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
       vk: { type: "element", ctype, n: e.n } });
+  // ENG-96457 (item 2) — AN ELEMENT THE CHOSEN TEMPLATE DOES NOT SHIP IS A DELIVERABLE, NOT CONTEXT. While the plan
+  // called Feed "template context" it carried no expected count of its own, so `--verify` could not miss it and the
+  // page's `Tabs — 1 expected` criterion actively argued against adding it. Every base-declared element the
+  // MEASURED capability table says the template lacks now gets its own count and its own `crt.*` gate. Only the
+  // measured `absent` verdict gates: `unconfirmed` stays a ⚠ in the Layout table, because a count no one has
+  // measured is not a criterion.
+  for (const w of cs.widgets || []) {
+    if (templateVerdict(opts, w.capability) !== TPL.ABSENT) continue;
+    const ctype = featureVerifyType(CAPABILITY_FEATURE[w.capability] || "");
+    if (!ctype) continue;
+    cover.push({ label: `${esc(w.widget)} — 1 expected (\`${ctype}\`) — the chosen template ships none, so it is built explicitly`,
+      vk: { type: "element", ctype, n: 1 } });
+  }
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -2293,7 +2520,7 @@ export function checklistGroups(result, opts = {}) {
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
-  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
+  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, opts));
   // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
@@ -2409,7 +2636,12 @@ function pageExpect(rows) {
   const r = vkOfType(rows, "rule");
   const list = listExpect(rows);
   if (list) return list;
-  return { fields: n("fields"), fieldNames: [...(f?.names || [])], tabs: n("tabs"), details: n("details"), images: n("image"),
+  // `fieldLayout` (ENG-96457, item 1) — each expected field's CELL: `{ name, row, column, colSpan?, rowSpan? }`.
+  // Published beside `fieldNames` for the same reason those names are: a build unit is handed one page and cannot
+  // see the plan document, so a placement stated only in `plan.md` reaches nobody. `[]` when the page's fields
+  // carry no computed cell (nothing to place by, and nothing to check).
+  return { fields: n("fields"), fieldNames: [...(f?.names || [])], fieldLayout: [...(f?.layout || [])],
+    tabs: n("tabs"), details: n("details"), images: n("image"),
     rules: n("rule"), ruleNames: [...(r?.names || [])] };
 }
 // ONE page entry. `expectedTemplate` is the SCHEMA NAME (via CHILD_TEMPLATE_SCHEMA at fold time), taken from the
@@ -2723,6 +2955,13 @@ export function pageUnits(result, opts = {}) {
     // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
     // approved app instead of resolving one off the stand.
     applicationCode: opts.applicationCode || null,
+    // ENG-96457 (item 3) — the two facts that make the code above CHECKABLE. `schemaNamePrefix` is what the stand
+    // prepends to any code `create-app` is given; `applicationPackage` is the package this plan's code will
+    // therefore produce. Published because the unit that mints the app is the one that would otherwise re-derive
+    // both off the stand — and re-deriving is how a code that already carried the prefix got prefixed twice.
+    // Both `null` when no app is minted (`existing-app` / `pages-only-no-menu`) or the prefix was never read.
+    schemaNamePrefix: opts.appCode?.prefix ?? null,
+    applicationPackage: opts.appCode?.pkg ?? null,
     pages,
     // The template names this plan asserts, for the pre-build stand check (ENG-95468). Root-level and deduped, like
     // the executor's `componentTypes` union: one lookup per distinct name, before the first write.
@@ -2802,6 +3041,8 @@ export function pageUnitsSlice(units, pageKey) {
     sectionSchema: units.sectionSchema ?? null,
     sectionHost: units.sectionHost ?? null,
     applicationCode: units.applicationCode ?? null,
+    schemaNamePrefix: units.schemaNamePrefix ?? null,
+    applicationPackage: units.applicationPackage ?? null,
     page,
     ...(units.parents && Object.hasOwn(units.parents, pageKey) ? { parent: units.parents[pageKey] } : {}),
     reachability: (units.reachability || []).filter((r) => (r.pages || []).includes(pageKey)),
@@ -2933,13 +3174,53 @@ function resolveStructuralVk(vk, ctx) {
 // yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
 // missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
 // `name` is the uncheckable case.
+// ENG-96457 (item 1) — THE PLACEMENT LEG of the fields row. Every expected field being present by name is not the
+// same fact as the page matching the plan: on the ENG-96445 page all four header fields were built and the pairing
+// was still wrong, because the plan's Layout table had published them in declaration order. The plan now publishes
+// each field's cell (`expect.fieldLayout`), so a built page can be checked against it.
+//
+// THREE OUTCOMES, and the third is why this cannot simply be a hard check:
+//   · every matched field sits at its published cell            ⇒ the name-identity verdict stands (✅)
+//   · a matched field sits at a DIFFERENT cell                  ⇒ ❌: the page is not the one the plan approved.
+//     A deviation someone approved is reported the same way ON PURPOSE — the answer lives in `resolutions.json`,
+//     which `--verify` does not read, so the gate reports what it measured and the deviation is recorded, not
+//     silently absorbed. The message names both cells so the reader can tell the two apart at a glance.
+//   · the built payload carries NO `layoutConfig` at all        ⇒ placement NOT checked, and the verdict says so
+//     rather than passing it off as checked. This is also every payload produced before this field existed, so an
+//     older `--built` file keeps its previous verdict instead of failing on evidence it could not have carried.
+//
+// ⚠ ONE UNVERIFIED ASSUMPTION, stated because it decides whether this gate is sound: that clio `get-page`'s merged
+// `bundle.viewConfig` returns each component's `layoutConfig.row`/`.column` in the SAME 1-based integer space the
+// engine emits. The engine emits per TARGET GRID, and one page can use two of them (a wide Header keeps the classic
+// 24-column grid → columns 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the coordinates,
+// or that returned a template-merged field's own cell instead of the built one, would fire ❌ on a correctly built
+// page. Only the `no layoutConfig at all` shape is defended against here. This needs ONE on-stand run to confirm
+// (build a 2-column header page, read it back, compare) — until then treat a placement ❌ as "look at the page"
+// rather than as proof, and if the space turns out to differ, normalise HERE rather than weakening the check.
+function resolvePlacement(vk, ops, okText) {
+  const want = (vk.layout || []).filter((e) => e && typeof e.name === "string" && Number.isInteger(e.row) && Number.isInteger(e.column));
+  if (!want.length) return ["✅ Done", okText, "ok"];
+  const byName = new Map(ops.filter((o) => o.name).map((o) => [o.name, o]));
+  const checkable = want.filter((e) => byName.get(e.name)?.layoutConfig && typeof byName.get(e.name).layoutConfig === "object");
+  if (!checkable.length)
+    return ["✅ Done", `${okText} — PLACEMENT not checked: no built component carries a \`layoutConfig\`, so the ${want.length} published cell(s) could not be compared (re-run get-page and pass \`bundle.viewConfig\` VERBATIM to check the grid too)`, "ok"];
+  const off = [];
+  for (const e of checkable) {
+    const got = byName.get(e.name).layoutConfig;
+    if (got.row !== e.row || got.column !== e.column)
+      off.push(`\`${esc(e.name)}\` planned r${e.row}·c${e.column}, built r${got.row ?? "?"}·c${got.column ?? "?"}`);
+  }
+  if (!off.length) return ["✅ Done", `${okText}, each at its planned cell (${checkable.length} of ${want.length} placement(s) checked)`, "ok"];
+  const overflow = off.length > 6 ? ` …and ${off.length - 6} more` : "";
+  return ["❌ MISSING", `every expected field is present BY NAME but ${off.length} sit(s) at a DIFFERENT cell than the plan published, so the built page does not carry the plan's layout: ${off.slice(0, 6).join("; ")}${overflow}. Re-place them, or — if the deviation was approved — record it and re-run`, "missing"];
+}
 function resolveFieldsByIdentity(vk, names, ops) {
   const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
   if (ops.length && !builtNames.size) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
   const missing = names.filter((n) => !builtNames.has(n));
   const b = names.length - missing.length;
-  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
+  if (b >= vk.n) return resolvePlacement(vk, ops, `${b} of ${vk.n} expected fields matched BY NAME on the built page`);
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
@@ -3393,7 +3674,12 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
+  // `layoutConfig` (ENG-96457, item 1) rides along with the name and the type. It is the ONLY evidence of where a
+  // field actually landed, and the flattening used to drop it — so a page with every expected field present but
+  // re-paired into the wrong columns read exactly like the page the plan asked for. Read under both shapes: a
+  // rendered node carries it directly, a diff op under `values`.
+  if (node.name != null || node.type != null)
+    out.push({ name: node.name, type: node.type, layoutConfig: node.layoutConfig ?? node.values?.layoutConfig ?? null });
   return walkViewConfig(node.items, out);
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
