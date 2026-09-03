@@ -22,7 +22,7 @@
 //
 // Zero dependencies (node built-ins only), same `check` idiom as the sibling
 // runners, exits 1 on any failed check.
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, cpSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
@@ -740,6 +740,27 @@ const genSrc = readFileSync(GENERATED, "utf8");
   const res = spawnSync(process.execPath, [path.join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   check("generator: the shipped `.workflow.js` is IN SYNC with the core — an edit to either alone must fail here, not ship as a silent divergence",
     res.status === 0, () => `${res.stdout}${res.stderr}`);
+  // PR #147 review: exit 0 alone does not say the gate DID anything — a run that checked nothing exits 0 too.
+  // Pin the per-target evidence: every configured target must have printed its own ✅ line naming its artifact.
+  check("generator: `--check` proves it compared EVERY shipped artifact — one ✅ line per target, naming the file, so an exit 0 from a run that checked nothing cannot read as a pass",
+    () => { const ticks = (res.stdout || "").split("\n").filter((l) => /^✅ .+ matches the core$/.test(l));
+      return ticks.length >= 1
+        && ticks.some((l) => l.includes("classic-behaviour-analysis.workflow.js")); },
+    () => res.stdout);
+  // …and the complement: a gate that cannot fail is not a gate. Corrupt the shipped artifact in a temp copy of
+  // the tree and assert `--check` goes red on it, so the green above is evidence rather than a constant.
+  {
+    const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "wf-drift-"));
+    cpSync(path.join(ROOT, "scripts"), path.join(tmpRoot, "scripts"), { recursive: true });
+    cpSync(path.join(ROOT, "skills"), path.join(tmpRoot, "skills"), { recursive: true });
+    const shipped = path.join(tmpRoot, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
+    writeFileSync(shipped, `${readFileSync(shipped, "utf8")}\n// drift introduced by the test\n`);
+    const drifted = spawnSync(process.execPath, [path.join(tmpRoot, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
+    check("generator: `--check` really FAILS on a drifted artifact — the green result above is a measurement, not a constant",
+      drifted.status === 1 && /out of sync/.test(drifted.stderr || ""),
+      () => ({ status: drifted.status, stdout: drifted.stdout, stderr: drifted.stderr }));
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
 }
 check("generated: no `import` or `export` survives except `meta` — the host evaluates this as a function body, so either would be a SyntaxError at run time",
   genSrc.split("\n").filter((l) => /^\s*(import|export)\s/.test(l)).join(" | ") === "export const meta = {",

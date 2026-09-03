@@ -230,7 +230,6 @@ if (isMain) {
     const outPath = path.join(ROOT, target.out)
     const next = build(target)
     const current = safeRead(outPath)
-    handled++
     if (check) {
       if (current !== next) {
         failed++
@@ -243,11 +242,21 @@ if (isMain) {
       writeFileSync(outPath, next, 'utf8')
       process.stdout.write(`${current === next ? '=' : '→'} ${target.out} (${next.split('\n').length} lines)\n`)
     }
+    // Counted at the END of the body, and compared against TARGETS.length below. Incrementing it at the TOP made
+    // it near-vacuous — it then equalled TARGETS.length on every run that reached the loop at all, so the only
+    // failure it could detect was an empty TARGETS, which is not a mode anyone hits (PR #147 review). Counting
+    // completed iterations catches the mode the message actually claims: a per-target `continue`, an early
+    // `break`, or a target skipped by a future guard, all of which would otherwise exit 0 while proving nothing.
+    handled++
   }
-  // A zero-target run can never pass as green: if the loop above emitted no per-target line there is nothing to
-  // conclude from an exit 0, and that is exactly what the symlinked-main defect looked like from CI.
-  if (!handled) {
-    process.stderr.write('❌ build-workflows: no targets were processed — nothing was checked or written, so this run proves nothing\n')
+  // A run that did not complete EVERY target can never pass as green: an exit 0 here asserts that each shipped
+  // artifact was compared against the core, and a partial run does not support that claim.
+  if (handled !== TARGETS.length) {
+    process.stderr.write(`❌ build-workflows: ${handled} of ${TARGETS.length} target(s) completed — this run proves nothing about the rest\n`)
+    process.exit(1)
+  }
+  if (!TARGETS.length) {
+    process.stderr.write('❌ build-workflows: no targets are configured — nothing was checked or written\n')
     process.exit(1)
   }
   process.exit(failed ? 1 : 0)

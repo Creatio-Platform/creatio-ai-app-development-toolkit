@@ -9081,6 +9081,26 @@ try {
       && !/was not recognized/.test(secOwn.reason),
     () => ({ secretColumn: secOwn, fieldControl: secCtl?.reason }));
 
+  // PR #147 review: the same two types, in columns whose NAME looks like an email or a phone. `fieldTypeLabel`
+  // consulted `labelFromColumnName` (/email/i -> Email, /phone|mobile/i -> Phone) BEFORE the TYPE_LABEL arm the
+  // two secret entries live in, so `UsrEmailHash` / `UsrMobilePinHash` / `UsrSecureEmail` printed in the
+  // operator-facing Layout table as ordinary migratable Email / Phone fields. The type is MEASURED and the name
+  // is a guess; the measured secret type must win.
+  const namedSecretCols = { UsrEmailHash: { type: "23" }, UsrMobilePinHash: { type: "23" }, UsrSecureEmail: { type: "24" } };
+  const namedSecretRun = runMigration({ entity: "X", noParentTemplate: true, entityColumns: namedSecretCols,
+    schemas: [{ pkg: "P", body: gmBody("", Object.keys(namedSecretCols).map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")) }] }, { baseDir: FIX });
+  const namedSecretVals = (n) => namedSecretRun.changeSet.viewConfigDiff.find((o) => o.name === n)?.values;
+  check("PR #147 review: a HASHED / ENCRYPTED column whose NAME looks like an email or a phone still reads as hashed/encrypted in the Layout table — the column-name heuristic must not override a measured secret type, or the one label that says 'this value is not migrated' is replaced by one that says it is",
+    namedSecretVals("UsrEmailHash")?.typeLabel === "Hashed text (not migrated)"
+      && namedSecretVals("UsrMobilePinHash")?.typeLabel === "Hashed text (not migrated)"
+      && namedSecretVals("UsrSecureEmail")?.typeLabel === "Encrypted text (not migrated)",
+    () => Object.keys(namedSecretCols).map((n) => ({ name: n, typeLabel: namedSecretVals(n)?.typeLabel })));
+  check("PR #147 review: …and they are still emitted READ-ONLY and still raise the secret-column decision — the label fix must not have moved them off the fail-closed path",
+    Object.keys(namedSecretCols).every((n) => namedSecretVals(n)?.readOnly === true)
+      && !!namedSecretRun.changeSet.needsDecision.find((d) => d.kind === "secret-column"),
+    () => ({ vals: Object.keys(namedSecretCols).map((n) => namedSecretVals(n)),
+      decision: namedSecretRun.changeSet.needsDecision.find((d) => d.kind === "secret-column") }));
+
   // ---- ENG-95412: clio's friendly type names, which the control table did not accept ----
   // OBSERVED, not inferred: on a live stand Contact.Phone/MobilePhone/HomePhone report `type: PhoneNumber`,
   // Product and Invoice report `Currency2`, Invoice reports `Decimal8`. The engine lower-cases the name and then

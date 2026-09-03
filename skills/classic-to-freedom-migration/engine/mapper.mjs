@@ -281,6 +281,13 @@ function fieldTypeLabel(col, meta, ctl) {
   if (ctl.lookup) return "Lookup";
   // same normalization as scalarControl: numeric codes AND clio's friendly names
   const t = normalizeDvt(String(meta.type || "").toLowerCase());
+  // SECRET TYPES FIRST — above the column-name fallback (PR #147 review). The name heuristic maps /email/i to
+  // "Email" and /phone|mobile/i to "Phone", so while these two sat in the generic TYPE_LABEL arm BELOW it, a
+  // HASH_TEXT / SECURE_TEXT column named `UsrEmailHash`, `UsrMobilePinHash` or `UsrSecureEmail` printed in the
+  // operator-facing Layout table as a migratable `Email` / `Phone` — the one label that must never be overridden
+  // by a guess about the column's name, since the whole point of these two is that the value is NOT carried over.
+  // The type is measured; the name is a guess. A measured secret type wins.
+  if (SECRET_DVT.has(t)) return TYPE_LABEL[t];   // the SAME set `secretTypeOf` fails closed on - one source, no second list
   // Order preserved from the original chain: the three FORMAT-carried types (phone/email/weblink) beat the
   // column-name fallback, the fallback beats everything the control implies, and the remaining typed arms sit
   // in the same table as those three because the lookup cannot express a precedence between its own keys.
@@ -735,6 +742,47 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   return vis;
 }
 
+// The per-field noise, FOLDED into one summary decision per kind — extracted from `mapFields` so its five
+// branches (collision density, unresolved controls, secret columns, split islands, missing labels) score against
+// this function rather than against the loop that fills the accumulators (Sonar S3776, CC 15). Pure: it reads the
+// accumulators and RETURNS the decisions, so the caller keeps ownership of `needsDecision`.
+function foldFieldSummaries(acc) {
+  const { collisionByContainer, fieldControlCols, secretCols, splitIslands, distinctProfileIslands,
+    payloadFields, fieldsWithTitle } = acc;
+  const out = [];
+  const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
+  // The DESIGN-PREREQUISITE — the ONLY layout signal surfaced (not per field, and NOT a second per-page
+  // "layout-collision" line: that said the same thing twice, and the per-container breakdown is engine-internal
+  // noise the agent can't act on). A dense multi-column classic grid does NOT map 1:1 onto the narrow (1–2 col)
+  // Freedom form; choosing the right target container/grid is a WHOLE-PAGE decision the agent must make BEFORE
+  // designing — the engine only auto-relocates collisions as a fallback. Fire only when the collapse is systemic
+  // so it doesn't nag pages with a stray collision or two.
+  if (totalCollisions >= 12) out.push({ kind: "layout-density", item: "(page layout)",
+    reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
+  if (fieldControlCols.length) {
+    const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
+    out.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
+      reason: `${fieldControlCols.length} field(s): the entity column exists but its TYPE was not recognized (an unmapped/exotic DataValueType code that get-entity-schema-properties returned as a number), OR no \`manifest.entityColumns\` was supplied to resolve types — defaulted to \`crt.Input\`. Confirm the control on-stand: ${shown}` });
+  }
+  // ENG-96483 review (Blocker) — the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
+  // here on purpose: the whole point is that the operator can see every column whose value the classic page put
+  // on screen and that this migration is NOT carrying over.
+  if (secretCols.length) {
+    const named = secretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
+    out.push({ kind: "secret-column", item: `(${secretCols.length} fields)`,
+      reason: `${secretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
+  }
+  // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
+  // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
+  if (splitIslands) out.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
+    reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — build EACH as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Do NOT merge them into one container "for simplicity" — that is a silent plan deviation. Merge ONLY if the Freedom left area genuinely cannot stack containers, and say so.` });
+  // #5/#13 (fields) — if NO field label resolved to a real title, the spec shows column CODES. Nudge the
+  // agent to pass get-entity-schema-properties column titles so labels read like the classic page, not raw codes.
+  if (payloadFields.length && fieldsWithTitle === 0) out.push({ kind: "field-labels", item: "(all fields)",
+    reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from get-entity-schema-properties) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
+  return out;
+}
+
 function mapFields(ctx, containers) {
   const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
   const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
@@ -1152,37 +1200,8 @@ function mapFields(ctx, containers) {
   };
   emitFromTable();
 
-  // ---- FOLD the accumulated per-field noise into summaries (declarations near the loop top) ----
-  const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
-  // The DESIGN-PREREQUISITE — the ONLY layout signal surfaced (not per field, and NOT a second per-page
-  // "layout-collision" line: that said the same thing twice, and the per-container breakdown is engine-internal
-  // noise the agent can't act on). A dense multi-column classic grid does NOT map 1:1 onto the narrow (1–2 col)
-  // Freedom form; choosing the right target container/grid is a WHOLE-PAGE decision the agent must make BEFORE
-  // designing — the engine only auto-relocates collisions as a fallback. Fire only when the collapse is systemic
-  // so it doesn't nag pages with a stray collision or two.
-  if (totalCollisions >= 12) needsDecision.push({ kind: "layout-density", item: "(page layout)",
-    reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
-  if (fieldControlCols.length) {
-    const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
-    needsDecision.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
-      reason: `${fieldControlCols.length} field(s): the entity column exists but its TYPE was not recognized (an unmapped/exotic DataValueType code that get-entity-schema-properties returned as a number), OR no \`manifest.entityColumns\` was supplied to resolve types — defaulted to \`crt.Input\`. Confirm the control on-stand: ${shown}` });
-  }
-  // ENG-96483 review (Blocker) — the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
-  // here on purpose: the whole point is that the operator can see every column whose value the classic page put
-  // on screen and that this migration is NOT carrying over.
-  if (secretCols.length) {
-    const named = secretCols.map((sc) => `${sc.col} (${sc.type === "hashtext" ? "hashed" : "encrypted"})`).join(", ");
-    needsDecision.push({ kind: "secret-column", item: `(${secretCols.length} fields)`,
-      reason: `${secretCols.length} field(s) bind a HASHED or ENCRYPTED column. The type IS recognized — Creatio stores these as HASH_TEXT / SECURE_TEXT and neither has a Freedom field that renders the value safely, and Classic's own \`generateEditControl\` throws \`UnsupportedTypeException\` for them, so no classic field existed to port. They are emitted READ-ONLY rather than as editable cleartext inputs, and the Layout table labels them "Hashed text (not migrated)" / "Encrypted text (not migrated)". DECIDE per column: drop the field, or bind a masked component if the target version has one (\`crt.PasswordInput\` is \`compositeOnly: true\` in the vendored component index — verify before promising it). Columns: ${named}` });
-  }
-  // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
-  // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
-  if (splitIslands) needsDecision.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
-    reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — build EACH as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Do NOT merge them into one container "for simplicity" — that is a silent plan deviation. Merge ONLY if the Freedom left area genuinely cannot stack containers, and say so.` });
-  // #5/#13 (fields) — if NO field label resolved to a real title, the spec shows column CODES. Nudge the
-  // agent to pass get-entity-schema-properties column titles so labels read like the classic page, not raw codes.
-  if (payloadFields.length && fieldsWithTitle === 0) needsDecision.push({ kind: "field-labels", item: "(all fields)",
-    reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from get-entity-schema-properties) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
+  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols,
+    splitIslands, distinctProfileIslands, payloadFields, fieldsWithTitle }));
   // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
   // header elements land in TopAreaProfileContainer rather than being crammed into the narrow left profile.
