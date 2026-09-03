@@ -26,7 +26,9 @@
 // WHAT THE `freedom-build-executor` BASELINE IS, as of ENG-96204: the PREVIOUSLY SHIPPED script, frozen. It began
 // life as the hand-written original the generator replaced, and it was replaced when the control-mode work (a
 // deliberate change to the return shape and to the Reconcile prompt) made every prompt and return diverge on
-// purpose. It therefore says nothing about the change that replaced it — that change's own coverage is the
+// purpose — and replaced a SECOND time, in the same ticket, when the round-boundary stop was reworked onto
+// ENG-95930's counts-plus-pointer pattern and `openRanked` left the return shape (DR-4 in the executor's decision
+// records). It therefore says nothing about the change that replaced it — that change's own coverage is the
 // executed suites in `run-infra.mjs` and `run-workflow-core.mjs` — and everything about the NEXT one: the whole
 // prompt text and return shape of the current behaviour is now pinned byte for byte. The value of this file is
 // always forward-looking, which is why replacing it is a reviewed act and not a build step.
