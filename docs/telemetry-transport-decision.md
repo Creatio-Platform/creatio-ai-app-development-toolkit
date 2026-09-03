@@ -104,7 +104,7 @@ effort, since the child is never awaited — at least one for any session that t
 
 ## Trust-boundary gaps accepted, not overlooked
 
-Three narrower gaps raised in review of PR #96, each accepted for the same reason: closing it
+Five narrower gaps raised in review of PR #96, each accepted for the same reason: closing it
 properly needs either information this hook does not have, or statefulness whose cost has not yet
 been justified by an observed failure.
 
@@ -125,6 +125,24 @@ been justified by an observed failure.
   assumes no real session stays open, or gets resumed under the same `session_id`, longer than 7
   days; it does not check whether a session is still live. See the comment above
   `sweepStaleMarkers()` for the failure mode if that assumption is ever wrong.
+- **Identity, state directory and consent are re-derived on every matching call.** Each
+  `PostToolUse` invocation is a fresh Node process, and it re-reads `plugin.json` for the plugin
+  version (`hooks/telemetry/identity.mjs`), re-runs `assertStateDirIsOurs()`'s lstat check, and
+  re-reads `consent.json`, before the tool result reaches the agent. Nothing is cached across
+  invocations, deliberately: the two checks most worth caching are the two that must not be. An
+  ownership guard answered from a decision made at session start would let a state directory
+  hijacked mid-session go undetected until the next process restart, and a cached consent answer
+  would widen the staleness window above from one hook call to a whole session, which the
+  `test_a_withdrawn_consent_stops_the_next_call_not_the_next_session` regression now pins. What the
+  call actually costs is a process start plus a handful of synchronous stats; no clio process is
+  spawned unless there is a dispatch to make.
+- **`UserPromptSubmit` and `Stop` fire in every project, Creatio or not.** This one is not closable
+  in the manifest at all. The Claude Code hooks reference groups both events under "no matcher
+  support", described there as always firing on every occurrence, and states that a `matcher` on an
+  event without matcher support is silently ignored. `PostToolUse` carries `mcp__.*clio.*` because
+  that event supports one. For the other two the guard has to live inside the hook instead, which is
+  why `main()` reaches `touchedClio(sessionId)` before any write path and returns immediately for a
+  session that never touched clio.
 
 ## Cursor's funnel is floor-only from this file
 

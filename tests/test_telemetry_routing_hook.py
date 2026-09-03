@@ -675,6 +675,85 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         attempts = await_payloads(capture, 3, event_name="workflow_started")
         self.assertEqual(len(attempts), 3, "bounded by FLOOR_ATTEMPT_LIMIT")
 
+    def test_a_persistently_refused_floor_says_so_once_and_not_once_per_call(self):
+        # `noteFloorExhausted` is the only local signal that an install's floor is dead: a clio that
+        # refuses `workflow_started` on every attempt leaves the session with no telemetry and, without
+        # that line, nothing anywhere saying anything was ever tried. Raised in review of PR #96 as
+        # untested, and a regression in either half of it is silent. The diagnostic has to appear once
+        # the attempt slots are spent, and its `claimOnce` guard has to hold it to one line per session
+        # rather than repeating on every later clio call for the life of a long session.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        failing, capture = stub_clio(answers="rejected")
+
+        lines = 0
+        first_written_on = None
+        for call in range(1, 7):
+            result = run_hook(
+                {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                telemetry_home=home, clio=NODE, capture=capture, capture_dir=failing,
+            )
+            self.assertEqual(result.returncode, 0)
+            written = result.stderr.count("clio is refusing the floor event")
+            if written and first_written_on is None:
+                first_written_on = call
+            lines += written
+            # Each refusal has to be on disk before the next call can notice it, since the answer
+            # arrives after the hook has already returned.
+            await_outcome(session, "floor")
+
+        self.assertEqual(
+            lines, 1,
+            "the exhaustion diagnostic is claimed once per session, not once per remaining call",
+        )
+        # FLOOR_ATTEMPT_LIMIT is 3, so calls 1 to 3 each take an attempt slot and the fourth is the
+        # first that finds none left. Writing it earlier would report a dead floor while a retry was
+        # still outstanding.
+        self.assertEqual(
+            first_written_on, 4,
+            "the diagnostic belongs on the first call after the attempt slots are spent",
+        )
+
+    def test_a_withdrawn_consent_stops_the_next_call_not_the_next_session(self):
+        # The hook reads clio's consent record off disk instead of asking clio for its live decision,
+        # which docs/telemetry-transport-decision.md accepts as a trade-off. What that trade-off
+        # actually costs is decided by how long a stale answer survives, and nothing pinned it.
+        # Consent is re-read on every invocation, so a withdrawal takes effect on the very NEXT hook
+        # call. Caching it for the session would leave an opt-out silently ineffective for the rest of
+        # that session, which is a different and far worse bargain than the one written down.
+        write = {
+            "tool_name": "mcp__clio__clio-run",
+            "tool_input": {"command": "modify-entity-schema-column", "args": {"environment-name": "x"}},
+        }
+
+        # Control arm first: with consent left standing, the second call's write reminder does fire.
+        # Without this the assertion below would pass just as well if the reminder were simply spent
+        # by the first call, which would make the test agree with any behaviour at all.
+        kept = telemetry_home("granted")
+        kept_session = str(uuid.uuid4())
+        run_hook({"session_id": kept_session, "tool_name": "mcp__clio__list-apps"},
+                 telemetry_home=kept)
+        still_reminded = run_hook({"session_id": kept_session, **write}, telemetry_home=kept)
+        self.assertIn(
+            "get-guidance name=product-telemetry", still_reminded.stdout,
+            "the write reminder has to fire on the second call while consent stands",
+        )
+
+        # Withdrawal arm: the same two calls, with consent revoked in between.
+        home = telemetry_home("granted")
+        session = str(uuid.uuid4())
+        run_hook({"session_id": session, "tool_name": "mcp__clio__list-apps"}, telemetry_home=home)
+        Path(home, "consent.json").write_text(
+            json.dumps({"telemetry_consent": "denied"}), encoding="utf-8"
+        )
+        after = run_hook({"session_id": session, **write}, telemetry_home=home)
+
+        self.assertEqual(after.returncode, 0)
+        self.assertEqual(
+            after.stdout.strip(), "",
+            "a withdrawal must silence the hook on the next call, not at the next session",
+        )
+
     def test_a_refused_reading_is_re_sent_rather_than_remembered(self):
         # Marking a refused send as delivered hides the failure behind a series that merely looks
         # sparse, and a persistently refused field would end the series in silence. The reading is
