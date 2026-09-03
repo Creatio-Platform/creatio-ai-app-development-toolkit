@@ -51,7 +51,8 @@ migrate.mjs: ⛔ COVERAGE INCOMPLETE — 4 schema member(s) unaccounted …
 migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: …   ← `--plan` mode; reaches this run via `--units.planGaps`
 migrate.mjs: ℹ this run ALSO has PLAN-level gaps (structure · coverage) — those are NOT
              buildable-out-of; return them to the caller instead of re-verifying against them.
-migrate.mjs: ℹ this run publishes 1 PLAN-level gap(s) in `units.planGaps` — NOT buildable-out-of,
+migrate.mjs: ℹ this run publishes 1 plan-completeness gap(s) — carried in `units.planGaps`
+             alongside any gate/structure/coverage gaps reported above, NOT buildable-out-of,
              and NOT reflected in this exit code: plan INCOMPLETE — placement not settled (1
              blocker(s)). …   ← `--units` mode; INFORMATIONAL, exit stays 0
 ```

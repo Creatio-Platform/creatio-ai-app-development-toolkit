@@ -69,7 +69,7 @@ explicitly rather than guessed. Re-record `manifest.placement` and re-plan.
 conflate the plan-level kinds with `verifyIncomplete`, which IS repairable by building and must not stop a run. A
 caller that gates on the exit code alone therefore learns nothing about the plan; gate on `planGaps.length`.
 `--units` does also say it on **stderr**, as one INFORMATIONAL, non-gating
-`ℹ … PLAN-level gap(s) in units.planGaps` line naming the same entries the artifact carries — PR review: the
+`ℹ … plan-completeness gap(s) … carried in units.planGaps` line naming the same entries the artifact carries — PR review: the
 other three kinds write their ⛔ line in EVERY mode, so silence on this one made stderr coverage look uniform
 across the four when it was not. That line is a courtesy for whoever is watching the run; the array is the
 contract. The plan-completeness legs are reported

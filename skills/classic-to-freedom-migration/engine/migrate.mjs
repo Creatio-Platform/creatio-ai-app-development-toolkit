@@ -2995,7 +2995,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // It reports the entries the artifact carries, not a second wording of them, so the two channels cannot disagree.
   if (unitsMode && !planMode) {
     const planLegs = planGaps(result, { planCompleteness: true }).filter((g) => g.startsWith("plan INCOMPLETE"));
-    if (planLegs.length) process.stderr.write(`migrate.mjs: ℹ this run publishes ${planLegs.length} PLAN-level gap(s) in \`units.planGaps\` — NOT buildable-out-of, and NOT reflected in this exit code: ${planLegs.join(" · ")}. Fix the manifest and re-plan; the build executor stops on them before its first stand write.\n`);
+    if (planLegs.length) process.stderr.write(`migrate.mjs: ℹ this run publishes ${planLegs.length} plan-completeness gap(s) — carried in \`units.planGaps\` alongside any gate/structure/coverage gaps reported above, NOT buildable-out-of, and NOT reflected in this exit code: ${planLegs.join(" · ")}. Fix the manifest and re-plan; the build executor stops on them before its first stand write.\n`);
   }
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);

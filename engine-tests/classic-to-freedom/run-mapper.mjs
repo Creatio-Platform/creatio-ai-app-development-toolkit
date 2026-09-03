@@ -2755,12 +2755,12 @@ check("ENG-95857 R1: `--units` publishes `[]` for a clean plan — REQUIRED and 
 // reports the entries the artifact carries, so the two channels cannot disagree about the same run.
 const unitsGapRun = runWithPlacement(undefined, "--units");
 check("ENG-95857 F5: a `--units` run over a plan-incomplete manifest ALSO reports the gap on stderr, naming the published set, while the exit code deliberately stays 0",
-  unitsGapRun.status === 0 && /PLAN-level gap\(s\) in `units.planGaps`/.test(unitsGapRun.stderr || "")
+  unitsGapRun.status === 0 && /plan-completeness gap\(s\) — carried in `units.planGaps`/.test(unitsGapRun.stderr || "")
   && /placement/.test(unitsGapRun.stderr || ""),
   () => ({ status: unitsGapRun.status, stderr: (unitsGapRun.stderr || "").slice(0, 300) }));
 const unitsCleanRun = runWithPlacement(FULL_PLACEMENT, "--units");
 check("ENG-95857 F5: a `--units` run over a CLEAN plan says nothing on stderr — the line reports the PUBLISHED set, so silence and `[]` can never disagree",
-  unitsCleanRun.status === 0 && !/PLAN-level gap/.test(unitsCleanRun.stderr || ""),
+  unitsCleanRun.status === 0 && !/plan-completeness gap/.test(unitsCleanRun.stderr || ""),
   () => (unitsCleanRun.stderr || "").slice(0, 300));
 // PR review — THE SLICE'S OMISSION IS AN INVARIANT, so it is pinned rather than only asserted in a comment.
 // `pageUnitsSlice` carries every OTHER run-level field (`planVersion`, `sectionHost`, `applicationCode`) and
