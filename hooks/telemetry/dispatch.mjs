@@ -273,3 +273,66 @@ export function readOutcome(sessionId, kind, nonce) {
 	// absent one 'pending' would leave the floor waiting on an answer that is never coming.
 	return Date.now() - stat.mtimeMs < OUTCOME_GRACE_MS ? 'pending' : 'rejected';
 }
+
+// The error code clio attached to a refusal, read from the same outcome file as readOutcome. clio
+// answers a rejected send as `{status:'rejected', error:{code, message}}`, in structuredContent or in a
+// JSON text block, and until now that code was parsed and thrown away: every refusal collapsed to the
+// one word 'rejected', so a floor that died because the connected clio predates the vocabulary
+// (`unknown-event-name`) was indistinguishable, in the only local diagnostic there is, from a
+// transient refusal for a bad field. Returns null when the answer carries no code this reads.
+export function readRejectionCode(sessionId, kind, nonce) {
+	let answer;
+	try {
+		answer = fs.readFileSync(markerPath(sessionId, `${kind}-${nonce}-outcome`), 'utf8');
+	} catch {
+		return null;
+	}
+	for (const line of answer.split('\n')) {
+		if (!line.startsWith('{')) {
+			continue;
+		}
+		let message;
+		try {
+			message = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (message?.id !== TOOL_CALL_ID) {
+			continue;
+		}
+		if (message.error) {
+			// A JSON-RPC level error: the server refused the call itself, not the event.
+			return `jsonrpc ${message.error.code ?? 'error'}`;
+		}
+		const code = telemetryErrorCode(message.result);
+		if (code !== null) {
+			return code;
+		}
+	}
+	return null;
+}
+
+// Mirror of telemetryStatus for the error object: both shapes clio may answer with.
+function telemetryErrorCode(result) {
+	if (!result || typeof result !== 'object') {
+		return null;
+	}
+	const structured = result.structuredContent;
+	if (typeof structured?.error?.code === 'string') {
+		return structured.error.code;
+	}
+	for (const block of Array.isArray(result.content) ? result.content : []) {
+		if (typeof block?.text !== 'string') {
+			continue;
+		}
+		try {
+			const payload = JSON.parse(block.text);
+			if (typeof payload?.error?.code === 'string') {
+				return payload.error.code;
+			}
+		} catch {
+			// Not a JSON block.
+		}
+	}
+	return null;
+}

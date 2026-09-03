@@ -4,7 +4,7 @@
 // only the same claim/outcome primitives underneath.
 import fs from 'node:fs';
 import { claimOnce, markerPath, sanitizeSessionId } from './state-dir.mjs';
-import { readOutcome, OUTCOME_GRACE_MS } from './dispatch.mjs';
+import { readOutcome, readRejectionCode, OUTCOME_GRACE_MS } from './dispatch.mjs';
 
 // A failed floor emit releases its claim so the next clio call retries, but not without end: an
 // installation whose clio refuses every send would otherwise spawn one for every tool call.
@@ -51,22 +51,38 @@ export function floorPersistentlyRejected(sessionId, lastAttempt) {
 	return readOutcome(sessionId, 'floor', floorNonce(lastAttempt)) === 'rejected';
 }
 
-// A one-time local signal for the case raised again in review of PR #96: a clio that rejects
-// `workflow_started` on every attempt (an unreleased vocabulary, an `unknown-event-name` answer)
-// leaves the session with zero telemetry and, before this, zero indication anything was ever tried —
-// a maintainer would only learn a whole install's floor was dead from the metrics it never sent.
-// `claimOnce` makes the write itself idempotent per session, so routeClioCall and Stop both calling
-// attemptFloorEmission after retries are exhausted logs once, not once per remaining hook invocation.
-export function noteFloorExhausted(sessionId) {
+// The one rejection code that means the pairing itself is wrong rather than one send: the connected
+// clio predates the flow-agnostic stage vocabulary and will refuse every stage this toolkit build
+// sends, for the whole session, on every session, until clio is upgraded.
+export const VOCABULARY_UNKNOWN_CODE = 'unknown-event-name';
+
+// A one-time local signal for the case raised in review of PR #96: a clio that rejects
+// `workflow_started` on every attempt leaves the session with zero telemetry and, before this, zero
+// indication anything was ever tried, so a maintainer would only learn a whole install's floor was
+// dead from the metrics it never sent. Two things about the line. It carries clio's own rejection code
+// for the last attempt, because a generic "refused" could not tell a deploy that shipped ahead of the
+// clio it needs from a transient refusal for a bad field, and those need opposite responses. And
+// `unknown-event-name` gets its own sentence naming the cause and the fix, since that code is the
+// degradation path of this whole design: nothing gates on clio's version up front, the floor tries,
+// clio answers, and this is where the answer becomes legible. `claimOnce` makes the write idempotent
+// per session, so routeClioCall and Stop both calling attemptFloorEmission after retries are exhausted
+// log once, not once per remaining hook invocation.
+export function noteFloorExhausted(sessionId, lastAttempt = FLOOR_ATTEMPT_LIMIT - 1) {
 	if (!claimOnce(sessionId, 'floor-exhausted')) {
 		return;
 	}
+	const code = readRejectionCode(sessionId, 'floor', floorNonce(lastAttempt));
+	const reason = code === null ? 'carried no error code' : `was '${code}'`;
 	try {
-		process.stderr.write(
-			'caadt telemetry: workflow_started was rejected on every attempt for session '
-			+ `${sanitizeSessionId(sessionId)} — clio is refusing the floor event (see `
-			+ 'docs/telemetry-transport-decision.md, "The floor\'s exactly-once contract")\n'
-		);
+		let text = 'caadt telemetry: workflow_started was rejected on every attempt for session '
+			+ `${sanitizeSessionId(sessionId)}; clio's last answer ${reason} (see `
+			+ 'docs/telemetry-transport-decision.md, "The floor\'s exactly-once contract")\n';
+		if (code === VOCABULARY_UNKNOWN_CODE) {
+			text += `caadt telemetry: '${VOCABULARY_UNKNOWN_CODE}' means the connected clio predates the `
+				+ 'flow-agnostic telemetry vocabulary (ENG-92551) and will reject every stage this toolkit '
+				+ 'sends; upgrade clio, nothing is recorded until then\n';
+		}
+		process.stderr.write(text);
 	} catch {
 		// A diagnostic that cannot be written is not a reason to fail the hook.
 	}

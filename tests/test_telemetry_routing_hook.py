@@ -62,6 +62,11 @@ ECHOES_RECORDED_REPLY = (
     "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,error:{code:-32602,"
     "data:{recorded:false},message:'event already stored for this session'}}));"
 )
+# What a clio that predates the flow-agnostic vocabulary answers to `workflow_started`: a refusal
+# whose code is the one that means the pairing itself is wrong, not the one send.
+UNKNOWN_EVENT_REPLY = ("process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,result:{structuredContent:"
+                       "{success:false,status:'rejected',error:{code:'unknown-event-name',"
+                       "message:'Unknown telemetry event name.'}}}}));")
 
 def _base_env() -> dict:
     return {
@@ -142,8 +147,9 @@ def stub_clio(*, answers: str = "recorded") -> "tuple[str, Path]":
     becomes `node`, and node runs an extension-less file as CommonJS.
 
     `answers` picks what clio says back: `recorded` (stored), `rejected` (refused, e.g. an invalid
-    field), `hangs` (never answers, still running) or `silent` (exits without answering, which is
-    what a missing or broken clio looks like from here).
+    field), `unknown-event` (refused because this clio predates the vocabulary), `hangs` (never
+    answers, still running) or `silent` (exits without answering, which is what a missing or broken
+    clio looks like from here).
     """
     directory = Path(tempfile.mkdtemp(prefix="caadt-stub-clio-", dir=_TMP))
     capture = directory / "captured.jsonl"
@@ -152,7 +158,8 @@ def stub_clio(*, answers: str = "recorded") -> "tuple[str, Path]":
     reply = {"recorded": RECORDED_REPLY, "rejected": REJECTED_REPLY,
              "hangs": HANGING_REPLY, "silent": "",
              "opaque": OPAQUE_REPLY, "text-recorded": TEXT_RECORDED_REPLY,
-             "echoes-recorded": ECHOES_RECORDED_REPLY}[answers]
+             "echoes-recorded": ECHOES_RECORDED_REPLY,
+             "unknown-event": UNKNOWN_EVENT_REPLY}[answers]
     (directory / "mcp-server").write_text(
         STUB_CAPTURE_SOURCE + reply + NEWLINE, encoding="utf-8"
     )
@@ -688,16 +695,18 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
         lines = 0
         first_written_on = None
+        stderr = ""
         for call in range(1, 7):
             result = run_hook(
                 {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
                 telemetry_home=home, clio=NODE, capture=capture, capture_dir=failing,
             )
             self.assertEqual(result.returncode, 0)
-            written = result.stderr.count("clio is refusing the floor event")
+            written = result.stderr.count("was rejected on every attempt")
             if written and first_written_on is None:
                 first_written_on = call
             lines += written
+            stderr += result.stderr
             # Each refusal has to be on disk before the next call can notice it, since the answer
             # arrives after the hook has already returned.
             await_outcome(session, "floor")
@@ -713,6 +722,36 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
             first_written_on, 4,
             "the diagnostic belongs on the first call after the attempt slots are spent",
         )
+        # The line names clio's reason. A generic "refused" could not tell a deploy that shipped ahead
+        # of its clio from a one-off rejection for a bad field, and those need opposite responses.
+        self.assertIn("clio's last answer was 'invalid-token'", stderr)
+        self.assertNotIn("predates the flow-agnostic telemetry vocabulary", stderr,
+                         "a field-level refusal must not be reported as an incompatible clio")
+
+    def test_an_incompatible_clio_is_named_as_the_reason_the_floor_died(self):
+        # The degradation path of the whole design: nothing probes clio's version before the first
+        # send, so a toolkit build that reaches a clio predating the vocabulary learns it from the
+        # answer. `unknown-event-name` is that answer, and it has to come out as a distinct sentence
+        # with the cause and the fix, once, or a maintainer reading stderr sees only "refused" and
+        # cannot tell the whole install is dead on arrival.
+        session = str(uuid.uuid4())
+        home = telemetry_home("granted")
+        too_old, capture = stub_clio(answers="unknown-event")
+
+        stderr = ""
+        for _ in range(5):
+            result = run_hook(
+                {"session_id": session, "tool_name": "mcp__clio__list-apps", "cwd": _TMP},
+                telemetry_home=home, clio=NODE, capture=capture, capture_dir=too_old,
+            )
+            self.assertEqual(result.returncode, 0)
+            stderr += result.stderr
+            await_outcome(session, "floor")
+
+        self.assertEqual(stderr.count("clio's last answer was 'unknown-event-name'"), 1)
+        self.assertEqual(stderr.count("predates the flow-agnostic telemetry vocabulary"), 1,
+                         "the incompatible-clio sentence is written once, with the cause and the fix")
+        self.assertIn("upgrade clio", stderr)
 
     def test_a_withdrawn_consent_stops_the_next_call_not_the_next_session(self):
         # The hook reads clio's consent record off disk instead of asking clio for its live decision,

@@ -281,7 +281,7 @@ function attemptFloorEmission(sessionId, payload) {
 	} else if (attempt + 1 >= FLOOR_ATTEMPT_LIMIT && floorPersistentlyRejected(sessionId, attempt)) {
 		// Every attempt slot is used and the last one was a definite refusal, not merely still
 		// pending — see noteFloorExhausted for why this is worth a local signal at all.
-		noteFloorExhausted(sessionId);
+		noteFloorExhausted(sessionId, attempt);
 	}
 	return claimed;
 }

@@ -195,6 +195,20 @@ class ProductTelemetryContractTests(unittest.TestCase):
         for stage in ("clarification_requested", "changes_applied", "workflow_failed"):
             self.assertNotIn(stage, telemetry)
 
+    def test_contract_names_the_degradation_path_for_an_older_clio(self):
+        # Raised across fourteen review rounds of PR #96: the contract delegated the vocabulary and
+        # said nothing about what happens when the connected clio does not accept it. Both halves
+        # have to be here, since this is the file an agent reads for CAADT flows and the one place
+        # a maintainer looks when a whole install reports nothing.
+        telemetry = read("context", "product-telemetry.md")
+
+        self.assertIn("## When the connected clio does not accept the vocabulary", telemetry)
+        self.assertIn("`unknown-event-name`", telemetry)
+        self.assertIn("Stop emitting for the rest of the run", telemetry)
+        self.assertIn("do not fall back to the deprecated app-creation names", telemetry)
+        self.assertIn("`FLOOR_ATTEMPT_LIMIT`", telemetry)
+        self.assertIn("upgrade clio", telemetry)
+
     def test_agents_md_does_not_instruct_the_deprecated_event_names(self):
         """AGENTS.md must not name the app-creation events the vocabulary replaced.
 

@@ -15,6 +15,23 @@ file; a stage name spelled from memory is rejected by clio's allow-list.
 The one field this repository supplies: use the static Analytics Context from the installed skill or
 rule for `coding_agent` and `plugin_version`.
 
+## When the connected clio does not accept the vocabulary
+
+Nothing here probes clio's version before emitting; the pairing is made compatible by release order
+(clio ships the vocabulary first, then the guidance, then this toolkit), and a mismatch is made
+visible rather than guessed around.
+
+- **Agent side.** A `send-telemetry` rejected with `unknown-event-name` means the installed clio
+  predates the flow-agnostic vocabulary. Stop emitting for the rest of the run and carry on with the
+  task; do not fall back to the deprecated app-creation names, and do not report it as a task failure.
+  The guidance article owns this rule, this is only where it lands for CAADT flows.
+- **Hook side.** The session-start floor is attempted at most `FLOOR_ATTEMPT_LIMIT` times per session.
+  When every attempt is refused, the hook writes one stderr line per session carrying clio's own
+  rejection code from the last answer, and `unknown-event-name` gets a second line naming the cause
+  and the fix (upgrade clio). That line is the difference between a deploy that shipped ahead of the
+  clio it needs and a transient refusal for a bad field, which need opposite responses. See
+  `docs/telemetry-transport-decision.md`, "The floor's exactly-once contract".
+
 ## Which `workflow` value a CAADT flow reports
 
 `workflow` identifies the flow; the stage names are shared. Pick the value for the flow you are

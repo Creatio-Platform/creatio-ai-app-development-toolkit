@@ -85,6 +85,14 @@ effort, since the child is never awaited — at least one for any session that t
 - **Durability trade-off accepted:** none of this survives a machine restart or a claim file lost to
   disk pressure — the guarantee is "at most once, best-effort at least once," not "exactly once,
   durably." A session that never gets a floor event leaves silence, not an error, on this design.
+- **Exhaustion is reported with clio's reason, once.** When every attempt is refused,
+  `noteFloorExhausted()` reads the last attempt's outcome file through `readRejectionCode()` and
+  writes one stderr line per session carrying clio's `error.code`; `unknown-event-name` adds a second
+  line naming the cause (a clio that predates the vocabulary) and the fix. Raised in review of PR #96:
+  a generic "refused" could not tell a deploy that shipped ahead of its clio from a one-off rejection.
+  This is the design's degradation path made legible, not a capability probe: nothing is checked
+  before the first send, and the release order across clio, clio-knowledge and this toolkit is what
+  makes the pairing compatible.
 
 **Invariants this protocol assumes, stated once so a future change can check itself against them:**
 
