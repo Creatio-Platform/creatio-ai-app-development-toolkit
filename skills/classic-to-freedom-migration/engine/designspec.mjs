@@ -1976,6 +1976,32 @@ function buildLayoutGroupRows(cs, regionOf) {
 // capability table says the template lacks gets its own count and its own `crt.*` gate here. Only the measured
 // `absent` verdict gates: `unconfirmed` stays a ⚠ in the Layout table, because a count no one has measured is not a
 // criterion. Own function so `buildCoverageRows` stays under Sonar CC 15.
+// The expected crt.ImageInput count. A value-bound `crt.ImageInput` emitted through the FIELD path (an entity
+// IMAGELOOKUP column laid out as a normal field) binds via `values.value`, so `isField` (control) misses it AND it
+// is not in `cs.images` (the generator/name-detected set) — count it here too, the SAME fieldImages fold the Layout
+// builder uses. Without it a page whose only image is an IMAGELOOKUP-column field gets NO image vk row,
+// `renderVerify` never runs the crt.ImageInput MISSING check, and a dropped image field passes `--verify` with
+// exit 0 (the AC2 gap two reviewers flagged). Own fn so `buildCoverageRows` stays under Sonar CC 15.
+function expectedImageCount(cs) {
+  const imgNames = new Set((cs.images || []).map((im) => im.classic));
+  const fieldImageCount = (cs.viewConfigDiff || [])
+    .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
+  return (cs.images || []).length + fieldImageCount;
+}
+// ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected" rather
+// than one row per element. Without a vk row they are built but ungated: `--verify` would exit 0 on a page that
+// dropped every one of them, and the executor would never fetch their documentation. Own fn for Sonar CC 15.
+function tableElementRows(cs) {
+  const byType = new Map();
+  for (const el of cs.tableElements || []) {
+    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
+    e.n++; e.kinds.add(String(el.classicKind || "element"));
+    byType.set(el.componentType, e);
+  }
+  return [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([ctype, e]) => ({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
+      vk: { type: "element", ctype, n: e.n } }));
+}
 // Each field's published CELL, dropped where the mapper computed none (nothing to place by, and nothing to check).
 // Own function so `buildCoverageRows` stays under Sonar CC 15.
 function fieldLayoutOf(fieldOps) {
@@ -2019,23 +2045,12 @@ function buildCoverageRows(cs, pm, result, opts = {}) {
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
   // only image is an IMAGELOOKUP-column field gets NO image vk row, `renderVerify` never runs the crt.ImageInput
   // MISSING check, and a dropped image field passes `--verify` with exit 0 (the AC2 gap two reviewers flagged).
-  const imgNames = new Set((cs.images || []).map((im) => im.classic));
-  const fieldImageCount = (cs.viewConfigDiff || [])
-    .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
-  const expImages = (cs.images || []).length + fieldImageCount;
+  const expImages = expectedImageCount(cs);
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
   // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
   // page that dropped every one of them, and the executor would never fetch their documentation.
-  const byType = new Map();
-  for (const el of cs.tableElements || []) {
-    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
-    e.n++; e.kinds.add(String(el.classicKind || "element"));
-    byType.set(el.componentType, e);
-  }
-  for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
-    cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
-      vk: { type: "element", ctype, n: e.n } });
+  cover.push(...tableElementRows(cs));
   cover.push(...templateAbsentRows(cs, opts));
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
