@@ -2050,8 +2050,9 @@ function buildCoverageRows(cs, pm, result, opts = {}) {
   // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
   // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
   // page that dropped every one of them, and the executor would never fetch their documentation.
-  cover.push(...tableElementRows(cs));
-  cover.push(...templateAbsentRows(cs, opts));
+  // ENG-96457 (item 2) — plus one row per base-declared element the MEASURED capability table says the chosen
+  // template does NOT ship: while Feed was "template context" it carried no expected count at all.
+  cover.push(...tableElementRows(cs), ...templateAbsentRows(cs, opts));
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
