@@ -10705,22 +10705,50 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   const wholeBytes = Buffer.byteLength(r.stdout || "", "utf8");
   const sliceBytes = sliceFiles.filter((f) => fs.existsSync(f)).map((f) => fs.statSync(f).size);
   const sumSlices = sliceBytes.reduce((t, b) => t + b, 0);
+  // MEASURE THE PARTITION AGAINST THE SLICEABLE PAYLOAD, NOT THE WHOLE DOCUMENT. The band below used to compare
+  // `sumSlices` with `wholeBytes`, which quietly made every new RUN-LEVEL field a step towards a red check: a key
+  // that appears in no slice inflates the denominator and nothing else. That is how it actually broke — the
+  // measured ratio walked 0.83 → 0.77 → 0.75 as `resolutionsUnmatched`, then `planGaps` (ENG-95857), then this
+  // ticket's own run-level counters were added, and the third step crossed the floor on a slicer nobody had
+  // touched (the three slice files were byte-identical at 1667/820/824 across all three heads). Re-calibrating the
+  // band would only postpone the next one, so the denominator is now the part that IS sliced.
+  // DERIVED, never a hard-coded key list: the sliceable keys are the union of the keys the slice files actually
+  // carry, so a field added to the queue and to the slice is counted on both sides and a run-level-only field is
+  // counted on neither. Serialised with the same `JSON.stringify(x, null, 2)` the CLI writes both sides with, at
+  // the same top-level depth, so the two byte counts are comparable.
+  const sliceDocs = sliceFiles.filter((f) => fs.existsSync(f))
+    .map((f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } })
+    .filter(Boolean);
+  const slicedKeys = new Set(sliceDocs.flatMap((doc) => Object.keys(doc)));
+  // `pageUnitsSlice` renames exactly two queue keys as it narrows them — the `pages` array becomes the one `page`
+  // it kept and the `parents` map becomes that page's own `parent` edge. Both ARE sliced, so both belong in the
+  // denominator; only these two are listed because a rename is the only thing key identity cannot see. Everything
+  // else is either carried under its own name (`entity`, `planVersion`, `sectionHost`, `reachability`, …) or is
+  // run-level only (`buildOrder`, `templateNames`, the `resolutions*` set, `planGaps`) — and a run-level field
+  // added tomorrow falls into the second group on its own, which is the whole point of deriving this.
+  const SLICE_RENAMES = { pages: "page", parents: "parent" };
+  const isSliceable = (k) => slicedKeys.has(k) || slicedKeys.has(SLICE_RENAMES[k]);
+  const sliceablePayload = parsed
+    ? Object.fromEntries(Object.entries(parsed).filter(([k]) => isSliceable(k)))
+    : {};
+  const partitionBytes = Buffer.byteLength(`${JSON.stringify(sliceablePayload, null, 2)}\n`, "utf8");
   // What the run cost BEFORE: every agent opened the whole queue. AFTER: each opens its own row.
   const runBefore = wholeBytes * keys.length, runAfter = sumSlices;
   // BOTH THRESHOLDS BELOW MEAN SOMETHING; neither is fitted to this fixture's byte counts.
-  // `PARTITION_BAND` is how far the sum may sit from the whole file. It cannot be 1.0: each slice repeats the
-  // run-level fields (`planVersion`, `sectionHost`, `applicationCode`, …), which inflates the sum, while the
-  // whole-run collections (`buildOrder`, `resolutionsUnmatched`) appear in no slice, which deflates it. Neither
-  // side is a defect. Measured sums land at 0.87–0.92 of the whole across the 1-, 2- and 3-page fixtures, so
-  // ±0.25 holds every one of them and still fails the regressions: a slicer that skips one of three files reads
-  // 0.65, and one that writes the whole payload into each reads 3.0. A wider band passed the missing-file case.
+  // `PARTITION_BAND` is how far the sum may sit from the SLICEABLE payload. It cannot be 1.0: each slice repeats
+  // the run-level fields it does carry (`planVersion`, `sectionHost`, `applicationCode`, …), which inflates the
+  // sum, while `pages` is split across the slices rather than repeated. Neither side is a defect. Against the
+  // sliceable denominator this fixture measures 0.89, and ±0.25 still fails the regressions it was chosen for:
+  // a slicer that skips one of three files reads 0.44 — outside the band because the denominator no longer
+  // shrinks with it — and one that writes the whole payload into each reads well over 1.25.
   // `ORDER_OF_MAGNITUDE` is the claim itself — bullet 2 promised a 10x per-agent drop and this asserts it does
   // NOT happen, so the 10 is the wording, not a calibration. Slices here sit at 2.3-4.6x, well inside it.
   const PARTITION_BAND = 0.25, ORDER_OF_MAGNITUDE = 10;
   check("ENG-95472: the slices PARTITION the queue — together they are about the whole file, not a fraction of it",
     () => keys.length === 3 && sliceBytes.length === keys.length
-      && sumSlices > wholeBytes * (1 - PARTITION_BAND) && sumSlices < wholeBytes * (1 + PARTITION_BAND),
-    () => ({ wholeBytes, sliceBytes, sumSlices, ratio: +(sumSlices / wholeBytes).toFixed(2) }));
+      && sumSlices > partitionBytes * (1 - PARTITION_BAND) && sumSlices < partitionBytes * (1 + PARTITION_BAND),
+    () => ({ wholeBytes, partitionBytes, runLevelOnly: Object.keys(parsed || {}).filter((k) => !isSliceable(k)),
+      sliceBytes, sumSlices, ratio: +(sumSlices / partitionBytes).toFixed(2) }));
   check("ENG-95472: so the saving is the RUN TOTAL and it scales with the page count — not an order of magnitude off any single agent's read",
     () => sliceBytes.length === keys.length && keys.length > 0
       && runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / ORDER_OF_MAGNITUDE),
