@@ -19,7 +19,7 @@ HTML or a rendered artifact.
 - **One `Layout` table = structure + contents.** The `Region` column is the page structure (side-profile
   islands, tabs, card actions) and REPEATS down its rows (Markdown can't merge cells). Every field,
   related list, native component and card action is ONE row — nothing is listed twice.
-- **`Logic` is where the business rules live** — the declarative page rules (required / read-only /
+- **`Business rules` is where they live** — the declarative page rules (required / read-only /
   visible-when, each with its condition) render here, together with entity/lookup filters and
   process launch. The Layout `Rule` column carries only intrinsic field state
   (e.g. a read-only mirror), never a business rule — a reader finds all the rules in ONE place.

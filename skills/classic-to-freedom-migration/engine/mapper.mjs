@@ -2402,7 +2402,7 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
     // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
     // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
     out.push({ kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
-      reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` });
+      reason: `Freedom quick filters REPLACE the list's entire filter set (they do not add to it), so the standard filters, search, folder tree and filter builder can silently disappear — confirm they are all preserved on the built page alongside this page's own filters` });
   }
   // ENG-96327 — the command bar no longer raises a ⚠ Confirm. What was found (or that nothing was) is a SHOWN fact:
   // the design spec's `**List buttons:**` summary line states it, and a shown fact is not something to ask the operator

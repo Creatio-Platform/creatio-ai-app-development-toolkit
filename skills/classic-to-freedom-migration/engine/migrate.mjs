@@ -2087,7 +2087,7 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   const REG_SOURCE_NOTE = {
     "stand-export": `checked against the TARGET STAND's own component registry (version ${reg.version})`,
     "vendored-pinned": `checked against the engine's vendored component index, pinned to ${reg.version}`,
-    "vendored-union": `checked against the engine's vendored component index, over the UNION of ${reg.index.meta.versions.length} platform versions — a type present in ANY of them passes, so this does NOT prove the target stand carries it; supply \`manifest.componentRegistry\` (the stand's registry export) or \`manifest.platformVersion\` to make it a real per-version check`,
+    "vendored-union": `checked against the engine's vendored component list (a union of platform versions), not this stand's own registry — a match here does not prove the target stand carries it, so confirm on-stand if a component looks doubtful`,
     "unreadable-export": `the manifest NAMED a component registry (\`${reg.file || "?"}\`) but the engine could not read it (${reg.error || "unknown error"}) — this run fell back to the vendored index, so nothing here reflects your stand`,
   };
   if (reg.source === "unreadable-export")

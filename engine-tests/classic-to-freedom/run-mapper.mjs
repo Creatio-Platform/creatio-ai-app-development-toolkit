@@ -1449,7 +1449,7 @@ check("ENG-95218: every grid column gets a matching `PDS_*` view-model attribute
       && Object.keys(attrs.values).join(",") === "PDS_Name,PDS_Stage,PDS_Flagged"
       && attrs.values.PDS_Name.modelConfig.path === "PDS.Name"; },
   () => JSON.stringify(lcs.listViewModelConfigDiff[0]));
-check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contribution and flags that a merge REPLACES the array — the engine cannot know the entries a starter page already registered (measured failure: search + folder tree silently break)",
+check("ENG-95218 / ENG-96327: `filterAttributes` publishes only THIS page's contribution; the ⚠ Confirm warns (plain language) that Freedom quick filters REPLACE the whole filter set (measured failure: search + folder tree silently break)",
   () => { const fa = lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes);
     return fa.values.filterAttributes.map((a) => a.name).join(",") === "QuickFilterByDueDate_Items,QuickFilterByStage_Items"
       && fa.values.filterAttributes.every((a) => a.loadOnChange === true)
@@ -1459,10 +1459,10 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
       && lcs.filterAttributes.mustRelistExisting === true
       // the hazard is a ⚠ Confirm item (an on-stand query with a recordable answer), not prose a reader may skip
       && lpRun.designSpec.includes("[list-filter-attributes]")
-      && lpRun.designSpec.includes("REPLACES the array")
+      && lpRun.designSpec.includes("REPLACE the list's entire filter set")
       && !lpRun.designSpec.includes("Read the starter list page FIRST")
       && lcs.needsDecision.some((d) => d.kind === "list-filter-attributes"
-        && d.reason.includes("silently disabled"))
+        && d.reason.includes("silently disappear"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
 check("ENG-95218 / ENG-96327: the command bar is a SHOWN `List buttons` line, not a ⚠ Confirm — it names the buttons found and raises no operator question (a shown fact is not confirmed)",
