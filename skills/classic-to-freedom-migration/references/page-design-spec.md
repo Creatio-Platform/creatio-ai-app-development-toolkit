@@ -23,17 +23,17 @@ HTML or a rendered artifact.
   visible-when, each with its condition) render here, together with entity/lookup filters and
   process launch. The Layout `Rule` column carries only intrinsic field state
   (e.g. a read-only mirror), never a business rule — a reader finds all the rules in ONE place.
-- **Custom METHODS are not in `Logic`** — each is a row in `⚠ Imperative logic`, with its trigger traced
-  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Logic` = what the
-  engine MAPPED; `⚠ Imperative logic` = the methods it could not, each carrying a ported/dropped/blocked
-  obligation. `Logic` closes with a pointer line naming how many methods the page has.
-- **`⚠ Imperative members`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
+- **Custom METHODS are not in `Business rules`** — each is a row in `⚠ Custom methods`, with its trigger traced
+  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Business rules` = what the
+  engine MAPPED; `⚠ Custom methods` = the methods it could not, each carrying a ported/dropped/blocked
+  obligation.
+- **`⚠ Other declared logic`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
   `module-dep`, `referenced-module`) — declared on this page, defined elsewhere. Same contract as
-  `⚠ Imperative logic`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
+  `⚠ Custom methods`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
   is, is stated once above the table; the row carries only what differs.
 - **`⚠ Confirm before I build`** collects only what needs a human ON-STAND answer (plus any discovery
   risks/gaps you append). A member explained by a step-5.1 card is NOT a confirm item — it is work, and it
-  lives in `⚠ Imperative members`.
+  lives in `⚠ Other declared logic`.
 - Feed the resolution inputs so names are real, not codes: `resources` (captions), `columnTitles` (field
   labels), `detailSchemas` (detail entity/columns/title). Separate confirmed facts from inferences.
 
@@ -133,13 +133,13 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
 
-#### ⚠ Imperative logic — account for EVERY row (<N>)
+#### ⚠ Custom methods — account for EVERY row (<N>)
 | Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
 | --- | --- | --- | --- | --- | --- | --- |
 | <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values[; ⚠ also calls: <call>] / ⚠ unclassified: <call> / ⚠ nothing recognised [(+<N> call(s) the parser did not forward)] | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
 | ↳ <helper> | L<from>-<to> | internal call from <caller> | … | … | port with `<caller>` | <card> <AC…> |
 
-#### ⚠ Imperative members — account for EVERY row (<N>)
+#### ⚠ Other declared logic — account for EVERY row (<N>)
 > what each KIND is, one line per kind present — stated here, not repeated on every row
 | Member | Kind | Detail | Described in |
 | --- | --- | --- | --- |
@@ -150,7 +150,7 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 - **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
-Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm), then each child page under **Child page mappings**.
+Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm), then each child page under **Child page mappings**.
 
 ## Worked example (single-section, abbreviated)
 
@@ -207,7 +207,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Reject reason | when Stage | required (else optional) | page business rule |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 
-#### ⚠ Imperative logic — account for EVERY row (2)
+#### ⚠ Custom methods — account for EVERY row (2)
 | Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
 | --- | --- | --- | --- | --- | --- | --- |
 | onContactChange | L247-250 | attribute-onchange (from Contact attribute onChange) — reported | refresh | — | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |

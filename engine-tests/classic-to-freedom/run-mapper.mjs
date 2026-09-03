@@ -1058,16 +1058,16 @@ check("design-spec: the Business rules table does NOT list the handler (methods 
 check("design-spec: the Business rules section carries NO 'see ⚠ Imperative logic below' pointer — the section's own header below already names the count (ENG-96327)",
   !/custom method\(s\) — see/.test(dsLogicBlock), () => dsLogicBlock);
 check("design-spec: the handler is still accounted for — it carries its own ⚠ Imperative logic row",
-  /#### ⚠ Imperative logic/.test(spec) && /\| onContactChanged \|/.test(spec));
+  /#### ⚠ Custom methods/.test(spec) && /\| onContactChanged \|/.test(spec));
 // Section ORDER, by offset. Every other assertion here is either presence or a block-scoped absence
 // (`split("#### Business rules")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
 // worklist being moved back below the confirm list.
 const specAt = (needle) => spec.indexOf(needle);
-check("design-spec: sections run Layout → Logic → ⚠ Imperative logic → ⚠ Confirm → Member ledger",
-  specAt("#### Layout") < specAt("#### Business rules") && specAt("#### Business rules") < specAt("#### ⚠ Imperative logic")
-  && specAt("#### ⚠ Imperative logic") < specAt("### ⚠ Confirm"),
+check("design-spec: sections run Layout → Business rules → ⚠ Custom methods → ⚠ Confirm → Member ledger",
+  specAt("#### Layout") < specAt("#### Business rules") && specAt("#### Business rules") < specAt("#### ⚠ Custom methods")
+  && specAt("#### ⚠ Custom methods") < specAt("### ⚠ Confirm"),
   () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Business rules"),
-    imperative: specAt("#### ⚠ Imperative logic"), confirm: specAt("### ⚠ Confirm") }));
+    imperative: specAt("#### ⚠ Custom methods"), confirm: specAt("### ⚠ Confirm") }));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
 
@@ -3203,9 +3203,9 @@ check("#3 Logic: NO method row reaches the Business rules table — methods are 
   && !["onContactChange", "setContactInfo", "clearContactInfo"].some((m) => foldLogicTable.includes(m)),
   () => foldLogicTable);
 check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
-  /#### ⚠ Imperative logic/.test(foldCs.designSpec)
+  /#### ⚠ Custom methods/.test(foldCs.designSpec)
   && ["onContactChange", "setContactInfo", "clearContactInfo"].every((m) =>
-    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0])));
+    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0])));
 // #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
@@ -5357,11 +5357,11 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm → Member ledger",
+  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm → Member ledger",
     () => {
-      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Imperative members"));
+      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Business rules", "#### ⚠ Imperative logic", "#### ⚠ Imperative members",
+      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
         "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
     },
@@ -5595,7 +5595,7 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
 // (ENG-96327 removed the worklist-mechanics preamble — those semantics live in the build-executor references.)
 check("empty state: a page with methods but no rules says so; the methods live in the ⚠ Imperative logic section below (no redundant pointer)",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
-  && /#### ⚠ Imperative logic/.test(evPlan)
+  && /#### ⚠ Custom methods/.test(evPlan)
   && !/custom method\(s\) — see/.test(evPlan),
   () => evPlan.split("\n").filter((l) => l.startsWith("> ")).slice(0, 4));
 
@@ -5620,9 +5620,9 @@ check("method evidence: `new Terrasoft.EntitySchemaQuery(…)` (a NewExpression)
   idiomStub("queryIt").evidence.kinds.includes("esq") && idiomStub("queryIt").category === "query/filter");
 
 // ---- the ⚠ Imperative logic worklist: EVERY method reaches a binding list ----
-const impSpecSection = (impRun.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0];
+const impSpecSection = (impRun.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0];
 check("⚠ Imperative logic: EVERY client method has a row — the defect was methods reaching NO binding worklist",
-  /#### ⚠ Imperative logic/.test(impRun.designSpec)
+  /#### ⚠ Custom methods/.test(impRun.designSpec)
   && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(String.raw`\| ` + m + String.raw` \|`).test(impSpecSection)),
   () => impSpecSection);
 check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
@@ -6655,7 +6655,7 @@ check("inverse graph: the handoff digest counts `internalCallOnly` separately fr
 // markable. These pin the fold, the two deliberate non-folds, and that the row count is unchanged.
 const foldPlan = renderPlan(invRun, {})
 const impTable = (md) => {
-  const lines = md.slice(md.indexOf('⚠ Imperative logic')).split('\n')
+  const lines = md.slice(md.indexOf('⚠ Custom methods')).split('\n')
   const out = []
   let started = false
   for (const l of lines) {
@@ -7151,7 +7151,7 @@ check("⚠ Imperative members: an undescribed `message` / `mixin` row reads ⚠ 
   () => /^\| \S+ \| (message|mixin) \|.*\| ⚠ not described \|$/m.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /^\| \S+ \| (message|mixin) \|/.test(l)));
 check("⚠ Imperative members: the header renders and undescribed members surface as a warning",
-  () => /#### ⚠ Imperative members — account for EVERY row \(\d+\)/.test(hoConfirm)
+  () => /#### ⚠ Other declared logic — account for EVERY row \(\d+\)/.test(hoConfirm)
     && /could not identify and describe the logic of \d+ of \d+ member/.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /Imperative members|could not identify/.test(l)));
 check("⚠ Imperative members: a described member row names its card + AC",

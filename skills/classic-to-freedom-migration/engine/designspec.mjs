@@ -354,7 +354,7 @@ function entityFilterRows(cs) {
 // declarative Freedom business rules. A process launch is NOT one — it is a card ACTION, and it already renders in
 // the Layout "Card actions" region (from the same `eff.processLaunch`), so it is not repeated here (ENG-96327 —
 // this table carries business rules only, no duplicate of the Card-actions row).
-// The rules the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the table
+// The rules the engine MAPPED. Methods belong to `⚠ Custom methods` only — one method, one row, in the table
 // that carries the port obligation and traces the trigger from the data.
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
 function buildLogicRows(cs) {
@@ -363,7 +363,7 @@ function buildLogicRows(cs) {
 
 // The `#### Business rules` section. Rendered whenever the page has rules OR methods: a missing section reads as "the
 // engine dropped the rules", not as "there are none", so an all-imperative page still states the absence (the
-// methods themselves live in the `⚠ Imperative logic` section immediately below, which carries its own count).
+// methods themselves live in the `⚠ Custom methods` section immediately below, which carries its own count).
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderLogicSection(cs) {
   const logic = buildLogicRows(cs);
@@ -818,11 +818,11 @@ export function renderDesignSpec(result, opts = {}) {
   }
 
   // ---- The rest of the page, in render order, in ONE push (S7778) ----
-  //  • ⚠ Imperative logic — the METHOD worklist, and a BINDING one. Directly under Logic: the two are one subject
+  //  • ⚠ Custom methods — the METHOD worklist, and a BINDING one. Directly under Business rules: the two are one subject
   //    split in two, what the engine mapped and then what it could not. Methods stay out of the ⚠ Confirm list
   //    (that one holds open questions needing an on-stand answer); this is where each method gets its ported /
   //    dropped / blocked mark, with the evidence the engine read from the body.
-  //  • ⚠ Imperative members — the same worklist contract for the NON-method imperative members. Beside the method
+  //  • ⚠ Other declared logic — the same worklist contract for the NON-method imperative members. Beside the method
   //    worklist because they are the same kind of thing: declared here, defined elsewhere, each a port unit.
   //    These three worklists together are "the ⚠ worklist" the SKILL's rules refer to.
   //  • child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist — GENUINE open
@@ -1073,7 +1073,7 @@ function foldByCaller(stubs) {
   return { ordered, folded: parentOf.size };
 }
 
-// The ⚠ Imperative members worklist. Mirrors ⚠ Imperative logic: a table of port units, with each row's unresolved
+// The ⚠ Other declared logic table. Mirrors ⚠ Custom methods: a table of port units, with each row's unresolved
 // aspect stated IN ITS OWN CELL rather than escalated to ⚠ Confirm — a bullet list can only say "this row is open",
 // it cannot say "we know what it is, we do not know whether the template already provides it".
 function renderImperativeMembers(cs) {
@@ -1083,10 +1083,10 @@ function renderImperativeMembers(cs) {
   if (!rows.length) return [];
   const described = rows.filter((d) => d.describedIn).length;
   const undescribed = rows.length - described;
-  // ENG-96327 — same as ⚠ Imperative logic: warn ONLY when the analysis could not explain some members (non-blocking,
+  // ENG-96327 — same as ⚠ Custom methods: warn ONLY when the analysis could not explain some members (non-blocking,
   // parallel follow-up; each marked `⚠ not described` below), and drop the worklist-mechanics preamble. The per-kind
   // note below stays — it says what each member KIND is, which is not worklist mechanics.
-  const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, ""];
+  const L = [`#### ⚠ Other declared logic — account for EVERY row (${rows.length})`, ""];
   if (undescribed > 0)
     L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${rows.length} member(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   // One explanation per kind PRESENT, above the table — a per-row reason repeats the same paragraph on every row.
@@ -1109,7 +1109,7 @@ function renderImperativeLogic(cs) {
   // `⚠ not described` in the table. When every row is described, no summary line — just the table. The agent-facing
   // worklist statistics (unresolved / traced-only / helpers folded → port units) are dropped; the `↳` fold still
   // shows per-row in the table.
-  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, ""];
+  const L = [`#### ⚠ Custom methods — account for EVERY row (${stubs.length})`, ""];
   if (undescribed > 0)
     L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${stubs.length} method(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   L.push(...IMPERATIVE_LOGIC_TABLE_HEADER);
@@ -1734,7 +1734,7 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
 
