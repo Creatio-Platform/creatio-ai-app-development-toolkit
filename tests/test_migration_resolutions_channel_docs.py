@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
 MIGRATION_DOCS = ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md"
+EXECUTOR_SKILL = ROOT / "skills/freedom-build-executor/SKILL.md"
+EXECUTOR_FILES_DOC = ROOT / "skills/freedom-build-executor/references/02-queue-and-built-files.md"
 
 
 def read_text(path):
@@ -38,7 +40,7 @@ def missing_markers(text, markers):
 class ResolutionsChannelDocTests(unittest.TestCase):
     def test_pinned_docs_are_present_and_non_empty(self):
         # The negative pin below passes vacuously on empty text, so it rests on this guard.
-        for path in (MIGRATION_SKILL, MIGRATION_DOCS):
+        for path in (MIGRATION_SKILL, MIGRATION_DOCS, EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
             self.assertTrue(read_text(path).strip(), f"{path} is empty")
 
     def test_answer_recording_step_names_the_machine_channel(self):
@@ -97,6 +99,276 @@ class ResolutionsChannelDocTests(unittest.TestCase):
             content = flat(read_text(path))
             self.assertIn("--units.preflight", content, path)
             self.assertIn("`pageKey` half moves between runs", content, path)
+
+
+class ConsumptionContractDocTests(unittest.TestCase):
+    """The CONSUMPTION half (reopened 3rd verification).
+
+    Delivery worked and the answer still produced nothing: a specified `entity-filter`
+    resolution was rendered verbatim into a build prompt and the page came back with no filter
+    on it. The contract that closes it is agent-facing — what a builder must return, what the
+    verifier must check, and that an unconsumed answer blocks `complete` — so it lives in prose
+    the agents read and is invisible to every engine test.
+    """
+
+    def test_builder_owes_an_account_of_every_answer(self):
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                "MUST return `resolutionsApplied`",
+                "`applied: false` with a `why` is a valid answer",
+                "leaving a row out is not",
+            ],
+        )
+        self.assertFalse(missing, f"the builder's obligation must be stated; missing {missing}")
+
+    def test_the_claim_is_checked_against_the_page(self):
+        content = read_text(EXECUTOR_SKILL)
+        missing = missing_markers(
+            content,
+            [
+                # PR #128 review: `"verifier"` alone appeared seven times in this file, including in prose
+                # predating the channel, so the marker could not fail. The sentence that carries the
+                # claim is what this test is named for.
+                "the read-only VERIFIER returns `resolutionChecks`",
+                "the same class of claim as",
+            ],
+        )
+        self.assertFalse(missing, f"the independent check must be stated; missing {missing}")
+
+    def test_an_unconsumed_answer_blocks_complete_and_never_closes_a_row(self):
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            content = flat(read_text(path))
+            self.assertIn("`unconsumedResolutions`", content, path)
+            # PR #128 review: this asserted the bare word "blocks", which SKILL.md already satisfied
+            # from an unrelated pre-existing line ("a parked `app` unit blocks everything") -- so for
+            # that file the marker had no failure mode at all. The test is named for criterion 5's
+            # core guarantee and never asserted the word `complete`; both halves are pinned now.
+            #
+            # PR #128 review (round 19) — and `blocks `complete`` then acquired TWO satisfiers in the
+            # queue-file doc, both added by this PR, so deleting either sentence left it green. Same
+            # class as the pin above, same fix: assert the phrase that carries the guarantee occurs
+            # exactly once. SKILL.md and the queue doc state it in their own words, so each gets its own.
+            self.assertIn("blocks `complete`", content, path)
+        for path, phrase in (
+            (EXECUTOR_SKILL, "buys its unit ONE repair round, and **blocks"),
+            (EXECUTOR_FILES_DOC, "still blocks `complete` after a usage limit"),
+        ):
+            doc = flat(read_text(path))
+            self.assertEqual(
+                doc.count(phrase), 1,
+                f"{path}: expected exactly one occurrence of {phrase!r} — with a second satisfier the "
+                f"pin survives the deletion of the sentence it is named for",
+            )
+        # The invariant must not be broken in the other direction while closing this gap: the
+        # whole fix is monotone, and a doc that stopped saying so is how it stops being true.
+        self.assertIn(
+            "closes NO row with one",
+            flat(read_text(EXECUTOR_SKILL)),
+        )
+
+    def test_cannot_tell_is_its_own_state_and_is_not_a_refutation(self):
+        """`shows` is three-valued, and the rule-shaped answer has a surface that can answer.
+
+        A two-valued `shows` forced the verifier to report "I could not determine this" as
+        `false`, and every `false` was read as a refutation -- so an honest builder plus an
+        honest verifier produced a contradiction that was not one, and the `lookup-value`
+        question this channel added was the systematic case, its effect living in
+        `BusinessRule_*` schemas that no page-body walk can see.
+        """
+        # `"unknown"` is quoted-in-backticks deliberately: the bare word `unknown` already
+        # appears in both files ("cannot verify, unknown schema") and would not fail.
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            self.assertIn('`"unknown"`', flat(read_text(path)), path)
+        # The distinction itself, not merely the vocabulary: a doc that listed three values
+        # while still calling the third one a defect would pass a bare-word check.
+        skill = flat(read_text(EXECUTOR_SKILL))
+        self.assertIn("NOT a refutation", skill)
+        self.assertIn("invisible to `viewConfig`", skill)
+        # THE SURFACE THAT CAN ANSWER, pinned per file on a phrase this change introduced.
+        # `read-page-business-rules` on its own is NOT usable here: the queue-file doc already
+        # mentioned it twice before this channel existed (the `Business rules` row, and the
+        # verify-row example), so a bare-name check there had no failure mode at all -- the
+        # same defect this module fixed for "blocks", reintroduced by the pin meant to prevent it.
+        self.assertIn("read, so it is within the read-only remit", skill)
+        self.assertIn(
+            "`read-page-business-rules` rather than reporting a page-body zero as a refutation",
+            flat(read_text(EXECUTOR_FILES_DOC)),
+        )
+
+    def test_an_unconsumed_answer_outlives_the_process_that_found_it(self):
+        """The record is persisted, and its EMPTY value is load-bearing.
+
+        This is the criterion-5 guarantee across a session boundary. A well-formed
+        `applied: false` files no `blocked` row and no `discrepancies` row, so before the
+        record was persisted it was the one outcome with no trace at all, and a re-run on a
+        green gate reported the folder complete over a dropped answer.
+        """
+        # PR #128 review (round 19) — THIS PIN WAS VACUOUS, confirmed by execution: deleting the
+        # persistence clause from SKILL.md left this module at 17/17 and the whole repo at 521/521.
+        # `assertIn("persisted")` had four satisfiers in SKILL.md alone; `assertIn("re-seeded")` was
+        # satisfied by the sentence stating the OPPOSITE for `unsettledResolutionClaims` ("is not
+        # re-seeded by Reconcile"); and "even when it is empty" matched the surviving fragment. That is
+        # the RC-14 defect this module already records at `test_round_17_pins_are_not_satisfied_by_
+        # pre_existing_text`, reintroduced in the same file. Pinned the way that test pins: a
+        # sentence-length phrase unique to the guarantee, asserted to occur EXACTLY ONCE, so rewriting
+        # the sentence turns it red instead of sliding onto a neighbour.
+        for path, phrase in (
+            (EXECUTOR_SKILL, "The record is persisted in the queue file under"),
+            (EXECUTOR_FILES_DOC, "`unconsumedResolutions` is at the ROOT"),
+        ):
+            doc = flat(read_text(path))
+            self.assertEqual(
+                doc.count(phrase), 1,
+                f"{path}: expected exactly one occurrence of {phrase!r} — a pin with a second "
+                f"satisfier cannot fail when the guarantee it names is deleted",
+            )
+        skill = flat(read_text(EXECUTOR_SKILL))
+        # The three halves of the guarantee, each pinned to the clause that carries it rather than to a
+        # word the file uses elsewhere: it is persisted, it is re-seeded BY RECONCILE (the sibling field
+        # says it is NOT, which is why the bare word could never fail), and the empty value is written.
+        self.assertEqual(
+            skill.count("re-seeded by the next Reconcile"), 1,
+            "the re-seed half must be pinned to its own clause: the bare word `re-seeded` is also "
+            "satisfied by the sentence stating the opposite for `unsettledResolutionClaims`",
+        )
+        self.assertEqual(
+            skill.count("and written **even when it is empty**"), 1,
+            "the empty value is load-bearing and must be pinned to the clause that states it",
+        )
+        # The queue-file doc has to say WHERE, or an agent cannot write it.
+        doc = flat(read_text(EXECUTOR_FILES_DOC))
+        self.assertIn("`unconsumedResolutions` is at the ROOT", doc)
+
+    def test_the_repair_grant_sets_are_documented_where_an_agent_can_find_them(self):
+        """`resolutionsReopened` / `resolutionsPending` are required root keys, so they must be documented.
+
+        PR #128 review (round 6): both became mandatory members of `RECONCILE_SCHEMA.required`, but the
+        only place a maintainer could learn they exist and must be written even when empty was a runtime
+        prompt string inside `carryBlock` -- not a stable reference, and free to drift from the schema
+        silently. The sibling `unconsumedResolutions` was documented in both files; these were not.
+        """
+        for path in (EXECUTOR_SKILL, EXECUTOR_FILES_DOC):
+            content = flat(read_text(path))
+            self.assertIn("`resolutionsReopened`", content, path)
+            self.assertIn("`resolutionsPending`", content, path)
+        # A bare-name check is nearly free to satisfy -- each file names both keys more than once, so
+        # mutating one mention leaves it green. Pin the SENTENCE that carries each key's consequence,
+        # the same bar the queue-file half below meets; this is the exact "pin with no failure mode"
+        # trap the RC-14 note in this module was written about.
+        skill = flat(read_text(EXECUTOR_SKILL))
+        self.assertIn("a dropped `resolutionsReopened` re-grants a spent round", skill)
+        self.assertIn("a dropped `resolutionsPending` strands a unit that was owed its repair", skill)
+        doc = flat(read_text(EXECUTOR_FILES_DOC))
+        # WHERE, and that the empty write is load-bearing -- an agent that learns the names but not the
+        # placement or the write-when-empty rule still produces a file the reconcile cannot trust.
+        self.assertIn("`resolutionsReopened` and `resolutionsPending` are at the ROOT", doc)
+        self.assertIn("EVERY close", doc)
+        # Each key's OWN failure mode, so a doc that names both but explains neither cannot pass.
+        self.assertIn("RE-GRANTS a round", doc)
+        self.assertIn("stranded", doc)
+        # And the reason they are persisted rather than derived -- the defect that made the first fix wrong.
+        self.assertIn("WITHOUT spending the", doc)
+
+    def test_the_grant_example_shows_pairs_not_bare_unit_keys(self):
+        """`resolutionsReopened` is `{unit, id}` objects, and the doc's JSON example must show that.
+
+        PR #128 review (round 9): round 8 changed the shape from unit-key strings to `{unit, id}`
+        pairs in `RECONCILE_SCHEMA` and `carryNow`, and left this file's example as `["main"]` --
+        so a reconcile agent following the doc writes a shape the schema rejects, or, worse,
+        transcribes a half-conforming one. The prose said "every unit" for the same reason. The
+        example is data the agent copies, so pin the SHAPE, not just that the key is mentioned.
+        """
+        doc = read_text(EXECUTOR_FILES_DOC)
+        flat_doc = flat(doc)
+        # The example entry is an object with both members -- a bare string list must fail here.
+        self.assertIn('"resolutionsReopened": [{ "unit":', flat_doc)
+        self.assertNotIn('"resolutionsReopened": ["', flat_doc)
+        # And the prose names them pairs rather than unit keys.
+        self.assertIn("`resolutionsReopened` is a list of `{unit, id}` PAIRS", flat_doc)
+        self.assertNotIn("`resolutionsReopened` is every unit", flat_doc)
+        # `resolutionsPending` is genuinely a unit-key list and must NOT be re-described as pairs.
+        self.assertIn("`resolutionsPending` is", flat_doc)
+        self.assertNotIn('"resolutionsPending": [{', flat_doc)
+
+    def test_the_docs_state_the_one_release_window_terminus(self):
+        """The stale-`"no"` terminus is STATED in prose. This asserts the doc, not the runtime.
+
+        PR #128 review (round 7) was right that the previous name over-claimed: this module reads
+        Markdown, so it can only pin that the contract is written down. The runtime half -- that the
+        grant guard short-circuits before a second reopen for a pair already granted -- lives in
+        `reportResolutionAccounting` and the verifier-contradiction append site, outside the exported
+        pure-helper block, and is pinned on control flow by the "round 7, G6" check in
+        `engine-tests/classic-to-freedom/run-infra.mjs`. Neither check substitutes for the other:
+        this one fails if the contract stops being documented, that one fails if the code stops
+        matching it.
+
+        PR #128 review (round 6) asked whether a verifier-sourced entry can ever be released once its
+        unit goes green. It can, exactly once: the contradiction grants the unit its repair round, the
+        rebuild is re-verified, and that read releases the entry on `"yes"` or `"unknown"`. After that
+        the grant is spent and the entry is held until the operator acts -- which is the intended
+        fail-closed terminus, not an oversight, and the docs have to say so or the next reader will
+        read the `"unknown"` rationale as a promise of unlimited re-verification.
+        """
+        doc = flat(read_text(EXECUTOR_FILES_DOC))
+        self.assertIn("ONE release window", doc)
+        self.assertIn("held until the operator", doc)
+
+    def test_the_file_must_exist_before_the_run_reads_it(self):
+        # The 79-minute gap: written after the only `--units` invocation, so nothing consumed it.
+        content = flat(read_text(EXECUTOR_FILES_DOC))
+        self.assertIn("must exist BEFORE the executor is launched", content)
+        self.assertIn("`resolutionsRead`", content)
+
+    def test_round_17_contract_changes_are_documented(self):
+        """The four behaviour changes of round 17 must be in the prose a driving agent reads.
+
+        Each assertion pins a sentence THIS round added, so mutating that sentence turns one red — the
+        failure mode the `assertIn("persisted", ...)` pin was found to be missing (it was already satisfied
+        by text predating this channel).
+        """
+        doc = read_text(EXECUTOR_FILES_DOC)
+
+        # Major 3 — the verifier obligation is required, not merely declared.
+        self.assertIn("`required` on any verify dispatch that was handed claims", doc)
+        # Major 5 — a positive read outranks either source.
+        self.assertIn("releases the row **whichever source recorded it**", doc)
+        # Major 4 — the reasoned-unknown escape is rule-shaped only, and the kinds are named.
+        self.assertIn("releases only a **verifier-sourced** row on a **rule-shaped**", doc)
+        for kind in ("`lookup-value`", "`rule`", "`visibility-rule`"):
+            self.assertIn(kind, doc)
+        # Major 5 (second half) — a refutation wins regardless of arrival order.
+        self.assertIn("a refutation wins whichever order they arrive", doc.replace("**", ""))
+        # Major 7 — the zero-work resume names the held answer.
+        self.assertIn("including on the zero-work", doc.replace("**", ""))
+        # Major 6 — the reopen grant is bounded by the round budget.
+        self.assertIn("A reopen grant is bounded by the ROUND BUDGET", doc.replace("**", ""))
+        # Review Minor (round 17b) — a reasoned `unknown` must name the surface it read.
+        self.assertIn("means `found` NAMES THE SURFACE IT READ", doc.replace("**", ""))
+        # Review Minor (round 17b) — the residual trust assumption is tracked, and the signal is non-gating.
+        self.assertIn("The residual trust assumption, and the signal that tracks it", doc.replace("**", ""))
+        self.assertIn("unsettledResolutionClaims", doc)
+        self.assertIn("deliberately NON-GATING", doc.replace("**", ""))
+
+    def test_round_17_pins_are_not_satisfied_by_pre_existing_text(self):
+        """Anti-vacuity for the pins above: each phrase must occur EXACTLY ONCE.
+
+        A pin satisfied by a second, unrelated occurrence cannot fail when the sentence it is named for is
+        rewritten — the RC-14 defect this module's own comments describe, and the one that slipped through
+        in `5be891c`. Counting occurrences is what makes these pins load-bearing rather than decorative.
+        """
+        doc = read_text(EXECUTOR_FILES_DOC).replace("**", "")
+        for phrase in ("required` on any verify dispatch that was handed claims",
+                       "releases the row whichever source recorded it",
+                       "releases only a verifier-sourced row on a rule-shaped",
+                       "a refutation wins whichever order they arrive",
+                       "including on the zero-work",
+                       "A reopen grant is bounded by the ROUND BUDGET",
+                       "means `found` NAMES THE SURFACE IT READ",
+                       "The residual trust assumption, and the signal that tracks it",
+                       "deliberately NON-GATING"):
+            self.assertEqual(doc.count(phrase), 1, f"expected exactly one occurrence of {phrase!r}")
 
 
 if __name__ == "__main__":

@@ -44,6 +44,10 @@ const reconcileWith = (blocker) => ({
   // Required since the merge with the stage-2 line (ENG-95683): the empty-prefix flag must be PRESENT, so an
   // answer that omits it is refused. This fixture reads a real prefix, hence `false`.
   schemaNamePrefixEmpty: false,
+  // Required since the merge with ENG-95503: the answers channel's two repair-grant arrays and the
+  // unconsumed-answer list must be PRESENT even when empty — an omitted one is a dropped grant or a
+  // silently discarded operator answer, which is the failure that ticket exists to remove.
+  resolutionsReopened: [], resolutionsPending: [], unconsumedResolutions: [],
   parkedUnits: [], proposals: [], blocked: [blocker], discrepancies: [], staleQueueKeys: [], newKeys: [],
   verify: {
     complete: false, missing: 1, unverified: 0, pending: 0, planGaps: [],

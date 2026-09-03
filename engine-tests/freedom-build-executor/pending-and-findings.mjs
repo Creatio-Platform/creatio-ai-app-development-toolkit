@@ -46,6 +46,10 @@ const reconcileGreenWithPending = (pending) => ({
   resolutionsUnmatched: [], resolutionsConflicts: [],
   evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
   schemaNamePrefixEmpty: false,
+  // Required since the merge with ENG-95503: the answers channel's two repair-grant arrays and the
+  // unconsumed-answer list must be PRESENT even when empty — an omitted one is a dropped grant or a
+  // silently discarded operator answer, which is the failure that ticket exists to remove.
+  resolutionsReopened: [], resolutionsPending: [], unconsumedResolutions: [],
   parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
   verify: {
     complete: true, missing: 0, unverified: 0, pending: pending.length, planGaps: [],

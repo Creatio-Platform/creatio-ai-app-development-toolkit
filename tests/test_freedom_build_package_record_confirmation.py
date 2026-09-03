@@ -4,6 +4,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / "skills/freedom-build-executor/freedom-build-executor.workflow.js"
+# The generator strips comments from the shipped artifact (half of it was maintainer prose, and the file has
+# a hard 524288-byte ceiling because the Workflow permission handler inlines it into the `script` field). The
+# tests below slice REGIONS bounded by comment markers and assert statement ORDER inside them, so they read
+# the CORE MODULE, which is where those comments are written, reviewed and maintained — and where a fix would
+# have to land anyway, since the artifact is generated from it.
+CORE_PATH = ROOT / "skills/_workflow-core/build-executor/core.mjs"
 QUEUE_DOC_PATH = ROOT / "skills/freedom-build-executor/references/02-queue-and-built-files.md"
 SKILL_PATH = ROOT / "skills/freedom-build-executor/SKILL.md"
 
@@ -25,6 +31,7 @@ def read_text(path):
 class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
     def setUp(self):
         self.workflow = read_text(WORKFLOW_PATH)
+        self.core = read_text(CORE_PATH)
 
     # --- Core defect: an INCONCLUSIVE live check must not outrank the run's own record -----------------
 
@@ -116,22 +123,22 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
 
     def test_both_ownership_stop_sites_route_through_confirm_package_stop(self):
         # Hard Stop 3 (baseline, right after the first Reconcile) ...
-        baseline_start = self.workflow.index("// --- HARD STOP 3: the target package cannot be established")
-        baseline_end = self.workflow.index("// --- HARD STOP 3.5", baseline_start)
-        baseline = self.workflow[baseline_start:baseline_end]
+        baseline_start = self.core.index("// --- HARD STOP 3: the target package cannot be established")
+        baseline_end = self.core.index("// --- HARD STOP 3.5", baseline_start)
+        baseline = self.core[baseline_start:baseline_end]
         self.assertIn("yield* confirmPackageStop(stopOnPackage,", baseline)
 
         # ... and the mid-run guarantee re-check inside `acceptReconciled`.
-        mid_start = self.workflow.index("function* acceptReconciled(next, whereFrom)")
-        mid_end = self.workflow.index("\n  }\n", mid_start)
-        mid = self.workflow[mid_start:mid_end]
+        mid_start = self.core.index("function* acceptReconciled(next, whereFrom)")
+        mid_end = self.core.index("\n  }\n", mid_start)
+        mid = self.core[mid_start:mid_end]
         self.assertIn("yield* confirmPackageStop(stopPkg,", mid)
 
         # `acceptReconciled` is a generator for this (it may suspend on the dedicated re-read), and both its
         # call sites must `yield*` it — a forgotten `yield*` would silently hand back the generator object
         # itself instead of the stop it eventually produces.
-        self.assertIn("function* acceptReconciled(", self.workflow)
-        call_sites = re.findall(r".*acceptReconciled\(.*", self.workflow)
+        self.assertIn("function* acceptReconciled(", self.core)
+        call_sites = re.findall(r".*acceptReconciled\(.*", self.core)
         self.assertGreaterEqual(len(call_sites), 3,  # the declaration + two call sites
             "expected the declaration plus two call sites")
         for line in call_sites:
@@ -148,9 +155,9 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
         # before anything downstream reads `state.packageState` again — pin that write exists at both sites.
         write_back = "state = { ...state, packageState: resolvePackageState(state.targetPackage, state.packageState, ownPackageNow()) }"
 
-        baseline_start = self.workflow.index("// --- HARD STOP 3: the target package cannot be established")
-        baseline_end = self.workflow.index("// --- HARD STOP 3.5", baseline_start)
-        baseline = self.workflow[baseline_start:baseline_end]
+        baseline_start = self.core.index("// --- HARD STOP 3: the target package cannot be established")
+        baseline_end = self.core.index("// --- HARD STOP 3.5", baseline_start)
+        baseline = self.core[baseline_start:baseline_end]
         confirm_idx = baseline.index("yield* confirmPackageStop(stopOnPackage,")
         write_idx = baseline.index(write_back)
         # The stop branch is a GUARD CLAUSE (`if (!stopOnPackage) return null`), not the `if (stopOnPackage) {`
@@ -166,9 +173,9 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
             "the write-back must happen BEFORE the stop branch returns, so Hard Stop 4's `appUnitFor` calls "
             "further down this closure see the resolved state on every path, stopped or not")
 
-        mid_start = self.workflow.index("function* acceptReconciled(next, whereFrom)")
-        mid_end = self.workflow.index("\n  }\n", mid_start)
-        mid = self.workflow[mid_start:mid_end]
+        mid_start = self.core.index("function* acceptReconciled(next, whereFrom)")
+        mid_end = self.core.index("\n  }\n", mid_start)
+        mid = self.core[mid_start:mid_end]
         mid_confirm_idx = mid.index("yield* confirmPackageStop(stopPkg,")
         mid_write_idx = mid.index(write_back)
         mid_schedule_idx = mid.index("schedule = scheduleUnits(")
@@ -179,12 +186,12 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
     def test_stop_text_distinguishes_unread_from_confirmed_absent(self):
         for site_marker in ("// ENG-95884 — distinguish \"confirmed absent\" from \"not read\"",
                             "next: pkgRecordUnread"):
-            self.assertIn(site_marker, self.workflow)
-        self.assertIn("packageRecordUnread", self.workflow)
-        self.assertIn("NOT READ, which is NOT the same as confirmed absent", self.workflow)
+            self.assertIn(site_marker, self.core)
+        self.assertIn("packageRecordUnread", self.core)
+        self.assertIn("NOT READ, which is NOT the same as confirmed absent", self.core)
         # The "unread" wording must promise a free retry — the whole point is that this case must not cost
         # a round, unlike a genuine stop.
-        self.assertIn("Nothing was spent on this attempt", self.workflow)
+        self.assertIn("Nothing was spent on this attempt", self.core)
 
 
 class FreedomBuildPackageRecordDocsTests(unittest.TestCase):
