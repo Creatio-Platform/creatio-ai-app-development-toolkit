@@ -712,9 +712,17 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   };
   const jobSrc = jobBoundarySlice(prYml, "name: Classic\u2192Freedom engine goldens");
   // Both sides reduced to the same vocabulary: the basename each command actually executes, plus `--check`.
-  const runnersIn = (text) => (text.match(/[A-Za-z0-9_-]+\.mjs(?:\s+--check)?/g) || [])
-    .map((m) => m.replace(/\s+/g, " ").trim())
-    .filter((m) => !/_testkit|strip-comments/.test(m));
+  // Tokenised rather than matched with one unanchored regex: `[A-Za-z0-9_-]+\.mjs` backtracks once
+  // per start position on a long run of word characters, which is super-linear on the whole file.
+  // Splitting on whitespace first makes every test anchored to a single short token.
+  const runnersIn = (text) => {
+    const tokens = text.split(/\s+/);
+    return tokens.flatMap((token, i) => {
+      const base = token.split("/").pop();
+      if (!/^[A-Za-z0-9_-]+\.mjs$/.test(base)) return [];
+      return [tokens[i + 1] === "--check" ? `${base} --check` : base];
+    }).filter((m) => !/_testkit|strip-comments/.test(m));
+  };
   const fromPkg = runnersIn(enginePkg.scripts?.test || "");
   const fromCi = runnersIn(jobSrc);
   check("ENG-96483 review (Major): the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",

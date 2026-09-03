@@ -713,6 +713,15 @@ const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
 // nested function's branching against its enclosing function, so `mapFields` sat one point over the S3776 ceiling
 // (16 against 15) while every one of its parts was already small. Nothing here reads `mapFields`'s locals: the two
 // facts it needs from the run — whether this is a mini page, and where to file a decision — come in as arguments.
+// #9b — the classic left area can group fields into MORE THAN ONE island container (e.g. ContactContainer
+// + InternalRequestContainer, both under LeftModulesContainer). The island = the OUTERMOST group between
+// the field and the profile anchor (groups[0]). If there is >1 distinct island, rebuild each as its own
+// container in the side profile instead of flattening every field into one stack.
+//
+// At module scope for the same reason as `fieldVisibility` below: Sonar counts a nested function's branching
+// against its enclosing function, and this one closes over nothing in `mapFields`.
+const islandOf = (own) => (own.groups?.length ? own.groups[0].name : null);
+
 function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   const hiddenAncestor = (own.groups || []).find((g) => g.visible === false || g.visible === "dynamic");
   let vis = f.visible !== false;
@@ -777,11 +786,6 @@ function mapFields(ctx, containers) {
       reason: `classic Header is a WIDE ${headerCols.size}-column block, not the default left profile island — mapped to a full-width header grid; confirm the target Freedom page uses a header region (no left profile) and the column layout` });
   }
   const profileRegion = (own) => (own.via === "Header" && headerIsWide) ? "HeaderContainer" : "SideAreaProfileContainer";
-  // #9b — the classic left area can group fields into MORE THAN ONE island container (e.g. ContactContainer
-  // + InternalRequestContainer, both under LeftModulesContainer). The island = the OUTERMOST group between
-  // the field and the profile anchor (groups[0]). If there is >1 distinct island, rebuild each as its own
-  // container in the side profile instead of flattening every field into one stack.
-  const islandOf = (own) => own.groups?.length ? own.groups[0].name : null;
   const distinctProfileIslands = new Set(resolved
     .filter(r => r.own.kind === "profile" && !(r.own.via === "Header" && headerIsWide))
     .map(r => islandOf(r.own)).filter(Boolean));
