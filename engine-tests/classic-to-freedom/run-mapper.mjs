@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
-  LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+  LIST_DECISION_KINDS, LOOKUP_VALUE_ITEM, comparesLookupGuid } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
@@ -1914,6 +1914,204 @@ check("ENG-95503: `matchResolution` prefers the `kind`+`item` pair over the id, 
       && matchResolution(i, { kind: "other", item: "z" }) === null
       && matchResolution(null, { kind: KIND_LIST_COLUMNS, item: "cols" }) === null; },
   () => "see matchResolution precedence");
+/* ---- ENG-95503 — WHY THE SLICE NEEDS NO `list-*` ROUTING OF ITS OWN. `pageUnitsSlice` narrows `preflight` on
+   `p.pageKey === pageKey`, while the executor routes a `list-*` ANSWER to the unit that builds the grid. Those look
+   like they can disagree — a list decision riding on `main` while the `list` unit is the one that must build it —
+   and an attempted fix here was dead code: `listConfirmOnMain` is emptied in exactly the branch that publishes the
+   `list` page group, so the two cases are mutually exclusive. This pins that correlation. If it ever comes apart,
+   the `list` builder's slice file silently stops carrying its own questions, which is invisible at runtime. ---- */
+const lpSliceUnits = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+const listKeyedElsewhere = (u) => (u.preflight || [])
+  .filter((p) => LIST_DECISION_KINDS.includes(p.kind) && p.pageKey !== "list");
+check("ENG-95503: a `list-*` question rides on a key OTHER than `list` only on a run that publishes NO `list` unit — so the slice narrowing cannot strand a question away from the unit that must build it",
+  () => { const withheld = lpSliceUnits;                                  // empty section: no `list` key
+    const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE }); // a real section: `list` published
+    const withheldHasListUnit = (withheld.pages || []).some((p) => p.key === "list");
+    const publishedHasListUnit = (published.pages || []).some((p) => p.key === "list");
+    // The invariant, both directions: items ride elsewhere ⇒ no list unit; a list unit exists ⇒ nothing rides elsewhere.
+    return listKeyedElsewhere(withheld).length > 0 && !withheldHasListUnit
+      && publishedHasListUnit && listKeyedElsewhere(published).length === 0
+      && pageUnitsSlice(withheld, "list") === null; },
+  () => ({ withheldElsewhere: listKeyedElsewhere(lpSliceUnits).map((p) => p.pageKey + " " + p.kind),
+    withheldListSlice: pageUnitsSlice(lpSliceUnits, "list"),
+    publishedElsewhere: listKeyedElsewhere(pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE })).map((p) => p.pageKey) }));
+/* PR #128 review (round 8) — THE INVARIANT ITSELF, pinned on its own. The check below it asserts the same fact
+   but also exercises `pageUnitsSlice`, so a reader could not tell which half was load-bearing, and a refactor that
+   broke the invariant while leaving the narrowing intact would show up as a confusing slice failure rather than as
+   "the mutual exclusivity is gone". This one touches no slice function: it is purely the correlation the comment
+   at the `listConfirmOnMain = []` assignment in designspec.mjs claims, stated where a maintainer of THAT branch
+   would look for it. The assignment now names this test in return, so the dependency is written down at both ends. */
+check("PR #128 review (round 8): the list-decision invariant, standalone — publishing the `list` page group and riding a `list-*` question on another key are MUTUALLY EXCLUSIVE. `listConfirmOnMain = []` in the publishing branch is the only thing making that true, it lives in a different file from the narrowing that depends on it, and its failure mode is a subtly wrong slice rather than a throw",
+  () => { const withheld = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+    const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE });
+    const hasList = (u) => (u.pages || []).some((p) => p.key === "list");
+    const elsewhere = (u) => (u.preflight || []).filter((p) => LIST_DECISION_KINDS.includes(p.kind) && p.pageKey !== "list").length;
+    // Neither run may be in the forbidden quadrant: a `list` unit published AND a list question keyed elsewhere.
+    return !(hasList(withheld) && elsewhere(withheld) > 0)
+      && !(hasList(published) && elsewhere(published) > 0)
+      // and both quadrants that ARE legal must be genuinely represented, or the check passes vacuously on two empty runs
+      && (!hasList(withheld) && elsewhere(withheld) > 0)
+      && (hasList(published) && elsewhere(published) === 0); },
+  () => ({ withheld: { list: (pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).pages || []).some((p) => p.key === "list") },
+    published: { list: (pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE }).pages || []).some((p) => p.key === "list") } }));
+check("ENG-95503: when the `list` unit IS published its slice carries its own ⚠ Confirm questions, answers included — the narrowing is correct for the case that actually has a list builder to read it",
+  () => { const published = pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE });
+    const slice = pageUnitsSlice(published, "list");
+    return !!slice && (slice.preflight || []).length > 0
+      && (slice.preflight || []).every((p) => p.pageKey === "list"); },
+  () => (pageUnitsSlice(pageUnits(lpRun, { ...lpOpts, resolutions: RES_FILE }), "list")?.preflight || [])
+    .map((p) => ({ id: p.id, kind: p.kind })));
+/* ---- ENG-95503 — "WAS THERE AN ANSWERS FILE AT ALL?". A real run wrote `resolutions.json` 79 minutes AFTER its
+   only `--units` invocation. Every published item carried `resolution: null` and `resolutionsUnmatched` was empty —
+   which is exactly what a run where the operator answered nothing looks like. The two are now distinguishable. ---- */
+check("ENG-95503: `--units` publishes whether the answers file was READ, so a run whose answers arrived too late is not indistinguishable from a run with no answers — `resolutionsUnmatched` cannot see this case, because an answer nobody read matches nothing and misses nothing",
+  () => { const withFile = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE });
+    const without = pageUnits(lpEmptySection, lpOpts);
+    return withFile.resolutionsRead === true && without.resolutionsRead === false
+      && without.resolutionsUnmatched.length === 0; },
+  () => ({ withFile: pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsRead,
+    without: pageUnits(lpEmptySection, lpOpts).resolutionsRead }));
+check("ENG-95503: `resolutionsMatched` counts the questions that actually got an answer — a file that was read but matched nothing reports 0, which is the shape a mistyped key produces",
+  () => { const matched = pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsMatched;
+    const readButMissed = pageUnits(lpEmptySection, { ...lpOpts, resolutions: { resolutions: [
+      { kind: KIND_LIST_COLUMNS, item: "a key that matches nothing here", answer: "x" }] } });
+    return matched >= 1 && readButMissed.resolutionsRead === true && readButMissed.resolutionsMatched === 0
+      && readButMissed.resolutionsUnmatched.length === 1
+      && matched === pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).preflight.filter((p) => p.resolution != null).length; },
+  () => ({ matched: pageUnits(lpEmptySection, { ...lpOpts, resolutions: RES_FILE }).resolutionsMatched }));
+/* PR #128 review (round 15, Minor) — WHY `resolutionsMatched` MAY USE A PRESENCE TEST AT ALL. The review asked
+   whether a falsy-but-matched `resolution` undercounts this diagnostic. It cannot today, and TWO independent
+   invariants are why: `resolutionProblem` refuses any entry whose `answer` is blank, so an empty answer never
+   enters the index; and `matchResolution` returns EITHER `null` OR an object (`{answer, ...}`), which is truthy
+   whatever the answer text is. The count now reads `!= null` so it states the second invariant rather than
+   relying on it — and this check pins the invariant itself, because that is the thing whose loss would make the
+   concern real: a later `matchResolution` that returned `hit.answer` directly would hand a falsy-but-matched
+   value to this filter, and only a test of the RETURN SHAPE catches that before the count starts lying. */
+check("PR #128 review (round 15): `matchResolution` returns `null` or an OBJECT — never a bare answer string — so a matched question can never be falsy, which is what lets `resolutionsMatched` count by presence instead of by truthiness",
+  () => { const ix = buildResolutionIndex({ resolutions: [
+      { kind: KIND_LIST_COLUMNS, item: "cols", answer: "0" },
+      { kind: KIND_LIST_COLUMNS, item: "blank", answer: "   " }] });
+    const hit = matchResolution(ix, { kind: KIND_LIST_COLUMNS, item: "cols" });
+    const miss = matchResolution(ix, { kind: KIND_LIST_COLUMNS, item: "nothing" });
+    return typeof hit === "object" && hit !== null && hit.answer === "0"
+      // a falsy ANSWER still yields a truthy match object — the property the count depends on
+      && !!hit === true && miss === null
+      // and the blank answer was refused at index time, so it is not a match to begin with
+      && matchResolution(ix, { kind: KIND_LIST_COLUMNS, item: "blank" }) === null
+      && ix.bad.length === 1; },
+  () => JSON.stringify(buildResolutionIndex({ resolutions: [{ kind: KIND_LIST_COLUMNS, item: "blank", answer: "   " }] }).bad));
+/* ---- ENG-95503 — THE `lookup-value` QUESTION NOW HAS AN ID. It used to be pushed straight into the RENDERED
+   worklist by `renderConfirmWorklist`, bypassing `needsDecision` entirely — so it had no evidence id, no
+   `--units.preflight` row, and no key an answer could bind to. On the run this ticket was verified against, the
+   operator's answer to it went into `resolutionsUnmatched`, which is the same as not answering. ---- */
+// Its own fixture rather than the `guidCs` the C2 test builds far below: that one is declared later in the file and
+// reading it here would be a temporal-dead-zone throw, not a test failure.
+const guidRuleSchema = (attr, guid) => ({ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"${attr}"},rightExpression:{type:0,value:"${guid}",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` });
+const resGuidCs = runMigration({ entity: "X", schemas: [guidRuleSchema("Stage", "c28f7c8f-1234-4abc-9def-000000000001")] }, { baseDir: FIX });
+const lookupValueOf = (cs) => (cs.needsDecision || []).filter((n) => n.kind === "lookup-value");
+check("ENG-95503: a business rule comparing against a lookup-record GUID raises a real `lookup-value` DECISION, not a line the spec renderer appends — a question with no `needsDecision` entry has no id, and an answer to it can only ever land in `resolutionsUnmatched`",
+  () => { const raised = lookupValueOf(resGuidCs.changeSet || {});
+    return raised.length === 1 && raised[0].item === LOOKUP_VALUE_ITEM && /resolve each GUID/.test(raised[0].reason); },
+  () => (resGuidCs.changeSet?.needsDecision || []).map((n) => ({ kind: n.kind, item: n.item })));
+check("ENG-95503: the `lookup-value` item is a FIXED literal — like `list-columns` learned to be, because `item` is half the key an answer matches on and a key derived from the GUIDs found would differ on every stand",
+  () => { const other = runMigration({ entity: "X", schemas: [guidRuleSchema("Source", "ffffffff-9999-4aaa-8bbb-000000000009")] }, { baseDir: FIX });
+    const a = lookupValueOf(resGuidCs.changeSet || {})[0], b = lookupValueOf(other.changeSet || {})[0];
+    return !!a && !!b && a.item === b.item && a.item === LOOKUP_VALUE_ITEM; },
+  () => ({ first: lookupValueOf(resGuidCs.changeSet || {})[0]?.item }));
+check("ENG-95503: a page whose rules compare no GUID raises NO `lookup-value` question — the new id is raised by the condition it is about, never by every page that happens to have a rule",
+  () => lookupValueOf(lpEmptySection.changeSet || {}).length === 0
+    && lookupValueOf(lpRun.changeSet || {}).length === 0,
+  () => ({ empty: lookupValueOf(lpEmptySection.changeSet || {}), run: lookupValueOf(lpRun.changeSet || {}) }));
+/* PR #128 review (round 8) — THE SCAN IS SCOPED TO COMPARISON VALUES. It used to be
+   `LOOKUP_GUID.test(JSON.stringify(rules))` over the whole serialised tree. The review's stated case (an unrelated
+   GUID-shaped field such as a rule `uId`) turns out NOT to be reachable — the mapper copies only
+   `action`/`element`/`conditions`/`note`/`provenance` forward, so raw ids never survive — and the first check below
+   pins that, so a future mapper that DOES carry an id through cannot quietly re-open it. The reachable false
+   positive was found while testing for that one, and it is the second check: a GUID-shaped value compared against a
+   TEXT column. A ⚠ Confirm item gates the build, and this one tells the operator to "resolve each GUID to its
+   display name on-stand" — for an external key or a correlation id there is nothing to resolve, so the build is
+   blocked on a question with no answer, and an operator who learns to rubber-stamp it is worse off than one who
+   was never asked. The third check pins the direction the narrowing must NOT take. */
+const guidUidRuleSchema = { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{uId:"11111111-2222-4333-8444-555555555555",enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"InProgress",dataValueType:1}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` };
+const resGuidUidCs = runMigration({ entity: "X", schemas: [guidUidRuleSchema] }, { baseDir: FIX });
+check("PR #128 review (round 8): a GUID-shaped string in a NON-comparison field (a rule's own `uId`) raises NO `lookup-value` question — the detector reads comparison VALUES, not every GUID-shaped substring in the serialised tree, so an internal id can never gate a build on a question that has nothing to confirm",
+  () => lookupValueOf(resGuidUidCs.changeSet || {}).length === 0,
+  () => ({ raised: lookupValueOf(resGuidUidCs.changeSet || {}), err: resGuidUidCs.error }));
+
+const guidTextColSchema = { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"ExternalKey"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:1}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` };
+const resGuidTextCs = runMigration({ entity: "X", schemas: [guidTextColSchema] }, { baseDir: FIX });
+check("PR #128 review (round 8): a GUID-shaped value compared against a TEXT column (`dataValueType: 1` — an external key, a correlation id) raises NO `lookup-value` question — this one WAS reachable before the narrowing, and the question it raised told the operator to resolve a lookup record that does not exist while the ⚠ Confirm item blocked the build",
+  () => lookupValueOf(resGuidTextCs.changeSet || {}).length === 0
+    // the rule itself still maps -- the narrowing must remove the QUESTION, not the rule
+    && (resGuidTextCs.changeSet?.pageBusinessRules || []).length === 1,
+  () => ({ raised: lookupValueOf(resGuidTextCs.changeSet || {}),
+    rules: (resGuidTextCs.changeSet?.pageBusinessRules || []).length, err: resGuidTextCs.error }));
+
+const guidNoDvtSchema = { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001"}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` };
+const resGuidNoDvtCs = runMigration({ entity: "X", schemas: [guidNoDvtSchema] }, { baseDir: FIX });
+check("PR #128 review (round 8): the narrowing FAILS CLOSED — a GUID-shaped comparison value with NO `dataValueType` at all still raises the question. A value is excluded only on positive evidence its field is not a lookup, because an unraised question has no id, so an operator's answer can never bind to it and lands in `resolutionsUnmatched` — which is this ticket's own founding failure, not a tidier version of it",
+  () => lookupValueOf(resGuidNoDvtCs.changeSet || {}).length === 1,
+  () => ({ raised: lookupValueOf(resGuidNoDvtCs.changeSet || {}), err: resGuidNoDvtCs.error }));
+/* PR #128 review (round 8) — THE NARROWING ITSELF, EXECUTED. The three end-to-end checks above cannot see the
+   `value`-only clause: today's mapper carries no GUID-shaped id forward, so walking every node behaves identically
+   and a mutation of that clause stayed green. That clause is defence against a mapper that LATER carries one
+   (a rule `uId`, a schema uid), which is precisely the case the review raised — so it needs a test that feeds the
+   detector rule objects directly rather than one that goes through a fixture the shape cannot reach. */
+check("PR #128 review (round 8): `comparesLookupGuid` reads COMPARISON VALUES only — a GUID-shaped string sitting in an id-like field of a rule object does not raise, while the same GUID as a lookup comparison value does. This is the clause the end-to-end fixtures cannot exercise, and the review's stated case is exactly the shape it guards",
+  () => comparesLookupGuid([{ action: "make-required", element: "Contact", conditions: [
+        { comparison: 3, left: { attribute: "Stage" }, right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 10 } }] }])
+    && !comparesLookupGuid([{ action: "make-required", element: "Contact",
+        uId: "11111111-2222-4333-8444-555555555555", ruleUId: "22222222-3333-4444-8555-666666666666",
+        conditions: [{ comparison: 3, left: { attribute: "Stage" }, right: { value: "InProgress", dataValueType: 1 } }] }]),
+  () => "an id-shaped GUID is not a comparison value");
+check("PR #128 review (round 8): `comparesLookupGuid` judges each value on ITS OWN `dataValueType` — a rule carrying both a text GUID and a lookup GUID still raises (the lookup one is real), and a rule carrying only the text one does not, so the narrowing cannot be satisfied by a neighbouring field's type",
+  () => comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } },
+        { right: { value: "aa11bb22-3344-4c55-8d66-000000000777", dataValueType: 10 } }] }])
+    && !comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } }] }])
+    && comparesLookupGuid([], undefined, null) === false,
+  () => "each value is judged on its own type");
+check("PR #128 review: `comparesLookupGuid` FAILS CLOSED on a non-numeric `dataValueType` — a malformed export carrying a string like `\"Lookup\"` (Number → NaN) RAISES the GUID comparison rather than silently excluding it, matching the fail-closed intent stated above the function; a recognised non-lookup numeric type still does not raise",
+  () => comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: "Lookup" } }] }])
+    && comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: "garbage" } }] }])
+    && !comparesLookupGuid([{ conditions: [
+        { right: { value: "c28f7c8f-1234-4abc-9def-000000000001", dataValueType: 1 } }] }]),
+  () => "a non-numeric dvt on a GUID-shaped value raises, a recognised text type does not");
+/* PR #128 review (RC-8a) — THE SECOND DISJUNCT, EXERCISED. `mapper.mjs` raises the question when a GUID appears in
+   `pageBusinessRules` OR in `entityBusinessRules`, and every fixture above is a BINDPARAMETER rule, which lands in
+   the PAGE list. `||` short-circuits, so the entity half never evaluated: deleting it left all four tests plus C2
+   green. The uncovered case is the canonical Classic "filter this lookup by a fixed Stage record" — a FILTRATION
+   rule (`ruleType: 1`) whose static filter constant IS a lookup GUID. Its failure mode is the ticket's own: no
+   question is raised, so there is no id, so no answer can bind, and the operator's answer lands in
+   `resolutionsUnmatched`, which is the same as not answering. The `entityBusinessRules`-is-the-non-empty-one
+   assertion is what stops this test silently drifting back onto the page branch. */
+const guidFilterSchema = (attr, guid) => ({ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{${attr}:{f:{ruleType:1,baseAttributePatch:"${attr}",comparisonType:3,value:"${guid}",dataValueType:10}}},diff:[{operation:"insert",name:"${attr}",parentName:"Header",propertyName:"items",values:{bindTo:"${attr}"}}]};});` });
+const resGuidFilterCs = runMigration({ entity: "X", schemas: [guidFilterSchema("Stage", "aa11bb22-3344-4c55-8d66-000000000777")] }, { baseDir: FIX });
+check("ENG-95503 review fix (RC-8a): a FILTRATION rule whose STATIC FILTER CONSTANT is a lookup GUID raises the `lookup-value` question — this is the `entityBusinessRules` half of the condition, and no fixture reached it, so the disjunct could be deleted with every test still green",
+  () => { const cs = resGuidFilterCs.changeSet || {};
+    const raised = lookupValueOf(cs);
+    return raised.length === 1 && raised[0].item === LOOKUP_VALUE_ITEM; },
+  () => ({ raised: lookupValueOf(resGuidFilterCs.changeSet || {}), err: resGuidFilterCs.error }));
+check("ENG-95503 review fix (RC-8a): and it is genuinely the ENTITY list carrying the GUID, not the page list — without this the fixture could drift back onto the first disjunct and the second would stop being covered again, silently",
+  () => { const cs = resGuidFilterCs.changeSet || {};
+    const guid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+    return (cs.entityBusinessRules || []).length > 0
+      && guid.test(JSON.stringify(cs.entityBusinessRules))
+      && !guid.test(JSON.stringify(cs.pageBusinessRules || [])); },
+  () => ({ entity: resGuidFilterCs.changeSet?.entityBusinessRules, page: resGuidFilterCs.changeSet?.pageBusinessRules }));
+check("ENG-95503: the `lookup-value` question is PUBLISHED in `--units.preflight` and an answer keyed on it matches — the end of the round trip the reopen found broken, asserted through the real key form an operator writes",
+  () => { const u = pageUnits(resGuidCs, checklistOpts({}));
+    const asked = u.preflight.find((p) => p.kind === "lookup-value");
+    if (!asked) return false;
+    const answered = pageUnits(resGuidCs, { ...checklistOpts({}), resolutions: { resolutions: [
+      { kind: "lookup-value", item: LOOKUP_VALUE_ITEM, answer: "InProgress = 10938891-…, OnDistribution = 36401ec5-…" }] } });
+    const hit = answered.preflight.find((p) => p.kind === "lookup-value");
+    return hit?.resolution?.answer?.startsWith("InProgress")
+      && answered.resolutionsUnmatched.length === 0 && answered.resolutionsConflicts.length === 0; },
+  () => pageUnits(resGuidCs, checklistOpts({})).preflight.map((p) => ({ id: p.id, kind: p.kind, item: p.item })));
 check("ENG-95218: under `pages-only-no-menu` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
   () => { const spec = renderDesignSpec(lpRun, lpNoMenuOpts);
     const at = spec.indexOf("### List page");
@@ -3256,6 +3454,31 @@ const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
 check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
   /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+/* PR #128 review (RC-8b) — and EXACTLY ONCE. The check above uses `.test()`, which cannot see a double-render: the
+   item used to be pushed straight into the rendered worklist, and a re-added render-time `confirm.push` would emit
+   it twice — one copy with an evidence id and one without — with this suite still green. The copy without an id is
+   the original defect (a question an operator was asked and had nowhere to answer), so a count is the assertion. */
+check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACTLY ONCE — a re-added render-time push would double-render it, one copy carrying an id and one not, and `.test()` is blind to that",
+  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1,
+  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length);
+/* PR #128 review (round 15, Major) — AND THE FILTER MUST NOT SWALLOW IT. Before this PR the lookup-value prompt was
+   pushed straight into the rendered `confirm` array, bypassing all filtering. It now arrives as a `needsDecision`
+   entry and passes through `SHOWN_ELSEWHERE` on BOTH surfaces — `renderConfirmWorklist` (what the operator reads)
+   and `confirmWorklistRows` (what `--units.preflight` publishes for an answer to bind to). If `lookup-value` ever
+   joined that Set the question would vanish from both at once: the operator is never asked, and no id exists to
+   answer — this ticket's own failure mode ("a question that reaches nowhere"), on the question side.
+   `SHOWN_ELSEWHERE` is module-private and stays that way (the export surface is itself a review finding), so this
+   pins the RELATION behaviourally, through the real render and the real publish. It is deliberately ONE check
+   naming the cause: the surrounding goldens do go red if the Set grows, but they read as three unrelated failures.
+   The accidental route is real and not hypothetical — `SHOWN_ELSEWHERE` spreads `IMPERATIVE_MEMBER_KINDS`, so
+   adding a `lookup-value` entry to `MEMBER_KIND_NOTE` for its prose would silently enrol it in the filter. */
+check("PR #128 review (round 15): `lookup-value` survives the `SHOWN_ELSEWHERE` filter on BOTH surfaces — it renders in the ⚠ Confirm worklist AND publishes a `--units.preflight` row. A kind in that Set is dropped from both at once, so the operator is never asked and no id exists for an answer to bind to",
+  () => { const rendered = (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1
+        && /#### ⚠ Confirm before I build/.test(guidCs.designSpec);
+    const published = pageUnits(guidCs, checklistOpts({})).preflight.filter((r) => r.kind === "lookup-value");
+    return rendered && published.length === 1 && published[0].id.includes("#confirm:lookup-value:"); },
+  () => ({ rendered: (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length,
+    published: pageUnits(guidCs, checklistOpts({})).preflight.map((r) => r.kind) }));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
@@ -3720,6 +3943,10 @@ const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\
 // Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
 // registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward
 // direction plus a count lets a simultaneous add+drop pass net-neutral.
+check("PR #128 review (round 17, architecture Minor): the engine resolution index keys on a STRUCTURED pair, not a NUL joiner — the invisible-delimiter strategy already cost this PR two review rounds (GitHub served the generated workflow as binary), and a JSON-encoded pair is exactly as unambiguous for a `kind`/`item` that carries colons while containing no control byte for tooling to misread",
+  /const resolutionKey = \(kind, item\) => JSON\.stringify/.test(DESIGNSPEC_SRC)
+    && !/resolutionKey = \(kind, item\) => `/.test(DESIGNSPEC_SRC),
+  () => (DESIGNSPEC_SRC.match(/const resolutionKey = .*/) || ["(no resolutionKey found)"])[0]);
 check("ENG-95021: EVERY `onstand` emission site in designspec.mjs uses a key registered in REACHABILITY_KEYS",
   emittedKeys.length >= REACHABILITY_KEYS.length            // the scan really found the sites (not a silent 0-match)
   && emittedKeys.every((k) => REACHABILITY_KEYS.includes(k)),

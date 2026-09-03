@@ -116,6 +116,14 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 - **[list-process]** section process: `<names>` — the Classic section launches it; wire it as a list-page
   run-process action …
 
+The FORM page raises its own kinds the same way, and one of them is worth naming here because it used to be the
+exception: **[lookup-value]** `lookup-record GUIDs in business-rule conditions` — raised when a business rule
+compares against a lookup-record GUID, so the raw GUID can be resolved to its display name on-stand. Its `item` is a
+FIXED literal for the same reason `fallback list column set` is: `item` is half the key an answer matches on, so a
+key derived from the GUIDs found would differ on every stand and send a real answer to `resolutionsUnmatched`. It
+used to be appended straight to the rendered worklist without a `needsDecision` entry, which left it with no
+evidence id and no `--units.preflight` row — a question an operator was asked and had nowhere to answer.
+
 ### <entity> form page
 #### Layout
 | Region | Element | Type | Source | Rule | Additional |
