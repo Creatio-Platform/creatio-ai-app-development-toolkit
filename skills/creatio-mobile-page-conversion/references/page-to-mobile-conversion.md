@@ -209,9 +209,12 @@ make. Section/workplace writes (`odata-update` on `SysModule`, `odata-create` on
 Show a SHORT, plain-language plan — no JSON, no page body, no per-property detail. Cover:
 
 - **Beta-release notice (show FIRST, verbatim)** — print this notice at the very top of the plan,
-  before anything else, exactly as written (do not paraphrase or drop it). It is temporary and names
-  the feature it applies to — converting a **web Freedom UI page** into a **mobile Freedom UI page**:
-  > ⚠️📱 You are using the **web-Freedom-page → mobile-Freedom-page conversion** in **Beta mode**: some functionality may be limited or subject to change, and the Converter currently supports the **Mobile canvas** only — Tablet support is on the roadmap and will be available in a future release.
+  before anything else, exactly as written (do not paraphrase or drop it). Print it as a PLAIN
+  paragraph: no blockquote, no leading `>` — terminals whose font lacks the quote bar draw it as a
+  missing-glyph box on every wrapped line of the notice. It is temporary and names the feature it
+  applies to — converting a **web Freedom UI page** into a **mobile Freedom UI page**:
+
+  ⚠️ You are using the **web-Freedom-page → mobile-Freedom-page conversion** in **Beta mode**: some functionality may be limited or subject to change, and the Converter currently supports the **Mobile canvas** only — Tablet support is on the roadmap and will be available in a future release.
 
   (The separate "enabling this feature activates Beta mode" heads-up is shown by clio at the moment the
   `mobile-page-converter` feature is enabled, not here.)
