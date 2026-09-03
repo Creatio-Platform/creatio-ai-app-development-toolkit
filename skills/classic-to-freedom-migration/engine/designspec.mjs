@@ -1976,6 +1976,13 @@ function buildLayoutGroupRows(cs, regionOf) {
 // capability table says the template lacks gets its own count and its own `crt.*` gate here. Only the measured
 // `absent` verdict gates: `unconfirmed` stays a ⚠ in the Layout table, because a count no one has measured is not a
 // criterion. Own function so `buildCoverageRows` stays under Sonar CC 15.
+// Each field's published CELL, dropped where the mapper computed none (nothing to place by, and nothing to check).
+// Own function so `buildCoverageRows` stays under Sonar CC 15.
+function fieldLayoutOf(fieldOps) {
+  return fieldOps
+    .map((o) => ({ name: o.name, ...pickCell(o.values?.layoutConfig) }))
+    .filter((e) => Number.isInteger(e.row) && Number.isInteger(e.column));
+}
 function templateAbsentRows(cs, opts) {
   const rows = [];
   for (const w of cs.widgets || []) {
@@ -2006,10 +2013,7 @@ function buildCoverageRows(cs, pm, result, opts = {}) {
   // ENG-96457 (item 1) — the vk carries each field's CELL beside its name. The plan states the coordinates, so the
   // queue must publish them (a builder that owns one unit sees only its row) and `--verify` must be able to check
   // them: a page whose fields are all present but re-paired is not the page the plan approved.
-  const fieldLayout = fieldOps
-    .map((o) => ({ name: o.name, ...pickCell(o.values?.layoutConfig) }))
-    .filter((e) => Number.isInteger(e.row) && Number.isInteger(e.column));
-  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name), layout: fieldLayout } });
+  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name), layout: fieldLayoutOf(fieldOps) } });
   // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
   // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
