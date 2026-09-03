@@ -9097,7 +9097,7 @@ try {
     () => Object.keys(namedSecretCols).map((n) => ({ name: n, typeLabel: namedSecretVals(n)?.typeLabel })));
   check("PR #147 review: …and they are still emitted READ-ONLY and still raise the secret-column decision — the label fix must not have moved them off the fail-closed path",
     Object.keys(namedSecretCols).every((n) => namedSecretVals(n)?.readOnly === true)
-      && !!namedSecretRun.changeSet.needsDecision.find((d) => d.kind === "secret-column"),
+      && namedSecretRun.changeSet.needsDecision.some((d) => d.kind === "secret-column"),
     () => ({ vals: Object.keys(namedSecretCols).map((n) => namedSecretVals(n)),
       decision: namedSecretRun.changeSet.needsDecision.find((d) => d.kind === "secret-column") }));
 

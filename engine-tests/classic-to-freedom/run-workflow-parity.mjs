@@ -295,7 +295,7 @@ function declared(pairName, baselineLine, shippedLine) {
 // made in that phase. An added dispatch carrying a different prompt is a different agent wearing a retry's label,
 // and still fails.
 function repeatsPhase(baselineCalls, shippedCall) {
-  const prior = baselineCalls.filter((c) => c.phase === shippedCall.phase).pop();
+  const prior = baselineCalls.findLast((c) => c.phase === shippedCall.phase);
   return !!prior && prior.prompt === shippedCall.prompt;
 }
 
