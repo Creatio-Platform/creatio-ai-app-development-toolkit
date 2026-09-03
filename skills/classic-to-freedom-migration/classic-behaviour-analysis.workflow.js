@@ -467,15 +467,17 @@ async function advance({ core, run, host, io, requires = [] }) {
     core, run, host, io, requires,
     onPending: (step, gate) => {
       run.status = 'open'
-      // `gate.width` is carried out so the CALLER can honour the negotiated concurrency. Dropping
+      // The negotiated width is carried out so the CALLER can honour the concurrency. Dropping
       // it here meant `cli next` advertised the whole batch at once while the driver's own log
       // claimed waves of W - the payload contradicting the log is the machine-readable half, so
-      // the host acted on the wrong one.
+      // the host acted on the wrong one. It is clamped through the SAME expression the in-process
+      // path uses, so a `parallel: false` step cannot be advertised as concurrent to a CLI host
+      // while running strictly serially in-process.
       return {
         stop: {
           status: 'pending',
           step,
-          width: gate.width,
+          width: effectiveWidth(step, gate.width),
           pending: pendingIds(run, step.items.map((i) => i.id)),
         },
       }
@@ -590,9 +592,14 @@ function sendFor(step, entries) {
   return { type: 'next', value: entries.map((e) => (e.outcome === OUTCOME.VALUE ? e.value : null)) }
 }
 
+// The concurrency a step actually runs at: a step the core declared sequential runs one at a time
+// whatever the host negotiated. One expression, read by both the in-process path and the payload
+// `advance` hands a CLI host — two copies would let the two hosts disagree about a step.
+const effectiveWidth = (step, width) => (step.parallel ? Math.max(1, width) : 1)
+
 async function executeStep(step, width, execute, runBatch) {
   const items = step.items
-  const w = step.parallel ? Math.max(1, width) : 1
+  const w = effectiveWidth(step, width)
   // A host that owns its own concurrency runs the whole batch through it. The
   // wave loop below is the fallback, and the ONLY caller of `Promise.all` here.
   if (runBatch && w > 1 && items.length > 1) return runBatch(items, (item) => safeExecute(item, execute), w)

@@ -142,7 +142,10 @@ async function cmdNext(argv) {
   // parallelism and the item count). Handing out all N commands while the driver logs "waves of W"
   // let a host started at --parallelism 1 fan out N concurrent stand-reading agents; the extra
   // `next` round-trip per wave is cheap next to one of those agents.
-  const width = Number(res.width) > 0 ? Number(res.width) : res.pending.length
+  // Fails CLOSED to a single item. Falling back to `res.pending.length` re-advertised the whole
+  // batch — the exact defect this cap exists to prevent — with nothing on any channel to say the
+  // width had gone missing. `advance` already clamped it by `step.parallel`.
+  const width = Number(res.width) > 0 ? Number(res.width) : 1
   const advertised = res.pending.slice(0, width)
   const items = res.step.items.filter((i) => advertised.includes(i.id))
   if (outDir) {

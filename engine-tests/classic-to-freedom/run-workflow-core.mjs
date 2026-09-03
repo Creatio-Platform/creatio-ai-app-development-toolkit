@@ -252,6 +252,35 @@ function* echoCore(seen) {
     () => JSON.stringify({ got: seen[2][1], logs }));
 }
 {
+  // The width `advance` hands a CLI host must be the width the in-process path would actually use.
+  // `negotiateStep` has no `step.parallel` term, so an unclamped `gate.width` advertised a step the
+  // core declared SEQUENTIAL as up to `host.parallelism` concurrent items — the CLI host fanning out
+  // where the Claude host runs one at a time, on the same step. Neither core has such a step today,
+  // which is a coincidence, not a guarantee, so it is pinned here rather than left to one.
+  // Built as a literal rather than through `step()`, which refuses a multi-item step without
+  // `parallel: true`. That refusal is why this shape cannot reach the driver from either core
+  // today — a structural guarantee worth keeping, and exactly why the width clamp must not be left
+  // resting on it: `negotiateStep` has no `step.parallel` term, so an unclamped `gate.width` would
+  // advertise a sequential step to a CLI host as up to `host.parallelism` concurrent items while
+  // the in-process path (`effectiveWidth`) runs it strictly one at a time.
+  function* serialCore() {
+    yield {
+      kind: "work",
+      parallel: false,
+      items: [
+        { id: "a", phase: "P", role: "r", prompt: "a" },
+        { id: "b", phase: "P", role: "r", prompt: "b" },
+      ],
+    };
+    return "end";
+  }
+  const serialRun = newRun({ workflow: "serial", host: fullHost });
+  const pendingRes = await advance({ core: serialCore(), run: serialRun, host: fullHost });
+  check("advance: a `parallel: false` multi-item step is advertised at width 1 even on a 4-wide host — the payload a CLI host acts on carries the width the driver itself would use, not the raw negotiated one",
+    pendingRes.status === "pending" && pendingRes.width === 1 && pendingRes.pending.length === 2,
+    () => JSON.stringify({ status: pendingRes.status, width: pendingRes.width, pending: pendingRes.pending }));
+}
+{
   const run = newRun({ workflow: "echo", host: thinHost });
   let err = null;
   await drive({ core: echoCore([]), run, host: thinHost, execute: async () => ({ outcome: OUTCOME.VALUE, value: 1 }), requires: ["independentRoles"] })

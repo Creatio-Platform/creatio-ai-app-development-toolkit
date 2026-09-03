@@ -19,7 +19,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE = path.join(ROOT, 'skills', '_workflow-core')
@@ -61,16 +61,33 @@ const TARGETS = [
 // Is this line an `import` (single- or multi-line) or a RE-EXPORT? Both are dropped: the inlined modules share one
 // scope, so every name is already in it. Split out so `inlineOne` stays a loop over lines.
 const isImportStart = (line) => /^import\s/.test(line)
+// Cut a trailing `//` line comment. A single left-to-right scan rather than a regex: an unanchored
+// `/\/\/.*$/` restarts from every position of a line that has no comment, which is quadratic in the
+// line length. The scan also tracks quote state, so a `//` INSIDE the specifier - `from
+// "https://example.com/m.js"` - is not mistaken for a comment. A plain `indexOf('//')` would cut
+// there, `endsImport` would then answer false, and the fail-closed path below would throw on legal
+// source.
+function stripLineComment(line) {
+  let quote = null
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (quote) {
+      if (ch === '\\') i++
+      else if (ch === quote) quote = null
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; continue }
+    if (ch === '/' && line[i + 1] === '/') return line.slice(0, i)
+  }
+  return line
+}
 // Both quote styles, an optional trailing semicolon, and an optional trailing line comment. The
 // previous single-quote-only shape failed OPEN: a `from "./y.mjs"` line left `skipping` armed and
 // every following line was discarded until something else happened to end with `from '...'`, so an
 // arbitrary span of the module vanished from the generated artifact with no error - and `--check`
 // could not catch it, because it compares two outputs of the same broken transform.
 const endsImport = (line) => {
-  // Two linear passes rather than one `/\s*(?:\/\/.*)?$/`: an optional group sitting next to
-  // `\s*$` makes the engine retry every split of the trailing run of whitespace, which is
-  // super-linear on a long line for no gain here.
-  const trimmed = line.replace(/\/\/.*$/, '').trim().replace(/;$/, '').trim()
+  const trimmed = stripLineComment(line).trim().replace(/;$/, '').trim()
   return /from\s+(['"])[^'"]+\1$/.test(trimmed) || /^\}\s+from\s+(['"])[^'"]+\1$/.test(trimmed)
 }
 // A re-export has nothing to inline. Stripping `export ` off one left a bare `{ a, b }` — a block of expression
@@ -106,8 +123,10 @@ function consumeImportLine(rel, lines, importStartLine, i) {
   return false
 }
 
-function inlineOne(rel) {
-  const src = readFileSync(path.join(CORE, rel), 'utf8')
+// The transform itself, over text rather than a path, so the fail-closed paths above can be
+// exercised from a test without writing a module into `_workflow-core/`. `run-infra.mjs` imports it
+// directly; nothing else does. `rel` only names the source in the error messages.
+export function stripImports(src, rel) {
   const out = []
   let skipping = false
   let importStartLine = 0
@@ -140,6 +159,8 @@ function inlineOne(rel) {
   // file is not hand-read, so the cosmetic gain was not worth that.
   return `// ===== inlined from _workflow-core/${rel} =====\n${out.join('\n').trim()}\n`
 }
+
+const inlineOne = (rel) => stripImports(readFileSync(path.join(CORE, rel), 'utf8'), rel)
 
 // Top-level identifier collisions would silently shadow one another once the
 // modules share a scope, so they are a hard error rather than a warning.
@@ -181,26 +202,30 @@ function build(target) {
   return text
 }
 
-const check = process.argv.includes('--check')
-let failed = 0
-for (const target of TARGETS) {
-  const outPath = path.join(ROOT, target.out)
-  const next = build(target)
-  const current = safeRead(outPath)
-  if (check) {
-    if (current !== next) {
-      failed++
-      process.stderr.write(`❌ ${target.out} is out of sync with skills/_workflow-core/ — run \`node scripts/build-workflows.mjs\`\n`)
-      process.stderr.write(`   ${firstDifference(current, next)}\n`)
+// Only when run as a program. Importing this module (the offline suite does, to reach
+// `stripImports`) must not write the shipped files or call `process.exit`.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const check = process.argv.includes('--check')
+  let failed = 0
+  for (const target of TARGETS) {
+    const outPath = path.join(ROOT, target.out)
+    const next = build(target)
+    const current = safeRead(outPath)
+    if (check) {
+      if (current !== next) {
+        failed++
+        process.stderr.write(`❌ ${target.out} is out of sync with skills/_workflow-core/ — run \`node scripts/build-workflows.mjs\`\n`)
+        process.stderr.write(`   ${firstDifference(current, next)}\n`)
+      } else {
+        process.stdout.write(`✅ ${target.out} matches the core\n`)
+      }
     } else {
-      process.stdout.write(`✅ ${target.out} matches the core\n`)
+      writeFileSync(outPath, next, 'utf8')
+      process.stdout.write(`${current === next ? '=' : '→'} ${target.out} (${next.split('\n').length} lines)\n`)
     }
-  } else {
-    writeFileSync(outPath, next, 'utf8')
-    process.stdout.write(`${current === next ? '=' : '→'} ${target.out} (${next.split('\n').length} lines)\n`)
   }
+  process.exit(failed ? 1 : 0)
 }
-process.exit(failed ? 1 : 0)
 
 function safeRead(p) {
   try { return readFileSync(p, 'utf8') } catch { return null }

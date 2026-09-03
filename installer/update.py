@@ -197,20 +197,24 @@ def refresh_claude_named_workflows(home: Path | None = None) -> list[str]:
     cache_root = latest_plugin_cache_root(home)
     if cache_root is None:
         return []
+    # The silent arm covers the IMPORT only. Spanning the call as well misclassified an ImportError
+    # raised INSIDE the provisioner - install.py does lazy imports of its own, and a partially
+    # installed runtime is exactly when this path runs - as "this runtime ships no provisioner", and
+    # returned [] with nothing on any channel: the invisible failure this diagnostic exists to close.
     try:
         import install as install_module  # noqa: PLC0415  (deliberately lazy)
-
-        return install_module.provision_named_workflows(cache_root, home / ".claude")
     except ImportError:
         # No sibling install.py on this surface - the documented, expected case. Staying quiet
         # here is deliberate: it is not a failure, it is a runtime that ships no provisioner.
         return []
-    except (OSError, RuntimeError) as error:
-        # Everything else is a real refusal and must be visible. RuntimeError in particular is
-        # what the hardened provisioner raises for the three security rejections - an unusable
-        # meta.name, two scripts claiming one name, and a destination resolving outside
-        # ~/.claude/workflows/. Swallowing those printed nothing on any channel, so an
-        # unattended update looked like it had provisioned the workflows it had just refused.
+    try:
+        return install_module.provision_named_workflows(cache_root, home / ".claude")
+    except (OSError, RuntimeError, ImportError) as error:
+        # Every refusal from the provisioner itself is real and must be visible. RuntimeError in
+        # particular is what the hardened provisioner raises for the three security rejections - an
+        # unusable meta.name, two scripts claiming one name, and a destination resolving outside
+        # ~/.claude/workflows/. Swallowing those printed nothing on any channel, so an unattended
+        # update looked like it had provisioned the workflows it had just refused.
         print(f"WARNING: named workflows were not provisioned: {error}", file=sys.stderr)
         return []
 

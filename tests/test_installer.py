@@ -678,6 +678,73 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
 
             self.assertEqual(installer.workflow_meta_name(script), "creatio-real")
 
+    def _meta_name_of(self, temp: str, source: str) -> str:
+        installer = load_installer()
+        skill_dir = Path(temp) / "src" / "skills" / "a-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        script = skill_dir / "build.workflow.js"
+        script.write_text(source, encoding="utf-8")
+        return installer.workflow_meta_name(script)
+
+    # The three `-1` exits and the index arithmetic in `_skip_comment` / `_skip_string` matter more
+    # than ordinary coverage: a wrong index here does not crash, it returns a slice running past
+    # `meta` into the inlined prompt text - which re-opens the "first line-initial `name:` anywhere
+    # in the file wins" hole, and that name becomes a path under ~/.claude/workflows/.
+
+    def test_a_brace_inside_a_block_comment_does_not_change_the_scanner_depth(self):
+        with tempfile.TemporaryDirectory() as temp:
+            name = self._meta_name_of(
+                temp,
+                "export const meta = {\n"
+                "  /* a stray { and } live in this prose, and must not move depth */\n"
+                "  name: 'creatio-real',\n"
+                "}\n"
+                "const agentSpec = {\n"
+                "name: 'creatio-../../evil',\n"
+                "}\n",
+            )
+            self.assertEqual(name, "creatio-real")
+
+    def test_an_unterminated_block_comment_refuses_rather_than_harvesting_a_later_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(RuntimeError) as raised:
+                self._meta_name_of(
+                    temp,
+                    "export const meta = {\n"
+                    "  /* this comment is never closed\n"
+                    "  name: 'creatio-real',\n"
+                    "}\n"
+                    "const agentSpec = {\n"
+                    "name: 'creatio-../../evil',\n"
+                    "}\n",
+                )
+            self.assertIn("unterminated", str(raised.exception))
+            self.assertNotIn("evil", str(raised.exception))
+
+    def test_a_line_comment_on_a_final_line_with_no_newline_refuses_rather_than_guessing(self):
+        # `_skip_comment` returns -1 when a `//` has no closing newline. The block is genuinely
+        # unterminated at that point, so refusing is the safe answer; the assertion exists so the
+        # index arithmetic cannot start returning a slice instead.
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(RuntimeError) as raised:
+                self._meta_name_of(temp, "export const meta = {\n  name: 'creatio-real', // trailing")
+            self.assertIn("unterminated", str(raised.exception))
+
+    def test_an_unterminated_string_literal_refuses_rather_than_harvesting_a_later_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(RuntimeError) as raised:
+                self._meta_name_of(
+                    temp,
+                    "export const meta = {\n"
+                    "  description: 'never closed,\n"
+                    "  name: 'creatio-real',\n"
+                    "const agentSpec = {\n"
+                    "name: 'creatio-../../evil',\n"
+                    "}\n",
+                )
+            self.assertIn("unterminated", str(raised.exception))
+            self.assertNotIn("evil", str(raised.exception))
+
     def test_provisions_every_bundled_workflow(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

@@ -14,6 +14,7 @@ import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/e
 import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
+import { stripImports } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
 
 // git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
@@ -603,18 +604,60 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // declared dependency order rather than every file under _workflow-core (the CLI-only adapters
   // are deliberately not inlined into the Claude artifact).
   const buildSrc = readFileSync(path.join(repoRoot, "scripts/build-workflows.mjs"), "utf8");
-  const modulesBlock = /modules:\s*\[([^\]]*)\]/.exec(buildSrc)?.[1] || "";
-  const inlined = [...modulesBlock.matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1]);
+  // One `modules:` array only. The artifact path above is hardcoded to the single target, so a second
+  // TARGETS entry would be checked against the wrong file — or, with `exec` taking the first match,
+  // not checked at all. Fail loudly instead of silently covering one target of two.
+  const moduleBlocks = [...buildSrc.matchAll(/modules:\s*\[([^\]]*)\]/g)];
+  const inlined = moduleBlocks.length === 1
+    ? [...moduleBlocks[0][1].matchAll(/'([^']+\.mjs)'/g)].map((m) => m[1])
+    : [];
+  // The names DECLARED by the artifact, not the names MENTIONED in it. `inlineOne` copies every
+  // comment of every inlined module verbatim, and those comments name the exports — so a substring
+  // probe passes even when the declaration itself was deleted, which is exactly the silent span
+  // deletion this block exists to catch. `declRe` is run over the artifact without its `export`
+  // prefix, which the transform strips.
+  const declaredRe = /^(?:export\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+  const declared = new Set([...generated.matchAll(declaredRe)].map((m) => m[1]));
   const missing = [];
   const modulesRead = inlined.length;
   for (const rel of inlined) {
     const src = readFileSync(path.join(coreDir, rel), "utf8");
     for (const m of src.matchAll(declRe)) {
-      if (!new RegExp(String.raw`(?:^|[^\w$])${m[1]}\b`).test(generated)) missing.push(`${rel}:${m[1]}`);
+      if (!declared.has(m[1])) missing.push(`${rel}:${m[1]}`);
     }
   }
-  check("build-workflows: every top-level export declared by a core module survives into the generated workflow — the inline transform is lossless, not merely self-consistent",
+  check("build-workflows: exactly one `modules:` array in the build script — the artifact path this block reads is hardcoded to that single target, so a second one would go unchecked",
+    moduleBlocks.length === 1, () => ({ moduleBlocks: moduleBlocks.length }));
+  check("build-workflows: every top-level export declared by a core module is DECLARED in the generated workflow — the inline transform is lossless, not merely self-consistent",
     modulesRead > 0 && missing.length === 0, () => ({ modulesRead, missing: missing.slice(0, 20) }));
+}
+
+// The fail-CLOSED paths in the inline transform are its entire safety net, and nothing reached them:
+// `--check` compares two outputs of the same transform, and the block above only reads the artifact the
+// working `endsImport` produced. `stripImports` is the transform over text, so the three cases can be
+// stated directly.
+{
+  const throwsWith = (src, needle) => {
+    try { stripImports(src, "synthetic.mjs"); return false; } catch (e) { return e.message.includes(needle); }
+  };
+  check("build-workflows: a multi-line import whose specifier form `endsImport` does not recognise throws, naming the import's start line, instead of swallowing the rest of the module",
+    () => throwsWith(["import {", "  a,", "} from <not a specifier>", "export function f() {}"].join("\n"), "line 1"),
+    () => { try { stripImports(["import {", "  a,", "} from <not a specifier>", "export function f() {}"].join("\n"), "synthetic.mjs"); return "did not throw"; } catch (e) { return e.message; } });
+  check("build-workflows: a file that ends mid-import throws rather than returning a truncated module",
+    () => throwsWith(["import {", "  a,"].join("\n"), "end of file"),
+    "expected an 'end of file' error");
+  check("build-workflows: a single-line DOUBLE-quoted import is dropped without arming the skip — the quote style that used to delete an arbitrary span",
+    () => {
+      const out = stripImports(['import { x } from "./y.mjs"', "export const kept = 1", "const alsoKept = 2"].join("\n"), "synthetic.mjs");
+      return !out.includes("import {") && out.includes("const kept = 1") && out.includes("const alsoKept = 2");
+    },
+    () => stripImports(['import { x } from "./y.mjs"', "export const kept = 1", "const alsoKept = 2"].join("\n"), "synthetic.mjs"));
+  check("build-workflows: a `//` inside the specifier itself is not mistaken for a trailing comment — the URL form stays a recognised single-line import",
+    () => {
+      const out = stripImports(['import x from "https://example.com/m.js"', "export const kept = 1"].join("\n"), "synthetic.mjs");
+      return !out.includes("import x") && out.includes("const kept = 1");
+    },
+    () => stripImports(['import x from "https://example.com/m.js"', "export const kept = 1"].join("\n"), "synthetic.mjs"));
 }
 // Every replay path in the CLI must carry the workflow's run-level requirements. `next` did and
 // `advanceOrExplain` (used by `submit`) did not, so negotiateRun ran there against the default

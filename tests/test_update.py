@@ -3,7 +3,9 @@ manual update command.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import subprocess
 import tempfile
@@ -371,9 +373,26 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
         (root / "skills" / "some-skill" / "some.workflow.js").write_text(
             "export const meta = { description: 'no name' }\n", encoding="utf-8"
         )
-        # RuntimeError from the provisioner is swallowed: the plugin update
-        # itself succeeded and the scriptPath fallback still resolves in-tree.
-        self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), [])
+        # A RuntimeError from the provisioner never fails the update - the plugin update itself
+        # succeeded and the scriptPath fallback still resolves in-tree - but it is the ONE signal an
+        # unattended run gives an operator that the hardened provisioner refused a script, so the
+        # warning is pinned here rather than left deletable with a green suite.
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), [])
+        self.assertIn("WARNING: named workflows were not provisioned", stderr.getvalue())
+        self.assertIn("meta.name", stderr.getvalue())
+
+    def test_a_runtime_without_a_provisioner_stays_silent(self):
+        """The ImportError arm is deliberately quiet: a surface that ships no `installer/` is the
+        documented, expected case, not a failure, and warning there would cry wolf on every update."""
+        self._write_cached_plugin("1.0.0", "creatio-x")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), patch.dict(
+            self.upd.sys.modules, {"install": None}
+        ):
+            self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), [])
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_claude_update_refreshes_the_mirror(self):
         self._write_cached_plugin("1.0.0", "creatio-x")
