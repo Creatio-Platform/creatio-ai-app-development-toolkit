@@ -2986,6 +2986,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  // PR review — the four kinds were ASYMMETRIC on this channel. `gate`/`structure`/`coverage` write their line in
+  // every mode (above) and fold into `notReady`; the three plan-completeness lines are `--plan`-only, so a `--units`
+  // run published the fourth kind in `units.planGaps` and said nothing on stderr at all — an integrator watching
+  // the signal the other three kinds already use IN THIS MODE learned nothing. This line closes that asymmetry and
+  // is INFORMATIONAL: the exit code stays 0 by design (see the engine README, "read the array, not the exit code"
+  // — exit 2 here would conflate the plan-level kinds with `verifyIncomplete`, which IS repairable by building).
+  // It reports the entries the artifact carries, not a second wording of them, so the two channels cannot disagree.
+  if (unitsMode && !planMode) {
+    const planLegs = planGaps(result, { planCompleteness: true }).filter((g) => g.startsWith("plan INCOMPLETE"));
+    if (planLegs.length) process.stderr.write(`migrate.mjs: ℹ this run publishes ${planLegs.length} PLAN-level gap(s) in \`units.planGaps\` — NOT buildable-out-of, and NOT reflected in this exit code: ${planLegs.join(" · ")}. Fix the manifest and re-plan; the build executor stops on them before its first stand write.\n`);
+  }
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse

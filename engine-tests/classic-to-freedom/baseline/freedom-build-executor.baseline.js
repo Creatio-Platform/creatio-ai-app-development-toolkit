@@ -1382,12 +1382,15 @@ function blockedByParked(parkedKeyList, parents, reachability, allKeys) {
 // `migrate.mjs: ⛔` and sent a blocked gate to the manifest remedy. An unrecognised entry yields NO kind, and
 // `planGapNext` falls back to a kind-agnostic instruction rather than guessing one.
 const PLAN_GAP_KINDS = ['gate BLOCKED', 'structure INCOMPLETE', 'coverage INCOMPLETE', 'plan INCOMPLETE']
-function gapKind(g) {
+// EVERY kind the entry names, not the first: the engine joins active gaps with ` · ` into ONE sentence
+// (`planGapBanner`, and the `verifyIncomplete` stderr line), so a pasted joined line names two kinds at once and a
+// first-match parse printed ONE remedy while BOTH halves were broken. The fallback covers NO match; this, SEVERAL.
+function gapKindsOf(g) {
   const u = String(g).toUpperCase()
-  return PLAN_GAP_KINDS.find((k) => u.includes(k.toUpperCase())) || null
+  return PLAN_GAP_KINDS.filter((k) => u.includes(k.toUpperCase()))
 }
 function planGapKinds(planGaps) {
-  return [...new Set((planGaps || []).map(gapKind).filter(Boolean))]
+  return [...new Set((planGaps || []).flatMap(gapKindsOf))]
 }
 const MANIFEST_REMEDY = 'in the manifest (\`planMeta\` / \`signals\`, after the read-only stand check / \`placement\`, or the structure/coverage inputs named)'
 const GATE_REMEDY = 'a BLOCKED gate is fixed in the stand or the input schemas, NOT the manifest — resolve what its reasons name'

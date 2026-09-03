@@ -401,11 +401,17 @@ export function approvalStop(app, planVersion, ctx = {}) {
 // wrong, which is the exact misdirection this stop exists to remove. An unrecognised entry now yields NO kind,
 // and `planGapNext` falls back to a kind-agnostic instruction rather than guessing one.
 const PLAN_GAP_KINDS = ['gate BLOCKED', 'structure INCOMPLETE', 'coverage INCOMPLETE', 'plan INCOMPLETE']
-const gapKind = (g) => {
+// EVERY kind the entry names, not the first one found. The engine itself publishes joined single strings on this
+// same vocabulary — `planGapBanner` and the `verifyIncomplete` stderr line both join the active gaps with ` · `
+// into ONE sentence — so an entry that quotes such a line names two kinds at once. A first-match parse collapsed it
+// to whichever word sits earliest in the list above and then printed ONE remedy while BOTH halves were broken:
+// the same confidently-wrong misdirection this stop exists to remove. The fallback below covers an entry matching
+// NO kind; this covers one matching SEVERAL (PR review).
+const gapKindsOf = (g) => {
   const u = String(g).toUpperCase()
-  return PLAN_GAP_KINDS.find((k) => u.includes(k.toUpperCase())) || null
+  return PLAN_GAP_KINDS.filter((k) => u.includes(k.toUpperCase()))
 }
-export const planGapKinds = (planGaps) => [...new Set((planGaps || []).map(gapKind).filter(Boolean))]
+export const planGapKinds = (planGaps) => [...new Set((planGaps || []).flatMap(gapKindsOf))]
 
 // The remedy differs by kind, and this stop used to give one answer for all four: "fix it in the manifest". That
 // is wrong for a blocked correctness GATE — a broken merge, or an effect the mapper cannot represent, is a fact

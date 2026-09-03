@@ -67,7 +67,12 @@ explicitly rather than guessed. Re-record `manifest.placement` and re-plan.
 **Read the array, not the exit code.** Exit codes are unchanged: `--plan` exits 2 on a plan-completeness gap, and
 `--units` exits 0 while publishing a non-empty `planGaps` — it is a build-queue read, and exit 2 there would also
 conflate the plan-level kinds with `verifyIncomplete`, which IS repairable by building and must not stop a run. A
-caller that gates on the exit code alone therefore learns nothing about the plan; gate on `planGaps.length`. The plan-completeness legs are reported
+caller that gates on the exit code alone therefore learns nothing about the plan; gate on `planGaps.length`.
+`--units` does also say it on **stderr**, as one INFORMATIONAL, non-gating
+`ℹ … PLAN-level gap(s) in units.planGaps` line naming the same entries the artifact carries — PR review: the
+other three kinds write their ⛔ line in EVERY mode, so silence on this one made stderr coverage look uniform
+across the four when it was not. That line is a courtesy for whoever is watching the run; the array is the
+contract. The plan-completeness legs are reported
 in the **plan-governed modes only** — `--plan` and `--units`, the same pair `--resolved-gates` rides, because plan
 completeness is a PLAN/RUN-time fact about the manifest and not a `--verify` verdict. A `--spec` or default run
 legitimately carries no `planMeta`, no `signals` and no `placement`, and reports none of them.

@@ -2550,6 +2550,20 @@ check("ENG-95857 R1/R2: `--units` PUBLISHES the plan-gap set, so the executor's 
 check("ENG-95857 R1: `--units` publishes `[]` for a clean plan — REQUIRED and never omitted, so a reader can tell a clean plan from an engine that publishes nothing",
   () => { const u = unitsFor(FULL_PLACEMENT); return Array.isArray(u.planGaps) && u.planGaps.length === 0 },
   () => unitsFor(FULL_PLACEMENT).planGaps);
+// PR review (F5) — the four kinds were asymmetric on stderr IN THIS MODE: `gate`/`structure`/`coverage` write
+// their ⛔ line in every mode, while the three plan-completeness lines are `--plan`-only, so a `--units` run
+// published the fourth kind in the artifact and said nothing on the channel the other three already use. The line
+// added for it is INFORMATIONAL — the exit code stays 0 by design ("read the array, not the exit code") — and it
+// reports the entries the artifact carries, so the two channels cannot disagree about the same run.
+const unitsGapRun = runWithPlacement(undefined, "--units");
+check("ENG-95857 F5: a `--units` run over a plan-incomplete manifest ALSO reports the gap on stderr, naming the published set, while the exit code deliberately stays 0",
+  unitsGapRun.status === 0 && /PLAN-level gap\(s\) in `units.planGaps`/.test(unitsGapRun.stderr || "")
+  && /placement/.test(unitsGapRun.stderr || ""),
+  () => ({ status: unitsGapRun.status, stderr: (unitsGapRun.stderr || "").slice(0, 300) }));
+const unitsCleanRun = runWithPlacement(FULL_PLACEMENT, "--units");
+check("ENG-95857 F5: a `--units` run over a CLEAN plan says nothing on stderr — the line reports the PUBLISHED set, so silence and `[]` can never disagree",
+  unitsCleanRun.status === 0 && !/PLAN-level gap/.test(unitsCleanRun.stderr || ""),
+  () => (unitsCleanRun.stderr || "").slice(0, 300));
 // R1 AC5 — the plan document a human approves against names the SAME kind the machine set does, so the two can
 // never be read as disagreeing.
 check("ENG-95857 R1: the plan document's ⛔ banner names the plan-completeness kind whenever the published set does",
