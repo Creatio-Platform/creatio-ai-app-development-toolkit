@@ -693,9 +693,24 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // business (the upstream-drift job runs `verify-vendor-upstream.mjs`, which is not part of the module's gate).
   // Sliced from the job's `name:` to the next line at job indentation, so a step added to a LATER job cannot
   // silently join this list.
-  const jobAt = prYml.indexOf("name: Classic\u2192Freedom engine goldens");
-  const nextJob = jobAt < 0 ? -1 : prYml.slice(jobAt).search(/\n {2}[A-Za-z0-9_-]+:\n/);
-  const jobSrc = jobAt < 0 ? "" : prYml.slice(jobAt, nextJob < 0 ? undefined : jobAt + nextJob);
+  // PR review — Sonar flagged the two lines this replaces: a nested ternary (S3358) and a super-linear regex
+  // (S8786, the `\n {2}…:\n` alternation backtracking across a long file). Both are gone: the slice is a plain
+  // early return, and the job boundary is found by scanning LINES for one at job indentation — linear in the file,
+  // with no backtracking possible, and easier to read than the pattern it replaces.
+  const jobBoundarySlice = (yml, header) => {
+    const at = yml.indexOf(header);
+    if (at < 0) return "";
+    const rest = yml.slice(at);
+    const lines = rest.split("\n");
+    let consumed = lines[0].length + 1;   // the header line itself is always part of the job
+    for (const line of lines.slice(1)) {
+      // A job key sits at exactly two spaces of indentation and ends in a colon; a STEP is deeper than that.
+      if (/^ {2}[A-Za-z0-9_-]+:$/.test(line)) return rest.slice(0, consumed);
+      consumed += line.length + 1;
+    }
+    return rest;
+  };
+  const jobSrc = jobBoundarySlice(prYml, "name: Classic\u2192Freedom engine goldens");
   // Both sides reduced to the same vocabulary: the basename each command actually executes, plus `--check`.
   const runnersIn = (text) => (text.match(/[A-Za-z0-9_-]+\.mjs(?:\s+--check)?/g) || [])
     .map((m) => m.replace(/\s+/g, " ").trim())

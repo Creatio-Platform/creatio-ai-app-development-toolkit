@@ -227,6 +227,56 @@ const pickMeta = (m) => {
   return out;
 };
 
+// The `componentRegistry.file` branch of `resolveRunIndex`, lifted out of it. Every refusal below returns the same
+// `unreadable-export` verdict for a different reason, and inlining them pushed `resolveRunIndex` past Sonar's
+// cognitive-complexity ceiling (S3776, 22 against 15) — a fair signal, since the caller only has to decide WHICH of
+// its three source kinds it is looking at, and this is the whole of one of them.
+function indexFromRegistryFileRef(src, manifest, readFile) {
+  // ENG-96483 review (Blocker) — PARSE, then apply the SAME shape guard `resolveRunIndex`'s inline `components`
+  // branch applies, then convert. Accepting anything that merely parses as JSON made this the fail-open path inside fail-closed code:
+  // `indexFromRegistryExport` defaults `components` to `[]`, so a manifest.json, a package.json, a truncated or
+  // simply wrong download yielded an index with `componentCount: 0` reported as `source: "stand-export"` — the
+  // strongest of the three evidence levels. `validateRun` then reported every emitted `crt.*` type as
+  // `unknown-component`, and the operator was handed "your stand does not carry crt.Input" instead of "that file
+  // is not a registry export". `unreadable-export` was unreachable for such an input because nothing threw.
+  // READ and PARSE are caught SEPARATELY, and only the read's own message is passed through. A read failure is
+  // reported by the engine's own reader (ENOENT, or the base-directory containment refusal), so its wording is
+  // engine-authored and safe to render. A `JSON.parse` failure is NOT: on Node 20+ the message embeds a snippet
+  // of the offending input, `readRegistryFile` deliberately allows absolute paths, and `migrate.mjs`
+  // interpolates `reg.error` into a needsDecision reason that lands verbatim in `plan.md` (same review) — so
+  // file bytes would reach the operator-facing plan. That branch reports a fixed classification instead.
+  let raw;
+  try {
+    raw = readFile(src.file);
+  } catch (e) {
+    // A registry the manifest NAMED but the engine could not read is reported, never silently downgraded to the
+    // vendored index: the operator asked for the stand's answer and has to know they did not get it.
+    return { index: vendoredIndex(), version: null, source: "unreadable-export", error: e.message, file: src.file };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { index: vendoredIndex(), version: null, source: "unreadable-export",
+      error: "the file's bytes are not JSON", file: src.file };
+  }
+  if (!Array.isArray(parsed?.components)) {
+    return { index: vendoredIndex(), version: null, source: "unreadable-export",
+      error: "the file parses as JSON but carries no `components` array, so it is not a registry export",
+      file: src.file };
+  }
+  const index = indexFromRegistryExport(parsed, { version: manifest.platformVersion || null });
+  if (!index.meta.componentCount) {
+    // A well-formed export with ZERO components is refused for the same reason: every emitted type would read
+    // as absent from the stand, which is a wholesale wrong diagnosis rather than a weak one.
+    return { index: vendoredIndex(), version: null, source: "unreadable-export",
+      error: "the file is a registry export carrying NO components, so nothing could be validated against it",
+      file: src.file };
+  }
+  return { index, version: index.meta.versions[0], source: "stand-export" };
+
+}
+
 // Which registry a RUN validates against, and what that choice does NOT prove. Three outcomes, deliberately
 // distinguished — "checked against the stand", "checked against a pinned version", and "checked against a union of
 // versions" are three different strengths of evidence and a reader must be told which one they have.
@@ -237,50 +287,7 @@ export function resolveRunIndex(manifest, { readFile = null } = {}) {
       const index = indexFromRegistryExport(src, { version: manifest.platformVersion || null });
       return { index, version: index.meta.versions[0], source: "stand-export" };
     }
-    if (typeof src.file === "string" && readFile) {
-      // ENG-96483 review (Blocker) — PARSE, then apply the SAME shape guard the inline branch above applies, then
-      // convert. Accepting anything that merely parses as JSON made this the fail-open path inside fail-closed code:
-      // `indexFromRegistryExport` defaults `components` to `[]`, so a manifest.json, a package.json, a truncated or
-      // simply wrong download yielded an index with `componentCount: 0` reported as `source: "stand-export"` — the
-      // strongest of the three evidence levels. `validateRun` then reported every emitted `crt.*` type as
-      // `unknown-component`, and the operator was handed "your stand does not carry crt.Input" instead of "that file
-      // is not a registry export". `unreadable-export` was unreachable for such an input because nothing threw.
-      // READ and PARSE are caught SEPARATELY, and only the read's own message is passed through. A read failure is
-      // reported by the engine's own reader (ENOENT, or the base-directory containment refusal), so its wording is
-      // engine-authored and safe to render. A `JSON.parse` failure is NOT: on Node 20+ the message embeds a snippet
-      // of the offending input, `readRegistryFile` deliberately allows absolute paths, and `migrate.mjs`
-      // interpolates `reg.error` into a needsDecision reason that lands verbatim in `plan.md` (same review) — so
-      // file bytes would reach the operator-facing plan. That branch reports a fixed classification instead.
-      let raw;
-      try {
-        raw = readFile(src.file);
-      } catch (e) {
-        // A registry the manifest NAMED but the engine could not read is reported, never silently downgraded to the
-        // vendored index: the operator asked for the stand's answer and has to know they did not get it.
-        return { index: vendoredIndex(), version: null, source: "unreadable-export", error: e.message, file: src.file };
-      }
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        return { index: vendoredIndex(), version: null, source: "unreadable-export",
-          error: "the file's bytes are not JSON", file: src.file };
-      }
-      if (!Array.isArray(parsed?.components)) {
-        return { index: vendoredIndex(), version: null, source: "unreadable-export",
-          error: "the file parses as JSON but carries no `components` array, so it is not a registry export",
-          file: src.file };
-      }
-      const index = indexFromRegistryExport(parsed, { version: manifest.platformVersion || null });
-      if (!index.meta.componentCount) {
-        // A well-formed export with ZERO components is refused for the same reason: every emitted type would read
-        // as absent from the stand, which is a wholesale wrong diagnosis rather than a weak one.
-        return { index: vendoredIndex(), version: null, source: "unreadable-export",
-          error: "the file is a registry export carrying NO components, so nothing could be validated against it",
-          file: src.file };
-      }
-      return { index, version: index.meta.versions[0], source: "stand-export" };
-    }
+    if (typeof src.file === "string" && readFile) return indexFromRegistryFileRef(src, manifest, readFile);
   }
   const idx = vendoredIndex();
   const pinned = manifest?.platformVersion && idx.meta.versions.includes(manifest.platformVersion) ? manifest.platformVersion : null;

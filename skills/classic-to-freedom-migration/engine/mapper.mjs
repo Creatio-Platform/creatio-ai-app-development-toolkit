@@ -238,28 +238,57 @@ function control(dataType, contentType, ref) {
 // caller adds the referenced object separately); Phone / Email / Web link come from the column FORMAT
 // (DataValueType 42 / "Email" / 44 — Creatio stores them as text with a format), with a column-name fallback for
 // when the type is missing; text carries its length when the column metadata provides it.
-function fieldTypeLabel(col, meta, ctl) {
-  if (ctl.lookup) return "Lookup";
-  let t = String(meta.type || "").toLowerCase();
-  t = normalizeDvt(t);   // same normalization as scalarControl: numeric codes AND clio's friendly names
-  if (t === "phone") return "Phone";
-  if (t === "email") return "Email";
-  if (t === "weblink") return "Web link";
+// The label a normalized type maps to ON ITS OWN, with no help from the resolved control. A TABLE and not an
+// if-chain because every arm here is the same shape — one type in, one string out — and the chain had grown past
+// Sonar's cognitive-complexity ceiling (S3776) the moment the two secret types were added, which is a signal that
+// the branching carried no information. The arms that DO need the control, or the column name, stay as branches
+// below, where the condition is the point.
+//
+// ENG-96483 review (Blocker) — the two SECRET types are in here. `scalarControl` withholds a control for them on
+// purpose, but the label fell through to plain `Text`, so the Layout table in `plan.md` — the verbatim operator
+// deliverable — rendered an encrypted or hashed column indistinguishably from any other text column. The Type cell
+// must never be able to read `Text` for one of these.
+const TYPE_LABEL = {
+  phone: "Phone",
+  email: "Email",
+  weblink: "Web link",
+  boolean: "Boolean",
+  datetime: "Date/time",
+  date: "Date",
+  hashtext: "Hashed text (not migrated)",
+  securetext: "Encrypted text (not migrated)",
+  integer: "Integer",
+  decimal: "Decimal",
+  float: "Decimal",
+  money: "Decimal",
+};
+// The label inferred from the COLUMN NAME when the type is missing — a fallback, so it is consulted only after the
+// type table has had its say, exactly as the original chain ordered them.
+function labelFromColumnName(col) {
   if (/email/i.test(col)) return "Email";
   if (/phone|mobile/i.test(col)) return "Phone";
-  if (ctl.type === "crt.Checkbox" || t === "boolean") return "Boolean";
-  if (ctl.picker === "datetime" || t === "datetime") return "Date/time";
-  if (ctl.picker === "date" || t === "date") return "Date";
-  // ENG-96483 review (Blocker) — the two SECRET types get their own label. `scalarControl` withholds a control
-  // for them on purpose, but the label fell through to plain `Text`, so the Layout table in `plan.md` — the
-  // verbatim operator deliverable — rendered an encrypted or hashed column indistinguishably from any other text
-  // column. The Type cell must never be able to read `Text` for one of these.
-  if (t === "hashtext") return "Hashed text (not migrated)";
-  if (t === "securetext") return "Encrypted text (not migrated)";
-  if (t === "integer") return "Integer";
-  if (["decimal", "float", "money"].includes(t)) return "Decimal";
+  return null;
+}
+// The label the resolved CONTROL implies, for the shapes the type alone does not name.
+function labelFromControl(ctl, t, meta) {
+  if (ctl.type === "crt.Checkbox") return "Boolean";
+  if (ctl.picker === "datetime") return "Date/time";
+  if (ctl.picker === "date") return "Date";
   if (ctl.multiline) return t === "richtext" ? "Rich text" : "Long text";
   return meta.length ? `Text (${meta.length})` : "Text";
+}
+function fieldTypeLabel(col, meta, ctl) {
+  if (ctl.lookup) return "Lookup";
+  // same normalization as scalarControl: numeric codes AND clio's friendly names
+  const t = normalizeDvt(String(meta.type || "").toLowerCase());
+  // Order preserved from the original chain: the three FORMAT-carried types (phone/email/weblink) beat the
+  // column-name fallback, the fallback beats everything the control implies, and the remaining typed arms sit
+  // in the same table as those three because the lookup cannot express a precedence between its own keys.
+  if (t === "phone" || t === "email" || t === "weblink") return TYPE_LABEL[t];
+  const byName = labelFromColumnName(col);
+  if (byName) return byName;
+  if (TYPE_LABEL[t]) return TYPE_LABEL[t];
+  return labelFromControl(ctl, t, meta);
 }
 
 // Nearest existing entity columns to a (missing) bound column — ranked by longest shared substring (≥5 chars).
@@ -677,6 +706,26 @@ function createContainers(ctx) {
 // handler; the request is the element's own entry point).
 const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
 
+// Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
+// too) and surface the dynamic-visibility / ancestor-visibility decisions.
+//
+// PR review — hoisted OUT of `mapFields` to module scope rather than left as a closure over it. Sonar counts a
+// nested function's branching against its enclosing function, so `mapFields` sat one point over the S3776 ceiling
+// (16 against 15) while every one of its parts was already small. Nothing here reads `mapFields`'s locals: the two
+// facts it needs from the run — whether this is a mini page, and where to file a decision — come in as arguments.
+function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
+  const hiddenAncestor = (own.groups || []).find((g) => g.visible === false || g.visible === "dynamic");
+  let vis = f.visible !== false;
+  if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
+  // On a MINI PAGE every add-mode field is shown/hidden BY THE ADD-MODE MECHANISM (not a rule) — flagging each
+  // as a visibility-rule was pure noise; skip for mini pages. On a real form a dynamic field IS worth confirming.
+  if (f.visible === "dynamic" && !isMiniPage) needsDecision.push({ kind: "visibility-rule", item: col,
+    reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
+  if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
+    reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
+  return vis;
+}
+
 function mapFields(ctx, containers) {
   const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
   const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
@@ -914,25 +963,11 @@ function mapFields(ctx, containers) {
     claimCells(cells, column, colSpan, row, rowSpan);
     return { column, row, colSpan, rowSpan };
   };
-  // Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
-  // too) and surface the dynamic-visibility / ancestor-visibility decisions. Own function for Sonar CC 15.
-  const fieldVisibility = (f, own, col) => {
-    const hiddenAncestor = (own.groups || []).find((g) => g.visible === false || g.visible === "dynamic");
-    let vis = f.visible !== false;
-    if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
-    // On a MINI PAGE every add-mode field is shown/hidden BY THE ADD-MODE MECHANISM (not a rule) — flagging each
-    // as a visibility-rule was pure noise; skip for mini pages. On a real form a dynamic field IS worth confirming.
-    if (f.visible === "dynamic" && !ctx.isMiniPage) needsDecision.push({ kind: "visibility-rule", item: col,
-      reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
-    if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
-      reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
-    return vis;
-  };
   for (const { f, own } of resolved) {
     const parent = routeField(f, own);
     const { col, meta, c, elName, missingColumn, nearMissing } = resolveFieldControl(f);
     const layoutConfig = computeLayout(f, own, parent, col);
-    const vis = fieldVisibility(f, own, col);
+    const vis = fieldVisibility(f, own, col, { isMiniPage: ctx.isMiniPage, needsDecision });
     const values = buildFieldValues(f, col, c, meta, vis, layoutConfig);
     // A column not on the entity → a LINKED cross-datasource value: mark it read-only + linkedValue so the design
     // spec maps it via the Freedom "column from a related data source" recipe (not a ⚠ assumption). Carry the
@@ -1073,7 +1108,7 @@ function mapFields(ctx, containers) {
     const own = resolveOwner(it.parent, index, profileAnchors);
     const parent = routeField(it, own);
     values.layoutConfig = computeLayout(it, own, parent, it.name);
-    if (!fieldVisibility(it, own, it.name)) values.visible = false;
+    if (!fieldVisibility(it, own, it.name, { isMiniPage: ctx.isMiniPage, needsDecision })) values.visible = false;
     // Tier B: the view is automatic, the behaviour is not. The element gets its `clicked` request and the request
     // goes on the worklist — the classic method it came from is already a stub row of its own (the engine resolves
     // a control's click binding as that method's trigger), so this adds the WIRING, not a second copy of the method.
