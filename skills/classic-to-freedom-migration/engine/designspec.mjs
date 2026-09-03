@@ -1456,6 +1456,12 @@ function renderChildMappings(childs) {
       P.push(...boundaryChildLines(c));
     } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
+    } else if (c.formless === "inline-grid") {
+      P.push(`> **No separate form page — inline-editable grid.** \`${esc(c.resolvedFrom || c.editPage)}\` has **0 form fields**: its body is only an attribute lookup-filter + column-render methods, so editing happens INLINE in the related-list rows (a ConfigurationGrid detail). Do NOT build a Freedom form page for it — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`, "");
+      P.push("", demoteHeadings(c.spec, lvl - 2)); // still show the logic (Business rules / ⚠ Custom methods / ⚠ Other declared logic)
+      for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
+    } else if (c.formless === "empty") {
+      P.push(`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, "");
     } else if (c.spec) {
       P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
@@ -1609,6 +1615,15 @@ function buildChildScopeRows(childs) {
       // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
       target = "↩ already mapped above (cycle) — same page, mapped higher in this plan";
       call = "Mapped above"; label = esc(c.resolvedFrom || c.editPage || c.entity);
+    } else if (c.formless === "inline-grid") {
+      // ENG-96327 — a folded child with 0 form fields is an inline-editable grid (its body is only an attribute
+      // lookup-filter + column-render methods), NOT a form page. Saying "Rebuild (child) → form page" with an empty
+      // Layout misled the reader — there is no form to build; the related list itself is the editable grid.
+      target = "inline-editable related list — NO separate form page; build it as an editable `crt.DataGrid` and port its logic (lookup filter / column config) as handlers";
+      call = "Inline grid"; label = esc(c.resolvedFrom || c.editPage || c.entity);
+    } else if (c.formless === "empty") {
+      target = "⚠ folded to 0 fields with no behaviour — verify the child bundle/seed before building";
+      call = "⚠ verify"; label = esc(c.resolvedFrom || c.editPage || c.entity);
     } else if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
       // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
       // recommendation banner. Unknown count (unmapped real page) → generic.

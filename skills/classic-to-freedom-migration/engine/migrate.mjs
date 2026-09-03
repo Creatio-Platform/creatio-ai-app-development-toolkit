@@ -947,6 +947,15 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
   // above as `c.stubScope` — so carrying the whole array would list every child page twice.
   c.childStubScopes = (res.stubIndex || []).slice(1);
+  // ENG-96327 — a cleanly-folded child with NO form fields, tabs or sub-details is not a form PAGE: it is an
+  // inline-editable grid / logic-only schema (a ConfigurationGrid detail — editing is inline in the rows, the page
+  // body only an attribute lookup-filter + column-render methods). Distinguished from a skeletal/bad-bundle fold by
+  // whether it carries behaviour (methods/members). Marked so the plan does not mislabel it `Rebuild (child) → form
+  // page` with an empty Layout; the unit still publishes below — its checklist rows ARE the logic to port.
+  if (c.fieldCount === 0 && !c.hasTabs && c.nDetails === 0) {
+    const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0 || (res.changeSet?.needsDecision?.length || 0) > 0;
+    c.formless = hasBehaviour ? "inline-grid" : "empty";
+  }
   // This child's OWN checklist rows, derived from ITS ChangeSet — the whole point of the page-scoped gate: the
   // parent's row set never sees this page's counts, and this page's counts can never be closed by the parent's
   // components. Its expected template comes from the SHARED child-template rule, so the row the agent must

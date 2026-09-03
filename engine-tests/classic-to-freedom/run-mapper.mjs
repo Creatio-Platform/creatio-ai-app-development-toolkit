@@ -3342,6 +3342,25 @@ check("#7 child recursion: mapped child's design spec is NESTED in the plan (hea
   /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
 check("#7 child recursion: unverified child gets an explicit verify-child-page FILL slot (not just a row)",
   /#### Child page: ChildB[\s\S]*?<FILL: verify child page>/.test(recCs.plan));
+// ENG-96327: a child page that folds to 0 form fields is an INLINE-EDITABLE GRID (its body is only an attribute
+// lookup-filter + column-render methods), NOT a form page — the real defect was a Contract detail
+// (CorrespondenceLinkDetail → CorrespondenceLinkPage) shown as "Rebuild (child) → form page" with an empty Layout.
+// It must read "Inline grid" and say "no separate form page — build an editable crt.DataGrid", not mislead the agent.
+const inlineGridCs = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"IgDetail",entitySchemaName:"Ig",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "Ig", editPage: "IgPage" } },
+  childPageSchemas: { IgPage: { entity: "Ig",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"Ig",attributes:{Correspondence:{lookupListConfig:{filter:function(){return this.Ext;}}}},methods:{getLinkColumnConfig:function(){return this.x;}},diff:[]};});` }] } } },
+  { baseDir: FIX });
+const igChild = inlineGridCs.childPages.find((c) => c.entity === "Ig") || {};
+check("ENG-96327: a folded child with 0 form fields + behaviour is flagged formless:inline-grid (a form page needs fields)",
+  igChild.fieldCount === 0 && igChild.formless === "inline-grid");
+check("ENG-96327: an inline-grid child reads 'Inline grid' (NOT 'Rebuild (child)') and its mapping says no separate form page — build an editable crt.DataGrid",
+  /\| IgPage — opened by detail[^|]*\| inline-editable related list[^|]*\| Inline grid \|/.test(inlineGridCs.plan)
+  && !/IgPage[^\n]*Rebuild \(child\)/.test(inlineGridCs.plan)
+  && /No separate form page — inline-editable grid/.test(inlineGridCs.plan)
+  && /build the related list as an editable \*\*crt\.DataGrid\*\*/.test(inlineGridCs.plan),
+  () => inlineGridCs.plan.split("\n").filter((l) => /Ig|Inline grid|DataGrid/.test(l)).slice(0, 8));
 // #7b Main-scope hygiene: child rows get a clean target that REFLECTS the template rule (< 15 flat → Mini page;
 // else Grid page) — ChildA has 1 field → Mini page — no free-text FILL, and no misleading generic "record page".
 check("#7b Main scope: a small child (1 field) row shows the Mini page template target (not a generic 'record page')",
