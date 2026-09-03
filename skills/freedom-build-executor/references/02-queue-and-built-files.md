@@ -11,6 +11,60 @@ Keyed on `kind` + `item` (the published `id` also works; its `pageKey` half move
 the ENGINE — `--units --resolutions` publishes each answer on the queue item that asked it — never parsed by an
 agent. Absent means nobody has answered yet, which is the normal first run. **It closes no `--verify` row:** an
 answer is an input to the build, and the evidence record is still filed and still judged.
+
+The file must exist BEFORE the executor is launched. `--units` reads it at the head of every round and publishes
+`resolutionsRead` / `resolutionsMatched` — writing it after the run's `--units` invocation leaves every item with
+`resolution: null` and nothing to say why, which is what a real run did by 79 minutes.
+
+An answer that a build agent WAS handed is tracked to a build action or to a stated refusal. The builder returns
+`resolutionsApplied` (`{ id, applied, how?, why? }`, one per answer it was given, `required` on those dispatches);
+the read-only verifier returns `resolutionChecks` saying whether the page it fetched actually shows each answer's
+effect, **`required` on any verify dispatch that was handed claims** (declared-but-optional was not enough: an absent
+row reads as unconfirmed rather than as a refutation, so an untrue `applied: true` closed the unit and the run reported
+`complete: true` over an answer that produced nothing); and anything left over is returned in `unconsumedResolutions`
+and **blocks `complete`**. None of this writes
+`built.evidence` or closes a row — the direction is one way, toward stricter.
+
+`resolutionChecks[].shows` is `"yes"` / `"no"` / `"unknown"`, and only `"no"` refutes the builder. `"unknown"` means
+the verifier could not determine the effect: it raises no contradiction, exactly like an absent row — unconfirmed, and
+not a defect. That distinction is load-bearing for any answer about BUSINESS RULES, whose effect lives in separate
+`BusinessRule_*` schemas invisible to `viewConfig`: the verifier reads `pages[<key>].businessRules` or calls
+`read-page-business-rules` rather than reporting a page-body zero as a refutation.
+One place a FRESH `"unknown"` is NOT like an absent row: when this round's verifier re-reads a page whose answer an
+earlier round recorded unconsumed on a `"no"`, a later non-refuting read for that pair can RELEASE the record. The two
+strengths are not interchangeable:
+
+- A `"yes"` releases the row **whichever source recorded it** — a positive independent read of the page outranks both
+  an earlier `"no"` and the builder's own `applied: false`. Before this, a builder that honestly declined an answer
+  because the page ALREADY satisfied it filed a row no later `"yes"` could clear, so the unit went green with
+  `complete` false for ever and only a hand-edit of the queue file recovered it.
+- A reasoned `"unknown"` releases only a **verifier-sourced** row on a **rule-shaped** kind — `lookup-value`,
+  `rule`, `visibility-rule` — the class whose effect `viewConfig` structurally cannot show. For any other kind it
+  releases nothing: a LAYOUT-shaped answer, whose effect the page body CAN show, must not be retired by a shrug
+  after being positively refuted. **And "reasoned" means `found` NAMES THE SURFACE IT READ** — `businessRules`,
+  `read-page-business-rules`, a `BusinessRule_*` schema. Generic prose ("could not determine from the fetched
+  view") releases nothing: the verifier prompt says exactly where to look for this class, so a verifier that looked
+  can say so, and one that shrugged cannot buy a release with the shrug.
+
+An ABSENT read (the verifier never looked) releases nothing, and a bare `"unknown"` with no `found` releases nothing.
+
+**The residual trust assumption, and the signal that tracks it.** Only `"no"` refutes a claim — correctly, since
+`"unknown"` must never be read as a lie. The cost is that a verifier which lands *every* check on `"unknown"` files
+no contradiction and no unconsumed row, so the original failure shape (an answer that produced nothing, reported as
+finished) can reappear through a channel that looks compliant. Nothing but a human reading the report used to catch
+that. The run now returns `unsettledResolutionClaims` — every `(unit, id)` a builder claimed that the verifier never
+settled either way, with the number of rounds it stayed `"unknown"` — and logs it at the close. It is
+**deliberately NON-GATING**: honest uncertainty must not fail a run, so this reports and leaves `complete` alone.
+An operator seeing entries here should check those pages by hand; a run where the list is long is a verifier
+problem, not a build problem.
+Two rows for the same pair in one result are collapsed to one, and **a refutation wins whichever order they arrive
+in** — `[yes, no]` files the contradiction and does not release it. Without this, a rule-shaped answer whose rebuilt effect the page body can never positively show
+would block `complete` for ever, because once its unit is green it is never re-verified and the confirming `"yes"`
+can never arrive.
+
+The leftovers are not process-local. They are persisted at the root of this file under `unconsumedResolutions` and
+re-seeded next run, so an answer that reached a builder and died there still blocks `complete` after a usage limit,
+a session end, or a new agent picking the folder up tomorrow — which is the whole reason the two files exist.
 They exist because a run is interrupted routinely — a usage limit, a session end, a new
 agent picking the work up in the same folder tomorrow. Nothing about "where we are" may live
 only in an agent's context.
@@ -66,6 +120,13 @@ there is no "resume" command: there is one command, and it does the next undone 
     { "round": 2, "unit": "main", "claim": "crt.ApprovalList added",
       "found": "get-page shows no crt.ApprovalList" }
   ],
+  "unconsumedResolutions": [
+    { "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)", "kind": "entity-filter",
+      "item": "(1 lookup)", "answer": "restrict to Status IN {InProgress}",
+      "why": "no lookupListConfig anywhere in viewConfig", "source": "verifier" }
+  ],
+  "resolutionsReopened": [{ "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)" }],
+  "resolutionsPending": [],
   "history": [
     { "round": 1, "units": ["child:VisaRequest", "child:Education", "mini:ApplicantMiniPage"], "at": "2026-08-07T11:04Z" }
   ]
@@ -128,6 +189,48 @@ Rules that make it trustworthy:
   accepted — an agent that quoted the number has not reported a count the row can gate on); a key you could not
   count is OMITTED, which reads ⚠ not-checked. **Nothing in the run unbinds a workplace** — that is a deletion of a
   customer record, so the extra binding is reported for a human to settle.
+- **`unconsumedResolutions` is at the ROOT, and it is written on EVERY close — including when it is `[]`.** It is
+  the operator answers a build agent was handed that produced no build action, and it is the one piece of run state
+  whose EMPTY value is load-bearing: an emptied list is how the next run learns the answer was finally built, so a
+  conditional write would leave a stale entry holding a finished folder open for ever. Absent reads as `[]`, which
+  is what a first run means. It has to be persisted at all because a well-formed `applied: false` + `why` is the
+  ONE outcome that files nothing else — an accounting miss files a `blocked` row and a verifier contradiction files
+  a `discrepancies` row, a clean refusal files neither — so before this existed the record died with its process and
+  a re-run on a green gate reported the folder `complete`. `source` (`dispatch` or `verifier`) round-trips because
+  it decides what may clear the row: a builder's own account of its own work is replaced whenever that unit builds
+  again, while the independent read that DISBELIEVED such an account is cleared only by a verifier that confirms
+  the effect. Copy the rows verbatim; the run re-checks each one against the questions the plan still asks, so a
+  withdrawn answer or an id a re-plan moved drops out on its own. A `verifier`-sourced row has exactly **ONE
+  release window**, and it is the repair round the contradiction itself buys: the unit re-opens, it is rebuilt, and
+  THAT round's verifier read releases the row on `"yes"`, or on a reasoned `"unknown"` when the kind is rule-shaped. There is no second window — the grant is
+  spent, the unit goes green, and a green unit is never re-verified — so a row whose repair round came back `"no"`
+  again, or came back with no check row for it at all, is **held until the operator acts**: fix the build, or
+  withdraw the answer so the question stops being owed. That terminus is deliberate and it is why the run's closing
+  `next` names the answer and its `why` rather than only reporting NOT COMPLETE — **including on the zero-work
+  resume**, the exit a held answer actually takes once its grant is spent (green gate, nothing parked, nothing open),
+  which used to advertise the verify table as a completion report; do not read the `"unknown"` release
+  rule as a promise that a later read will eventually arrive on its own, because for a green unit it will not.
+- **A reopen grant is bounded by the ROUND BUDGET.** A unit the engine gate calls green cannot be parked, and a
+  reopen key forces it open, so a grant that was never released left the run dispatching full Build/Verify/Judge
+  rounds on a green unit for ever whenever a build agent returned `null` deterministically. Once a unit has spent its
+  round budget its reopen grant stops forcing it open; anything still unaccounted for is REPORTED as an unconsumed
+  answer rather than retried, which is the same fail-closed direction the rest of this channel takes.
+- **`resolutionsReopened` and `resolutionsPending` are at the ROOT, they are REQUIRED, and both are written on
+  EVERY close — including when they are `[]`.** They are the answer-channel repair grants, and they are process
+  bookkeeping rather than operator content: do NOT judge, filter or tidy them. `resolutionsReopened` is a list of
+  `{unit, id}` PAIRS — every ANSWER that has already spent its ONE answer-channel repair round, **not** every unit:
+  two answers on one page each get their own round, because the bound exists to stop re-asking the SAME question,
+  and an answer that has never had a round must not be denied one by a neighbour that has. Drop an entry and the
+  next resume RE-GRANTS a round that was already spent, which is how a builder gives the same refusal twice at
+  full cost. `resolutionsPending` is
+  the subset still owed that round's dispatch; drop an entry and a unit that was owed its repair is stranded — the
+  grant is recorded as spent while the build it paid for never runs. Both are written even when empty for the same
+  reason `unconsumedResolutions` is: an emptied set is how a resumed run learns a grant was finally consumed, and a
+  stale non-empty one strands a settled unit for ever. They are persisted DIRECTLY rather than derived from
+  `unconsumedResolutions` on resume, because a transient build death files an unconsumed row WITHOUT spending the
+  grant — so the derivation over-marked exactly those units and denied them the repair they were owed. Copy the
+  arrays verbatim; the keys are unit keys and the run trims them on read, so incidental whitespace cannot re-grant
+  a spent round.
 - **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
   else in this file is bookkeeping about units; this is the one section that records a change made outside the
   file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before

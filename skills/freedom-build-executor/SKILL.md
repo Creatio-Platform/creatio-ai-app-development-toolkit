@@ -337,6 +337,73 @@ questions a human already settled, never a precondition for the rest.
 this plan asks: a mistyped `item`, or a regenerated manifest shifting an item's text) and `resolutionsConflicts` (one
 question answered by both an `id` entry and a `kind`+`item` entry — the pair is applied, the `id` one is discarded).
 Both name the `resolutions.json` path, and both are re-reported when a later Reconcile replaces the run state.
+`--units` also publishes `resolutionsRead` and `resolutionsMatched`, which report the case those two cannot see: a
+run where NO answers file existed at the moment `--units` ran. An answer nobody read matches nothing and misses
+nothing, so without these it is indistinguishable from a plan whose questions the operator simply left open — the
+shape a real run produced by writing `resolutions.json` 79 minutes after its only `--units` invocation.
+
+**And an answer that REACHED a builder must produce something, or say why not.** Delivery is not consumption: on a
+real run a fully specified `entity-filter` answer sat in `resolutions.json`, was rendered verbatim into the build
+prompt, and the page came back with no filter on it anywhere — nothing in the run could say the answer had gone
+nowhere, because nothing asked. So:
+- a build agent handed answers MUST return `resolutionsApplied` — one `{ id, applied, how?, why? }` per answer it was
+  given. The field is `required` on exactly those dispatches, so an omission is a schema failure the agent retries,
+  not a silence discovered a phase later. `applied: false` with a `why` is a valid answer; leaving a row out is not.
+  An `applied: true` should carry `how` (what you built because of the answer); an `applied: true` with no `how` is
+  surfaced as a report-quality `blocked` row but does NOT gate `complete` on its own — `how` is descriptive prose, and
+  the authoritative check on whether the effect is real is the verifier's page read below, which sees the answer's
+  claim regardless of `how`. What DOES hold the run open is an answer that produced nothing (`applied: false`, or an
+  omitted/malformed account), never a missing description of one that did.
+- the read-only VERIFIER returns `resolutionChecks` — whether the page it just fetched actually shows what each
+  answer asked for. A builder's `applied: true` that the verifier contradicts is recorded as a `discrepancy` and the
+  answer counts as unconsumed: `applied: true` is the builder's own word about its own work, the same class of claim
+  as `claimedBuilt`.
+  **`shows` has THREE values and only one of them refutes anything.** `"yes"` — the right surface carries what the
+  answer asked for. `"no"` — the right surface does NOT carry it; this refutes the builder, and the answer is
+  recorded unconsumed and the unit re-opened, so use it only when you actually looked. `"unknown"` — you could not
+  determine the effect, with `found` saying why; it reads exactly like a row you never returned, unconfirmed and
+  NOT a refutation. The third value is not a courtesy: `shows` was once a boolean, "cannot tell" had to be reported
+  as `false`, and every `false` was read as a lie — so an honest builder plus an honest verifier produced a
+  contradiction that was not one, spent a full build round on it, and still ended the run NOT COMPLETE.
+  **A rule-shaped answer is what made that systematic.** A `lookup-value` answer resolving lookup-record GUIDs, or
+  any answer about a rule's condition or its filter, has its effect in separate `BusinessRule_*` schemas that are
+  invisible to `viewConfig` — so a page-body walk returns a structural zero for a page whose rules are all correct.
+  Read `pages[<key>].businessRules` from the built file, or call `read-page-business-rules` for that page; it is a
+  read, so it is within the read-only remit. `"unknown"` is for when even that cannot settle it, never a shortcut
+  past a read that can be performed.
+- an unconsumed answer is returned in `unconsumedResolutions`, buys its unit ONE repair round, and **blocks
+  `complete`**. The gate can be green and the page genuinely built while an answer the operator gave went nowhere;
+  a run that called itself finished holding one would be exactly the silence this channel exists to end.
+  **And it survives the session that found it.** The record is persisted in the queue file under
+  `unconsumedResolutions`, re-seeded by the next Reconcile, and written **even when it is empty** — an emptied list
+  is how a resumed run learns the answer was finally built, and a stale non-empty one would hold a finished folder
+  open for ever. Without this the guarantee lasted exactly one process: a well-formed `applied: false` + `why` is
+  the ONE outcome that leaves no other trace (an accounting miss files a `blocked` row, a verifier contradiction
+  files a `discrepancies` row, a clean decline files neither), so re-running in the same folder on a green gate
+  reported `complete: true` over a dropped answer — this channel's own failure, one session boundary later. The
+  repair round the answer buys is told WHY the unit re-opened, naming the answer and what became of it last time,
+  rather than being handed the previous round's prompt again.
+  **The repair GRANT is persisted too**, under the root keys `resolutionsReopened` (every ANSWER that has spent
+  its one repair round, as `{unit, id}` pairs — two answers on one page each get their own round, because the
+  bound exists to stop re-asking the SAME question) and `resolutionsPending` (the unit keys still owed that
+  round's dispatch), both required and both written even when empty — a dropped `resolutionsReopened` re-grants
+  a spent round on the next resume, a dropped `resolutionsPending` strands a unit that was owed its repair. A rehydrated entry is re-checked against the
+  questions the plan still asks, so an answer the operator has since withdrawn, or one whose id a re-plan moved,
+  drops out instead of holding the folder open.
+This never softens the invariant above, only tightens it: the verifier files NO evidence record for an answer and
+closes NO row with one. An answer is still an input to a build, never proof that one happened.
+
+**One signal on this channel is NOT persisted, and that is a stated limit rather than an oversight.**
+`unsettledResolutionClaims` — the report of claims a verifier answered `unknown` for and never once settled —
+counts within **a single process lifetime only**. It does not ride the carry and is not re-seeded by Reconcile,
+so a run that stops and resumes reports the unsettled count **as if verification had just started**. Read it as
+"since this process started", not "since this folder began". Everything else on this channel does survive a
+resume, so the asymmetry is worth naming: the reason is size, not principle. Re-seeding it means another REQUIRED
+key on `RECONCILE_SCHEMA`, which serialises to **3820 bytes** against a stated budget of 3900 and the host's hard
+**4096-byte** classifier cap — a required key is charged twice (`properties` and `required`), and a schema over
+that cap is a phase that cannot start at all. The signal is **non-gating** — it feeds operator-facing text and
+never the `complete` decision — so a reset costs accumulated evidence and can never change a build verdict, which
+is what makes it the affordable half of that trade.
 
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand

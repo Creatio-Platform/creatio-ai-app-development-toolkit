@@ -1796,6 +1796,54 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   }
 }
 
+// ENG-95503 — the lookup-GUID ⚠ Confirm item's two constants. `LOOKUP_VALUE_ITEM` is EXPORTED because it is half the
+// key a recorded answer matches on: a test that re-typed it would still pass while the engine raised something else,
+// which is the exact failure mode the fixed-literal rule exists to prevent. The pattern stays module-local — no
+// caller needs it, and `.test()` on a non-global regex keeps no state between calls.
+const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+// PR #128 review (round 8) — Creatio's `DataValueType.LOOKUP`. The scan below reads it to tell a lookup-record
+// reference from a GUID-shaped string that merely happens to sit in a comparison.
+const DVT_LOOKUP = 10;
+// EVERY OBJECT NODE in a mapped rule tree. The scoping that matters is NOT this walk -- it is that the test below
+// reads `node.value` and its sibling `node.dataValueType`, instead of the old
+// `LOOKUP_GUID.test(JSON.stringify(rules))` over the whole serialised blob. That blob matched a GUID ANYWHERE,
+// including in a field that is not a comparison at all; reading a named property cannot.
+// A `Object.hasOwn(node, "value")` guard was written here first and then deleted: it changes no outcome, because a
+// node without a `value` fails the GUID test on `undefined` regardless -- and shipping a clause whose deletion
+// leaves every test green is the exact defect eight rounds of this review have been about. It is gone rather than
+// kept with an apology.
+function* ruleNodes(node) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) { for (const x of node) { yield* ruleNodes(x); } return; }
+  yield node;
+  for (const v of Object.values(node)) yield* ruleNodes(v);
+}
+// FAIL-CLOSED ON AN UNKNOWN TYPE. A value is excluded ONLY on positive evidence that its field is not a lookup; an
+// ABSENT or unrecognised `dataValueType` still raises. Narrowing this into a false NEGATIVE would be the worse trade
+// by far: an unraised question has no id, so the operator's answer can never bind and lands in
+// `resolutionsUnmatched` -- this ticket's own founding failure, not a tidier version of it.
+// The reachable false positive this closes: a GUID-shaped value compared against a TEXT column (an external key, a
+// correlation id). A Confirm item gates the build, and this one tells the operator to "resolve each GUID to its
+// display name on-stand" -- for a text column there is nothing to resolve, so the build blocks on an unanswerable
+// question, and an operator taught to rubber-stamp it is worse off than one never asked.
+// EXPORTED so the narrowing is EXECUTED directly (PR #128 review, round 8) rather than only inferred from
+// end-to-end fixtures, whose rule shapes cannot reach every branch of it.
+export function comparesLookupGuid(...ruleSets) {
+  for (const rules of ruleSets) {
+    for (const n of ruleNodes(rules)) {
+      if (!LOOKUP_GUID.test(String(n.value ?? ""))) continue;
+      const dvt = n.dataValueType;
+      // Fail closed on a dvt that does NOT coerce to a finite number too, not only the absent cases: a malformed
+      // export carrying a string like `"Lookup"` gives `Number(dvt) → NaN`, and `NaN === DVT_LOOKUP` is false, which
+      // would SILENTLY EXCLUDE the GUID-shaped comparison instead of raising it — the exact "a signal that should
+      // surface never does" this ticket closes, one layer earlier. An unrecognised type raises, as the comment says.
+      if (dvt === undefined || dvt === null || dvt === "" || !Number.isFinite(Number(dvt)) || Number(dvt) === DVT_LOOKUP) return true;
+    }
+  }
+  return false;
+}
+export const LOOKUP_VALUE_ITEM = "lookup-record GUIDs in business-rule conditions";
+
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
 function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
@@ -1816,6 +1864,17 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
+  // ENG-95503 — THE LOOKUP-GUID QUESTION IS A REAL ⚠ CONFIRM ITEM, not a line the spec renderer appended. It used to
+  // be pushed straight into the rendered worklist, which meant it had no `needsDecision` entry, hence no evidence id,
+  // hence no `--units.preflight` row — a question an operator was asked and had nowhere to answer. A real run's
+  // answer to it landed in `resolutionsUnmatched`, which is the same as not answering. Raised here, where the rules
+  // it is about are built, it gets an id like every other kind and the answers channel can key on it.
+  // The `item` is a FIXED LITERAL, exactly as `list-columns` learned to be: `item` is half the key an answer matches
+  // on, so deriving it from the GUIDs found would give the same question a different key on every stand.
+  if (comparesLookupGuid(pageBusinessRules, entityBusinessRules)) {
+    needsDecision.push({ kind: "lookup-value", item: LOOKUP_VALUE_ITEM,
+      reason: "business-rule conditions compare against lookup-record GUIDs (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly" });
+  }
   return { pageBusinessRules, entityBusinessRules, needsDecision };
 
   // FOLD incomplete FILTRATIONs (dynamic / column-reference lookup filters, no static constant) into ONE concrete
