@@ -46,6 +46,13 @@ LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
         "profile island", "mini page", "dialog", "section", "page layout",
         "UI review", "UX audit",
     ],
+    # ENG-95730 added the legacy Mobile-wizard list page as a second source type behind the same tool and
+    # skill. A cold "convert my classic mobile section / MobileActivityGridPageSettingsDefaultWorkplace to
+    # Freedom UI" request can only reach the skill through these triggers — a future trim must keep them.
+    "creatio-mobile-page-conversion": [
+        "Freedom UI WEB page", "Mobile application wizard", "GridPageSettings", "legacy mobile page",
+        "Apply proactively", "convert to mobile", "web to mobile", "register mobile section",
+    ],
 }
 
 

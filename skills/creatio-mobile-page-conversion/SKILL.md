@@ -1,15 +1,23 @@
 ---
 name: creatio-mobile-page-conversion
-description: 'Convert a Creatio Freedom UI WEB page into a Freedom UI MOBILE page for the Creatio Mobile app. Apply proactively — even if not explicitly selected and even if the user does not say "convert" — whenever the user wants an existing web page made available on mobile: convert/port a web page to mobile, build a mobile list or form page from an existing web page, or register a converted page as a mobile section/workplace. This skill drives the GATED conversion flow (get-mobile-page-conversion-guide → plain-language plan → Gate M approval → build the mobile body → Gate S section registration) so that nothing is written to Creatio until the developer approves. Keywords: convert to mobile, web to mobile, page to mobile, mobile page, mobile list page, mobile form page, Freedom UI mobile, MobileFormPage, MobileListPage, register mobile section, mobile workplace, get-mobile-page-conversion-guide, Leads_ListPage to mobile.'
+description: 'Convert a Creatio Freedom UI WEB page, or a classic Mobile application wizard list page (legacy Mobile<Entity>GridPageSettings<Workplace> schema), into a Freedom UI MOBILE page for the Creatio Mobile app. Apply proactively — even if not explicitly selected and even if the user does not say "convert" — whenever the user wants a web page or a legacy mobile page made available on mobile: convert/port a page to mobile, build a mobile list or form page from an existing page, migrate a classic mobile section to Freedom UI mobile, or register a converted page as a mobile section/workplace. Drives the GATED flow (get-mobile-page-conversion-guide → plan → Gate M → build body → Gate S) so nothing is written until the developer approves. Keywords: convert to mobile, web to mobile, mobile page, mobile list page, mobile form page, Freedom UI mobile, MobileListPage, GridPageSettings, legacy mobile page, Mobile application wizard, register mobile section, mobile workplace.'
 ---
 
 # Creatio mobile page conversion
 
-Use this skill whenever the user wants an existing **Freedom UI WEB page** made available in the
-**Creatio Mobile app** — converting/porting a web page to a mobile **list** or **form** page, and
-optionally registering it as a mobile section. This is a **targeted, implementation-ready change**: it
-does **not** require the full BA-style Business Plan / Gate R / `creatio-app-orchestrator` app-generation
-flow.
+Use this skill whenever the user wants an existing page made available in the **Creatio Mobile app** as a
+Freedom UI mobile **list** or **form** page, optionally registered as a mobile section. Two source types
+are supported, through ONE tool and ONE flow:
+
+- a **Freedom UI WEB page** (`sourceType: freedom-web`) — converted/ported to a mobile list or form page;
+- a **classic Mobile application wizard LIST page** — a legacy `Mobile<Entity>GridPageSettings<Workplace>`
+  settings schema (`sourceType: legacy-mobile-grid-page`, ENG-95730) — converted to a mobile list page the
+  Freedom UI Mobile designer can open.
+
+Out of scope: a legacy wizard **RECORD** page (`Mobile<Entity>RecordPageSettings<Workplace>`, detected and
+reported as not yet supported — ENG-95731) and a **Classic UI web** page (migrate it to a Freedom UI web
+page first). This is a **targeted, implementation-ready change**: it does **not** require the full BA-style
+Business Plan / Gate R / `creatio-app-orchestrator` app-generation flow.
 
 ## File resolution (read first)
 
@@ -23,7 +31,8 @@ toolkit files are not accessible from this session, and do not run the conversio
 
 ## Preflight: the converter is a GATED clio feature (check first)
 
-The Web→Mobile converter is an **experimental clio feature, off by default**. The converter-specific
+The mobile page converter (web source AND legacy wizard source — one flag covers both, there is no second
+flag for the legacy path) is an **experimental clio feature, off by default**. The converter-specific
 surface — the `get-mobile-page-conversion-guide` tool and the `get-guidance` article
 `freedom-page-web-to-mobile-conversion` — is gated behind the feature flag **`mobile-page-converter`**
 and is **not registered** until that flag is enabled. (The general page tools `create-page` /
@@ -69,6 +78,11 @@ Before the Load order below, verify the converter is available: list the server 
    guidance and the single source of truth for the body-building mechanics (component classification,
    per-operation `elementMap` rules, `mobileValues` paste, the paste-verbatim data-section rules, adaptive /
    tab-body / normalization behavior, the hard mobile rules). The playbook defers to it for all mechanics.
+   **Legacy wizard source:** the article's web-specific mechanics (multi-entry `elementMap`, adaptive layout,
+   tab layers, normalizations, business rules, requests) do NOT apply — the guide arrives with none of those
+   fields; `resourceStrings` carries just the page title (`DefaultPageTitle`), registered the same way. For a legacy source the mechanics are the guide's own `constraints` + `nextSteps`
+   (composed by the converter for THIS conversion), plus the article's shared sections: GATES, DATA SECTIONS
+   (paste, don't rebuild), the list-row merge-by-name rule and HARD MOBILE RULES.
 3. Read `../../context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics
    (separate web/mobile pages, body format, component-registry differences).
 4. **Before authoring the mobile page body (Flow step 7):** (a) call clio `get-guidance` with name
@@ -78,13 +92,20 @@ Before the Load order below, verify the converter is available: list the server 
    Then (b) **invoke the `creatio-ui-guidelines` skill** and apply its mobile-relevant rules (component
    choice, lookups, fields, captions, tooltips, accessibility), and run its review checklist before
    treating the page as done. `create-page` / `update-page` on a mobile page are the same page-authoring
-   tool calls the toolkit's Core Rules gate behind `creatio-ui-guidelines`.
+   tool calls the toolkit's Core Rules gate behind `creatio-ui-guidelines`. **For a legacy wizard source the
+   UI review is report-only:** the body is a verbatim paste of what the guide returned, so a UI finding goes
+   into the conversion report and the designer hand-off — never into the body.
 5. Resolve every clio MCP tool contract through `get-tool-contract`; do not hardcode payloads.
 6. **One-schema rule:** capture the `schemaUId` returned by `create-page` and pass it as
    `target-schema-uid` on every subsequent `update-page`. Otherwise, when the chosen package is not the
    app's design package, `update-page` writes a replacing schema in the design package and leaves the
    created mobile schema empty — the Mobile app then loads the empty schema and crashes. Details in the
    playbook's Flow step 7.
+7. **Source body isolation (legacy wizard source):** never read the source settings schema — or any of its
+   replacing layers — into the conversation: no `get-page`, `get-page-hierarchy`, `get-client-unit-schema`,
+   `export-schema`, and no `odata-read` of `SysSchema.Body` on it. `get-mobile-page-conversion-guide` reads
+   and merges the package layers internally and returns facts only (`guide.legacySource`); those facts are all
+   the plan and report need. `get-page` is used only on the NEW mobile page (read-back, Flow step 7a).
 
 ## Gates are MANDATORY — this is the point of this skill
 
@@ -98,6 +119,9 @@ request collapse this into a single unattended pass. The invariants:
   `create-related-page-addon` with `schema-type=mobile`).
 - **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
   and END THE TURN without writing — never self-approve.
+- **Same gates for both source types.** A legacy wizard source goes through the identical FORBIDDEN lists.
+  A guide that comes back with `success: false` (custom viewConfig refused, legacy RECORD page, unreadable
+  source) ends the run in a **failed state with nothing written** — relay the tool's message; never work around it.
 
 The AUTHORITATIVE, detailed gate rules — the two-choice (View details / Adjust vs Approve) flow, what the
 plan must contain, and the exact FORBIDDEN-until-approved tool lists — live in the "Gate M" / "Gate S"
