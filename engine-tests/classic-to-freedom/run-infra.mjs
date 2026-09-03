@@ -5241,27 +5241,12 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
      exists to fix. A generated file grows one prompt sentence at a time, so this is the check that has to notice.
      Two thresholds, matching the schema convention: the HOST's hard limit, and a working budget under it. */
   const WORKFLOW_SCRIPT_INLINE_CAP = 524288;
-  // RAISED 480000 → 492000 in ENG-95857, deliberately, which is the response this check's own failure detail
-  // names ("shrink prompt text, or raise the budget deliberately and say why"). The why, in two parts:
-  //   · The change that tripped it adds roughly 4.5 KB to the generated artifact — the plan-level verdict now
-  //     travels as `--units.planGaps` copied verbatim instead of stderr lines an agent retyped, plus the
-  //     kind-recognition that keeps a paraphrased entry from drawing the wrong remedy. The prompt text was trimmed
-  //     three times before this number moved; what is left is the instruction itself, and shaving that to buy a
-  //     couple of kilobytes against 40+ KB of real headroom is the worse trade. Figures are approximate on
-  //     purpose: an exact byte count in a comment goes stale on the next edit and reads as a measurement nobody
-  //     re-took. Run this check for the current number.
-  //   · The pressure is STANDING, not this ticket's: `scripts/build-workflows.mjs` inlines the host-neutral core
-  //     VERBATIM, comments included, and this repo's core is mostly rationale prose. The budget had 1823 bytes of
-  //     headroom before this change, so any prompt edit at all tripped it — an alarm that fires on every change is
-  //     not a budget. 492000 restores a real one: ~11 KB of runway, and 32288 bytes (6.2%) still under the HOST's
-  //     hard limit, so this keeps failing far enough below the cliff to be actionable.
-  // What must NOT happen is this number drifting up per change. If it is hit again, the fix is upstream — strip
-  // comments from the generated artifact (the core keeps them; the inlined copy does not need them), which would
-  // free a large multiple of anything trimmed by hand here.
-  // NOTE the scope: this budget is checked against EVERY shipped `*.workflow.js`, so raising it also loosens the
-  // check on `classic-behaviour-analysis.workflow.js` (~85 KB, nowhere near either line). Pre-existing design —
-  // stated so the loosening is not silent. A per-file budget is the right shape if that file ever grows.
-  const WORKFLOW_SCRIPT_BUDGET = 492000;
+  // Briefly raised to 492000 in ENG-95857, while the generated `freedom-build-executor.workflow.js` sat at
+  // ~482 KB and left under 2 KB of headroom, so any prompt edit tripped this check. Reverted once the
+  // remedy that raise pointed at landed on the base branch: `engine-tests/build-workflows/strip-comments.mjs`
+  // strips comments from the generated artifact, which brought it to ~280 KB. The original, tighter guard
+  // stands. Figures are approximate on purpose — run this check for the current number.
+  const WORKFLOW_SCRIPT_BUDGET = 480000;
   for (const file of wfFiles) {
     const bytes = statSync(file).size;
     check(`workflow script ${path.basename(file)} fits the host's ${WORKFLOW_SCRIPT_INLINE_CAP}-byte \`script\` field — the approval handler inlines this file into it, so an oversized file is rejected before the run starts`,
