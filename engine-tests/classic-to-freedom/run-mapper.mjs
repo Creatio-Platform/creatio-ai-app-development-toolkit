@@ -3640,12 +3640,11 @@ check("ENG-95861: CHILD_PAGE_ANSWERS names the boundary AND that it is the user'
 check("ENG-96327: the editPage:false child note is the plain decision — NO typed-entity confirm caveat in the plan",
   () => /No separate child page\*\* — a read-only \/ attach-only related list; nothing to migrate here/.test(DESIGNSPEC_SRC)
     && !/ONE CHECK BEFORE ACCEPTING/.test(DESIGNSPEC_SRC));
-check("ENG-95850 (D): the child-page ANSWER list names `list-entity-client-schemas` as the call that settles a typed entity, so the answer is not recorded off `list-pages` alone",
-  () => /list-entity-client-schemas` by that '/.test(DESIGNSPEC_SRC)
-    && /TYPED entity registers per-type edit cards instead of one/.test(CHILD_PAGE_ANSWERS)
-    && /finding no `\*Page` is not the same as the entity having no Classic card/.test(CHILD_PAGE_ANSWERS));
-check("ENG-95850 (D): the REUSE sentence carries the same caveat — the two places that state 'no Classic child page' cannot disagree about how strong that claim is",
-  () => /A TYPED entity registers per-type cards rather than one/.test(DESIGNSPEC_SRC));
+check("ENG-96327 (supersedes ENG-95850): the child-page ANSWER list names the four recordable outcomes plainly, WITHOUT the typed-entity confirm jargon",
+  () => /childPageSchemas/.test(CHILD_PAGE_ANSWERS) && /"reuseFreedomPage"/.test(CHILD_PAGE_ANSWERS) && /"opensClassicPage"/.test(CHILD_PAGE_ANSWERS)
+    && !/TYPED entity/.test(CHILD_PAGE_ANSWERS));
+check("ENG-96327 (supersedes ENG-95850): the REUSE sentence states 'no Classic child page to supersede' plainly — no typed-entity caveat",
+  () => /no Classic child page to supersede/.test(DESIGNSPEC_SRC) && !/A TYPED entity registers per-type cards rather than one/.test(DESIGNSPEC_SRC));
 const emittedKeys = [...new Set([...DESIGNSPEC_SRC.matchAll(/type:\s*"onstand",\s*evidence:\s*"([A-Za-z]+)"/g)].map((m) => m[1]))];
 // Both directions. Forward: an emitted key that is not registered can never be offered or cleared. Reverse: a
 // registered key nobody emits is an obligation the executor can never be asked for. Checking only the forward

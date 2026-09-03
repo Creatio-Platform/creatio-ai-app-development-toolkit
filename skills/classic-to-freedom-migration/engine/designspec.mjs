@@ -1365,15 +1365,13 @@ export function boundarySectionPhrase(c) {
   return (typeof own === "string" && own.trim()) ? "the `" + esc(own.trim()) + "` section" : "another section";
 }
 
-// ENG-95850 (D) — `list-pages` ALONE cannot answer this for a TYPED entity. An entity whose records are typed
-// registers a per-type edit card in `SysModuleEdit` instead of one `<Entity>Page`, so a search for a single `*Page`
-// legitimately finds nothing while the entity has many. A real run recorded `editPage: false` for `InternalRequest`,
-// which has ~18 typed edit pages, and the plan then asserted there was nothing to migrate; it was caught only by a
-// hand-written Adjustments entry. So the answer list names the second call that settles it.
+// ENG-96327 (supersedes ENG-95850's typed-entity caveat here, Katya's call): the child-page ANSWER list names the
+// four recordable outcomes plainly, WITHOUT the typed-entity confirm. The human approver catches a wrong "none"; the
+// typed nuance (a typed entity keeps per-type edit cards in `SysModuleEdit`, so a single `*Page` search can miss them)
+// lives in the SKILL. History: ENG-95850 added it after a real `InternalRequest` run (~18 typed edit pages) was
+// wrongly recorded editPage:false and asserted nothing to migrate, caught only by a hand-written Adjustments entry.
 export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema to `manifest.childPageSchemas` '
-  + '(rebuild it here); none exists → record `"editPage": false`, and check `list-entity-client-schemas` by that '
-  + 'entity FIRST: a TYPED entity registers per-type edit cards instead of one `<Entity>Page`, so `list-pages` '
-  + 'finding no `*Page` is not the same as the entity having no Classic card; the CHILD entity already ships a `kind: freedom` '
+  + '(rebuild it here); none exists → record `"editPage": false`; the CHILD entity already ships a `kind: freedom` '
   + 'form page (`list-entity-client-schemas`) → record `"reuseFreedomPage": "<Freedom form page>"` (the related '
   + 'list opens THAT page and nothing is rebuilt here); the child entity OWNS ANOTHER SECTION and the user drew that '
   + 'boundary → record `"opensClassicPage": "<Classic page>"` (+ optional `"ownSection": "<Section>"`) — its Classic '
@@ -1388,7 +1386,7 @@ export const CHILD_PAGE_ANSWERS = 'a Classic `*Page` exists → add its schema t
 // claim about it. Own fn for Sonar CC 15.
 function reuseClassicChildSentence(c) {
   if (typeof c.editPage === "string" && c.editPage) return `The Classic \`${esc(c.editPage)}\` is NOT migrated — it is superseded, not skipped.`;
-  if (c.editPage === false) return "There is no Classic child page to supersede — `list-pages` by this entity found none (recorded in the manifest), so the list simply opens the Freedom form. (A TYPED entity registers per-type cards rather than one `*Page`, so confirm `list-entity-client-schemas` reports no `editPages` either before reading this as none.)";
+  if (c.editPage === false) return "There is no Classic child page to supersede — none was found, so the list simply opens the Freedom form.";
   return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
 }
 
