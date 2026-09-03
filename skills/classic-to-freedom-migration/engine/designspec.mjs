@@ -697,24 +697,36 @@ const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget",
   // row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Other declared logic
   // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
   "attribute-dependency"]);
-// The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
-// or the ⚠ Custom methods worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
+// ENG-96327 — WHO the ⚠ Confirm block is for. The plan's ⚠ Confirm block is read by the HUMAN approver, but the
+// build is done by an AGENT that holds what the approver does not: the classic body, the live stand and the
+// contracts. So the dividing question for every decision is "does the approver hold information the agent lacks,
+// or is this a call only a human may make (or one whose silent wrong guess loses data)?" If not, it is an AGENT
+// task — the agent resolves it on-stand or builds it per contract. HUMAN_CONFIRM_KINDS is the allowlist of the
+// kinds that genuinely need the human; only these render in the plan's ⚠ Confirm. Every OTHER non-SHOWN_ELSEWHERE
+// kind still rides the MACHINE channel (`confirmWorklistRows` → `--units.preflight`) and the agent resolves it
+// there — nothing is lost, the human's list is just short. The eight:
+//   · unmapped-component / component — no clean Freedom mapping: map-or-drop / confirm the proposed substitute
+//   · list-filter-attributes        — Freedom quick filters REPLACE the whole set (silent search/tree/builder loss)
+//   · dedup-on-save                  — a business + on-stand decision (esp. when the Freedom service is unconfigured)
+//   · feature-toggle                 — which feature-gated blocks are in scope to migrate
+//   · layout-type                    — a header-heavy page with NO left profile: a page-shape choice
+//   · container / detail-placement   — an element/detail whose parent could not be resolved: where does it go?
+// The rest — captions/labels/types to fetch on-stand, GUIDs to resolve, dynamic behaviour to re-author, "build each
+// island / use the existing tab" placement rules, registry/enum advisories — are agent work, kept out of this block.
+const HUMAN_CONFIRM_KINDS = new Set([
+  "unmapped-component", "component", "list-filter-attributes", "dedup-on-save",
+  "feature-toggle", "layout-type", "container", "detail-placement",
+]);
+// The "⚠ Confirm before I build" worklist — ONLY the HUMAN_CONFIRM_KINDS decisions (above). Returns the lines.
 function renderConfirmWorklist(cs) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
   // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
-  // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
-  // no `described in` and no card tally — those belong to the ⚠ Other declared logic / ⚠ Custom methods worklists.
-  const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
+  const nd = (cs.needsDecision || []).filter((n) => HUMAN_CONFIRM_KINDS.has(n.kind));
   const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
-  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
-  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
-  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
-    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
 }
@@ -2037,6 +2049,9 @@ function evidenceRow(id, label, extra = {}, vkExtra = {}) {
 // republishes them next to the id so the executor reads the decision it must resolve without re-parsing an id —
 // and without `esc`, which is a rendering transform and would not round-trip.
 function confirmWorklistRows(pageKey, cs) {
+  // INTENTIONALLY broader than the human `renderConfirmWorklist` (which shows only HUMAN_CONFIRM_KINDS): the agent
+  // resolves EVERY non-SHOWN_ELSEWHERE kind through `--units.preflight`, so the kinds kept out of the human plan are
+  // handled here on-stand rather than lost. Keep this filter in sync with SHOWN_ELSEWHERE, not with the human set.
   return (cs.needsDecision || [])
     .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind))
     .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,

@@ -1978,15 +1978,14 @@ check("ENG-95218: a row action emits NO op and says so — every other op here r
       && /carries no op in this ChangeSet/.test(lpRowActionRun.designSpec)
       && /control and placement NOT resolved here/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.designSpec.slice(lpRowActionRun.designSpec.indexOf("#### Row actions"), lpRowActionRun.designSpec.indexOf("#### Row actions") + 700));
-check("ENG-95218: each row action raises a ⚠ Confirm decision — a declared condition must become Freedom state, and an action with none asks whether Classic gated it, because an always-enabled port is a behaviour change",
+check("ENG-95218/ENG-96327: each row action raises an AGENT-resolved decision (preflight) — a declared condition must become Freedom state, an action with none asks whether Classic gated it — but it is NOT a human ⚠ Confirm row",
   () => { const nd = lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action");
     const withCond = nd.find((d) => /QualificationProcess/.test(d.item));
     const without = nd.find((d) => /PlainAction/.test(d.item));
     return nd.length === 2
       && /must become Freedom state/.test(withCond.reason) && /canQualify/.test(withCond.reason)
       && /always-enabled port is a behaviour change/.test(without.reason)
-      && /#### ⚠ Confirm before I build/.test(lpRowActionRun.designSpec)
-      && /\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
+      && !/\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action"));
 // A SUB-BUNDLE MAY CARRY ITS OWN `section` — the engine accepts it silently, and the self-referential typed fixture
 // above shows the shape occurs. Its list-page questions must stay in the main scope: a per-type form page has no grid,
@@ -3179,8 +3178,8 @@ check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
-check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
-  /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+check("C2/ENG-96327: a lookup-GUID rule NO LONGER prompts a [lookup-value] note — the agent resolves GUIDs to display names itself when it builds the rule",
+  !/\[lookup-value\]/.test(guidCs.designSpec));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Business rules table (field · when <attr> · effect · page business rule)",
@@ -3735,8 +3734,8 @@ check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1
 check("#3 detail-editability: NOT flagged when the detail's own schema is bundled (editability resolvable from its config)",
   !/detail-editability/.test(stVerifiedNone.plan));
 const deUnbundled = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }] }, { baseDir: FIX });
-check("#3 detail-editability: STILL flagged when the detail schema was NOT bundled (genuinely undeterminable)",
-  /detail-editability/.test(deUnbundled.plan));
+check("#3/ENG-96327 detail-editability: STILL raised as an agent decision (preflight) when the detail schema was NOT bundled — no longer a human ⚠ Confirm row",
+  deUnbundled.changeSet.needsDecision.some((d) => d.kind === "detail-editability") && !/detail-editability/.test(deUnbundled.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
 // RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
@@ -4412,8 +4411,8 @@ check("Major2: a real editPage + hidden add-record → structure INCOMPLETE (hid
 // Major 3 — a dynamic mapping-affecting property (visible via a call) → an explicit dynamic-property decision.
 const m3 = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F",visible:computeVisibility()}}]};});` }] }, { baseDir: FIX });
-check("Major3: a dynamic 'visible' (call) surfaces as a dynamic-property decision + reaches the plan (not a silent static default)",
-  m3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "F") && /dynamic 'visible'/.test(m3.designSpec),
+check("Major3/ENG-96327: a dynamic 'visible' (call) surfaces as a dynamic-property decision (not a silent static default) — raised for the agent, no longer rendered in the human plan",
+  m3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "F") && !/\[dynamic-property\]/.test(m3.designSpec),
   () => m3.changeSet.needsDecision.map((n) => n.kind));
 
 // E3 — the dynamic-property reporter must name the RIGHT field even when an earlier diff op is dropped by
@@ -5364,13 +5363,16 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm (Member ledger is --spec-only, ENG-96327)",
+  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm-if-present (Member ledger --spec-only; ⚠ Confirm human-only, ENG-96327)",
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
-        "#### ⚠ Confirm before I build"].map((n) => page.indexOf(n));
-      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
+      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic"]
+        .map((n) => page.indexOf(n));
+      if (!(order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos))) return false;
+      // ⚠ Confirm now renders ONLY when a HUMAN_CONFIRM kind is present (ENG-96327); when present it stays last.
+      const confirmPos = page.indexOf("#### ⚠ Confirm before I build");
+      return confirmPos === -1 || confirmPos > order[order.length - 1];
     },
     () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));
   // `referenced-module` was the one member kind pinned nowhere on the ARRIVAL side — breaking its emission would
@@ -6390,9 +6392,9 @@ check("detail add-mechanism: lookup + backend SERVICE (name + method) detected",
   regDetail?.addMode?.lookup === true && regDetail?.addMode?.service === "DocumentRegistryService"
   && regDetail?.addMode?.method === "AddCorrespondencesToRegistry",
   () => regDetail?.addMode);
-check("detail add-mechanism: each raised as a decision + rendered in the plan (custom Freedom add handler; verify service)",
+check("detail add-mechanism/ENG-96327: each raised as an agent decision (custom Freedom add handler; verify service) — NOT rendered in the human plan",
   dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
-  && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
+  && !/NOT a plain related list/.test(dmRun.plan) && !/\[detail-add-mechanism\]/.test(dmRun.plan),
   () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
 // review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
 // (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
@@ -6412,18 +6414,23 @@ check("#11 detail add-mechanism: add-disabled + custom grid action (attachReques
   && vacDetail?.addMode?.fixedFilters === true
   && ["Category", "Type", "Status"].every((c) => (vacDetail.addMode.filterCols || []).includes(c)),
   () => vacDetail?.addMode);
-check("#11 detail add-mechanism: rendered as a decision — add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns",
-  /add-new DISABLED/.test(attachRun.plan) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(attachRun.plan) && /FIXED list filters on Category, Type, Status/.test(attachRun.plan));
+check("#11/ENG-96327 detail add-mechanism: NOT rendered in the human plan — it is an agent decision now (detection pinned above)",
+  !/add-new DISABLED/.test(attachRun.plan) && !/\[detail-add-mechanism\]/.test(attachRun.plan));
+// ENG-96327: the SPLIT itself — a B-kind (detail-add-mechanism) is kept OUT of the human ⚠ Confirm render, yet the
+// agent STILL receives it through the checklist/preflight (confirmWorklistRows), so it is resolved, not lost.
+check("ENG-96327 split: detail-add-mechanism is ABSENT from the human ⚠ Confirm plan but PRESENT in the checklist/preflight (agent resolves it)",
+  !/\[detail-add-mechanism\]/.test(attachRun.plan)
+  && (checklistGroups(attachRun, {}).find((g) => g.title === "⚠ Confirm worklist")?.rows || []).some((r) => /detail-add-mechanism/.test(r.label)));
 const openCardOnlyRun = runMigration({
   entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"OpenCardDetail",entitySchemaName:"OpenChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
   detailSchemas: { OpenCardDetail: { body: `define("OpenCardDetail",[],function(){return{entitySchemaName:"OpenChild",methods:{openCardByMode:function(){this.openCardInChain();}}};});`, editPage: false } },
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
-check("detail add-mechanism: openCardByMode-only detail gets end-to-end custom add-handler guidance in the plan",
-  () => /overrides the default add-card open/.test(openCardOnlyRun.plan)
-    && /CUSTOM add request-handler/.test(openCardOnlyRun.plan)
-    && /overridden add-card flow/.test(openCardOnlyRun.plan),
+check("detail add-mechanism/ENG-96327: openCardByMode-only detail RAISES the custom add-handler decision for the agent (preflight) — not rendered in the human plan",
+  () => openCardOnlyRun.changeSet.needsDecision.some((n) => n.kind === "detail-add-mechanism")
+    && !/overrides the default add-card open/.test(openCardOnlyRun.plan)
+    && !/\[detail-add-mechanism\]/.test(openCardOnlyRun.plan),
   () => openCardOnlyRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism")?.reason);
 // review (Applicant #12, verified on-stand): a system-maintained detail (stage history) is read-only via
 // `getAddRecordButtonVisible: return false` — declared in the BASE replacing layer (HRApplicant), NOT the client
@@ -6435,8 +6442,8 @@ const roPageBody = `define("XPage",[],function(){return{entitySchemaName:"X",dif
 const roChain = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
   detailSchemas: { StageDetail: { bodies: [roBaseLayer, roTopLayer], editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
 const roDetail = roChain.changeSet.details.find((d) => d.detailSchema === "StageDetail");
-check("#12 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → add-new DISABLED",
-  roDetail?.addMode?.addDisabled === true && /add-new DISABLED/.test(roChain.plan),
+check("#12/ENG-96327 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → addMode.addDisabled (agent decision, not the human plan)",
+  roDetail?.addMode?.addDisabled === true && !/add-new DISABLED/.test(roChain.plan),
   () => roDetail?.addMode);
 const roTopOnly = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
   detailSchemas: { StageDetail: { body: roTopLayer, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
