@@ -512,6 +512,14 @@ export function planGapNext(planGaps, tail = 'then re-run this build') {
 export function buildModes() {
   return ['auto', 'checkpoints', 'guided', 'round1', 'layout-first']
 }
+// THE MODES OFFERED TO AN OPERATOR — a STRICT SUBSET of `buildModes()`, and what the menu renders. It is the
+// TICKET's set (ENG-96204). `auto` and `checkpoints` are legal and deliberately NOT here: a menu whose purpose is
+// operator control cannot offer "run unattended" as a choice, and `checkpoints` is an inherited mode the ticket
+// does not specify. Both stay accepted as `mode` and as `defaultMode`, so no existing caller breaks (DR-6).
+// Hoisted `function`, never a const — the TDZ note above.
+export function offeredModes() {
+  return ['guided', 'round1', 'layout-first']
+}
 export function buildMode(raw) {
   const BUILD_MODES = buildModes()
   if (raw === undefined || raw === null || raw === '') return null
@@ -523,19 +531,17 @@ export function buildMode(raw) {
   }
   return m
 }
-// WHAT EACH MODE DOES, one line each — the text the refuse-to-start stop puts in front of the operator, so the
-// answer to "which of these do I want" travels WITH the question instead of living only in a SKILL.md nobody is
-// reading at that moment. Driven off `buildModes()` rather than off a second list, so a mode added there and left
-// undescribed here renders as exactly that, loudly, instead of vanishing from the menu the operator chooses from.
+// WHAT EACH OFFERED MODE DOES, one line each in a non-engineer's words — the text the refuse-to-start stop puts in
+// front of the operator, so "which of these do I want" is answered WITH the question. The user-facing word is
+// STEP; `unit` stays the internal key everywhere and is not always a page (DR-6). Driven off `offeredModes()`, so
+// a mode added there and left undescribed here renders as exactly that, loudly, instead of vanishing.
 export function buildModeMenu() {
   const WHAT = {
-    auto: 'build every unit without stopping (unattended)',
-    checkpoints: 'stop after each unit named in `checkpointAfter` so the operator can check it on the stand',
-    guided: 'stop after EVERY unit',
-    round1: 'run ONE round per invocation and stop at the round boundary while anything is open',
-    'layout-first': 'round 1 builds LAYOUT only and stops; the business logic is ported on the next invocation',
+    guided: 'pause after every step, so you can check each page on the stand as it lands',
+    round1: 'build everything once, then pause and show what was built and what is still open, before any repair round',
+    'layout-first': 'build the page layouts first and pause; the business logic is ported on the next run',
   }
-  return buildModes().map((m) => `\`${m}\` — ${WHAT[m] || '(NO DESCRIPTION — this mode was added to `buildModes` and not described in `buildModeMenu`)'}`)
+  return offeredModes().map((m) => `\`${m}\` — ${WHAT[m] || '(NO DESCRIPTION — this mode was added to `offeredModes` and not described in `buildModeMenu`)'}`)
 }
 // THE RUN-LEVEL QUESTION ITEMS in `resolutions.json` (engine kind `run`). Two of them, and they are the ONLY
 // channel the operator's run-level answers travel through — the ticket forbids a second one, and `findings` keeps
@@ -753,7 +759,7 @@ export function openCountsOf(units) {
 // fixed-shape line per open unit, linear in the UNIT count and INVARIANT in the number of open rows.
 //
 // AND NO TWO SECTIONS OF IT CAN DISAGREE ABOUT WHETHER ANYTHING IS OPEN (PR review F6) — the defect the ranked
-// list had, printing "nothing is open" three lines above a "Still open (units)" list naming a unit. Both sections
+// list had, printing "nothing is open" three lines above a "Still open (steps)" list naming one. Both sections
 // render from the SAME list (`openCounts.units`), so agreement is structural rather than a conditional
 // empty-text string somebody has to keep in step with a second field.
 export function runStatusDoc(status = {}) {
@@ -799,14 +805,14 @@ export function runStatusDoc(status = {}) {
   L.push('# Build run status', '')
   L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)
   L.push(`- **Stopped at:** ${status.stopped || '(not stopped)'}${Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''}`)
-  if (status.pausedAfter) L.push(`- **Paused after unit:** \`${status.pausedAfter}\``)
+  if (status.pausedAfter) L.push(`- **Paused after step:** \`${status.pausedAfter}\``)
   L.push('', '## Built this round', '')
   L.push(...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'))
   L.push('', '## Open — counts, and where the rows are', '')
   L.push(...cappedList(openUnits, unitLine, 'nothing is open',
     `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`))
   if (openUnits.length) {
-    L.push(`- **Total:** ${openUnits.length} unit(s) still open · ${counts.open ?? 0} open row(s)`
+    L.push(`- **Total:** ${openUnits.length} step(s) still open · ${counts.open ?? 0} open row(s)`
       + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
       + `${counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''}`)
     L.push(`- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
@@ -824,8 +830,8 @@ export function runStatusDoc(status = {}) {
   L.push('', '## Parked, and why', '')
   L.push(...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
     'nothing is parked', 'parked unit(s) — the full list is in the queue file'))
-  L.push('', '## Still open (units)', '')
-  L.push(...list(openUnits, (u) => `- \`${u.unit}\``, 'no unit is still open'))
+  L.push('', '## Still open (steps)', '')
+  L.push(...list(openUnits, (u) => `- \`${u.unit}\``, 'no step is still open'))
   L.push('', '## Next step', '', status.next || '(none recorded)', '')
   return L.join('\n')
 }

@@ -209,3 +209,63 @@ stop's `next` (restore `roundsSpent` in the queue file; leave the entry alone) r
 re-asking the operator for an answer that is already on file. A Reconcile answer that omits
 `consumedRoundAnswers` is refused by the host and retried, exactly as one that omits
 `runResolutions` is.
+
+---
+
+## DR-6 (ENG-96204) — `unit` is the internal term, "step" is the word an operator reads, and the OFFERED modes are a subset of the VALID ones
+
+**Status:** accepted, shipped in ENG-96204.
+
+**The change.** Two splits, both between what the machine keys on and what a human is shown.
+
+1. **Term.** `unit` stays the internal term everywhere it already is: the queue-file keys, the
+   `checkpointAfter` values, `findings: [{ unit, problem }]`, `openCounts.units`, the engine keys and
+   every test assertion. Only the prose a human reads changed, and the word there is **step** —
+   `buildModeMenu()`'s descriptions, the `mode-not-chosen` / `mode-invalid` refusals, the
+   `run-status.md` headings (`Paused after step:`, `Still open (steps)`, `N step(s) still open`), and
+   the operator-facing paragraphs of the two skills.
+2. **Set.** `buildModes()` remains the five VALID values (`auto`, `checkpoints`, `guided`, `round1`,
+   `layout-first`) and still drives validation, `defaultMode` and the unknown-mode throw. A second
+   hoisted function, `offeredModes()`, returns the three PRESENTED to an operator (`guided`,
+   `round1`, `layout-first`) and is what `buildModeMenu()` renders. `mode-invalid` names all five, so
+   a caller who deliberately passed `checkpoints` or `auto` is never told it was invalid.
+
+**Why not a global rename to "step".** Because it would be inaccurate, not merely churn. A unit is
+NOT always a page: the `app` unit creates the application and the package, and the reachability /
+section-registration units produce configuration records. "Page" was already wrong for those, and
+renaming the KEYS would break published contract surface for no user gain — `checkpointAfter` and
+`findings[].unit` are values a driving agent and an operator's `resolutions.json` already carry, and
+`openCounts.units` is a published return field. The cost of the split is one convention to remember;
+the cost of a rename is a breaking change to buy a word.
+
+**Why `auto` is legal but not offered.** The ticket specifies three modes and never mentions `auto`.
+Offering "run unattended" inside a menu whose entire purpose is operator control is
+self-contradictory: the stop exists because an absent mode used to mean `auto`, and a run the
+operator meant to watch had written the whole section before they found out. Putting `auto` back on
+that menu re-offers the one answer the gate was built to stop being taken by accident. It stays
+fully accepted as an explicit `mode` and as `defaultMode`, which is the declared unattended path and
+where a genuinely unwatched run says so on file.
+
+**Why `checkpoints` is legal but not offered.** Same rule, applied consistently: the offered set is
+the TICKET's set, and `checkpoints` is an inherited mode ENG-96204 does not specify. Nothing about it
+changed — the mode, `checkpointAfter`, `shouldPauseAfter`, the `unknown-checkpoint-key` refusal and
+the `paused-at-checkpoint` stop are all still there and still tested — it is simply not put in front
+of an operator as a choice, and a caller that asks for it by name gets it.
+
+**What was rejected, and why.**
+
+- *Renaming `unit` to `step` everywhere.* Rejected above: the `app` and reachability units are not
+  pages or "steps a user checks", and the keys are published.
+- *Deleting `checkpoints` now that it is unoffered.* Rejected outright. It predates this ticket and
+  has callers; removing it would be a second breaking change nobody asked for, on top of the one this
+  ticket already makes deliberately (an absent mode no longer meaning `auto`). Not offering a value
+  and not accepting it are different decisions, and only the first was taken.
+- *One list with an `offered: true/false` flag per mode.* Rejected as a shape that makes the
+  common read ("what may an operator choose?") a filter over a list whose other entries are the
+  answer to a different question. Two functions, each with one caller-visible job, keep
+  `buildMode`'s validation and `buildModeMenu`'s rendering from having to agree about a flag — and a
+  mode added to one and not the other is caught by a pin that asserts the two sets differ by exactly
+  `auto` and `checkpoints`.
+- *Dropping the "NO DESCRIPTION" fallback in `buildModeMenu()` now that the map is hand-kept.*
+  Rejected: it is the property that makes a mode added to `offeredModes()` and left undescribed
+  render loudly instead of vanishing from the operator's menu.

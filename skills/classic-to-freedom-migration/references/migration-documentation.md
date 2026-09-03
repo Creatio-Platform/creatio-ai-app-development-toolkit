@@ -77,8 +77,11 @@ belongs to a page; these belong to the invocation and to no page:
                    { "kind": "run", "item": "round-2", "answer": "go" } ] }
 ```
 
-`control-mode` chooses how closely the operator watches (`auto` · `checkpoints` · `guided` · `round1` ·
-`layout-first`); `round-<N>` authorises round N in a round-boundary mode. They are republished at
+`control-mode` chooses how closely the operator follows the build. Five values are valid; the three a driver
+OFFERS are `guided` · `round1` · `layout-first`, while `auto` (the unattended path, normally passed as
+`defaultMode`) and `checkpoints` are accepted when a caller passes them deliberately and are not put in front of
+an operator as a choice — DR-6 in the executor's decision records. `round-<N>` authorises round N in a
+round-boundary mode. They are republished at
 `--units.runResolutions` and are **excluded from `resolutionsUnmatched`** — they answer no ⚠ Confirm question by
 construction, so reporting them would call a correctly-recorded mode choice an answer nobody asked for. **One
 channel, no exceptions:** there is no second state file for either decision, and `findings` is not it — `findings`
@@ -93,7 +96,7 @@ walked-back count cannot re-spend a `go`. The operator's file stays theirs; the 
 machine's file (DR-5 in the executor's decision records).
 
 **`run-status.md` is ENGINE-WRITTEN, and it is the only one of these documents that is.** A round-boundary stop
-writes it: what was built, the open COUNTS per unit with the severity tally, the parked units with their reasons,
+writes it: what was built, the open COUNTS per step with the severity tally, the parked steps with their reasons,
 the round answers already SPENT against the one currently AWAITED (so consumption is visible without opening the
 queue file), the one next step, and a pointer to the verify artifacts — every line computed from the gate's own
 numbers, never composed by an agent. **It carries no open rows.** Those are in `verify.md` (the table) and `verify.json`, where

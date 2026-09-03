@@ -169,13 +169,13 @@ const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByPa
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings", "reopenKeySet"];
 // ENG-96204 — THE CONTROL-MODE DECISION AND THE ROUND-BOUNDARY STOP, filed as its own concern per the rule stated
 // above: a new name goes under a concern, and this one is a surface rather than "a few more scheduling names".
-// `buildModes`/`buildModeMenu` are the ONE mode list and its operator-facing descriptions; `resolveControlMode` is
-// the three-input precedence and its reported source; `stopsAtRoundBoundary`/`isLayoutPassMode` are the two new
+// `buildModes` is the ONE list of VALID values and `offeredModes` the subset PUT IN FRONT OF AN OPERATOR, which
+// is what `buildModeMenu` describes; `resolveControlMode` is the three-input precedence and its reported source; `stopsAtRoundBoundary`/`isLayoutPassMode` are the two new
 // predicates; `roundsOnFile`, `openCountsOf`, `runStatusDoc` and `passScopeText` are the stop's arithmetic and
 // its text. `rankOpenItems` / `openItemsFor` are GONE (see `openCountsOf`): the open ROWS do not cross the
 // Reconcile boundary, so a stop that ranked them ranked nothing — it reports counts and points at the
 // engine's own verify artifacts.
-const H_CONTROL_MODE = ["buildModes", "buildModeMenu", "resolveControlMode", "runResolutionAnswer", "roundDecisionItem",
+const H_CONTROL_MODE = ["buildModes", "offeredModes", "buildModeMenu", "resolveControlMode", "runResolutionAnswer", "roundDecisionItem",
   "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "openCountsOf",
   "runStatusDoc", "passScopeText",
   // ENG-96204 (ENG-96474) — the spent-answer union the queue-file record and the resume gate are built on.
@@ -743,12 +743,27 @@ check("buildMode: an UNKNOWN mode THROWS — it must never fall back to `auto`, 
 check("ENG-96204: the refusal message LISTS every mode, including the two new ones — it is the menu an operator picks from at the stop, so a mode missing from it is a mode nobody can choose",
   () => { try { wf.buildMode("semi"); return false; } catch (e) { return wf.buildModes().every((m) => e.message.includes(m)); } },
   () => { try { wf.buildMode("semi"); return ""; } catch (e) { return e.message; } });
-check("ENG-96204: `buildModes` is the ONE list, and `buildModeMenu` describes every entry of it — a mode added to the list and left undescribed renders as exactly that, loudly, instead of vanishing from the operator's menu",
+check("ENG-96204 (DR-6): `offeredModes` is the list the MENU renders, and `buildModeMenu` describes every entry of it — a mode added to the offered list and left undescribed renders as exactly that, loudly, instead of vanishing from the operator's menu",
   () => { const menu = wf.buildModeMenu();
-    return menu.length === wf.buildModes().length
-      && wf.buildModes().every((m, i) => menu[i].startsWith("`" + m + "`"))
+    return menu.length === wf.offeredModes().length
+      && wf.offeredModes().every((m, i) => menu[i].startsWith("`" + m + "`"))
       && menu.every((l) => !/NO DESCRIPTION/.test(l)); },
   () => wf.buildModeMenu());
+// DR-6 — TWO SETS, ONE OF THEM A SUBSET, AND THE DIFFERENCE IS THE WHOLE DECISION. `buildModes()` is what the run
+// ACCEPTS and `offeredModes()` is what an operator is SHOWN; the gap is exactly `auto` (the unattended path,
+// declared through `defaultMode`) and `checkpoints` (an inherited mode ENG-96204 does not specify). Pinned as the
+// exact difference rather than as "offered ⊆ valid", so a mode added to one list and forgotten in the other is a
+// red test either way round — an offered mode the run would refuse, or a sixth valid mode nobody can choose.
+check("ENG-96204 (DR-6): `offeredModes` is a STRICT SUBSET of `buildModes`, and the two differ by exactly `auto` and `checkpoints` — a mode added to one list and not the other is caught here, in both directions",
+  () => { const valid = wf.buildModes(), offered = wf.offeredModes();
+    const notOffered = valid.filter((m) => !offered.includes(m));
+    return offered.every((m) => valid.includes(m))
+      && JSON.stringify([...notOffered].sort()) === JSON.stringify(["auto", "checkpoints"])
+      && offered.length === valid.length - 2; },
+  () => ({ valid: wf.buildModes(), offered: wf.offeredModes() }));
+check("ENG-96204 (DR-6): and every value `buildModes` accepts is still ACCEPTED — being left off the menu is not being removed, so a caller that deliberately passes `auto` or `checkpoints` is honoured, not refused",
+  () => wf.buildModes().every((m) => wf.buildMode(m) === m),
+  () => wf.buildModes().map((m) => `${m} -> ${wf.buildMode(m)}`));
 /* ENG-96204 — MODE RESOLUTION AND ITS SOURCE. Three inputs in falling order of how specifically they speak about
    this invocation, and the SOURCE is reported because AC 5 turns on it: a run that proceeded on a configured
    default and one the operator launched in that mode are the same `mode` string and very different facts. */
@@ -890,7 +905,7 @@ check("ENG-96204 (R5): `runStatusDoc` carries every fact — what was built, the
     return /## Built this round/.test(doc) && /`main`/.test(doc)
       && /5 open row\(s\): 3 MISSING \+ 2 unconfirmed/.test(doc)
       && /`app` — 1 open item\(s\) \[correctness\] — no package on this stand/.test(doc)
-      && /3 unit\(s\) still open · 7 open row\(s\) — 2 correctness · 0 fidelity · 5 stamped per row in `out\/verify\.json`/.test(doc)
+      && /3 step\(s\) still open · 7 open row\(s\) — 2 correctness · 0 fidelity · 5 stamped per row in `out\/verify\.json`/.test(doc)
       && /The rows are NOT in this file/.test(doc) && /out\/verify\.md/.test(doc) && /rowSeverity/.test(doc)
       && /still short after 3 round\(s\)/.test(doc)
       && /## Next step/.test(doc) && /authorise round 2/.test(doc)
@@ -902,16 +917,27 @@ check("ENG-96204 (R5): and NO open row's text is in it — not the deliverable, 
     return !/❌ MISSING/.test(doc) && !/missing: Amount/.test(doc) && !/\[fidelity\]/.test(doc)
       && !/## Open, ranked/.test(doc) && /## Open — counts, and where the rows are/.test(doc); },
   () => wf.runStatusDoc({ mode: "round1", openCounts: wf.openCountsOf(OPEN_MIXED), next: "x" }));
+// ENG-96204 (DR-6) — THE HEADINGS AN OPERATOR READS SAY "STEP", and the KEYS in them stay `unit` keys. A unit is
+// not always a page (`app`, a reachability key), so "step" is the only umbrella word that is true of all of them;
+// pinned on the rendered document because this is the one artifact a non-engineer reads end to end.
+check("ENG-96204 (DR-6): the status document's operator-facing headings read `step`, never `unit` — `Paused after step:`, `Still open (steps)` and an `N step(s) still open` total — while the keys under them are the unchanged `unit` keys in backticks",
+  () => { const doc = wf.runStatusDoc({ mode: "guided", modeSource: "argument", stopped: "paused-at-checkpoint",
+      pausedAfter: "mini:Applicant", built: ["app"], openCounts: wf.openCountsOf(OPEN_MIXED), next: "check the page" });
+    return /- \*\*Paused after step:\*\* `mini:Applicant`/.test(doc)
+      && /## Still open \(steps\)/.test(doc)
+      && /step\(s\) still open/.test(doc)
+      && !/Paused after unit/.test(doc) && !/Still open \(units\)/.test(doc) && !/unit\(s\) still open/.test(doc); },
+  () => wf.runStatusDoc({ mode: "guided", pausedAfter: "mini:Applicant", openCounts: wf.openCountsOf(OPEN_MIXED), next: "x" }).split("\n").filter((l) => /Paused|Still open|Total/.test(l)).join(" | "));
 check("ENG-96204: every section of the status document says something when it is EMPTY — a heading with nothing under it reads as a document that failed to render, not as 'nothing is parked'",
   () => { const doc = wf.runStatusDoc({ mode: "round1", modeSource: "default", stopped: "paused-at-round", rounds: 1 });
     return /nothing was built in this round/.test(doc) && /nothing is open/.test(doc)
-      && /nothing is parked/.test(doc) && /no unit is still open/.test(doc); },
+      && /nothing is parked/.test(doc) && /no step is still open/.test(doc); },
   () => wf.runStatusDoc({ mode: "round1", stopped: "paused-at-round", rounds: 1 }));
-check("ENG-96204 (PR review F6, structurally): the open section and `Still open (units)` render from the SAME unit list, so the document CANNOT say `nothing is open` while naming an open unit — the conditional empty-text string that used to hold that invariant together is gone",
+check("ENG-96204 (PR review F6, structurally): the open section and `Still open (steps)` render from the SAME unit list, so the document CANNOT say `nothing is open` while naming an open step — the conditional empty-text string that used to hold that invariant together is gone",
   () => { const doc = wf.runStatusDoc({ mode: "round1", stopped: "paused-at-round", rounds: 1,
       openCounts: wf.openCountsOf([{ unit: "app", kind: "app", open: 1, missing: null, unverified: null, severity: "correctness", why: "the package is not on this stand" }]),
       next: "x" });
-    return !/nothing is open/.test(doc) && !/no unit is still open/.test(doc)
+    return !/nothing is open/.test(doc) && !/no step is still open/.test(doc)
       && (doc.match(/- `app`/g) || []).length === 2; },
   () => wf.runStatusDoc({ mode: "round1", openCounts: wf.openCountsOf([{ unit: "app", open: 1, severity: "correctness", why: "w" }]), next: "x" }));
 /* ENG-96204 (R9) — THE PASS SCOPE the layout-first builder is handed. The text matters as much as the arithmetic:
@@ -4475,6 +4501,12 @@ check("workflow: `buildMode` binds its mode list to a local const off a HOISTED 
   /function buildMode\(raw\) \{[ \t]*\n[ \t]*const BUILD_MODES = buildModes\(\)/.test(wfSrc)
     && /^function buildModes\(\) \{/m.test(wfSrc)
     && topLevelConstAt("BUILD_MODES") < 0);
+// DR-6 — the OFFERED list is a second list and inherits the same rule, for the same reason: it is read from
+// `buildModeMenu`, which the refuse-to-start stop calls, so a module-level const here would reintroduce exactly
+// the temporal-dead-zone crash the pin above exists for.
+check("ENG-96204 (DR-6): `offeredModes` is a HOISTED function declaration too, never a module-level const — the same TDZ rule `buildModes` is held to, since the stop's menu is built from it",
+  /^function offeredModes\(\) \{/m.test(wfSrc)
+    && topLevelConstAt("OFFERED_MODES") < 0);
 
 // …and the same failure caught by EXECUTION rather than by reading the source, which is the only check that
 // covers initialization order in general. The script is a function body with injected globals and top-level await,
@@ -4987,11 +5019,11 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
       && (nonPageOpen.res.openCounts?.units || []).some((u) => u.unit === "app" && u.severity === "correctness" && /package/.test(u.why || ""))
       && nonPageOpen.res.openCounts?.correctness === 1 && nonPageOpen.res.openCounts?.unstamped === 0,
     () => (nonPageOpen.res.threw ? `threw: ${nonPageOpen.res.threw}` : { stopped: nonPageOpen.res.stopped, openCounts: nonPageOpen.res.openCounts, remaining: nonPageOpen.res.remainingOpen }));
-  check("PR review F6: and the status document an operator READS never says `nothing is open` while its own `Still open (units)` section names a unit — two sections of one file may not disagree about whether there is anything left to do, and they now render from ONE list so they cannot",
+  check("PR review F6: and the status document an operator READS never says `nothing is open` while its own `Still open (steps)` section names a step — two sections of one file may not disagree about whether there is anything left to do, and they now render from ONE list so they cannot",
     !/- nothing is open/.test(persistPrompt(nonPageOpen.calls))
-      && !/- no unit is still open/.test(persistPrompt(nonPageOpen.calls))
+      && !/- no step is still open/.test(persistPrompt(nonPageOpen.calls))
       && /Application \/ package/.test(persistPrompt(nonPageOpen.calls))
-      && /1 unit\(s\) still open · 1 open row\(s\) — 1 correctness · 0 fidelity/.test(persistPrompt(nonPageOpen.calls)),
+      && /1 step\(s\) still open · 1 open row\(s\) — 1 correctness · 0 fidelity/.test(persistPrompt(nonPageOpen.calls)),
     () => persistPrompt(nonPageOpen.calls).split("\n").filter((l) => /nothing is open|Still open|^- `|^- \*\*Total/.test(l)).slice(0, 10).join(" | "));
 
   /* --- AC 2 (Part C): the stop's severity tally is REAL for pages, read off the engine's own per-page counts ----- */
@@ -5009,7 +5041,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     () => (stampedStop.res.threw ? `threw: ${stampedStop.res.threw}` : stampedStop.res.openCounts));
   check("ENG-96204 (AC 2): and the status document the operator reads carries the same split on the page's own line and in the total — with no `stamped per row` remainder to send them hunting for a band the file already states",
     /`main` — 2 open row\(s\): 1 MISSING \+ 1 unconfirmed · 1 correctness \/ 1 fidelity/.test(persistPrompt(stampedStop.calls))
-      && /1 unit\(s\) still open · 2 open row\(s\) — 1 correctness · 1 fidelity$/m.test(persistPrompt(stampedStop.calls)),
+      && /1 step\(s\) still open · 2 open row\(s\) — 1 correctness · 1 fidelity$/m.test(persistPrompt(stampedStop.calls)),
     () => persistPrompt(stampedStop.calls).split("\n").filter((l) => /`main`|Total/.test(l)).join(" | "));
   const QG_ONLY_VERIFY = verifySummary({}, { complete: false, missing: 0, unverified: 1,
     pages: { main: { complete: false, buildComplete: true, builderOpen: 0, missing: 0, unverified: 1, openCorrectness: 0, openFidelity: 1, openRows: [ROW_FIDELITY] } } });
@@ -5108,6 +5140,45 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     /round1/.test(badRecordedMode.res.next || "") && /layout-first/.test(badRecordedMode.res.next || "")
       && /NOT read as `auto`/.test(badRecordedMode.res.next || ""),
     () => (badRecordedMode.res.next || "").slice(0, 300));
+  // ENG-96204 (DR-6) — `mode-invalid` NAMES EVERY VALID VALUE, offered or not. A caller who deliberately typed
+  // `auto` or `checkpoints` and mistyped something else must not be handed a list that implies the value they
+  // meant was rejected: the refusal states what the run accepts (five) and, separately, which of them this
+  // question offers (three). The two facts are different and both belong in the text.
+  check("ENG-96204 (DR-6): the `mode-invalid` refusal names ALL FIVE valid values — including the two that are never offered — so a caller who meant `auto` or `checkpoints` is never told their value is invalid, while it still says which three are the ones to choose between here",
+    wf.buildModes().every((m) => (badRecordedMode.res.next || "").includes(m))
+      && (badRecordedMode.res.validModes || []).length === wf.buildModes().length
+      && /These 3 are the ones to choose between here/.test(badRecordedMode.res.next || "")
+      && /`auto` and `checkpoints`, are accepted when passed deliberately/.test(badRecordedMode.res.next || ""),
+    () => (badRecordedMode.res.next || ""));
+
+  /* --- DR-6: the refuse-to-start MENU offers the three, and never `auto` or `checkpoints` ------------------- */
+  // The operator-facing half of the same decision, driven through the real generated script rather than read off
+  // `buildModeMenu()`: what reaches `next` is what a human is actually shown. Both halves are pinned — the three
+  // that ARE offered (each with its plain-language description) and the two that are NOT rendered as a menu line.
+  const noModeAtAll = await scriptRun({ mode: undefined }, [RECONCILE_R()]);
+  const noModeMenuLines = (noModeAtAll.res.next || "").split("\n").filter((l) => /^ {2}- `/.test(l));
+  check("ENG-96204 (DR-6): with no mode from any source the run refuses to start and its menu offers EXACTLY the three modes ENG-96204 specifies, each described without jargon — `unit` never appears in the text a non-engineer reads",
+    !noModeAtAll.res.threw && noModeAtAll.res.stopped === "mode-not-chosen"
+      && noModeMenuLines.length === 3
+      && wf.offeredModes().every((m, i) => noModeMenuLines[i].startsWith("  - `" + m + "`"))
+      && /pause after every step/.test(noModeAtAll.res.next || "")
+      && /before any repair round/.test(noModeAtAll.res.next || "")
+      && /build the page layouts first and pause/.test(noModeAtAll.res.next || "")
+      && !/\bunit\b/.test(noModeAtAll.res.next || ""),
+    () => (noModeAtAll.res.threw ? `threw: ${noModeAtAll.res.threw}` : { stopped: noModeAtAll.res.stopped, menu: noModeMenuLines, next: noModeAtAll.res.next }));
+  check("ENG-96204 (DR-6): and NEITHER `auto` NOR `checkpoints` is rendered as a choice on that menu — offering \"run unattended\" in a menu about how closely to watch is the one answer this gate exists to stop being taken by default, and `checkpoints` is an inherited mode this ticket does not specify",
+    noModeMenuLines.every((l) => !l.startsWith("  - `auto`") && !l.startsWith("  - `checkpoints`"))
+      && !/^ {2}- `auto`/m.test(noModeAtAll.res.next || "")
+      && !/^ {2}- `checkpoints`/m.test(noModeAtAll.res.next || ""),
+    () => noModeMenuLines);
+  check("ENG-96204 (DR-6): the refusal still tells the operator that both unoffered values are ACCEPTED when passed deliberately, and names `defaultMode` as the channel for the unattended one — a value left off a menu must not read as a value that was removed",
+    /`auto` and `checkpoints` are both still accepted when a caller passes them deliberately/.test(noModeAtAll.res.next || "")
+      && /pass it as `defaultMode`/.test(noModeAtAll.res.next || "")
+      && (noModeAtAll.res.validModes || []).length === wf.buildModes().length,
+    () => (noModeAtAll.res.next || ""));
+  check("ENG-96204 (DR-6): and it built NOTHING — the menu rework did not soften the gate",
+    buildCalls(noModeAtAll.calls).length === 0 && noModeAtAll.res.mode === null && noModeAtAll.res.rounds === 0,
+    () => `builds=${buildCalls(noModeAtAll.calls).length} mode=${noModeAtAll.res.mode} rounds=${noModeAtAll.res.rounds}`);
 }
 const badMode = await runPrologue("semi").catch((e) => ({ threw: e.message }));
 check("workflow prologue: an UNKNOWN mode still throws its own error — the TDZ fix did not turn the validation into a silent fallback to `auto`",

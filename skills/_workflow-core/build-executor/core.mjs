@@ -32,6 +32,7 @@ import {
   absorbPreflight, answeredNoteFor, appCodeInstruction, appIdentityClause, appIdentityMismatch, appUnitFor, approvalStop,
   batchPreflight, blockedByParked,
   buildModeMenu, buildModes, buildSchemaKind, claimsBlock, componentReplanClause, componentTypeList,
+  offeredModes,
   componentTypeMismatches, composeBuildPrompt, continuationAllowed, continuationBudgetBlock,
   CONTROL_MODE_ITEM, earnedFrom, findingsFor,
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
@@ -1131,9 +1132,10 @@ Return the schema. Nothing else.`
       planVersion: state.planVersion || null,
       verdict: verdictOf(state.verify),
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `choose how much of this build you want to watch, then re-run. The modes are:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
-        `Pass it as \`mode\`, or record it as the run-level answer in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":"<mode>"}\` — which is the channel that survives across invocations and is the one a driving skill writes after asking you. ` +
-        'For a run NOBODY IS WATCHING, declare it: pass `defaultMode` and the run proceeds without asking. ' +
+      next: `choose how closely you want to follow this build, then re-run. The choices are:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
+        `Pass the choice as \`mode\`, or record it in \`${RESOLUTIONS_FILE}\` as \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":"<mode>"}\` — that entry is the one that survives across invocations, and the one a driving skill writes after asking you. ` +
+        'For a run NOBODY IS WATCHING there is `auto`. It is not one of the choices above and is not picked from this list: pass it as `defaultMode` and the run proceeds without asking. ' +
+        '`auto` and `checkpoints` are both still accepted when a caller passes them deliberately — they are just not offered here. ' +
         'An absent mode is NOT read as `auto` any more: it used to be, and a run the operator meant to watch had written the whole section by the time they found out it never stopped. Nothing has been built.',
     })
   }
@@ -1143,13 +1145,13 @@ Return the schema. Nothing else.`
   // built — before any agent — so a typo in either has already thrown at launch. The operator's RECORDED answer
   // is the one value this run first sees here, after the baseline Reconcile has already spent an agent, and a
   // raw throw at that point is an uncaught exception mid-run. It was also asymmetric in the least defensible
-  // direction: an ABSENT mode got the sibling stop, which LISTS the five modes, while `round-1` for `round1` got a
+  // direction: an ABSENT mode got the sibling stop, which LISTS the modes to choose between, while `round-1` for `round1` got a
   // stack trace — next to a feature whose whole purpose is turning crash-prone failure into a refusal the
   // operator can read. Nothing is softer about it: no mode resolves, nothing is dispatched, nothing is built.
   // It just says which answer it could not read and what the answers are.
   function modeInvalidStop() {
     if (mode || !modeInvalidAnswer) return null
-    log(`STOP — the recorded control-mode answer ${JSON.stringify(modeInvalidAnswer)} is not one of the ${buildModes().length} modes this run accepts. Nothing has been built.`)
+    log(`STOP — the recorded control-mode answer ${JSON.stringify(modeInvalidAnswer)} is not one of the ${buildModes().length} modes this run accepts (${buildModes().join(', ')}). Nothing has been built.`)
     return runReturn({
       stopped: 'mode-invalid',
       validModes: buildModes(),
@@ -1158,8 +1160,8 @@ Return the schema. Nothing else.`
       planVersion: state.planVersion || null,
       verdict: verdictOf(state.verify),
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `the run-level answer recorded in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":${JSON.stringify(modeInvalidAnswer)}}\` — names no mode this run has. It was NOT corrected and it was NOT read as \`auto\`: an answer this script rewrote would be the operator's decision silently replaced by its own guess. Fix the answer to one of these, then re-run:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
-        'Nothing has been built and nothing on the stand was touched.',
+      next: `the run-level answer recorded in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":${JSON.stringify(modeInvalidAnswer)}}\` — names no mode this run has. It was NOT corrected and it was NOT read as \`auto\`: an answer this script rewrote would be the operator's decision silently replaced by its own guess. This run accepts ${buildModes().join(', ')}. These ${offeredModes().length} are the ones to choose between here:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
+        'The other two, `auto` and `checkpoints`, are accepted when passed deliberately but are not offered here — `auto` means nobody is watching the run, and is passed as `defaultMode` rather than recorded as an answer. Fix the entry, then re-run. Nothing has been built and nothing on the stand was touched.',
     })
   }
 
