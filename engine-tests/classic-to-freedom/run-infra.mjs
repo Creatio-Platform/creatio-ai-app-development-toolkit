@@ -5261,6 +5261,11 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
      exists to fix. A generated file grows one prompt sentence at a time, so this is the check that has to notice.
      Two thresholds, matching the schema convention: the HOST's hard limit, and a working budget under it. */
   const WORKFLOW_SCRIPT_INLINE_CAP = 524288;
+  // Briefly raised to 492000 in ENG-95857, while the generated `freedom-build-executor.workflow.js` sat at
+  // ~482 KB and left under 2 KB of headroom, so any prompt edit tripped this check. Reverted once the
+  // remedy that raise pointed at landed on the base branch: `engine-tests/build-workflows/strip-comments.mjs`
+  // strips comments from the generated artifact, which brought it to ~280 KB. The original, tighter guard
+  // stands. Figures are approximate on purpose — run this check for the current number.
   /* ENG-96458 briefly raised this to 510000 and then put it back. Worth recording why, because the number moved
      twice: the stage-2 line alone measured 478177 B against the old 480000 line, merging the park-once branch made
      487925, and this ticket's own prompt text took it past 503 KB — so the budget was raised with the margin stated.
