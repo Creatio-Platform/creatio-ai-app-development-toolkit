@@ -1529,10 +1529,20 @@ function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
 }
 // The FULL per-type form spec for each typed page (bind-only / cyclic / folded spec / parse-error / unresolved).
 // Returns the lines. Extracted for Sonar CC 15.
+// The Type a per-type form is for, as a heading/row suffix. The agent resolves the Type-column GUIDs on-stand
+// (before `--plan`) and puts the readable name on each `typedPages` entry as `typeName`; when only the raw
+// `typeColumnValue` GUID is present, the plan shows it with a ⚠ to resolve it — a bare GUID tells the approver
+// nothing about which Type the form is for (ENG-96327). A `type` that is already a readable string shows as-is.
+function typedTypeSuffix(t) {
+  const label = t.typeName || t.type;
+  if (!label) return "";
+  const guid = !t.typeName && typeof t.type === "string" && GUID_VALUE.test(t.type);
+  return ` — type "${esc(label)}"${guid ? " ⚠ resolve the type name on-stand" : ""}`;
+}
 function renderTypedPageRows(typed) {
   const P = ["### Typed page mappings", ""];
   for (const t of typed) {
-    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeNote = typedTypeSuffix(t);
     P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
     if (t.bindOnly) P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the **Shared form (base) above** for this Type (by the Type column).`);
     else if (t.cyclic) P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);
@@ -1568,7 +1578,7 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
-    const typeSuffix = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeSuffix = typedTypeSuffix(t);
     const cls = `${esc(t.schema)}${typeSuffix} (typed form)`;
     let tgt;
     if (t.bindOnly) tgt = "bind shared form by Type";
@@ -1905,7 +1915,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (!typed.length) pages.push({ label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
+  for (const t of typed) { const ts = (t.typeName || t.type) ? ` — type "${esc(t.typeName || t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE

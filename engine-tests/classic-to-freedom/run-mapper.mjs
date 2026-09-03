@@ -4943,6 +4943,32 @@ check("typed-page: base form spec SUPPRESSED (no general mapping) — only List 
   && /2 typed forms/.test(docFirstSize)       // the Overview (FIRST) Size line describes the typed forms…
   && !docFirstSize.includes(" fields ·"),     // …NOT the base-derived "N fields · … · 0 rules" line
   () => docFirstSize);
+// ENG-96327: a per-type FORM must NOT carry its own List page block. A typed page's bundle includes the section
+// layers (same entity), so without `formOnly` its sub-run read as a section migration and rendered a redundant
+// (demoted) `##### List page` inside EVERY typed form. The List page renders ONCE from the base section only.
+check("ENG-96327 typed form: no List page block nested inside the per-type forms (rendered once from the base section)",
+  /^### List page/m.test(docSecRun.plan)       // the base section's List page — still present
+  && !/#{4,} List page/.test(docSecRun.plan),  // no demoted (4+ `#`) List page nested inside a `#### Typed form:` block
+  () => docSecRun.plan.split("\n").filter((l) => /List page|Typed form/.test(l)));
+// ENG-96327 (Issue 2): the plan NAMES the Type each per-type form is for. When the agent resolved it on-stand and
+// put `typeName` on the entry → show the name; when only the raw `typeColumnValue` GUID is present → show it WITH a
+// ⚠ to resolve (a bare GUID tells the approver nothing about which Type the form is for).
+const typedTypeRun = runMigration({
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [
+    { schema: "XICPage", type: "1b2f4d6e-0000-4000-8000-000000000001", typeName: "Retirement plan" },
+    { schema: "XOCPage", type: "1b2f4d6e-0000-4000-8000-000000000002" },
+  ],
+  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField") },
+  addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("ENG-96327 typed type: a resolved typeName shows the NAME; an unresolved Type-GUID shows the GUID + ⚠ resolve on-stand",
+  /#### Typed form: XICPage — type "Retirement plan"/.test(typedTypeRun.plan)
+  && !/Retirement plan[^\n]*⚠ resolve/.test(typedTypeRun.plan)
+  && /#### Typed form: XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand/.test(typedTypeRun.plan),
+  () => typedTypeRun.plan.split("\n").filter((l) => /Typed form/.test(l)));
 // a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
 // (base pageBusinessRules can be 0 while each typed form has several; the plan must show them per type).
 const docRuleRun = runMigration({

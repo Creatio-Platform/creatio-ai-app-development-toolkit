@@ -973,7 +973,11 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    const f = foldSubPage(tkey, typedSchemas, foldCtx);
+    // `formOnly`: a per-type page is a FORM, not a section. Its bundle carries the section layers (same entity as the
+    // section), so without this its sub-run reads as a section migration and renders a redundant `### List page` block
+    // inside each typed form (ENG-96327). The List page is rendered ONCE by the base fold (`listPageOnly`); the typed
+    // forms show their own layout only.
+    const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
