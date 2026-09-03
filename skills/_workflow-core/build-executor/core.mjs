@@ -37,7 +37,7 @@ import {
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planInvalidNextAll,
-  preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, repairBlock, requeueDecisions,
+  preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
   resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
@@ -1092,33 +1092,34 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // same reason: the engine gates on deliverables and has no row for "the answer you were handed produced nothing".
   // Two sets, one union — kept separate at the source so `findings` stays exactly what it is (the operator re-opening
   // a unit the gate called complete) rather than becoming the answer channel this ticket exists to replace.
-  // A REOPEN GRANT IS BOUNDED BY THE ROUND BUDGET (PR #128 review, round 17, Major 6).
-  // The two openness notions disagreed on purpose — `openNow()` admits a unit a reopen key holds open, while
-  // `parkableKeys` filters on `isUnitOpen`, which for a page the gate calls green is `false`. So a gate-green unit
-  // held open ONLY by a reopen key was admitted to every round and was a park candidate in none of them, and
-  // `driveRounds` is `while (true)` with no global cap. Since the answer channel's grant is released at DISPATCH
-  // (correctly — a builder that died must not be charged for its repair round), a build agent returning `null`
-  // DETERMINISTICALLY left the key set for ever: one full Build + Verify + Judge + Reconcile round per iteration,
-  // on a unit the gate already calls complete, until the host's own limits stopped it.
+  // A REOPEN GRANT IS BOUNDED BY THE ROUND BUDGET — THE ANSWER CHANNEL'S, NOT THE FINDINGS ONE (PR #128 review,
+  // round 17 Major 6, corrected in round 20 Major 1). The two openness notions disagreed on purpose — `openNow()`
+  // admits a unit a reopen key holds open, while `parkableKeys` filters on `isUnitOpen`, which for a page the gate
+  // calls green is `false`. So a gate-green unit held open ONLY by a reopen key was admitted to every round and was
+  // a park candidate in none of them, and `driveRounds` is `while (true)` with no global cap. Since the answer
+  // channel's grant is released at DISPATCH (correctly — a builder that died must not be charged for its repair
+  // round) AND RE-ADDED by `reportResolutionAccounting`, a build agent returning `null` DETERMINISTICALLY left the
+  // key set for ever: one full Build + Verify + Judge + Reconcile round per iteration, on a unit the gate already
+  // calls complete, until the host's own limits stopped it.
   // Released rather than parked: parking would take the findings channel's ONE extra dispatch away from a unit that
   // is already at the budget, which is a different feature's contract. Releasing the key ends the loop and leaves
   // the answer in `unconsumed`, so it is still reported to the operator — the fail-closed direction this channel
   // takes everywhere else. `chargeBuildAttempt` runs on the `!res` path too, so the count that bounds this always
   // advances and termination does not depend on the builder cooperating.
+  // `findingsPending` IS EXEMPT, and round 17 wrongly folded it in: it is seeded ONCE and never re-added, so it
+  // cannot produce the loop the cap exists for — while capping it silently dropped an operator finding filed against
+  // a unit that had already spent its rounds. The reasoning and the truth table live in `reopenKeySet`, which is
+  // pure and executed by the offline suite; this closure only supplies the budget predicate and the once-per-key log.
   const exhaustedReopen = new Set()
   const reopenKeys = () => {
-    const out = new Set()
-    for (const k of [...findingsPending, ...resolutionsPending]) {
-      if (roundsRun(state.roundOf, localRounds, k) >= MAX_ROUNDS) {
-        if (!exhaustedReopen.has(k)) {
-          exhaustedReopen.add(k)
-          log(`\`${k}\` has spent its ${MAX_ROUNDS}-round budget — its reopen grant no longer forces the unit open. Anything still unaccounted for is reported rather than retried.`)
-        }
-        continue
-      }
-      out.add(k)
+    const { keys, exhausted } = reopenKeySet(findingsPending, resolutionsPending,
+      (k) => roundsRun(state.roundOf, localRounds, k) >= MAX_ROUNDS)
+    for (const k of exhausted) {
+      if (exhaustedReopen.has(k)) continue
+      exhaustedReopen.add(k)
+      log(`\`${k}\` has spent its ${MAX_ROUNDS}-round budget — its reopen grant no longer forces the unit open. Anything still unaccounted for is reported rather than retried.`)
     }
-    return out
+    return keys
   }
   // PR #128 review (round 6) -- the union is built ONCE PER CALL, not once per schedule element. It is still rebuilt
   // on EVERY `openNow()` because both Sets mutate between calls (a grant is spent, a contradiction files one), so it
@@ -1706,6 +1707,17 @@ THIS UNIT IS A CHECKPOINT — the run STOPS after you finish it so a human can o
 // `unconsumed` is REPLACED per unit, never appended to: this runs every round the unit builds, and an entry that
 // survived its own repair would otherwise be reported twice and hold the run incomplete on a resolved question.
 function reportResolutionAccounting(unit, routed, res, dispatched = true) {
+  // WHAT `routed` IS, AND WHY A UNIT-WIDE WIPE CANNOT LOSE A ROW (PR #128 review, round 20, Major 2). `routed` is
+  // NOT a per-dispatch delta: the caller recomputes it every dispatch as
+  // `resolutionsForUnit(state.preflightItems, unit.key, unitKeys)` — the FULL persisted answer set, filtered to the
+  // answers this unit owns. `preflightItems` is a REQUIRED key of `RECONCILE_SCHEMA`, so a round cannot arrive with
+  // it silently dropped. So for any answer still owed to this unit, `routed` carries it, the early return below is
+  // not reached, and `unconsumedResolutions(routed, res, unit.key)` re-adds the row the wipe just cleared.
+  // `routed` is empty for this unit ONLY when nothing is owed any more — a withdrawn answer, a `list-*` item
+  // re-routed to another unit by a newly published `list` key, an id a regenerated manifest shifted — which is
+  // exactly the state whose stale row must be cleared, and the reason this wipe was hoisted above the guard in the
+  // first place. A verifier-sourced row is NOT dispatch-sourced and is never touched here (see the `source` scoping
+  // below), so the higher-trust record survives regardless.
   // HOISTED ABOVE THE GUARD (PR #128 review). This clear used to sit BELOW `if (!routed.length) return`, so the one
   // condition that empties `routed` -- a withdrawn answer, a `list-*` item re-routed by a newly published `list` key,
   // an id a regenerated manifest shifted -- was the one condition under which the unit's own entries could never be

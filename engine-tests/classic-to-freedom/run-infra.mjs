@@ -166,7 +166,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
 // run, not to be pinned by name — and where a seam could be executed instead of regexed, this PR has moved that way
 // (round 13 replaced a source-regex wiring check with a real `composeBuildPrompt` composition).
 const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings"];
+  "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings", "reopenKeySet"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
@@ -1456,12 +1456,15 @@ check("findings: a reopened unit gets ONE repair attempt — the constant key se
     // reported defect unscheduled and this check green), and the per-invocation consumption must still happen.
     && /isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, keys, packageState\)\)/.test(wfSrc)
     && /const openNow = \(\) => \{\s*const keys = reopenKeys\(\)/.test(wfSrc)
-    // ROUND 17 (Major 6): `reopenKeys` is no longer a one-liner — it now DROPS a grant whose unit has spent the
-    // round budget, because a gate-green unit held open only by a reopen key was admitted to every round and
-    // was a park candidate in none, and `driveRounds` has no global cap. The union over BOTH channels is still
-    // pinned (a rename dropping `findingsPending` would leave a reported defect unscheduled), and so is the bound.
-    && /for \(const k of \[\.\.\.findingsPending, \.\.\.resolutionsPending\]\) \{/.test(wfSrc)
-    && /if \(roundsRun\(state\.roundOf, localRounds, k\) >= MAX_ROUNDS\) \{/.test(wfSrc)
+    // ROUND 20 (Major 1) — THE BOUND IS THE ANSWER CHANNEL'S ALONE, and the decision moved into the pure
+    // `reopenKeySet`, which the behavioural checks below EXECUTE. Round 17 capped the union, which silently
+    // dropped an operator finding filed against a unit that had already spent its rounds; `findingsPending` is
+    // seeded once and never re-added, so it cannot produce the loop the cap exists for. The union over BOTH
+    // channels is still pinned (a rename dropping `findingsPending` would leave a reported defect unscheduled),
+    // and so is the bound and the per-invocation consumption.
+    && /const \{ keys, exhausted \} = reopenKeySet\(findingsPending, resolutionsPending,/.test(wfSrc)
+    && /\(k\) => roundsRun\(state\.roundOf, localRounds, k\) >= MAX_ROUNDS\)/.test(wfSrc)
+    && !/for \(const k of \[\.\.\.findingsPending, \.\.\.resolutionsPending\]\)/.test(wfSrc)
     && /findingsPending\.delete\(unit\.key\)/.test(wfSrc));
 check("findings: a key naming no published unit REFUSES the run — nothing schedules it, so the run would close green with the reported defect untouched",
   /stopped: 'unknown-finding-key'/.test(wfSrc) && /unknownCheckpointKeys\(\[\.\.\.FINDING_KEYS\]/.test(wfSrc));
@@ -1817,11 +1820,24 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // EVERY property still declared. The fix for the byte count was to stop describing the INSIDES of the nested
 // objects — not to drop fields — and the core computes on all 41 of them, so a shrink that removed one would be a
 // silent contract change no other test here would notice.
+// PR #128 review (round 20, Major 3) — THE FOUR NEW KEYS ARE ASSERTED BY NAME, not only by the list's length. A typo
+// or a rename in any one of them keeps `required.length` at 18 and left this check green while the invariant the
+// ticket exists to guarantee was gone. `unconsumedResolutions` is the destructive one (`schemas.mjs` states it: an
+// omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
+// `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
+// `resolutions*` keys are the reopen bookkeeping that must survive a resume.
+const RECONCILE_REQUIRED_ANSWER_KEYS = ["preflightItems", "resolutionsReopened", "resolutionsPending", "unconsumedResolutions"];
 check("ENG-95930: the loosened Reconcile schema still declares all 45 properties (42 + the answers channel's three round-trip keys) and its 18-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
   Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 45 && (wf.RECONCILE_SCHEMA?.required || []).length === 18
     && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
+check(`PR #128 review (round 20): each of the answers channel's four required Reconcile keys is asserted BY NAME (${RECONCILE_REQUIRED_ANSWER_KEYS.join(", ")}) — a rename or typo in any one keeps the required list 18 long, so the count check above cannot see it, and an unrequired key is a silently droppable one: that is how an unconsumed answer went missing across a resume in the first place`,
+  RECONCILE_REQUIRED_ANSWER_KEYS.every((k) => (wf.RECONCILE_SCHEMA?.required || []).includes(k))
+    && RECONCILE_REQUIRED_ANSWER_KEYS.every((k) => !!wf.RECONCILE_SCHEMA?.properties?.[k]),
+  () => ({ missingFromRequired: RECONCILE_REQUIRED_ANSWER_KEYS.filter((k) => !(wf.RECONCILE_SCHEMA?.required || []).includes(k)),
+    missingFromProperties: RECONCILE_REQUIRED_ANSWER_KEYS.filter((k) => !wf.RECONCILE_SCHEMA?.properties?.[k]),
+    required: wf.RECONCILE_SCHEMA?.required || [] }));
 // The shape table is the schema's other half now, so an empty or truncated one is a silent loss of every check the
 // schema used to perform. Pinned by the properties that carry a decision: the verify digest, the preflight answers,
 // and the two `resolved: false` gates.
@@ -3630,6 +3646,47 @@ check("PR #128 third-round review (RC-16): the reopen UNION re-opens a COMPLETE 
   },
   () => "a resolutions-only key re-opens its complete unit and leaves another complete unit closed");
 
+/* PR #128 REVIEW (ROUND 20, MAJOR 1) — THE ROUND BUDGET BINDS THE ANSWER CHANNEL, NOT THE FINDINGS ONE.
+   Round 17 fixed a real unbounded `while (true)` by dropping a reopen grant whose unit had spent `MAX_ROUNDS`,
+   but it applied that drop to the UNION — so a key that reached `reopenKeys()` through `findingsPending` was
+   dropped too. `findingsPending` is seeded ONCE from the caller's `findings` and never re-added (the answer
+   channel's key IS re-added, every round, which is the loop the cap exists for), so an operator finding filed
+   against a unit that had already burned its rounds — a resume, or a gate that went green on round 3 — never
+   opened the unit, and the ZERO-WORK early return (which rests on `openNow()` ALONE) then reported the run
+   complete over the reported defect. That is the exact case the findings channel exists for, and the case
+   `isUnitOpenWithFindings` documents as never parked by the round budget.
+   Executed rather than source-pinned, for the reason `runComplete` was extracted: while this lived inside
+   `run()`'s closure no test could reach it, and every pin on it proved the text existed, not that the truth
+   table evaluated. Both directions are asserted — the finding survives exhaustion, the answer key does not. */
+const EXHAUST_ALL = () => true;
+check("PR #128 review (round 20, Major 1): an EXHAUSTED-ROUND operator finding still forces its unit open — `reopenKeySet` exempts `findingsPending` from the round budget, and the unit it names still reports open through `isUnitOpenWithFindings` on a machine-GREEN gate, which is the one case the findings channel exists for",
+  () => {
+    const { keys, exhausted } = wf.reopenKeySet(new Set(["main"]), new Set(), EXHAUST_ALL);
+    return keys.has("main") && exhausted.length === 0
+      && wf.isUnitOpenWithFindings({ key: "main", kind: "page" }, { pages: { main: { complete: true } } }, {}, keys) === true;
+  },
+  () => "a finding is seeded once and never re-added, so it buys one dispatch and cannot loop");
+check("PR #128 review (round 20, Major 1): an EXHAUSTED-ROUND answer key IS released and reported as exhausted — the round-17 bound on the answer channel is intact, so a gate-green unit held open only by a re-added resolutions grant no longer loops forever",
+  () => {
+    const { keys, exhausted } = wf.reopenKeySet(new Set(), new Set(["main"]), EXHAUST_ALL);
+    return keys.size === 0 && exhausted.join(",") === "main"
+      && wf.isUnitOpenWithFindings({ key: "main", kind: "page" }, { pages: { main: { complete: true } } }, {}, keys) === false;
+  },
+  () => "the answer channel re-adds its key every round, which is the loop the cap exists for");
+check("PR #128 review (round 20, Major 1): a key in BOTH halves is held by its FINDING half and is never reported exhausted — releasing it would take the findings channel's one dispatch away on the strength of the other channel's budget",
+  () => {
+    const { keys, exhausted } = wf.reopenKeySet(new Set(["main"]), new Set(["main"]), EXHAUST_ALL);
+    return keys.has("main") && keys.size === 1 && exhausted.length === 0;
+  },
+  () => "one key, two grants: the stronger grant wins and the log stays silent");
+check("PR #128 review (round 20, Major 1): with the budget UNSPENT `reopenKeySet` is exactly the union of the two halves and reports nothing exhausted — the fix must not narrow the normal path",
+  () => {
+    const { keys, exhausted } = wf.reopenKeySet(new Set(["a"]), new Set(["b", "c"]), () => false);
+    return [...keys].sort().join(",") === "a,b,c" && exhausted.length === 0
+      && wf.reopenKeySet(undefined, undefined, EXHAUST_ALL).keys.size === 0;
+  },
+  () => "a,b,c with no exhaustion, and absent sets are empty rather than a throw");
+
 /* THE BATCH GATE, executed. The answered-items instructions exist because a live run showed batches carrying an
    answered item reporting their unanswered ones as unresolvable. The prose is pinned by regex below, but the gate
    deciding WHICH batches receive it is executable logic — and as an inline expression nothing referenced it, so a
@@ -5356,7 +5413,14 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
     && /if \(!openNow\(\)\.length\) \{/.test(coreSrc)
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(coreSrc));
 check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
-  /'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',[\s\S]{0,900}'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'\]/.test(wfSrc));
+  // PR #128 review (round 20, Minor) — ASSERTED AGAINST THE PARSED `required` ARRAY, not a source regex over
+  // `wfSrc`. `wf` is sliced out of the SHIPPED artifact and imported, so the runtime read covers the same file the
+  // regex read — while the regex additionally depended on the five names staying adjacent within 900 characters,
+  // i.e. it would have gone green-but-vacuous on a reformat and proved source-text adjacency rather than the
+  // schema the host actually receives. The four answers-channel keys have their own by-name check above.
+  ["targetPackage", "packageState", "evidenceIds", "evidenceFiled", "evidenceRejected"]
+    .every((k) => (wf.RECONCILE_SCHEMA?.required || []).includes(k)),
+  () => ({ required: wf.RECONCILE_SCHEMA?.required || [] }));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
   // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
   // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.

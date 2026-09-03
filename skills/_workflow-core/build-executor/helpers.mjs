@@ -979,6 +979,34 @@ export function isUnitOpenWithFindings(unit, verify, reachState, findingKeys, pa
   return isUnitOpen(unit, verify, reachState, packageState)
 }
 
+// WHICH REOPEN KEYS STILL FORCE A UNIT OPEN — the union `openNow()` hands `isUnitOpenWithFindings`, with the round
+// budget applied to the ANSWER channel's keys ONLY. Extracted and EXECUTED for the reason `runComplete` was: the two
+// channels' grants have DIFFERENT lifetimes, that difference is the entire content of this decision, and while it
+// lived inside `run()`'s closure no test could reach it — the regression below shipped in exactly that blind spot.
+// WHY ONLY `resolutionsPending` IS CAPPED (PR #128 review, round 20, Major 1). Round 17 added the cap to end an
+// unbounded `while (true)`, and that argument is about the ANSWER channel alone: it RE-ADDS its key every round
+// (`reportResolutionAccounting`, and the contradiction loop), so a build agent returning `null` left the key in the
+// set for ever. `findingsPending` is seeded ONCE from the caller's `findings` and is never re-added, so it buys
+// exactly one dispatch and cannot loop. Capping it broke the channel the cap was never needed for: an operator
+// finding filed against a unit that had ALREADY spent its rounds — a resume, or a gate that went green on round 3 —
+// was dropped before it could buy its one repair round, and the ZERO-WORK early return (which rests on `openNow()`
+// ALONE) then reported the run complete over the reported defect. That is the one case the findings channel exists
+// for, and `isUnitOpenWithFindings` above states the invariant directly: a unit open only because a human reported a
+// defect is scheduled for repair and is NEVER parked by the round budget.
+// A key in BOTH sets is held by its finding half and is never released here, so no exhaustion is reported for it.
+// `exhausted` is RETURNED rather than logged from in here, so this stays pure and the caller keeps its
+// once-per-key log guard.
+export function reopenKeySet(findingsPending, resolutionsPending, isExhausted) {
+  const keys = new Set(findingsPending || [])
+  const exhausted = []
+  for (const k of resolutionsPending || []) {
+    if (keys.has(k)) continue
+    if (isExhausted(k)) { exhausted.push(k); continue }
+    keys.add(k)
+  }
+  return { keys, exhausted }
+}
+
 export const nonBlank = (s) => typeof s === 'string' && s.trim() !== ''
 // The ONE place this id is composed. Composing it here is a validation of what the builder COPIED, never a
 // substitute for copying it: `qualityGateRows` emits exactly this for every key that carries the row.

@@ -616,9 +616,14 @@ export const VERIFIER_SCHEMA = {
     reachabilityWritten: { type: 'object', additionalProperties: { type: 'string' } },
     evidenceWritten: { type: 'array', items: { type: 'string' } },   // evidence ids filed
     // ENG-95503 — WHETHER THE PAGE SHOWS WHAT EACH OPERATOR ANSWER ASKED FOR. An OBSERVATION, not a verdict: the run
-    // compares it against the builder's own `applied` claim and records where the two disagree. Not required — a
-    // round with no answered items has nothing to report, and a verifier that could not fetch a page must not be
-    // forced to invent a row about it; an absent row reads as unconfirmed, which is what it is.
+    // compares it against the builder's own `applied` claim and records where the two disagree. Not required IN THIS
+    // STATIC BASE — a round with no answered items has nothing to report, and a verifier that could not fetch a page
+    // must not be forced to invent a row about it; an absent row reads as unconfirmed, which is what it is.
+    // IT IS REQUIRED ON A ROUND THAT HANDED OUT ANSWERS, and the obligation is ADDED rather than declared here:
+    // `verifierSchemaWithChecks(VERIFIER_SCHEMA, resolutionClaimCount(claims))` (helpers.mjs) appends it to
+    // `required` for exactly those dispatches. That is what `references/02-queue-and-built-files.md` describes when
+    // it says the verifier returns `resolutionChecks` for the answers it was handed — the doc and this comment are
+    // about the two halves of one conditional, not in conflict.
     resolutionChecks: {
       type: 'array',
       items: {

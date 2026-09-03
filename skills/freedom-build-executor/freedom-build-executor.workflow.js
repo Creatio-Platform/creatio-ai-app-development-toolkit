@@ -1129,6 +1129,17 @@ function isUnitOpenWithFindings(unit, verify, reachState, findingKeys, packageSt
   return isUnitOpen(unit, verify, reachState, packageState)
 }
 
+function reopenKeySet(findingsPending, resolutionsPending, isExhausted) {
+  const keys = new Set(findingsPending || [])
+  const exhausted = []
+  for (const k of resolutionsPending || []) {
+    if (keys.has(k)) continue
+    if (isExhausted(k)) { exhausted.push(k); continue }
+    keys.add(k)
+  }
+  return { keys, exhausted }
+}
+
 const nonBlank = (s) => typeof s === 'string' && s.trim() !== ''
 const qualityGateId = (key) => `${key}#quality-gates`
 function owesGuidelines(unit, evidenceIds) {
@@ -2480,18 +2491,14 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
     .sort((a, b) => a.localeCompare(b))
   const exhaustedReopen = new Set()
   const reopenKeys = () => {
-    const out = new Set()
-    for (const k of [...findingsPending, ...resolutionsPending]) {
-      if (roundsRun(state.roundOf, localRounds, k) >= MAX_ROUNDS) {
-        if (!exhaustedReopen.has(k)) {
-          exhaustedReopen.add(k)
-          log(`\`${k}\` has spent its ${MAX_ROUNDS}-round budget — its reopen grant no longer forces the unit open. Anything still unaccounted for is reported rather than retried.`)
-        }
-        continue
-      }
-      out.add(k)
+    const { keys, exhausted } = reopenKeySet(findingsPending, resolutionsPending,
+      (k) => roundsRun(state.roundOf, localRounds, k) >= MAX_ROUNDS)
+    for (const k of exhausted) {
+      if (exhaustedReopen.has(k)) continue
+      exhaustedReopen.add(k)
+      log(`\`${k}\` has spent its ${MAX_ROUNDS}-round budget — its reopen grant no longer forces the unit open. Anything still unaccounted for is reported rather than retried.`)
     }
-    return out
+    return keys
   }
   const openNow = () => {
     const keys = reopenKeys()
