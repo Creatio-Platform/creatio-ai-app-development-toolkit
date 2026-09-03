@@ -560,10 +560,16 @@ const RECONCILE_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['type', 'resolved'],
+        required: ['type', 'resolved', 'resolvedFrom'],
         properties: {
           type: { type: 'string' },
           resolved: { type: 'boolean' },
+          // ENG-95468 (residual) — WHERE the answer came from: `'stand'` (this environment answered) or `'catalog'`
+          // (it did not — `get-component-info` could not probe the environment and answered from its bundled
+          // `latest` catalog instead). Only `'stand'` is a confirmation; a catalog answer STOPS the round rather
+          // than clearing the gate on a round where nothing about the stand was checked. REQUIRED, because an
+          // optional provenance field is a gate that is silently off on exactly the round that needs it.
+          resolvedFrom: { type: 'string' },
           note: { type: 'string' },
           // ENG-95683 — the OPTIONAL typed gate the plan resolved for this type: `kind` ('composite'), the gating
           // package `id`, and the optional gating `feature`. When a `resolved: false` type carries a well-formed
@@ -1738,6 +1744,77 @@ const planInvalidNext = (mismatches, tail) => {
     + 'These do not: ' + componentReplanClause(list) + ' ' + tail
 }
 
+// --- ENG-95468 (residual): AN ANSWER THAT DID NOT COME FROM THIS STAND IS NOT A CONFIRMATION -----------------
+// The measured failure this closes (ST_2 round 5, `wf_c8fb22f1-27d`): the stand was unreachable — a hard DNS
+// failure, reproduced through both the shell `clio` and the MCP transport — and the component sweep did not stop.
+// `get-component-info` fell back to its BUNDLED `latest` catalog and answered `resolved: true` for all nine types,
+// recording the substitution only in free-text `note` (`resolvedFrom=latest-fallback`,
+// `resolvedFromReason=probe-error`). `resolved: true` is what the round arithmetic reads, so the component gate
+// PASSED on a round where nothing about the stand had been checked: REFS → BUILD → VERIFY → persist all ran after
+// the point the stand was known to be gone, five agents and ~1.68M weighted tokens, zero stand writes — and the
+// information needed to stop was already in hand at this validation's own first phase.
+//
+// So an answer now carries WHERE IT CAME FROM, and only one of the two values is a confirmation. This is the same
+// three-valued discipline step 2b applies to the target package (`exists` / `absent` / `unknown`, "do NOT resolve
+// doubt into either answer") and ENG-95884 later hardened — the component axis simply never had it.
+//
+// WHY NOT the rule the TEMPLATE axis uses. That arm says an inconclusive read must be OMITTED, never reported as
+// `false`, which is right for it: its danger is a false NEGATIVE (a stop no re-plan can act on). This axis fails
+// the other way — a false POSITIVE — and omission cannot express it, because a missing entry is deliberately NOT
+// gated here (the un-swept types are logged and the run continues: absence is not evidence). Silence would
+// therefore reproduce the same unstopped round with a log line in place of the `resolved: true`. It takes a VALUE.
+const RESOLVED_FROM_STAND = 'stand'
+const RESOLVED_FROM_CATALOG = 'catalog'
+// The published types whose answer did NOT come from this stand. Read exactly like `componentTypeMismatches`
+// otherwise: scoped to what the PLAN published (a sweep cannot invent a stop over a type no plan names), and a
+// stated value is the only thing that gates — an entry with NO `resolvedFrom` is left alone, so a state written
+// before this field existed behaves exactly as it did. That drop path is closed where it belongs instead: the
+// response-shape check makes `resolvedFrom` REQUIRED on every entry, so an agent answer missing it is refused and
+// retried rather than quietly reaching this arithmetic without provenance.
+// `resolved` rides along because the stop's text has to say something honest about a catalog `resolved: false` too:
+// it is not evidence about this stand, and it must not be handed to an operator as a re-plan.
+function standUnconfirmedComponents(componentResolution, publishedTypes) {
+  const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
+  return (componentResolution || [])
+    .filter((c) => c && typeof c.type === 'string' && typeof c.resolvedFrom === 'string')
+    .filter((c) => c.resolvedFrom.trim() !== RESOLVED_FROM_STAND)
+    .filter((c) => published.size === 0 || published.has(c.type))
+    // FAIL-CLOSED on an unrecognised value: anything that is not `'stand'` is treated as "not a confirmation",
+    // including a value neither literal names. An agent that invents a third word is telling us it did not answer
+    // from the stand, and reading an unknown token as a pass is the exact class of defect this closes.
+    // `capNote` on the provenance for the reason it is used on `note`: both are AGENT-SUPPLIED and both are
+    // rendered into the operator-facing `next`, so a newline or a wall of text in either could forge a line or bury
+    // the fix instruction. It flattens whitespace runs and caps the length; the value it should carry is one word.
+    .map((c) => ({
+      type: c.type,
+      resolvedFrom: capNote(c.resolvedFrom),
+      resolved: c.resolved === true,
+      note: (typeof c.note === 'string' && c.note.trim()) ? capNote(c.note) : 'answered without reaching this stand',
+    }))
+}
+const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
+const standUnconfirmedDetail = (entries) => (entries || [])
+  .map((c) => '`' + c.type + '` (from `' + c.resolvedFrom + '`: ' + c.note + ')').join('; ')
+// The operator's next move, and it is NOT a re-plan: the plan is not implicated by an answer nobody got from the
+// stand. ONE home for the wording, like `componentReplanClause`, so the pre-build and mid-run stops cannot drift.
+const standUnvalidatedNext = (entries, tail) => {
+  const list = entries || []
+  const falseFromCatalog = list.filter((c) => !c.resolved).length
+  return 'the component types this plan names were NOT confirmed on the target stand this round — they were answered '
+    + 'without reaching it: ' + standUnconfirmedDetail(list) + '. A bundled-catalog answer is not an answer about '
+    + 'THIS environment (clio substitutes its `latest` catalog when the stand cannot be probed — '
+    + '`resolvedFromReason=probe-error`), so this round validated nothing and is not a pass'
+    + (falseFromCatalog
+      ? '. ' + falseFromCatalog + ' of them came back NOT resolved, from the catalog — that is not evidence about '
+        + 'this stand either, so do NOT re-plan on it'
+      : '')
+    + '. Restore access to the stand and re-run this build: check the registered environment, its DNS and its '
+    + 'credentials (`clio ping`), confirm `get-component-info` answers from the environment itself, then re-run. '
+    + 'There is no flag that turns a catalog answer into a confirmation — a stand whose version cannot be probed '
+    + 'while it is otherwise up fails this the same way, and the fix is the same: make the environment answerable. '
+    + tail
+}
+
 // --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
 // A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
 // first write. Components were (above). These two were not, and the third Applicant run failed on both:
@@ -2353,6 +2430,10 @@ function runReturn(extra) {
     // stop keeps `stopped: 'new-app-over-existing-package'` (placement is primary) yet still carries the component
     // mismatches here, so keying off `stopped === 'plan-invalid-against-stand'` alone would miss them on that stop.
     componentMismatches: [],
+    // ENG-95468 (residual) — the component types whose answer did not come from THIS stand, on every return and
+    // defaulted for the same reason as the three fields around it: `standUnconfirmedComponents.length` is the ONE
+    // signal that says "this round validated nothing", and a consumer must not have to infer it from `stopped`.
+    standUnconfirmedComponents: [],
     // The other two axes of the same pre-build question (ENG-95468), defaulted for the same reason and read the same
     // way: `templateMismatches.length` and `appIdentityMismatch !== null` are true or false on EVERY return, whatever
     // stop fired. A consumer that had to switch on `stopped` to learn whether the plan disagreed with the stand would
@@ -2465,7 +2546,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\` as \`{ found, version, date, who, recordedIn, quote }\` — \`recordedIn\` the file you found it in, \`quote\` the entry VERBATIM, and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. **Return \`planGaps\` — \`--units.planGaps\`, VERBATIM.** The engine's OWN verdict on this manifest, covering all FOUR plan-level checks (plan completeness included), and the ONE thing this run's plan-level stop reads. Copy the array as published: do NOT quote a stderr line into it, do NOT summarise or drop an entry, and do NOT re-derive it from the \`--verify\` verdict (that is the BUILD verdict, narrower by design). **\`[]\` is REQUIRED when empty** — an absent field cannot be told apart from a clean plan. None are buildable-out-of: a run can be \`complete: true\` and still stop on one. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty prefix is a REAL answer and is not the same as unreadable — but it must NOT travel as a bare empty string** (an empty-string value is the token that has been dropped in transit from this very answer, which then fails to parse). \`schemaNamePrefixEmpty\` is REQUIRED on EVERY answer: return \`true\` with \`schemaNamePrefix: null\` when this stand's prefix is EMPTY (a common and correct configuration), and \`false\` in every other case — beside the prefix VERBATIM when you read one, or beside \`schemaNamePrefix: null\` when you could not read the setting at all. A field that must always be sent cannot be silently dropped: an answer missing it is refused and retried, so an empty prefix can never quietly decode as unreadable. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` (each \`{ id, pageKey, kind, item, requires, resolution }\` — \`pageKey\` is the page the item belongs to and is REQUIRED on every item) and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` AND \`resolutionsConflicts\` — the root-level \`--units.resolutionsUnmatched\` / \`--units.resolutionsConflicts\`, verbatim, each entry \`{ id, kind, item }\` (identifiers only — no \`answer\` text, it is already in the operator's own file). Unmatched are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks; conflicts are questions answered TWICE through the two key forms. This run is the only thing that can tell the operator about either, so return BOTH as \`[]\` when there is nothing to report rather than omitting them.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Run it VERBATIM — its \`--slices\` flag writes each unit its own row of the queue, and a dropped flag costs every build agent this round its slice. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. **Return \`planGaps\` — \`--units.planGaps\`, VERBATIM.** The engine's OWN verdict on this manifest, covering all FOUR plan-level checks (plan completeness included), and the ONE thing this run's plan-level stop reads. Copy the array as published: do NOT quote a stderr line into it, do NOT summarise or drop an entry, and do NOT re-derive it from the \`--verify\` verdict (that is the BUILD verdict, narrower by design). **\`[]\` is REQUIRED when empty** — an absent field cannot be told apart from a clean plan. None are buildable-out-of: a run can be \`complete: true\` and still stop on one. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Then RESOLVE each of those types against the target stand, READ-ONLY: call \`get-component-info component-type=<type>\` (scoped to THIS environment) for every one, and return \`componentResolution\` — one \`{ type, resolved, resolvedFrom, note }\` per type. \`resolved: true\` when the tool confirms it is a real component type on this stand (a \`compositeOnly\` component still counts — it resolves), \`false\` when the tool reports it is not a component type / matches nothing (a fabricated name, or a composite/component whose \`CrtCustomer360App\`-style package or gating feature is not installed here). Put the tool's reason in \`note\` — the closest matches it suggests, or the required package/feature. **AND SAY WHERE EACH ANSWER CAME FROM — \`resolvedFrom\`, REQUIRED on EVERY entry.** \`'${RESOLVED_FROM_STAND}'\` when the tool answered about THIS environment. \`'${RESOLVED_FROM_CATALOG}'\` when it did NOT: it could not probe the environment and answered from its own BUNDLED \`latest\` catalog instead — its note says so (\`resolvedFrom=latest-fallback\`, \`resolvedFromReason=probe-error\`) — or the stand is unreachable and what you are reporting is a catalog/documentation answer rather than this stand's. A catalog answer is NOT a confirmation about this stand and this run does not read it as one: it STOPS the round and asks for the stand instead, so never dress one up as a plain on-stand \`resolved: true\`. That is the exact failure this field exists to prevent — measured once at five agents and 18 minutes of build, verify and persist work on a round where nothing about the stand had been checked, after the unreachable stand was already known from this step's own first phase. Report what you actually got: if the WHOLE sweep came from the catalog, say \`'${RESOLVED_FROM_CATALOG}'\` on every entry rather than omitting the entries, and do NOT resolve the doubt into either answer. **When the type is a gated COMPOSITE** — \`get-component-info\` reports a required gating package (a \`CrtCustomer360App\`-style package, and a gating feature when there is one) — ALSO return the typed gate on that entry: \`kind: "composite"\`, \`id: "<gating package>"\`, and \`feature: "<gating feature>"\` when there is one. \`get-component-info\` is the ONLY source of the gate today: the \`componentTypes\` list is bare type-name strings that carry no package, and the \`--resolved-gates\` provenance artifact is not yet wired into this run (ENG-95555) — so do NOT infer a gate from either, and never fabricate a package name. That is OPTIONAL — omit it when \`get-component-info\` names no gating package — but when present it lets the stop tell the operator to INSTALL the package (and enable the feature) and re-run the BUILD, instead of a dead-end re-plan for a plan that is actually correct. This is the pre-build COMPONENT GATE: a type that does not resolve stops the run BEFORE any unit is built, naming every unresolved type at once, so it is fixed once in a re-plan instead of failing a builder mid-Build. Resolve, never create.  **THEN THE OTHER TWO THINGS THE PLAN ASSERTS ABOUT THIS STAND, both READ-ONLY (ENG-95468).** (a) **TEMPLATES.** Return \`templateNames\` — \`--units.templateNames\`, VERBATIM: the deduped Freedom page-TEMPLATE schema names this plan asserts. Then resolve each one against THIS stand and return \`templateResolution\` — one \`{ name, resolved, note }\` per name. \`resolved: true\` when a schema by that EXACT name exists here (clio \`get-schema\`, \`get-page\` — a template IS a page schema — or \`list-pages\` matched on \`schema-name\`), \`false\` when the stand ANSWERED that nothing of that name is there. Put what you actually found in \`note\` — the closest names the stand DOES have, so a re-plan can pick the right one instead of guessing. **\`false\` means the stand said no, NOT that your read failed.** If the call errored, timed out, needed a permission you do not have, or you could not establish the answer for any other reason, OMIT that entry entirely and say why in \`notes\` — an omitted name is reported as un-swept and does NOT stop the run, while a \`false\` you could not stand behind would stop a correct plan before its first write. That asymmetry is deliberate: the cost of a missed check is one mid-build failure, the cost of a fabricated one is a re-plan nobody needed. A template name is a plan assertion exactly like a component type: a name this stand lacks does not fail loudly, it gets built on whatever the platform falls back to, and the divergence then surfaces AFTER the write as something to confirm rather than something to fix. (b) **THE APP/PACKAGE PREFIX.** Return \`schemaNamePrefix\` — the environment's \`SchemaNamePrefix\` system setting, read off THIS stand, VERBATIM. **The empty prefix is a REAL answer and is not the same as unreadable — but it must NOT travel as a bare empty string** (an empty-string value is the token that has been dropped in transit from this very answer, which then fails to parse). \`schemaNamePrefixEmpty\` is REQUIRED on EVERY answer: return \`true\` with \`schemaNamePrefix: null\` when this stand's prefix is EMPTY (a common and correct configuration), and \`false\` in every other case — beside the prefix VERBATIM when you read one, or beside \`schemaNamePrefix: null\` when you could not read the setting at all. A field that must always be sent cannot be silently dropped: an answer missing it is refused and retried, so an empty prefix can never quietly decode as unreadable. This is what makes the app/package identity decidable BEFORE anything is written: \`create-app\` derives a new app's package as \`SchemaNamePrefix\` + \`code\`, so the prefix decides both whether the plan's target package is producible here and which code produces it. Read it; never set it, and never assume a house default.  Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Return \`sectionHost\` and \`applicationCode\` — the root-level \`--units.sectionHost\` / \`--units.applicationCode\`, VERBATIM (\`null\` when the field is absent, which is what a plan written before placement was gated publishes; do NOT substitute a default, and do NOT resolve an application code off the stand — an invented one is exactly the failure these fields exist to stop). Return \`evidenceIds\` as \`[]\` when this plan publishes no evidence rows — REQUIRED, never omitted; an absent list would leave the UI-guidelines close row inert without saying so. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` (each \`{ id, pageKey, kind, item, requires, resolution }\` — \`pageKey\` is the page the item belongs to and is REQUIRED on every item) and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist. For \`preflightItems\`, carry each item's \`resolution\` THROUGH exactly as \`--units\` published it: the object \`{ answer, decidedBy, date }\` when the operator answered that ⚠ Confirm question, and the literal \`null\` when they did not. **Copy \`null\` rather than omitting the field** — the engine publishes it deliberately, and an omitted field cannot be told apart from an engine that publishes no answers at all. Copy the \`answer\` text verbatim; do not shorten it, do not judge whether it looks right, and never invent one for an item whose \`resolution\` is \`null\`. Also return \`resolutionsUnmatched\` AND \`resolutionsConflicts\` — the root-level \`--units.resolutionsUnmatched\` / \`--units.resolutionsConflicts\`, verbatim, each entry \`{ id, kind, item }\` (identifiers only — no \`answer\` text, it is already in the operator's own file). Unmatched are answers recorded in \`${RESOLUTIONS_FILE}\` that matched NO question this plan asks; conflicts are questions answered TWICE through the two key forms. This run is the only thing that can tell the operator about either, so return BOTH as \`[]\` when there is nothing to report rather than omitting them.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that. **\`'exists'\` does not say WHOSE it is.** A package this migration created itself reads exactly like a stranger's from the stand, and the two need opposite handling under \`sectionHost: new-app\`; the only thing that tells them apart is the \`standWrites.packageCreated\` record in the queue file, which step 5 has you report as \`packageCreatedByRun\`. Report the state you actually read here, and let that record answer the ownership question.
 
@@ -2739,6 +2820,31 @@ if ((state.planGaps || []).length) {
 // facts, before any unit is built. Computed here so a placement stop can carry the component mismatches too: the
 // Applicant run stopped on placement in round 1 and only hit the fabricated component type rounds later, so a
 // re-plan that sees BOTH at once fixes them in one pass.
+// --- HARD STOP 3.4: the plan was never VALIDATED against this stand (ENG-95468, residual) -----------------
+// FIRST on this stop point, ahead of the package stop and its queue-file re-read: when the component answers did
+// not come from this stand, this round established nothing about the stand at all, so every verdict below it would
+// be computed over a catalog. Stopping here also stops the agents the package stop would spend confirming a record
+// on a round that is already over.
+// NOT a re-plan, and the `next` says so: nothing here implicates the plan — a catalog `resolved: false` is no more
+// evidence about this stand than a catalog `resolved: true` — so the move is to make the environment answerable and
+// re-run. There is deliberately no override: a stand whose version cannot be probed while it is otherwise up
+// produces the same catalog answer, and treating that as a confirmation is the defect, not a special case of it.
+const standUnconfirmed = standUnconfirmedComponents(state.componentResolution, state.componentTypes)
+if (standUnconfirmed.length) {
+  log(`STOP — the plan was NOT validated against this stand this round: ${standUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(standUnconfirmed)}`)
+  return runReturn({
+    stopped: 'plan-unvalidated-against-stand',
+    standUnconfirmedComponents: standUnconfirmed,
+    targetPackage: state.targetPackage || null,
+    packageState: state.packageState || null,
+    approval,
+    planVersion: state.planVersion || null,
+    verdict: verdictOf(state.verify),
+    staleQueueKeys: state.staleQueueKeys || [],
+    newKeys: state.newKeys || [],
+    next: standUnvalidatedNext(standUnconfirmed, 'Nothing was built.'),
+  })
+}
 const componentMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
 // Non-gating VISIBILITY (ENG-95468, PR #102 review): a published type with NO resolution entry at all is not a
 // failure — the gate deliberately stops only on an explicit `resolved: false` (absence is not evidence). But an
@@ -4030,6 +4136,24 @@ async function acceptReconciled(next, whereFrom) {
   if (stopApproval) {
     log(`STOP after ${whereFrom} — the approval no longer authorises this plan (${stopApproval.stopped}): approved=${(state.approval || approval)?.version || '(none)'} plan=${state.planVersion || '(unversioned)'}`)
     return { ...stopApproval, approval: state.approval || approval, planVersion: state.planVersion || null }
+  }
+  // ENG-95468 (residual) — the provenance check is a mid-run guarantee too, and it is the one whose absence was
+  // MEASURED rather than reasoned about: the stand went away DURING the ST_2 run, and every Reconcile after that
+  // kept clearing the component gate on catalog answers. Checked BEFORE the package stop for the same reason it
+  // runs first at the baseline — a round that never reached the stand cannot have established anything about the
+  // package either, and this stop costs no agent calls.
+  const midRunUnconfirmed = standUnconfirmedComponents(state.componentResolution, state.componentTypes)
+  if (midRunUnconfirmed.length) {
+    log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}`)
+    return {
+      stopped: 'plan-unvalidated-against-stand',
+      standUnconfirmedComponents: midRunUnconfirmed,
+      targetPackage: state.targetPackage || null,
+      packageState: state.packageState || null,
+      approval: state.approval || approval,
+      planVersion: state.planVersion || null,
+      next: standUnvalidatedNext(midRunUnconfirmed, 'Anything already built this run is on disk.'),
+    }
   }
   // `ownPackageNow()` and not `state.packageCreatedByRun`: on the round that created the package this process holds
   // the record and the refreshed report cannot yet, so reading only the report would stop a `new-app` run on its own

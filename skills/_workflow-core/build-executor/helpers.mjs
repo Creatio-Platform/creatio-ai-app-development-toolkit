@@ -767,6 +767,77 @@ export const planInvalidNext = (mismatches, tail) => {
     + 'These do not: ' + componentReplanClause(list) + ' ' + tail
 }
 
+// --- ENG-95468 (residual): AN ANSWER THAT DID NOT COME FROM THIS STAND IS NOT A CONFIRMATION -----------------
+// The measured failure this closes (ST_2 round 5, `wf_c8fb22f1-27d`): the stand was unreachable — a hard DNS
+// failure, reproduced through both the shell `clio` and the MCP transport — and the component sweep did not stop.
+// `get-component-info` fell back to its BUNDLED `latest` catalog and answered `resolved: true` for all nine types,
+// recording the substitution only in free-text `note` (`resolvedFrom=latest-fallback`,
+// `resolvedFromReason=probe-error`). `resolved: true` is what the round arithmetic reads, so the component gate
+// PASSED on a round where nothing about the stand had been checked: REFS → BUILD → VERIFY → persist all ran after
+// the point the stand was known to be gone, five agents and ~1.68M weighted tokens, zero stand writes — and the
+// information needed to stop was already in hand at this validation's own first phase.
+//
+// So an answer now carries WHERE IT CAME FROM, and only one of the two values is a confirmation. This is the same
+// three-valued discipline step 2b applies to the target package (`exists` / `absent` / `unknown`, "do NOT resolve
+// doubt into either answer") and ENG-95884 later hardened — the component axis simply never had it.
+//
+// WHY NOT the rule the TEMPLATE axis uses. That arm says an inconclusive read must be OMITTED, never reported as
+// `false`, which is right for it: its danger is a false NEGATIVE (a stop no re-plan can act on). This axis fails
+// the other way — a false POSITIVE — and omission cannot express it, because a missing entry is deliberately NOT
+// gated here (`core.mjs` logs the un-swept types and continues: absence is not evidence). Silence would therefore
+// reproduce the same unstopped round with a log line in place of the `resolved: true`. It takes a VALUE.
+export const RESOLVED_FROM_STAND = 'stand'
+export const RESOLVED_FROM_CATALOG = 'catalog'
+// The published types whose answer did NOT come from this stand. Read exactly like `componentTypeMismatches`
+// otherwise: scoped to what the PLAN published (a sweep cannot invent a stop over a type no plan names), and a
+// stated value is the only thing that gates — an entry with NO `resolvedFrom` is left alone, so a state injected by
+// another producer, or one written before this field existed, behaves exactly as it did. That drop path is closed
+// where it belongs instead: `RECONCILE_SHAPE` makes `resolvedFrom` REQUIRED on every entry, so an agent answer
+// missing it is refused and retried rather than quietly reaching this arithmetic without provenance.
+// `resolved` rides along because the stop's text has to say something honest about a catalog `resolved: false` too:
+// it is not evidence about this stand, and it must not be handed to an operator as a re-plan.
+export function standUnconfirmedComponents(componentResolution, publishedTypes) {
+  const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
+  return (componentResolution || [])
+    .filter((c) => c && typeof c.type === 'string' && typeof c.resolvedFrom === 'string')
+    .filter((c) => c.resolvedFrom.trim() !== RESOLVED_FROM_STAND)
+    .filter((c) => published.size === 0 || published.has(c.type))
+    // FAIL-CLOSED on an unrecognised value: anything that is not `'stand'` is treated as "not a confirmation",
+    // including a value neither literal names. An agent that invents a third word is telling us it did not answer
+    // from the stand, and reading an unknown token as a pass is the exact class of defect this closes.
+    // `capNote` on the provenance for the reason it is used on `note`: both are AGENT-SUPPLIED and both are
+    // rendered into the operator-facing `next`, so a newline or a wall of text in either could forge a line or bury
+    // the fix instruction. It flattens whitespace runs and caps the length; the value it should carry is one word.
+    .map((c) => ({
+      type: c.type,
+      resolvedFrom: capNote(c.resolvedFrom),
+      resolved: c.resolved === true,
+      note: (typeof c.note === 'string' && c.note.trim()) ? capNote(c.note) : 'answered without reaching this stand',
+    }))
+}
+export const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
+const standUnconfirmedDetail = (entries) => (entries || [])
+  .map((c) => '`' + c.type + '` (from `' + c.resolvedFrom + '`: ' + c.note + ')').join('; ')
+// The operator's next move, and it is NOT a re-plan: the plan is not implicated by an answer nobody got from the
+// stand. ONE home for the wording, like `componentReplanClause`, so the pre-build and mid-run stops cannot drift.
+export const standUnvalidatedNext = (entries, tail) => {
+  const list = entries || []
+  const falseFromCatalog = list.filter((c) => !c.resolved).length
+  return 'the component types this plan names were NOT confirmed on the target stand this round — they were answered '
+    + 'without reaching it: ' + standUnconfirmedDetail(list) + '. A bundled-catalog answer is not an answer about '
+    + 'THIS environment (clio substitutes its `latest` catalog when the stand cannot be probed — '
+    + '`resolvedFromReason=probe-error`), so this round validated nothing and is not a pass'
+    + (falseFromCatalog
+      ? '. ' + falseFromCatalog + ' of them came back NOT resolved, from the catalog — that is not evidence about '
+        + 'this stand either, so do NOT re-plan on it'
+      : '')
+    + '. Restore access to the stand and re-run this build: check the registered environment, its DNS and its '
+    + 'credentials (`clio ping`), confirm `get-component-info` answers from the environment itself, then re-run. '
+    + 'There is no flag that turns a catalog answer into a confirmation — a stand whose version cannot be probed '
+    + 'while it is otherwise up fails this the same way, and the fix is the same: make the environment answerable. '
+    + tail
+}
+
 // --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
 // A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
 // first write. Components were (above). These two were not, and the third Applicant run failed on both:

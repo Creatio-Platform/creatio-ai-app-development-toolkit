@@ -156,7 +156,7 @@ export const RECONCILE_SCHEMA = {
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
     componentTypes: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
-    // resolved against the TARGET stand: `{ type, resolved, note }`. This is what the pre-build component gate
+    // resolved against the TARGET stand: `{ type, resolved, resolvedFrom, note }`. This is what the pre-build component gate
     // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
     // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
     // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
@@ -169,6 +169,11 @@ export const RECONCILE_SCHEMA = {
     // `gatedComposite`). Absent or malformed ⇒ the generic clause stands, so an older plan behaves as it did.
     // One `{ type, resolved, note }` per entry, `type`/`resolved` required, plus ENG-95683's OPTIONAL typed gate on a
     // gated composite: `kind` ('composite'), the gating package `id`, and the gating `feature` when there is one.
+    // ENG-95468 (residual) — `resolvedFrom` says WHERE the answer came from: `'stand'` (this environment answered)
+    // or `'catalog'` (it did not — `get-component-info` could not probe the environment and answered from its
+    // bundled `latest` catalog instead). Only `'stand'` is a confirmation; a catalog answer STOPS the round
+    // (`plan-unvalidated-against-stand`) rather than passing the gate on a round where nothing about the stand was
+    // checked. REQUIRED — enforced in `RECONCILE_SHAPE`, which is not byte-capped, so the field cannot be dropped.
     // Those three are NOT re-declared as `properties` here and that is deliberate (ENG-95930, mode A): the expanded
     // per-property form serializes over the host's 4096-byte classifier cap, which is what refused the schema before
     // the model ever ran. `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` carries them — a string cap does not constrain
@@ -328,8 +333,19 @@ export const RECONCILE_SHAPE = {
   // ENG-95683 — `kind`/`id`/`feature` are the OPTIONAL typed gate on a `resolved: false` composite; the by-kind
   // stop (`helpers.mjs` `GATE_COMPOSITE`) reads them. Declared here rather than in `RECONCILE_SCHEMA` for the mode-A
   // reason given above; absent/malformed still falls back to the generic re-plan clause.
-  componentResolution: { kind: 'array', required: ['type', 'resolved'],
-    types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
+  // ENG-95468 (residual) — `resolvedFrom` is REQUIRED, and THIS table is where that requirement costs nothing:
+  // `RECONCILE_SCHEMA` is bounded by the host's 4096-byte classifier cap and this checker is not, so the one field
+  // that must never be silently droppable rides here rather than there. An answer missing it spends an attempt and
+  // the informed retry names it (`reconcileAttempt`) — the same fail-closed treatment `schemaNamePrefixEmpty` earns
+  // for the same reason: a provenance field an agent may quietly omit is a gate that is switched off on exactly the
+  // round that needs it, and the round it was needed on cost five agents and 18 minutes for zero stand writes.
+  componentResolution: { kind: 'array', required: ['type', 'resolved', 'resolvedFrom'],
+    types: { type: 'string', resolved: 'boolean', resolvedFrom: 'string', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
+  // NO provenance field here, deliberately. The template sweep reads schemas (`get-schema` / `get-page` /
+  // `list-pages`), and those have no bundled-catalog substitute to fall back TO: a failed read is a failed read, and
+  // the prompt already orders it OMITTED rather than reported as `false`. The component axis needs a value because
+  // its tool answers from a catalog when the stand cannot be probed — that is a false POSITIVE, which omission
+  // cannot express (see `helpers.mjs` `standUnconfirmedComponents`).
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
   // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key

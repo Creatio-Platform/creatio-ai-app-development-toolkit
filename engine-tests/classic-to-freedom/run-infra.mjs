@@ -169,7 +169,9 @@ const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByPa
   "buildMode", "buildVerificationSurface", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings", "reopenKeySet"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "preflightToRun", "componentTypeMismatches",
-  "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
+  "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
+  // ENG-95468 (residual) - the provenance axis of the same pre-build question: WHERE the component answer came from.
+  "standUnconfirmedComponents", "standUnconfirmedList", "standUnvalidatedNext"];
 // What a build agent is HANDED: its schema, its prompt, and the guidelines record it owes.
 const H_BUILD_PROMPT = ["resolutionsForUnit", "guidelinesCloseMiss", "owesGuidelines", "guidelinesLine",
   "buildSchemaKind", "guidelinesReturnFor", "guidelinesSuffix", "claimsBlock", "earnedFrom",
@@ -225,7 +227,10 @@ check("PR #128 review (round 16): the grouped helper surface has no name in two 
 // echoes `shows` back and the clear keys on `source` exactly, so a copy re-typed here could drift from the run's.
 const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS", "RESOLUTIONS_RETURN",
   "CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED", "UNCONSUMED_CARRY_WARN",
-  "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH"];
+  "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH",
+  // ENG-95468 (residual) - the two values a component answer provenance can take. Literals for the same reason
+  // `shows` is: a live Reconcile agent echoes them back, so a copy re-typed here could drift from the run.
+  "RESOLVED_FROM_STAND", "RESOLVED_FROM_CATALOG"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
@@ -1281,8 +1286,16 @@ check("componentTypeMismatches: malformed/absent signals never gate — no `type
 // i.e. `RECONCILE_SCHEMA.componentResolution.items` marks `type` and `resolved` `required`. The execution tests
 // inject `componentResolution` into state directly and bypass the schema, so pin it here in the source, the same
 // way the placement fields are pinned (`/'targetPackage', 'packageState'\]/` below). (PR #102 review, RC-10.)
-check("RECONCILE_SCHEMA: `componentResolution` items mark BOTH `type` and `resolved` required — the guarantee the malformed-signal contract leans on (a real unresolved type is never silently dropped for a missing field)",
-  /componentResolution:[\s\S]*?required: \['type', 'resolved'\]/.test(wfSrc));
+check("RECONCILE_SCHEMA: `componentResolution` items mark `type`, `resolved` AND `resolvedFrom` required — the guarantee the malformed-signal contract leans on (a real unresolved type is never silently dropped for a missing field), plus the provenance field the round arithmetic reads",
+  /componentResolution:[\s\S]*?required: \['type', 'resolved', 'resolvedFrom'\]/.test(wfSrc));
+// ENG-95468 (residual) — `resolvedFrom` is REQUIRED, and it is required HERE rather than in `RECONCILE_SCHEMA`: that
+// schema is bounded by the host's 4096-byte classifier cap (it sits at 3820 of a 3900 budget) and this checker is
+// not, so the field costs zero bytes and still cannot be dropped — an answer missing it spends an attempt and the
+// informed retry names it. Optional provenance would be a gate that is silently OFF on the round it is needed on,
+// which is the whole failure this closes.
+check("ENG-95468 (residual): `resolvedFrom` costs the byte-capped schema NOTHING — it is required in RECONCILE_SHAPE (uncapped, checked on arrival) and NOT re-declared as a `properties` entry, so the run's first agent cannot be refused for carrying it",
+  /required: \['type', 'resolved', 'resolvedFrom'\]/.test(wfSrc) && !/resolvedFrom: \{ type: /.test(wfSrc),
+  () => `shape-required=${/required: \['type', 'resolved', 'resolvedFrom'\]/.test(wfSrc)} schema-property=${/resolvedFrom: \{ type: /.test(wfSrc)}`);
 // The Applicant replay (ENG-95468 done-criterion): the two round-1 blockers are BOTH reproducible through the
 // pre-build checks — the fabricated component type via componentTypeMismatches, and new-app-over-existing via
 // packagePreconditionStop — so a re-plan sees both instead of paying repair rounds to rediscover them.
@@ -3968,7 +3981,7 @@ const baselineState = (componentResolution) => ({
   targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app",
   componentResolution,
 });
-const gateFires = await runToBaseline(baselineState([{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }])).catch((e) => ({ threw: e.message }));
+const gateFires = await runToBaseline(baselineState([{ type: "crt.ContactCommunication", resolvedFrom: "stand", resolved: false, note: "not a component type on this stand" }])).catch((e) => ({ threw: e.message }));
 check("workflow EXECUTES Hard Stop 3.5: a baseline Reconcile with a resolved:false component type STOPS the run with `plan-invalid-against-stand` before any unit is built — the branch is run, not just source-pinned",
   !gateFires.threw && gateFires.stopped === "plan-invalid-against-stand"
     && Array.isArray(gateFires.componentMismatches) && gateFires.componentMismatches.some((c) => c.type === "crt.ContactCommunication"),
@@ -3983,7 +3996,7 @@ check("workflow Hard Stop 3.5 `next` is the operator's re-plan instruction with 
     && /Nothing was built\./.test(gateFires.next || "")
     && !/already built this run is on disk/.test(gateFires.next || ""),
   () => `next=${JSON.stringify(gateFires.next)}`);
-const gatePasses = await runToBaseline(baselineState([{ type: "crt.CommunicationOptions", resolved: true }])).catch((e) => ({ threw: e.message }));
+const gatePasses = await runToBaseline(baselineState([{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: true }])).catch((e) => ({ threw: e.message }));
 check("workflow EXECUTES past the component gate: an all-resolved baseline Reconcile does NOT stop on `plan-invalid-against-stand` — it reaches a downstream stop, so an inverted gate condition would surface here",
   !gatePasses.threw && gatePasses.stopped !== "plan-invalid-against-stand" && gatePasses.stopped === "unknown-checkpoint-key",
   () => (gatePasses.threw ? `threw: ${gatePasses.threw}` : `stopped=${gatePasses.stopped}`));
@@ -4007,7 +4020,7 @@ check("runReturn: a non-component stop (here `unknown-checkpoint-key`) still exp
 const combinedStop = await runToBaseline({
   approval: { found: true, version: "v1" }, planVersion: "v1",
   targetPackage: "UsrApplicantMig", packageState: "exists", sectionHost: "new-app",
-  componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }],
+  componentResolution: [{ type: "crt.ContactCommunication", resolvedFrom: "stand", resolved: false, note: "not a component type on this stand" }],
 }).catch((e) => ({ threw: e.message }));
 check("workflow EXECUTES the combined stop: a baseline with new-app-over-existing placement AND a resolved:false type STOPS with BOTH blockers in one return — `stopped: new-app-over-existing-package`, a `componentMismatches` array carrying the type, and a `next` that names it — so one re-plan fixes both, not one per round",
   !combinedStop.threw && combinedStop.stopped === "new-app-over-existing-package"
@@ -4067,7 +4080,7 @@ const allThree = await runToBaseline({
   targetPackage: "UsrApplicant", packageState: "absent", sectionHost: "new-app",
   applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
   componentTypes: ["crt.ContactCommunication"],
-  componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }],
+  componentResolution: [{ type: "crt.ContactCommunication", resolvedFrom: "stand", resolved: false, note: "not a component type on this stand" }],
   templateNames: ["ListPageV2FreedomTemplate"],
   templateResolution: [{ name: "ListPageV2FreedomTemplate", resolved: false, note: "no such schema; closest: ListPageV3Template" }],
 }).catch((e) => ({ threw: e.message }));
@@ -4305,12 +4318,12 @@ const midRunBaseline = {
   targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app", mainEntity: "UsrThing",
   unitKeys: ["main"], buildOrder: ["main"], reachability: [],
   preflightItems: [{ id: "pf1", pageKey: "main" }],
-  componentResolution: [{ type: "crt.CommunicationOptions", resolved: true }],
+  componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: true }],
 };
 // The post-preflight Reconcile surfaces a resolved:false type the BASELINE never saw — a resumed run whose baseline
 // predated `componentResolution`, or a component package uninstalled mid-run. `acceptReconciled` must stop the run here.
 const midRunStops = await runToPostPreflight(midRunBaseline,
-  { ...midRunBaseline, componentResolution: [{ type: "crt.ContactCommunication", resolved: false, note: "not a component type on this stand" }] })
+  { ...midRunBaseline, componentResolution: [{ type: "crt.ContactCommunication", resolvedFrom: "stand", resolved: false, note: "not a component type on this stand" }] })
   .catch((e) => ({ threw: e.message }));
 check("workflow EXECUTES the mid-run gate in `acceptReconciled`: a post-preflight Reconcile that FIRST reports a resolved:false type STOPS with `plan-invalid-against-stand` before the next unit — an inverted or dropped mid-run guard passes every source-pin but fails here",
   !midRunStops.threw && midRunStops.stopped === "plan-invalid-against-stand"
@@ -4442,7 +4455,7 @@ check("ENG-95683: a malformed gate (no id, wrong kind, blank id) is NOT carried 
 
 // The by-kind branch END-TO-END through the pre-build stop: a gated composite yields install/enable + re-run the
 // BUILD and explicitly NOT a re-plan (no `--plan --out`), with the PRE-BUILD tail.
-const gatedComposite = await runToBaseline(baselineState([{ type: "crt.CommunicationOptions", resolved: false, note: "package not installed on this stand", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }])).catch((e) => ({ threw: e.message }));
+const gatedComposite = await runToBaseline(baselineState([{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package not installed on this stand", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }])).catch((e) => ({ threw: e.message }));
 check("ENG-95683 (R3): a gated-composite resolved:false type yields the install/enable + re-run the BUILD branch (NO re-plan) in the pre-build stop `next`",
   !gatedComposite.threw && gatedComposite.stopped === "plan-invalid-against-stand"
     && /install the `CrtCustomer360App` package/.test(gatedComposite.next || "")
@@ -4455,7 +4468,7 @@ check("ENG-95683 (R3): a gated-composite resolved:false type yields the install/
   () => (gatedComposite.threw ? `threw: ${gatedComposite.threw}` : `next=${(gatedComposite.next || "").slice(0, 320)}`));
 // Negative control: an UNGATED unresolved type (a fabricated `crt.*`, no typed gate) keeps the original re-plan text
 // and gets NO install/BUILD instruction — the branch must not fire for a plan that a re-plan is the only fix for.
-const ungatedStop = await runToBaseline(baselineState([{ type: "crt.NotAComponent", resolved: false, note: "not a component type on this stand" }])).catch((e) => ({ threw: e.message }));
+const ungatedStop = await runToBaseline(baselineState([{ type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type on this stand" }])).catch((e) => ({ threw: e.message }));
 check("ENG-95683 (R3, negative control): an ungated unresolved type keeps the 're-run `--plan --out`, re-approve' text and gets NO install/BUILD branch",
   !ungatedStop.threw && ungatedStop.stopped === "plan-invalid-against-stand"
     && /re-run .--plan --out., re-approve/.test(ungatedStop.next || "")
@@ -4464,8 +4477,8 @@ check("ENG-95683 (R3, negative control): an ungated unresolved type keeps the 'r
 // Mixed set: a gated composite AND a fabricated type in one stop produce BOTH clauses — the install/BUILD branch for
 // the recoverable one and the re-plan branch for the one no install can fix — so one stop names every axis of the fix.
 const mixedStop = await runToBaseline(baselineState([
-  { type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" },
-  { type: "crt.NotAComponent", resolved: false, note: "fabricated" },
+  { type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" },
+  { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "fabricated" },
 ])).catch((e) => ({ threw: e.message }));
 check("ENG-95683 (R3): a mixed stop (one gated composite + one fabricated type) carries BOTH the install/BUILD branch and the re-plan branch in one `next`",
   !mixedStop.threw && mixedStop.stopped === "plan-invalid-against-stand"
@@ -4475,13 +4488,125 @@ check("ENG-95683 (R3): a mixed stop (one gated composite + one fabricated type) 
 // The MID-RUN stop inherits the same branch via `planInvalidNextAll` → `planInvalidNext` → `componentReplanClause`,
 // differing only in the tail: a gated composite reported mid-run gets install/BUILD with the MID-RUN tail.
 const midRunGated = await runToPostPreflight(midRunBaseline,
-  { ...midRunBaseline, componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })
+  { ...midRunBaseline, componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })
   .catch((e) => ({ threw: e.message }));
 check("ENG-95683 (R3): the MID-RUN stop reflects the by-kind branch too — a gated composite gets install/enable + re-run the BUILD with the MID-RUN tail (units may already be on disk)",
   !midRunGated.threw && midRunGated.stopped === "plan-invalid-against-stand"
     && /install the `CrtCustomer360App` package/.test(midRunGated.next || "") && /re-run the BUILD/.test(midRunGated.next || "")
     && /Anything already built this run is on disk\./.test(midRunGated.next || "") && !/Nothing was built/.test(midRunGated.next || ""),
   () => (midRunGated.threw ? `threw: ${midRunGated.threw}` : `next=${(midRunGated.next || "").slice(0, 320)}`));
+
+/* --- ENG-95468 (residual): AN ANSWER THAT NEVER REACHED THE STAND IS NOT A PASS -----------------------------
+ * THE MEASURED FAILURE, from the ST_2 run (round 5, `wf_c8fb22f1-27d`): the stand was unreachable (a hard DNS
+ * failure, reproduced through both the shell `clio` and the MCP transport), `get-component-info` answered from its
+ * BUNDLED `latest` catalog for all nine types, and reported `resolved: true` with the substitution recorded only in
+ * free-text `note`. The round arithmetic reads the flag, so the component gate PASSED on a round where nothing
+ * about the stand had been checked — REFS → BUILD → VERIFY → persist all ran after the stand was known gone, five
+ * agents and ~1.68M weighted tokens for zero stand writes, and the information needed to stop had been in hand
+ * since this validation's own first phase. `resolvedFrom` is the value that tells the two apart, and the round
+ * arithmetic must not read the catalog one as a confirmation.
+ */
+check("ENG-95468 (residual): a CATALOG-sourced answer is returned as unconfirmed — the ST_2 shape exactly, `resolved: true` on a round the stand never answered, and it must not read as a pass",
+  () => { const u = wf.standUnconfirmedComponents([{ type: "crt.CommunicationOptions", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFrom=latest-fallback, resolvedFromReason=probe-error)" }]);
+    return u.length === 1 && u[0].type === "crt.CommunicationOptions" && u[0].resolvedFrom === "catalog" && u[0].resolved === true && /probe-error/.test(u[0].note); });
+check("ENG-95468 (residual): an on-STAND answer is NOT unconfirmed — the value meaning THIS environment answered is the one thing that clears this gate, so an inverted comparison would stop every healthy round",
+  () => wf.standUnconfirmedComponents([{ type: "crt.CommunicationOptions", resolvedFrom: wf.RESOLVED_FROM_STAND, resolved: true }]).length === 0
+    && wf.standUnconfirmedComponents([{ type: "crt.CommunicationOptions", resolvedFrom: "  stand  ", resolved: true }]).length === 0);
+check("ENG-95468 (residual): the two provenance literals are the SHIPPED values — a live agent echoes them back verbatim, so a copy re-typed in a test would pass while the run compared against something else",
+  wf.RESOLVED_FROM_STAND === "stand" && wf.RESOLVED_FROM_CATALOG === "catalog",
+  () => `stand=${wf.RESOLVED_FROM_STAND} catalog=${wf.RESOLVED_FROM_CATALOG}`);
+check("ENG-95468 (residual): an UNRECOGNISED provenance value gates too — fail-closed, because an agent that invents a third word is saying it did not answer from the stand, and reading an unknown token as a pass is the defect this closes",
+  () => { const u = wf.standUnconfirmedComponents([{ type: "crt.Foo", resolvedFrom: "documentation", resolved: true }]);
+    return u.length === 1 && u[0].resolvedFrom === "documentation"; });
+check("ENG-95468 (residual): the provenance and note rendered into the operator's text are FLATTENED and CAPPED like `note` is — both are agent-supplied and both reach `next`, so a newline could forge an instruction line and a wall of text could bury the fix",
+  () => { const LF = String.fromCharCode(10);
+    const u = wf.standUnconfirmedComponents([{ type: "crt.Foo", resolvedFrom: "cata" + LF + "log", resolved: true, note: "a".repeat(600) }]);
+    return !u[0].resolvedFrom.includes(LF) && u[0].resolvedFrom === "cata log" && u[0].note.length <= 300 && /…$/.test(u[0].note); });
+check("ENG-95468 (residual): a catalog answer for a type the PLAN never published does NOT gate — the same plan-scope intersection `componentTypeMismatches` applies, so a sweep cannot manufacture a stop over a type no re-plan owns",
+  () => wf.standUnconfirmedComponents([{ type: "crt.Invented", resolvedFrom: "catalog", resolved: true }], ["crt.DataGrid"]).length === 0
+    && wf.standUnconfirmedComponents([{ type: "crt.DataGrid", resolvedFrom: "catalog", resolved: true }], ["crt.DataGrid"]).length === 1);
+check("ENG-95468 (residual): an entry with NO `resolvedFrom` does not gate — absent provenance is left alone here (the drop path is closed by RECONCILE_SHAPE requiring the field, not by inventing a stop), and a non-string one is ignored the same way",
+  () => wf.standUnconfirmedComponents([{ type: "crt.A", resolved: true }, { type: "crt.B", resolvedFrom: 7, resolved: true }, { type: "crt.C", resolvedFrom: null, resolved: false }]).length === 0);
+// THE OPERATOR'S NEXT MOVE, and the thing this stop must NOT say: re-plan. Nothing about a catalog answer implicates
+// the plan — a catalog `resolved: false` is no more evidence about this stand than a catalog `resolved: true` — so a
+// `next` carrying the re-plan instruction would send an operator to regenerate a plan that may be perfectly correct.
+check("ENG-95468 (residual): `standUnvalidatedNext` names the type and its provenance, says the round is NOT a pass, points at the ENVIRONMENT (clio ping / registration / credentials) and carries the caller's tail — and does NOT tell the operator to re-plan",
+  () => { const n = wf.standUnvalidatedNext(wf.standUnconfirmedComponents([{ type: "crt.CommunicationOptions", resolvedFrom: "catalog", resolved: true, note: "probe-error" }]), "Nothing was built.");
+    return /crt\.CommunicationOptions/.test(n) && /catalog/.test(n) && /not a pass/.test(n) && /clio ping/.test(n)
+      && /Nothing was built\./.test(n) && !/--plan --out/.test(n) && !/re-approve/.test(n); });
+check("ENG-95468 (residual): a catalog `resolved: false` is called out as NOT evidence about this stand — the one wording that stops an operator re-planning on a verdict the catalog produced — and the clause is absent when every catalog answer was positive",
+  () => { const withFalse = wf.standUnvalidatedNext(wf.standUnconfirmedComponents([{ type: "crt.Foo", resolvedFrom: "catalog", resolved: false, note: "not in the bundled catalog" }]), "t.");
+    const allTrue = wf.standUnvalidatedNext(wf.standUnconfirmedComponents([{ type: "crt.Foo", resolvedFrom: "catalog", resolved: true }]), "t.");
+    return /do NOT re-plan on it/.test(withFalse) && !/do NOT re-plan on it/.test(allTrue); });
+
+// …and the same decision EXECUTED, because a decision nothing calls is a decision that ships switched off — which is
+// precisely what the ST_2 round was: the note said the stand had not been reached, and no arithmetic read it.
+const ST_2_CATALOG = [
+  { type: "crt.CommunicationOptions", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFrom=latest-fallback, resolvedFromReason=probe-error) because the stand is unreachable this round" },
+  { type: "crt.DataGrid", resolvedFrom: "catalog", resolved: true, note: "the same fallback" },
+];
+const unvalidatedStop = await runToBaseline({ ...baselineState(ST_2_CATALOG), componentTypes: ["crt.CommunicationOptions", "crt.DataGrid"] }).catch((e) => ({ threw: e.message }));
+check("ENG-95468 (residual): the ST_2 round REPLAYED — a baseline Reconcile whose component answers came from the bundled catalog STOPS with `plan-unvalidated-against-stand` before any unit, naming the types, instead of clearing the gate on `resolved: true`",
+  !unvalidatedStop.threw && unvalidatedStop.stopped === "plan-unvalidated-against-stand"
+    && Array.isArray(unvalidatedStop.standUnconfirmedComponents) && unvalidatedStop.standUnconfirmedComponents.length === 2
+    && /crt\.CommunicationOptions/.test(unvalidatedStop.next || "") && /Nothing was built\./.test(unvalidatedStop.next || "")
+    && !/--plan --out/.test(unvalidatedStop.next || ""),
+  () => (unvalidatedStop.threw ? `threw: ${unvalidatedStop.threw}` : `stopped=${unvalidatedStop.stopped} unconfirmed=${JSON.stringify(unvalidatedStop.standUnconfirmedComponents)} next=${(unvalidatedStop.next || "").slice(0, 240)}`));
+// POSITIVE CONTROL: the identical run whose answers came from the stand proceeds past the gate to a deterministic
+// downstream stop. A gate that always fired would stop every healthy run at its first agent — worse than the defect
+// it fixes — and only this pair tells the two apart.
+const probedPasses = await runToBaseline({ ...baselineState([{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: true }]), componentTypes: ["crt.CommunicationOptions"] }).catch((e) => ({ threw: e.message }));
+check("ENG-95468 (residual, positive control): the SAME baseline answered from the STAND does not stop on `plan-unvalidated-against-stand` — it reaches `unknown-checkpoint-key` downstream, so an always-firing provenance gate surfaces here",
+  !probedPasses.threw && probedPasses.stopped === "unknown-checkpoint-key" && probedPasses.standUnconfirmedComponents.length === 0,
+  () => (probedPasses.threw ? `threw: ${probedPasses.threw}` : `stopped=${probedPasses.stopped} unconfirmed=${JSON.stringify(probedPasses.standUnconfirmedComponents)}`));
+// PRECEDENCE over Hard Stop 3.5: a catalog `resolved: false` must NOT be reported as a plan defect. Both stops can
+// fire on the same state, and the wrong one sends an operator to re-plan on a verdict this stand never gave.
+const catalogFalse = await runToBaseline({ ...baselineState([{ type: "crt.ContactCommunication", resolvedFrom: "catalog", resolved: false, note: "not in the bundled catalog either" }]), componentTypes: ["crt.ContactCommunication"] }).catch((e) => ({ threw: e.message }));
+check("ENG-95468 (residual): a catalog `resolved: false` stops as UNVALIDATED, not as `plan-invalid-against-stand` — the run must not hand an operator a re-plan built on an answer the stand never gave",
+  !catalogFalse.threw && catalogFalse.stopped === "plan-unvalidated-against-stand" && !/--plan --out/.test(catalogFalse.next || ""),
+  () => (catalogFalse.threw ? `threw: ${catalogFalse.threw}` : `stopped=${catalogFalse.stopped} next=${(catalogFalse.next || "").slice(0, 240)}`));
+// PRECEDENCE over the PACKAGE stop, which runs first on this stop point and spends agent calls re-reading the queue
+// file: on a round that never reached the stand there is nothing to confirm, so the provenance stop comes first.
+const catalogOverPackage = await runToBaseline({
+  approval: { found: true, version: "v1" }, planVersion: "v1",
+  targetPackage: "UsrApplicantMig", packageState: "exists", sectionHost: "new-app",
+  componentTypes: ["crt.CommunicationOptions"], componentResolution: ST_2_CATALOG.slice(0, 1),
+}).catch((e) => ({ threw: e.message }));
+check("ENG-95468 (residual): the provenance stop PRECEDES the package precondition stop — a new-app-over-existing placement on a round answered from the catalog stops as `plan-unvalidated-against-stand`, so no agent is spent confirming a record on a round that is already over",
+  !catalogOverPackage.threw && catalogOverPackage.stopped === "plan-unvalidated-against-stand",
+  () => (catalogOverPackage.threw ? `threw: ${catalogOverPackage.threw}` : `stopped=${catalogOverPackage.stopped} next=${(catalogOverPackage.next || "").slice(0, 200)}`));
+// MID-RUN — the case the ST_2 run actually was: the stand was there at the baseline and went away DURING the run, so
+// every later Reconcile kept clearing the gate on catalog answers. The baseline here is answered from the stand.
+const midRunUnvalidated = await runToPostPreflight(midRunBaseline,
+  { ...midRunBaseline, componentTypes: ["crt.CommunicationOptions"], componentResolution: ST_2_CATALOG.slice(0, 1) })
+  .catch((e) => ({ threw: e.message }));
+check("ENG-95468 (residual): the MID-RUN provenance stop — a stand that goes away DURING the run (baseline answered from the stand, a later Reconcile from the catalog) stops before the next unit with the MID-RUN tail, which is the ST_2 sequence exactly",
+  !midRunUnvalidated.threw && midRunUnvalidated.stopped === "plan-unvalidated-against-stand"
+    && /Anything already built this run is on disk\./.test(midRunUnvalidated.next || "")
+    && !/Nothing was built/.test(midRunUnvalidated.next || ""),
+  () => (midRunUnvalidated.threw ? `threw: ${midRunUnvalidated.threw}` : `stopped=${midRunUnvalidated.stopped} next=${(midRunUnvalidated.next || "").slice(0, 240)}`));
+// THE FIELD CANNOT BE DROPPED — executed. `resolvedFrom` is REQUIRED in `RECONCILE_SHAPE` (not in the byte-capped
+// schema), so an answer that omits it is refused and retried; a run whose every attempt omits it stops honestly
+// having built nothing, instead of reaching the arithmetic with no provenance and passing the gate by absence.
+const droppedProvenance = await runWith({}, async () => ({
+  ...baselineState([{ type: "crt.CommunicationOptions", resolved: true }]),
+  componentTypes: ["crt.CommunicationOptions"],
+})).catch((e) => ({ threw: e.message }));
+check("ENG-95468 (residual): an answer that OMITS `resolvedFrom` is refused by the shape check on every attempt and the run stops `reconcile-failed` — the provenance gate cannot be switched off by silently dropping the field",
+  !droppedProvenance.threw && droppedProvenance.stopped === "reconcile-failed",
+  () => (droppedProvenance.threw ? `threw: ${droppedProvenance.threw}` : `stopped=${droppedProvenance.stopped}`));
+// The wiring, at both call sites, in the shipped artifact: the baseline check runs BEFORE the package stop (an
+// ordering an execution test can only observe through which stop wins), and the mid-run one is inside
+// `acceptReconciled` — the shared acceptance path every in-run Reconcile passes through.
+check("ENG-95468 (residual): the shipped `placementAndComponentStop` computes the provenance stop FIRST — before `hardStopOnPackage` and before the mismatch arithmetic",
+  /placementAndComponentStop[\s\S]{0,900}?planUnvalidatedAgainstStandStop\(standUnconfirmedComponents\(state\.componentResolution, state\.componentTypes\)\)[\s\S]{0,300}?componentTypeMismatches/.test(wfSrc));
+check("ENG-95468 (residual): the shipped `acceptReconciled` re-applies the provenance stop on every in-run Reconcile, ahead of the package precondition stop",
+  /standUnconfirmedComponents\(state\.componentResolution, state\.componentTypes\)/.test(topLevelFnBody("acceptReconciled"))
+    && /stopped: 'plan-unvalidated-against-stand'/.test(topLevelFnBody("acceptReconciled"))
+    && topLevelFnBody("acceptReconciled").indexOf("standUnconfirmedComponents(") < topLevelFnBody("acceptReconciled").indexOf("packagePreconditionStop("));
+check("ENG-95468 (residual): the Reconcile prompt tells the agent to report `resolvedFrom` on EVERY entry, names both values, and states the consequence — a catalog answer STOPS the round rather than passing as a confirmation",
+  /resolvedFrom\\`, REQUIRED on EVERY entry/.test(wfSrc) && /it STOPS the round and asks for the stand/.test(wfSrc)
+    && /resolvedFromReason=probe-error/.test(wfSrc));
 
 // --- THE BUILD CONTINUATION as an EXECUTION path (ENG-95474 review). Everything about the round-vs-continuation
 // split was asserted only by regexes over the source, which stay green if the accounting is inverted, if the ceiling
@@ -4495,7 +4620,7 @@ const roundBaseline = {
   approval: { found: true, version: "v1" }, planVersion: "v1",
   targetPackage: "UsrMig", packageState: "exists", sectionHost: "existing-app", mainEntity: "UsrThing",
   unitKeys: ["main"], buildOrder: ["main"], reachability: [], preflightItems: [],
-  componentResolution: [{ type: "crt.CommunicationOptions", resolved: true }],
+  componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: true }],
   evidenceIds: [],
 };
 // A builder answer shaped for a page unit. `continuationRequested` is the variable under test.
@@ -5108,6 +5233,16 @@ check("executor SKILL.md (PR #128 review, round 18): the ONE signal on the answe
     // ...and the reader is told what it costs: non-gating, so a reset can never change a build verdict.
     && /non-gating/i.test(execSkill),
   () => execSkill.split("\n").filter((l) => /unsettledResolutionClaims|single process lifetime/i.test(l)).slice(0, 4).join("\n"));
+
+// ENG-95468 (residual) - the SKILL doc has to distinguish the two stops, because they ask an operator for opposite
+// things: `plan-invalid-against-stand` is a re-plan, `plan-unvalidated-against-stand` is 'make the environment
+// answerable and re-run'. A doc that mentioned only the first would send every unreachable-stand round to a re-plan
+// nobody needed - the misdiagnosis this stop exists to prevent - so the wording is pinned rather than left to drift.
+check("ENG-95468 (residual): the SKILL doc names the unvalidated stop, its `resolvedFrom` provenance values, the return field a consumer reads, and that it is NOT a re-plan but an environment fix - the two stops ask an operator for opposite things",
+  /plan-unvalidated-against-stand/.test(execSkill) && /resolvedFrom/.test(execSkill)
+    && /standUnconfirmedComponents/.test(execSkill) && /clio ping/.test(execSkill)
+    && /not..? a re-plan/.test(execSkill) && /no.{0,4}override/.test(execSkill),
+  () => "the SKILL.md paragraph for `plan-unvalidated-against-stand` is missing one of: the stop key, `resolvedFrom`, `standUnconfirmedComponents`, `clio ping`, the not-a-re-plan statement, the no-override statement");
 
 /* --- THE `list` UNIT'S BUILD PROMPT, pinned against the engine constants it DESCRIBES. The prompt is prose, so no
    behavioural test reaches it, and prose that restates a constant is a second copy of it — free to disagree. A

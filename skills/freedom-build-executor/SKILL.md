@@ -519,6 +519,20 @@ Details of the record shapes, the ids and the judge tri-state:
   a code that yields the planned package — the prompt hands it the exact `code` (`SchemaNamePrefix` + code =
   `targetPackage`, so the code is arithmetic). "Choose the code so the package comes out right" is the instruction a
   real run followed to a package the plan did not name; the read-back equality on `packageName` stays the backstop.
+- A plan that was **never validated against the stand at all** — a different stop from the one above, and it comes
+  FIRST on the same stop point. `get-component-info` does not fail when it cannot probe the environment: it answers
+  from its BUNDLED `latest` catalog and still reports `resolved: true`, recording the substitution only in free text.
+  A round that read those answers checked nothing about the stand, so each entry of Reconcile's sweep now carries
+  `resolvedFrom` — `'stand'` (this environment answered) or `'catalog'` (it did not) — and only `'stand'` is a
+  confirmation. Any catalog-sourced answer **stops the run** (`stopped: 'plan-unvalidated-against-stand'`,
+  `standUnconfirmedComponents` on every return) before the first build unit, and again at every in-run Reconcile for
+  a stand that goes away mid-run. This is **not** a re-plan: nothing about a catalog answer implicates the plan —
+  a catalog `resolved: false` is no more evidence about this stand than a catalog `resolved: true` — so the `next`
+  points at the environment (registration, DNS, credentials, `clio ping`) and asks for a re-run. There is no
+  override: a stand whose version cannot be probed while it is otherwise up produces the same catalog answer, and
+  reading that as a confirmation is the defect. `resolvedFrom` is REQUIRED on every entry, enforced by the
+  response-shape check rather than the byte-capped output schema, so it cannot be dropped to switch the gate off
+  (ENG-95468).
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.

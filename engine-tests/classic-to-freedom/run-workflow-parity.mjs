@@ -239,7 +239,7 @@ function buildScenarios() {
     buildOrder: ["child:Documents", "list", "main"],
     targetPackage: "DealPkg", packageState: "exists", mainEntity: "Deal",
     sectionHost: "existing-app", applicationCode: "DealApp",
-    componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolved: true, note: "" }],
+    componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "" }],
     pageSchemas: { "child:Documents": "DocsFormPage", list: "DealListPage", main: "DealFormPage" },
     parents: { "child:Documents": "main", list: "main" },
     reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the section is in the app menu", miss: "pages stay unreachable" }],
@@ -298,9 +298,14 @@ function buildScenarios() {
     // stand one. Both sides share the fixture, so parity passed either way — the bug was invisible here by design.
     { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["coverage INCOMPLETE (4 unaccounted member(s))"] })] }) },
     { name: "package state unknown — hard stop 3", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "unknown" })] }) },
-    { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "not a component type" }] })] }) },
-    { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "install CrtCustomer360App" }] })] }) },
-    { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolved: true }] })] }) },
+    { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: false, note: "install CrtCustomer360App" }] })] }) },
+    // ENG-95468 (residual) — the PROVENANCE branch, driven through BOTH scripts for the reason the note below gives
+    // about the gated-composite branch: two copies of a decision that no scenario exercises can differ for a whole
+    // review round with every parity check green. A catalog-sourced answer must stop as `plan-unvalidated-against-
+    // stand` on both sides, and the un-swept scenario below is its negative twin (absence still logs, never stops).
+    { name: "a catalog-sourced component answer stops as unvalidated, not as a plan defect", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true }] })] }) },
     // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
     // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
     // two copies could differ on gated input and every parity check still passed. These three drive the
@@ -309,9 +314,9 @@ function buildScenarios() {
     // Each one MUST override `componentTypes` as well: `RECONCILE` defaults it to `["crt.ComboBox"]`, and
     // `componentTypeMismatches` drops any resolution the plan did not publish — so a scenario that overrides only
     // `componentResolution` never reaches the gate branch at all and passes vacuously against either predicate.
-    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
-    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
-    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolved: false, note: "fabricated" }] })] }) },
+    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
+    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
+    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "fabricated" }] })] }) },
     { name: "a checkpoint key that names no unit — hard stop 4", args: { ...ARGS, mode: "checkpoints", checkpointAfter: ["nope"] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "a finding that names no unit — refused", args: { ...ARGS, findings: [{ unit: "ghost", problem: "wrong" }] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "nothing published — no-units-published", args: ARGS, answer: host({ reconciles: [RECONCILE({ unitKeys: [], buildOrder: [], reachability: [] })] }) },
