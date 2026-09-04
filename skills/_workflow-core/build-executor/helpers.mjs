@@ -829,15 +829,42 @@ const isStandProvenance = (v) => typeof v === 'string' && v.trim().toLowerCase()
 // A STATED provenance that is not this stand. `undefined` is NOT one — absence is handled where it belongs, by the
 // shape check (`componentSweepFaults`), not by inventing a verdict here.
 const statedNotStand = (c) => typeof c?.resolvedFrom === 'string' && !isStandProvenance(c.resolvedFrom)
+// clio's OWN machine tokens for a bundled-catalog answer, as it writes them into `get-component-info`'s free-text
+// `note` (`resolvedFrom=latest-fallback`, `resolvedFromReason=probe-error`). The stand-write gate keys on the agent's
+// `resolvedFrom` CLASSIFICATION, so a `note` carrying one of these beside a claimed `resolvedFrom: 'stand'` is the
+// tool contradicting the model — the exact false-positive this axis exists to close, moved from tool to model.
+// `componentSweepFaults` refuses such an entry at arrival (PR #159 review, Major 7). Matched case-insensitively.
+const CATALOG_NOTE_TOKENS = /probe-error|latest-fallback/i
 // WHAT GETS RENDERED for an operator, as one of two fixed words rather than the agent's own string (PR #159 review,
 // Minor). `resolvedFrom` is a one-word enum, and `standUnconfirmedDetail` renders it inside an inline-code span, so
 // an agent-supplied backtick could escape that span and forge instruction-shaped prose in the text an operator acts
 // on. That is the exposure `GATE_NAME_SHAPE` already answers for `id`/`feature`; `note` stays exempt because it is
 // deliberately prose. The raw (flattened, capped) value still travels on the structured entry, where it is JSON and
 // cannot escape anything, so nothing an operator might need to see is lost.
-const provenanceToken = (v) => (typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_CATALOG
-  ? RESOLVED_FROM_CATALOG
-  : 'unrecognised')
+// An ALLOWLIST sanitiser rather than a two-way collapse (PR #159 review, Minor round 2). The old form rendered
+// everything that was not `catalog` as the opaque word `unrecognised` — including `latest-fallback`, the token clio
+// itself writes into the note this feature keys off, and so the value an agent is likeliest to echo. That lost the
+// one diagnostic that tells an operator this was the KNOWN catalog fallback rather than an invented word. A value
+// matching a tight token shape (a leading letter, then letters/digits/`-`/`_`, length-capped) renders VERBATIM;
+// anything else — a backtick that would escape the inline-code span, a newline, a wall of text — still collapses to
+// `unrecognised`, so the anti-forgery guarantee `GATE_NAME_SHAPE` gives `id`/`feature` is unchanged. `catalog`
+// normalises to the literal (case-folded) as before, so the two-word common case reads exactly as it did.
+const PROVENANCE_TOKEN_SHAPE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+const provenanceToken = (v) => {
+  if (typeof v !== 'string') return 'unrecognised'
+  const t = v.trim()
+  if (t.toLowerCase() === RESOLVED_FROM_CATALOG) return RESOLVED_FROM_CATALOG
+  return PROVENANCE_TOKEN_SHAPE.test(t) ? t : 'unrecognised'
+}
+// The SAME neutralisation for the agent-supplied `type`, which `standUnconfirmedDetail` renders in the inline-code
+// span right beside the provenance (PR #159 review, Major 2). `type` is as agent-supplied as `resolvedFrom`, so an
+// agent backtick in it could escape that span and forge instruction-shaped prose exactly where `provenanceToken`
+// stops `resolvedFrom` from doing so. A component type is `crt.Xxx`, whose dot `GATE_NAME_SHAPE` (used for `id` /
+// `feature`) forbids — so it needs its own shape: a leading letter, then letters, digits, `_` and `.`, length-capped.
+// A value that is not that shape renders as a fixed token; the RAW value still travels on the structured entry,
+// where it is JSON and cannot escape, so nothing an operator might need to inspect is lost.
+const COMPONENT_TYPE_SHAPE = /^[A-Za-z][A-Za-z0-9_.]{0,127}$/
+const componentTypeToken = (t) => (typeof t === 'string' && COMPONENT_TYPE_SHAPE.test(t.trim()) ? t.trim() : 'unnamed-type')
 // The published types whose answer did NOT come from this stand. Read exactly like `componentTypeMismatches`
 // otherwise: scoped to what the PLAN published (a sweep cannot invent a stop over a type no plan names), and a
 // stated value is the only thing that gates — an entry with NO `resolvedFrom` is left alone, so a state injected by
@@ -875,7 +902,7 @@ export const standAnsweredResolutions = (componentResolution) =>
   (componentResolution || []).filter((c) => !statedNotStand(c))
 export const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
 const standUnconfirmedDetail = (entries) => (entries || [])
-  .map((c) => '`' + c.type + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
+  .map((c) => '`' + componentTypeToken(c.type) + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
 // The operator's next move, and it is NOT a re-plan: the plan is not implicated by an answer nobody got from the
 // stand. ONE home for the wording, like `componentReplanClause`, so the pre-build and mid-run stops cannot drift.
 export const standUnvalidatedNext = (entries, tail) => {
@@ -910,6 +937,15 @@ export const alsoAxesClauses = (componentMismatches, templateMismatchesNow, appI
     : '',
   appIdentity ? 'ALSO — ' + appIdentityClause(appIdentity) : '',
 ].filter(Boolean)
+// The LOG-line counterpart of the clauses above, and its OWN home for the same reason (PR #159 review, Minor round
+// 2). The trailing ` — ALSO …` fragments a stop's `log(...)` appends were hand-written THREE times — in
+// `packageStopReturn`, `planUnvalidatedAgainstStandStop` and the mid-run `acceptReconciled` block — and the log half
+// is the one nothing guards, because `run-workflow-parity.mjs` compares logs as a warning only. One home, appended
+// to each STOP line, so a wording change lands in every stop at once and the three cannot drift silently.
+export const alsoAxesLog = (componentMismatches, templateMismatchesNow, appIdentity) =>
+  (componentMismatches?.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : '')
+  + (templateMismatchesNow?.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : '')
+  + (appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : '')
 // --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
 // A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
 // first write. Components were (above). These two were not, and the third Applicant run failed on both:
@@ -1588,11 +1624,11 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
 // is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
 // instead of every index of a 200-row array.
-// THE COMPONENT SWEEP'S OWN TWO FAULTS (ENG-95468 residual; PR #159 review, Majors 1 and 3). Both live HERE and
+// THE COMPONENT SWEEP'S OWN THREE FAULTS (ENG-95468 residual; PR #159 review, Majors 1, 3 and 7). All live HERE and
 // not in `RECONCILE_SCHEMA` for the reason the whole provenance field does: this checker is not bounded by the
 // host's 4096-byte classifier cap, so a fault costs zero schema bytes, and a faulted answer spends ONE attempt and
-// comes back with the informed retry naming the exact field — which is the cheap outcome. Neither is expressible as
-// a per-field table row: one is a value contradiction, the other is about the set as a whole.
+// comes back with the informed retry naming the exact field — which is the cheap outcome. None is expressible as
+// a per-field table row: two are value contradictions, the other is about the set as a whole.
 // FAULT 1 — a BLANK `resolvedFrom`. `shapeRequiredErrors` rejects only `undefined` and the typed check only a
 // non-string, so `''` used to pass arrival and then gate, hard-stopping a healthy run with a DNS remedy. A bare
 // `""` is the token this repo has already MEASURED being dropped in transit from this very answer (the reason
@@ -1606,10 +1642,33 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // exactly as documented (`absence is not evidence`), so one flaky `get-component-info` call cannot cost the round.
 function componentSweepFaults(state, out) {
   const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
-  for (const c of rows) {
-    if (c && typeof c.resolvedFrom === 'string' && c.resolvedFrom.trim() === '') {
-      out.push('componentResolution[' + (typeof c.type === 'string' ? c.type : '?') + '].resolvedFrom: BLANK. Report `stand` when this environment answered or `catalog` when it did not — an empty string is the token observed dropped in transit on this answer, so it is refused rather than read as "did not reach the stand"')
-    }
+  // PR #159 review (Major 2): name the offending row by INDEX, never by echoing the agent-supplied `type`. This
+  // message lands in `lastShapeFaults` and is rendered into the retry prompt's `faultLines` — the answer of the very
+  // agent whose next classification gates a stand-writing round — and `type` is unbounded/unflattened on this path,
+  // so a `type` carrying a newline could forge a fault line telling that agent what to return. The index identifies
+  // the row without relaying agent text. (PR #159 review, Minor / RC-8) AGGREGATED into one message naming the first
+  // few indices, the way the byte-size fault names its worst fields: the per-row push had no cap, so ≥12 blank rows —
+  // the whole-array transport artefact this fault exists for — displaced every other fault past the 12-entry `limit`
+  // in `reconcileShapeErrors` and the run gave up instead of converging on the informed retry.
+  const blankRows = []
+  rows.forEach((c, i) => { if (c && typeof c.resolvedFrom === 'string' && c.resolvedFrom.trim() === '') blankRows.push(i) })
+  if (blankRows.length) {
+    const which = blankRows.slice(0, 3).map((i) => 'componentResolution[' + i + ']').join(', ') + (blankRows.length > 3 ? ', …' : '')
+    out.push(blankRows.length + ' component resolution entr' + (blankRows.length === 1 ? 'y has' : 'ies have') + ' a BLANK `resolvedFrom` (' + which + '). Report `stand` when this environment answered or `catalog` when it did not — an empty string is the token observed dropped in transit on this answer, so it is refused rather than read as "did not reach the stand"')
+  }
+  // FAULT 3 — a `resolvedFrom: 'stand'` CLAIM that the entry's OWN `note` contradicts (PR #159 review, Major 7). The
+  // gate keys on the agent's classification, so it was fail-closed in one direction only: `catalog`/unrecognised is
+  // stopped, but `stand` over a note carrying clio's catalog-fallback token (`probe-error` / `latest-fallback`)
+  // PASSED — the exact false-positive this axis exists to close, moved from the tool to the model. clio's machine
+  // signal is already in hand, quoted verbatim to the agent in the Reconcile prompt, so the script cross-checks it
+  // here rather than trusting the classification, the same way `reconcileShapeErrors` refuses a self-contradicting
+  // `schemaNamePrefixEmpty` pair. Named by INDEX, never by echoing the agent `note`. This runs BEFORE the
+  // published-types early return: a contradiction is a fault whether or not the plan published `componentTypes`.
+  const contradictory = []
+  rows.forEach((c, i) => { if (c && isStandProvenance(c.resolvedFrom) && typeof c.note === 'string' && CATALOG_NOTE_TOKENS.test(c.note)) contradictory.push(i) })
+  if (contradictory.length) {
+    const which = contradictory.slice(0, 3).map((i) => 'componentResolution[' + i + ']').join(', ') + (contradictory.length > 3 ? ', …' : '')
+    out.push(contradictory.length + ' component resolution entr' + (contradictory.length === 1 ? 'y claims' : 'ies claim') + ' `resolvedFrom: stand` but the entry\'s own `note` carries clio\'s catalog-fallback token (`probe-error` / `latest-fallback`) (' + which + '). That is a bundled-catalog answer, not a stand answer: report `catalog` when the note says the environment could not be probed, so the round is not read as validated against a stand it never reached')
   }
   const published = (Array.isArray(state.componentTypes) ? state.componentTypes : []).filter((t) => typeof t === 'string')
   if (!published.length) return

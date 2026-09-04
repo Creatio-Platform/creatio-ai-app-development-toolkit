@@ -168,9 +168,13 @@ export const RECONCILE_SCHEMA = {
     // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
     // resolved against the TARGET stand: `{ type, resolved, resolvedFrom, note }`. This is what the pre-build component gate
     // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
-    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
-    // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
-    // run that predates this field behaves exactly as it did before.
+    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL TO
+    // THE ARITHMETIC: a type with no entry produces no component gate on it — a partial or absent sweep is left
+    // alone (absence is not evidence), so `standUnconfirmedComponents` / `componentTypeMismatches` behave over a
+    // provenance-less or partial sweep exactly as they did before this field. The ONE carve-out is a shape check,
+    // not the arithmetic (PR #159 review, Minor): a plan that PUBLISHED component types and swept NONE of them is
+    // refused by `componentSweepFaults` (FAULT 2) and retried, because a wholly-absent sweep would otherwise clear
+    // the gate by absence — the door the residual scope exists to close. A PARTIAL sweep stays un-faulted.
     // ENG-95683 DELIVERED the by-kind branch this comment used to defer: a `resolved: false` type carrying a
     // well-formed gated composite (`kind: 'composite'` + an `id` of gate-name shape) makes the stop say 'install
     // `id` (+enable `feature`) and re-run the BUILD' instead of the generic re-plan text. What is STILL open is
@@ -183,7 +187,19 @@ export const RECONCILE_SCHEMA = {
     // or `'catalog'` (it did not — `get-component-info` could not probe the environment and answered from its
     // bundled `latest` catalog instead). Only `'stand'` is a confirmation; a catalog answer STOPS the round
     // (`plan-unvalidated-against-stand`) rather than passing the gate on a round where nothing about the stand was
-    // checked. REQUIRED — enforced in `RECONCILE_SHAPE`, which is not byte-capped, so the field cannot be dropped.
+    // checked. VOCABULARY (PR #159 review, Major 7): this toolkit-side field REUSES clio's field name `resolvedFrom`
+    // with a DIFFERENT two-word vocabulary — clio's own `resolvedFrom` is `latest-fallback` (etc.), which the agent
+    // reads out of the `get-component-info` note and CLASSIFIES into `stand`/`catalog` here. Because the gate rests on
+    // that classification, `componentSweepFaults` FAULT 3 cross-checks it against clio's machine tokens in the same
+    // entry's `note` (`probe-error` / `latest-fallback`): a `stand` claim over such a note is refused as a bundled-
+    // catalog answer, so the model cannot re-open the tool-side false positive this axis closed.
+    // REQUIRED — enforced in `RECONCILE_SHAPE`, which is not byte-capped, so the field cannot be dropped. NOTE on
+    // RESUME (PR #159 review, Major 4): requiring it means a run JOURNAL recorded before this field existed carries
+    // `componentResolution` entries without `resolvedFrom`, so a resume that REPLAYS such an answer re-validates it,
+    // faults, and the driver stops with `run journal drifted … Start a fresh run` — cross-version journal replay is
+    // not supported (it never was; the driver's drift check already declares it). The ARITHMETIC half is unaffected —
+    // `standUnconfirmedComponents`/`componentTypeMismatches` leave a provenance-less entry alone — so a fresh run off
+    // the same folder behaves exactly as before; it is only mid-flight RESUME across the upgrade that starts over.
     // Those three are NOT re-declared as `properties` here and that is deliberate (ENG-95930, mode A): the expanded
     // per-property form serializes over the host's 4096-byte classifier cap, which is what refused the schema before
     // the model ever ran. `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` carries them — a string cap does not constrain

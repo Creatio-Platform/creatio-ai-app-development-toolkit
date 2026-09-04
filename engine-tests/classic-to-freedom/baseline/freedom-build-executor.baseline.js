@@ -1799,9 +1799,23 @@ const statedNotStand = (c) => typeof c?.resolvedFrom === 'string' && !isStandPro
 // this inside an inline-code span, and an agent-supplied backtick could escape it and forge instruction-shaped
 // prose — the exposure `GATE_NAME_SHAPE` already answers for `id`/`feature`. The raw value still travels on the
 // structured entry, where it is JSON and cannot escape anything.
-const provenanceToken = (v) => (typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_CATALOG
-  ? RESOLVED_FROM_CATALOG
-  : 'unrecognised')
+// An ALLOWLIST sanitiser rather than a two-way collapse (PR #159 review, Minor round 2): `latest-fallback` — the
+// token clio writes into the note this feature keys off — renders VERBATIM instead of the opaque `unrecognised`,
+// while a backtick/newline/wall-of-text value still collapses so it cannot escape the inline-code span. `catalog`
+// still normalises to the literal.
+const PROVENANCE_TOKEN_SHAPE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+const provenanceToken = (v) => {
+  if (typeof v !== 'string') return 'unrecognised'
+  const t = v.trim()
+  if (t.toLowerCase() === RESOLVED_FROM_CATALOG) return RESOLVED_FROM_CATALOG
+  return PROVENANCE_TOKEN_SHAPE.test(t) ? t : 'unrecognised'
+}
+// The SAME neutralisation for the agent-supplied `type` (PR #159 review, Major 2): `standUnconfirmedDetail` renders
+// it in the inline-code span beside the provenance, so a backtick in it could escape the span exactly where
+// `provenanceToken` stops `resolvedFrom` from doing so. A component type is `crt.Xxx`, whose dot `GATE_NAME_SHAPE`
+// forbids, so it gets its own shape; anything else renders as a fixed token while the raw value stays on the entry.
+const COMPONENT_TYPE_SHAPE = /^[A-Za-z][A-Za-z0-9_.]{0,127}$/
+const componentTypeToken = (t) => (typeof t === 'string' && COMPONENT_TYPE_SHAPE.test(t.trim()) ? t.trim() : 'unnamed-type')
 function standUnconfirmedComponents(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
@@ -1828,7 +1842,7 @@ const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).joi
 const standAnsweredResolutions = (componentResolution) =>
   (componentResolution || []).filter((c) => !statedNotStand(c))
 const standUnconfirmedDetail = (entries) => (entries || [])
-  .map((c) => '`' + c.type + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
+  .map((c) => '`' + componentTypeToken(c.type) + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
 // The operator's next move, and it is NOT a re-plan: the plan is not implicated by an answer nobody got from the
 // stand. ONE home for the wording, like `componentReplanClause`, so the pre-build and mid-run stops cannot drift.
 // THE OTHER AXES, CARRIED ONTO A STOP THAT IS PRIMARILY ABOUT SOMETHING ELSE — one home for the three `ALSO —`
@@ -1843,6 +1857,12 @@ const alsoAxesClauses = (componentMismatches, templateMismatchesNow, appIdentity
     : '',
   appIdentity ? 'ALSO — ' + appIdentityClause(appIdentity) : '',
 ].filter(Boolean)
+// The LOG-line counterpart of the clauses above, one home for the ` — ALSO …` fragments a stop's `log(...)` appends
+// (PR #159 review, Minor round 2) — written three times before, in the two stops and the mid-run block.
+const alsoAxesLog = (componentMismatches, templateMismatchesNow, appIdentity) =>
+  (componentMismatches?.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : '')
+  + (templateMismatchesNow?.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : '')
+  + (appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : '')
 const standUnvalidatedNext = (entries, tail) => {
   const list = entries || []
   const falseFromCatalog = list.filter((c) => !c.resolved).length
@@ -2937,10 +2957,7 @@ if (state.sectionHost === 'new-app' && typeof state.schemaNamePrefix !== 'string
 // `next` that says "do NOT re-plan".
 const standUnconfirmed = standUnconfirmedComponents(state.componentResolution, state.componentTypes)
 if (standUnconfirmed.length) {
-  const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
-  const alsoTemplates = templateMismatchesNow.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : ''
-  const alsoIdentity = appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : ''
-  log(`STOP — the plan was NOT validated against this stand this round: ${standUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(standUnconfirmed)}${alsoTypes}${alsoTemplates}${alsoIdentity}`)
+  log(`STOP — the plan was NOT validated against this stand this round: ${standUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(standUnconfirmed)}` + alsoAxesLog(componentMismatches, templateMismatchesNow, appIdentity))
   return runReturn({
     stopped: 'plan-unvalidated-against-stand',
     standUnconfirmedComponents: standUnconfirmed,
@@ -2972,10 +2989,7 @@ state = { ...state, packageState: resolvePackageState(state.targetPackage, state
 // review; no independent corroboration added (out of this ticket's scope).
 if (packageRecordViaReread) log(`NOTE — the target package stop cleared via the dedicated ${QUEUE_FILE} re-read, not the baseline Reconcile record — this resume's ownership rests on that one unverified agent read`)
 if (stopOnPackage) {
-  const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
-  const alsoTemplates = templateMismatchesNow.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : ''
-  const alsoIdentity = appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : ''
-  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}${alsoTypes}${alsoTemplates}${alsoIdentity}`)
+  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}` + alsoAxesLog(componentMismatches, templateMismatchesNow, appIdentity))
   // ENG-95884 — distinguish "confirmed absent" from "not read": the second is not evidence of anything and must
   // not read like a settled verdict, or an operator acts on a stop that a dead read produced.
   const packageNext = packageRecordUnread
@@ -3014,18 +3028,24 @@ if (stopOnPackage) {
 // All named at once so a re-plan fixes them in a single pass. Read-only throughout: the resolutions came from
 // Reconcile's `get-component-info` / `get-schema` sweeps and one prefix read. (When placement ALSO fails, the stop
 // above already carried all three.)
-if (componentMismatches.length || templateMismatchesNow.length || appIdentity) {
+// PR #159 review (Major 1) — recompute the identity axis after `confirmPackageStop`. It may have recovered this
+// run's own `packageCreated` record from the queue file (a resume whose baseline report dropped it), flipping
+// `appUnitDone()` true; reading the pre-re-read `appIdentity` here would stop a healthy resumed `new-app` run on a
+// stale mismatch for an app whose unit is already done. The provenance stop above keeps the pre-re-read value on
+// purpose — it returns before the re-read runs, so that IS its settled value.
+const appIdentitySettled = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode, appUnitDone())
+if (componentMismatches.length || templateMismatchesNow.length || appIdentitySettled) {
   const parts = [
     componentMismatches.length ? `${componentMismatches.length} component type(s): ${componentTypeList(componentMismatches)}` : '',
     templateMismatchesNow.length ? `${templateMismatchesNow.length} page template(s): ${templateNameList(templateMismatchesNow)}` : '',
-    appIdentity ? `app/package identity: ${appIdentity.kind}` : '',
+    appIdentitySettled ? `app/package identity: ${appIdentitySettled.kind}` : '',
   ].filter(Boolean).join(' · ')
   log(`STOP — the plan asserts what this stand does not have — ${parts}`)
   return runReturn({
     stopped: 'plan-invalid-against-stand',
     componentMismatches,
     templateMismatches: templateMismatchesNow,
-    appIdentityMismatch: appIdentity,
+    appIdentityMismatch: appIdentitySettled,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -3033,7 +3053,7 @@ if (componentMismatches.length || templateMismatchesNow.length || appIdentity) {
     verdict: verdictOf(state.verify),
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
-    next: planInvalidNextAll(componentMismatches, templateMismatchesNow, appIdentity, 'Nothing was built.'),
+    next: planInvalidNextAll(componentMismatches, templateMismatchesNow, appIdentitySettled, 'Nothing was built.'),
   })
 }
 
@@ -4275,15 +4295,16 @@ async function acceptReconciled(next, whereFrom) {
   // re-plan sees every axis whichever fired. The component axis is scoped to STAND-ANSWERED entries.
   const midRunMismatches = componentTypeMismatches(standAnsweredResolutions(state.componentResolution), state.componentTypes)
   const midRunTemplates = templateMismatches(state.templateResolution, state.templateNames)
+  // PR #159 review (Major 1) — the identity axis is the ONE of the three that is NOT pure over the refreshed
+  // state: `appUnitDone()` reads `ownPackageNow()`, which `confirmPackageStop`'s queue-file re-read below MUTATES
+  // when a resume's baseline report dropped this run's own `packageCreated` record. So it cannot be hoisted across
+  // that mutation the way the two pure axes are. This pre-re-read value is used ONLY by the provenance stop, which
+  // returns BEFORE `confirmPackageStop` runs — so on that path there is no later mutation and this IS the settled
+  // value. The plan-invalid gate below reads `midRunIdentitySettled`, recomputed after the re-read.
   const midRunIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode, appUnitDone())
   const midRunUnconfirmed = standUnconfirmedComponents(state.componentResolution, state.componentTypes)
   if (midRunUnconfirmed.length) {
-    const alsoMid = [
-      midRunMismatches.length ? ` — ALSO ${midRunMismatches.length} unresolved component type(s): ${componentTypeList(midRunMismatches)}` : '',
-      midRunTemplates.length ? ` — ALSO ${midRunTemplates.length} unresolved template(s): ${templateNameList(midRunTemplates)}` : '',
-      midRunIdentity ? ` — ALSO the app/package identity (${midRunIdentity.kind})` : '',
-    ].join('')
-    log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}${alsoMid}`)
+    log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}` + alsoAxesLog(midRunMismatches, midRunTemplates, midRunIdentity))
     return {
       stopped: 'plan-unvalidated-against-stand',
       standUnconfirmedComponents: midRunUnconfirmed,
@@ -4329,25 +4350,30 @@ async function acceptReconciled(next, whereFrom) {
   // The template and identity axes are mid-run guarantees for exactly the same reasons (ENG-95468): a resumed run's
   // baseline may predate these fields, a template schema can be uninstalled during a long run, and `sectionHost` /
   // `targetPackage` are re-read every Reconcile — so a round that FIRST reports a producible-package contradiction
-  // must stop before the next unit rather than let `create-app` run on it. All three were computed above the
-  // provenance stop (PR #159 review, Major 2) and are read here, not recomputed — one set of facts, three stops.
-  if (midRunMismatches.length || midRunTemplates.length || midRunIdentity) {
+  // must stop before the next unit rather than let `create-app` run on it. The component and template axes are read
+  // as computed above the provenance stop (they are pure over the refreshed state, which `confirmPackageStop` does
+  // not touch). The IDENTITY axis is RECOMPUTED here (PR #159 review, Major 1): `confirmPackageStop` above may have
+  // recovered this run's own `packageCreated` record from the queue file, flipping `appUnitDone()` true, so reading
+  // the pre-re-read value would stop a healthy resumed `new-app` run on a stale mismatch for an app whose unit is
+  // already done. Recomputing costs no agent call — it is the same arithmetic over the now-settled ownership.
+  const midRunIdentitySettled = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode, appUnitDone())
+  if (midRunMismatches.length || midRunTemplates.length || midRunIdentitySettled) {
     const parts = [
       midRunMismatches.length ? `${midRunMismatches.length} component type(s): ${componentTypeList(midRunMismatches)}` : '',
       midRunTemplates.length ? `${midRunTemplates.length} page template(s): ${templateNameList(midRunTemplates)}` : '',
-      midRunIdentity ? `app/package identity: ${midRunIdentity.kind}` : '',
+      midRunIdentitySettled ? `app/package identity: ${midRunIdentitySettled.kind}` : '',
     ].filter(Boolean).join(' · ')
     log(`STOP after ${whereFrom} — the plan asserts what this stand does not have — ${parts}`)
     return {
       stopped: 'plan-invalid-against-stand',
       componentMismatches: midRunMismatches,
       templateMismatches: midRunTemplates,
-      appIdentityMismatch: midRunIdentity,
+      appIdentityMismatch: midRunIdentitySettled,
       targetPackage: state.targetPackage || null,
       packageState: state.packageState || null,
       approval: state.approval || approval,
       planVersion: state.planVersion || null,
-      next: planInvalidNextAll(midRunMismatches, midRunTemplates, midRunIdentity, 'Anything already built this run is on disk.'),
+      next: planInvalidNextAll(midRunMismatches, midRunTemplates, midRunIdentitySettled, 'Anything already built this run is on disk.'),
     }
   }
   // ENG-95884 (fix) — same write-back as the baseline call site: resolve `state.packageState` against the now-

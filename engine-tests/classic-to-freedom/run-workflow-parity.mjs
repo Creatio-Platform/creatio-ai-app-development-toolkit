@@ -324,6 +324,13 @@ function buildScenarios() {
     // stand` on both sides, and the un-swept scenario below is its negative twin (absence still logs, never stops).
     { name: "a catalog-sourced component answer stops as unvalidated, not as a plan defect", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
     { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true }] })] }) },
+    // PR #159 review (Major 5) — the single-type catalog scenario above drives the provenance stop, but NOT the two
+    // branches the frozen mirror hand-writes into it: the `...alsoAxesClauses(...)` carry (only reached when a
+    // stand-answered defect rides beside the catalog answer) and the `falseFromCatalog` "do NOT re-plan on it" clause
+    // (only reached when the catalog answer is itself `resolved: false`). Deleting either from the mirror alone left
+    // parity green, the exact divergence class recorded on this PR. These two differential scenarios drive both.
+    { name: "PR #159 (Major 5): a MIXED round — a catalog answer beside a stand-confirmed defect — stops as unvalidated AND carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "PR #159 (Major 5): a catalog answer that is ALSO resolved:false drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
     // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
     // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
     // two copies could differ on gated input and every parity check still passed. These three drive the
@@ -362,6 +369,11 @@ function buildScenarios() {
     // from the mirror alone left parity 407/0 and infra 856/0 green with the two copies behaviourally divergent.
     // That is the failure class the gated-composite note above records, measured again.
     { name: "a stand that goes away MID-RUN stops before the next unit", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    // PR #159 review (Major 5) — the MID-RUN twins of the two differential scenarios above. The mirror hand-writes the
+    // provenance stop's construction at BOTH sites, so a deletion from the mid-run copy's `alsoAxesClauses` carry or
+    // `falseFromCatalog` clause is caught only by a scenario that reaches the SECOND Reconcile.
+    { name: "PR #159 (Major 5): a MIXED round MID-RUN carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "PR #159 (Major 5): a catalog resolved:false MID-RUN drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
     { name: "a guidelines record that is not fileable is reported, not filed", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], build: (unit) => ({ ...BUILT(unit), guidelines: { evidenceId: `${unit}#quality-gates`, ran: true, referencePage: "", componentsDiffed: [] } }) }) },
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },
