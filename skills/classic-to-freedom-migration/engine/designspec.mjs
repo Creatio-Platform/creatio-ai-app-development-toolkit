@@ -350,13 +350,13 @@ function conditionPhrase(c) {
   }
   return esc(attr);
 }
-// Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
+// Declarative page business rules → Business-rules rows [trigger, behaviour, effect, target]. Extracted for Sonar CC 15.
 function pageRuleRows(cs) {
   return (cs.pageBusinessRules || []).map((r) => {
     const phrases = (r.conditions || []).map(conditionPhrase).filter(Boolean);
     const trigger = phrases.length ? `when ${phrases.join(" and ")}` : ((r.conditions || []).length ? "conditional" : "always");
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
-    return [esc(r.element), trigger, effect, "page business rule"];
+    return [trigger, esc(r.element), effect, "page business rule"];
   });
 }
 // entity/lookup filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
@@ -368,7 +368,7 @@ function entityFilterRows(cs) {
     const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
     const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
     const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
-    return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
+    return [`${esc(attr)} lookup`, `Filter · ${esc(attr)}`, effc, "entity business rule / lookup filter"];
   });
 }
 // Build the Business-rules table rows: declarative page business rules → entity/lookup filters. Both are
@@ -377,7 +377,7 @@ function entityFilterRows(cs) {
 // this table carries business rules only, no duplicate of the Card-actions row).
 // The rules the engine MAPPED. Methods belong to `⚠ Custom methods` only — one method, one row, in the table
 // that carries the port obligation and traces the trigger from the data.
-// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
+// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [trigger, behaviour, effect, target].
 function buildLogicRows(cs) {
   return [...pageRuleRows(cs), ...entityFilterRows(cs)];
 }
@@ -391,7 +391,7 @@ function renderLogicSection(cs) {
   const stubCount = (cs.handlerStubs || []).length;
   if (!logic.length && !stubCount) return [];
   const table = logic.length
-    ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
+    ? ["| Trigger | Behaviour | Effect | Freedom target |", "| --- | --- | --- | --- |",
       ...logic.map((row) => `| ${row.join(" | ")} |`)]
     : ["> No declarative business rules or lookup filters on this page."];
   // ENG-96327: no "see ⚠ Custom methods below" pointer — that section's own header (with its count) is right

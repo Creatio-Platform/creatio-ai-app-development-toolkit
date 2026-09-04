@@ -3184,7 +3184,7 @@ check("C2/ENG-96327: a lookup-GUID rule NO LONGER prompts a [lookup-value] note 
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3/ENG-96327: a page business rule shows the WHOLE condition in the Trigger (field · when <attr> <op> <value> · effect · type) — a lookup GUID renders as 'a specific value'",
   /#### Business rules/.test(guidCs.designSpec)
-  && /\| Contact \| when Stage = a specific value \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+  && /\| when Stage = a specific value \| Contact \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // ENG-96327: the Trigger states the WHOLE condition — a presence check reads "is filled/empty", a readable value
@@ -3193,9 +3193,9 @@ check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's R
 const brRun = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Sf:{r:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:12,leftExpression:{type:1,attribute:"Stage"}}]}},Am:{r:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Amount"},rightExpression:{type:0,value:5,dataValueType:4}}]}}},diff:[{operation:"insert",name:"Sf",parentName:"Header",propertyName:"items",values:{bindTo:"Sf"}},{operation:"insert",name:"Am",parentName:"Header",propertyName:"items",values:{bindTo:"Am"}}]};});` }] }, { baseDir: FIX });
 check("ENG-96327 business-rule Trigger: a presence check reads 'is filled'; a readable value renders inline ('when Amount = 5')",
-  /\| Sf \| when Stage is filled \| required \(else optional\) \| page business rule \|/.test(brRun.designSpec)
-  && /\| Am \| when Amount = 5 \| required \(else optional\) \| page business rule \|/.test(brRun.designSpec),
-  () => brRun.designSpec.split("\n").filter((l) => /^\| (Sf|Am) \|/.test(l)));
+  /\| when Stage is filled \| Sf \| required \(else optional\) \| page business rule \|/.test(brRun.designSpec)
+  && /\| when Amount = 5 \| Am \| required \(else optional\) \| page business rule \|/.test(brRun.designSpec),
+  () => brRun.designSpec.split("\n").filter((l) => /\| (Sf|Am) \|/.test(l)));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
@@ -3218,7 +3218,7 @@ check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
-  /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
+  /\| Filter · Req \| 2 filters/.test(dupFilt.designSpec));
 // #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
@@ -6031,7 +6031,7 @@ const ck = ckRun.checklist || "";
   const lines = logicBlock.split("\n").filter((l) => l.trim());
   check("Logic (canonical): the rules table comes first and the section carries NO method-count pointer (ENG-96327 — methods live in ⚠ Custom methods below)",
     /#### Business rules/.test(ckRun.plan)
-    && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
+    && /^\| Trigger \| Behaviour \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
     && !lines.some((l) => /custom method\(s\) — see/.test(l))
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),
