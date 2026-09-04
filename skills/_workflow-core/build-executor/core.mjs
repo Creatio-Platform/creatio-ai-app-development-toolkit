@@ -46,8 +46,10 @@ import {
   RESOLVED_FROM_CATALOG, RESOLVED_FROM_STAND, standAnsweredResolutions, standUnconfirmedComponents,
   standUnconfirmedList, standUnvalidatedNext,
   // PR #159 review (Major 2) — the three `ALSO -` clauses, one home, shared by the package stop and the
-  // unvalidated-stand stop so a re-plan sees every axis whichever of the two fired.
+  // unvalidated-stand stop so a re-plan sees every axis whichever of the two fired. `alsoAxesLog` is the LOG-line
+  // counterpart (PR #159 review, Minor round 2), shared by the same stops' `log(...)` calls.
   alsoAxesClauses,
+  alsoAxesLog,
   // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
   // import, while the inlined Claude artifact shares one scope and would not have noticed a missing name. The core
   // suite caught exactly that: `reconcileUnconsumed is not defined` on a green baseline the artifact ran fine.
