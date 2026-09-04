@@ -1991,7 +1991,13 @@ function buildLayoutGroupRows(cs, regionOf) {
     const parts = [];
     if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
     parts.push(...e.items);
-    return { label: `${k} — ${parts.join(" · ")}` };
+    // ENG-96458 D4 — THE FIVE ROWS THE TICKET IS ABOUT, and the ONLY rows in this engine that opt into `pending`.
+    // A tab/region's placement is not derivable from `get-page` (the coordinate space it reports is not confirmed
+    // against the one the plan publishes), so these are deliberately handed to a human — and the measured defect is
+    // that one of them, `Header — 16 fields · Feed (ESN)`, was the one row that actually failed that human check
+    // while every machine row read green. `confirm: true` is what makes the row COUNT (see `resolveRow`); every
+    // other vk-less row in this file is a note and stays a note.
+    return { label: `${k} — ${parts.join(" · ")}`, human: true };
   });
 }
 // ENG-96457 (item 2) — AN ELEMENT THE CHOSEN TEMPLATE DOES NOT SHIP IS A DELIVERABLE, NOT CONTEXT. While the plan
@@ -2122,7 +2128,10 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (!typed.length) pages.push({ label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
+  // `about` is this row's identity WITHIN the shared `typedFormsBuilt` evidence key: N typed forms emit N rows that
+  // all read one boolean, and without it every one of them keys to `main#onstand:typedFormsBuilt`, so a single
+  // `accepted` entry would close them all (PR #157 review, Blocker 1). The schema name is the row's own subject.
+  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, about: t.schema, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
@@ -2171,8 +2180,12 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // dropped silently: the reader must still see that the section is unreachable from the menu, and that this
   // was chosen. Any other mode (including a plan that recorded no placement at all) keeps the gated row.
   if (pm.sectionSchema || result.section) {
+    // `na` (PR #157 review, Blocker 2) — the SAME mechanism its boundary sibling nine lines up uses, and for the
+    // same reason: this row is a decision the plan already took, so there is nothing to build, nothing to check and
+    // nobody to ask. Without it the row resolved as an open confirmation and a correctly executed
+    // `pages-only-no-menu` plan could never report complete.
     pages.push(opts.sectionHostMode === "pages-only-no-menu"
-      ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
+      ? { na: "not registered by decision (`placement.sectionHost.mode = pages-only-no-menu`)", label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
       : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings", miss: "the section is not in the menu — its pages are unreachable" } });
     // ENG-96458 D6 — THE RUN'S OWN SCAFFOLD IS A DELIVERABLE OF THE RUN. `create-app` mints a stub entity and binds
     // starter pages to it; `create-app-section` adds a starter form page on whatever template it defaults to. Once
@@ -2185,8 +2198,17 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
     // Gated the same way every other reachability fact is: an explicit on-stand boolean, tri-state. This is NOT the
     // same row as `orphanedPagesOnFile`, which reports orphans an EARLIER run left for a human to settle — those
     // are somebody else's to remove. This one is about debris THIS run minted minutes ago, which is the run's own.
-    pages.push({ label: "No scaffold left behind on the target package — the stub section, starter page(s) and stub entity `create-app` / `create-app-section` minted for this run are removed once the real page is bound (or, where a removal genuinely could not be made, recorded as such); `list-pages` on the target package returns no starter page bound to nothing, and the app menu shows ONE section for the entity",
-      vk: { type: "onstand", evidence: "noOrphanScaffold", what: "`list-pages` on the target package plus a menu read: no starter page bound to nothing, one section per entity", miss: "this run's own scaffold is still on the stand — a dead look-alike page/section a user and a later diagnosis both read as real" } });
+    // MODE-AWARE, exactly as the section row above is (PR #157 review, Major). The scaffold half is wanted in both
+    // modes — the stub section `create-app` minted must be gone either way — but the MENU half is not: a
+    // `pages-only-no-menu` run registers no section at all, so "the app menu shows ONE section for the entity" is
+    // false on a correctly executed plan and the key would be written `false` forever. In that mode the row asks
+    // only for the removal, and says so in its own `what`, so the verifier's literal condition matches the plan.
+    const noMenu = opts.sectionHostMode === "pages-only-no-menu";
+    pages.push(noMenu
+      ? { label: "No scaffold left behind on the target package — the stub section and starter page(s) `create-app` minted for this run are removed once the real page is bound (or, where a removal genuinely could not be made, recorded as such); `list-pages` on the target package returns no starter page bound to nothing. This mode registers NO section, so the app menu is expected to show NONE for the entity — that is not scaffold and is not checked here",
+          vk: { type: "onstand", evidence: "noOrphanScaffold", what: "`list-pages` on the target package: no starter page bound to nothing and no stub section left (this mode registers no section, so no menu count is expected)", miss: "this run's own scaffold is still on the stand — a dead look-alike page a user and a later diagnosis both read as real" } }
+      : { label: "No scaffold left behind on the target package — the stub section, starter page(s) and stub entity `create-app` / `create-app-section` minted for this run are removed once the real page is bound (or, where a removal genuinely could not be made, recorded as such); `list-pages` on the target package returns no starter page bound to nothing, and the app menu shows ONE section for the entity",
+          vk: { type: "onstand", evidence: "noOrphanScaffold", what: "`list-pages` on the target package plus a menu read: no starter page bound to nothing, one section per entity", miss: "this run's own scaffold is still on the stand — a dead look-alike page/section a user and a later diagnosis both read as real" } });
   }
   return pages;
 }
@@ -2827,7 +2849,21 @@ export function templateNamesOf(pages, opts = {}) {
 // emits a gated row for it, so the executor can neither invent an obligation nor miss one. `reuseBindings` is
 // published like the rest — it is gated by the engine and was documented nowhere, so a migration with a reused
 // Freedom child page could not exit 0 by following the docs. `pages` lists the page keys whose rows read the key.
-export const REACHABILITY_KEYS = ["typedFormsBuilt", "typedRouting", "miniPageWired", "reuseBindings", "sectionRegistered", "noOrphanScaffold"];
+//
+// A key in THIS list is a WIRING obligation: the executor schedules one build unit per applicable key, and that
+// unit's prompt says "do the wiring on the stand, then confirm it by opening the surface it governs".
+export const REACHABILITY_KEYS = ["typedFormsBuilt", "typedRouting", "miniPageWired", "reuseBindings", "sectionRegistered"];
+// VERIFIER-ONLY evidence keys (PR #157 review, Major — `noOrphanScaffold`). Same tri-state gate row, same on-stand
+// boolean, but NOT a wiring obligation and therefore NOT a build unit: `noOrphanScaffold` is a CLEANUP fact, and
+// the wiring prompt is simply the wrong instruction for it — worse, a unit told to make "no starter page bound to
+// nothing" true would hold a delete-capable CLI with no removal scope on a customer package. The removal is owned
+// end to end by the APP unit, which is the thing that minted the debris and records what it minted
+// (`standWrites.appScaffold`); this key only REPORTS. Published with `appliesWhen: false` so no reach unit is
+// scheduled for it, and flagged `verifierOnly` so the fact is data rather than a silent omission.
+export const VERIFIER_ONLY_REACHABILITY_KEYS = ["noOrphanScaffold"];
+// Every on-stand evidence key the engine may gate a row on — the union, for whoever needs to know which booleans
+// `--built.reachability` can legitimately carry.
+export const ONSTAND_EVIDENCE_KEYS = [...REACHABILITY_KEYS, ...VERIFIER_ONLY_REACHABILITY_KEYS];
 function reachabilityUnits(rows) {
   const found = new Map();
   for (const r of rows) {
@@ -2836,10 +2872,12 @@ function reachabilityUnits(rows) {
     if (!e.pages.includes(r.pageKey)) e.pages.push(r.pageKey);
     found.set(r.vk.evidence, e);
   }
-  return REACHABILITY_KEYS.map((key) => {
+  const entry = (key, verifierOnly) => {
     const e = found.get(key);
-    return { key, appliesWhen: !!e, what: e?.what || null, miss: e?.miss || null, pages: e?.pages || [] };
-  });
+    return { key, appliesWhen: verifierOnly ? false : !!e, ...(verifierOnly ? { verifierOnly: true, emitted: !!e } : {}),
+      what: e?.what || null, miss: e?.miss || null, pages: e?.pages || [] };
+  };
+  return [...REACHABILITY_KEYS.map((k) => entry(k, false)), ...VERIFIER_ONLY_REACHABILITY_KEYS.map((k) => entry(k, true))];
 }
 // LEAF-FIRST build order, computed in the engine so the executor does not derive it from the tree by eye: a page's
 // own sub-pages are emitted before it, `main` last. Deduped by the same `pageDedupeId` as the row splice, so a
@@ -2897,16 +2935,32 @@ function resolutionList(input) {
 }
 const hasPairKey = (r) => !blankStr(r.kind) && !blankStr(r.item);
 // ENG-96458 D3 — an ACCEPTED deviation is keyed to a `--verify` ROW, and `row` is the word the operator writes:
-// `{ kind: "accepted", row: "sectionRegistered", answer, decidedBy, date }`. That is the same `kind`+`item` pair
+// `{ kind: "accepted", row: "main#onstand:sectionRegistered", answer, decidedBy, date }` — the row key as
+// `--verify-json` publishes it, never a hand-built one. That is the same `kind`+`item` pair
 // every other resolution uses, so it is NORMALISED here rather than given a second index: one key form, one
 // matcher, one duplicate check. Written as `item` it also works — the alias is a convenience, not a dialect.
 const withRowAlias = (r) => (r && r.kind === ACCEPTED_KIND && blankStr(r.item) && !blankStr(r.row) ? { ...r, item: r.row } : r);
 export const ACCEPTED_KIND = "accepted";
+// ENG-96458 D3, PR #157 review (Major) — AN ACCEPTANCE MUST NAME ITS DECIDER. Every other resolution kind is an
+// INPUT to the build; `accepted` is the one kind that OVERRIDES a completeness gate and turns a red row green, so
+// it is the one kind whose audit trail is the whole point. `decidedBy`/`date` were optional and `acceptedRow`
+// degraded to "ACCEPTED BY DECISION — <answer>" with nobody named: a route to ✅ that no later reader — the verify
+// table, `--verify-json`, the close report, an audit of the migration folder — could trace to an accountable human.
+// Enforced HERE, at the boundary that already exits 1 for a blank `answer`, and only for this kind: no other kind's
+// validation changes. The date must PARSE — a free-text "last week" is not a record.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
+function acceptedProblem(r, at) {
+  if (blankStr(r.decidedBy)) return `${at} is \`kind: "accepted"\` and has no non-blank \`decidedBy\` — an acceptance overrides a completeness gate, so the decision must name the human who took it`;
+  if (blankStr(r.date)) return `${at} is \`kind: "accepted"\` and has no non-blank \`date\` — an acceptance must record WHEN it was taken (ISO \`YYYY-MM-DD\`)`;
+  if (!ISO_DATE_RE.test(r.date.trim()) || Number.isNaN(Date.parse(r.date.trim()))) return `${at} has \`date: "${r.date.trim()}"\`, which is not a parseable ISO date (\`YYYY-MM-DD\`)`;
+  return null;
+}
 // An entry needs an `answer` plus EITHER `id` OR both `kind` and `item`. Returns the problem, or null when usable.
 function resolutionProblem(r, at) {
   if (!r || typeof r !== "object") return `${at} is not an object`;
   if (blankStr(r.answer)) return `${at} has no non-blank \`answer\``;
   if (blankStr(r.id) && !hasPairKey(r)) return `${at} names neither an \`id\` nor both \`kind\` and \`item\``;
+  if (r.kind === ACCEPTED_KIND) return acceptedProblem(r, at);
   return null;
 }
 // One entry under BOTH key forms it supplies. A second answer to the same question overwrites the first — a later
@@ -3273,12 +3327,16 @@ function surplusNames(ctx, types, expected) {
 }
 // The shared verdict for one count row. `types` is the accepted component-type list (used to name the surplus);
 // pass `[]` when the count came from something other than a type scan and only the number can be reported.
-function countVerdict(b, expected, noun, ctx, types) {
-  if (b === expected) return ["✅ Done", `${b} ${noun} built`, "ok"];
+// The row-kind-specific caveat a caller may append to BOTH cells (`note`), so a call site can say what its own
+// count could not check without duplicating the comparison chain. Empty for every existing caller — the tabs /
+// details / image / element wording is byte-for-byte what it was.
+const NO_FIELD_NAMES_NOTE = " — this deliverable published no expected field names, so identity was not checkable";
+function countVerdict(b, expected, noun, ctx, types, note = "") {
+  if (b === expected) return ["✅ Done", `${b} ${noun} built${note}`, "ok"];
   if (b > expected) {
     const extra = surplusNames(ctx, types, expected);
     const named = extra.length ? `: ${extra.join(", ")}` : "";
-    return ["⚠ verify", `${expected} expected, ${b} built (+${b - expected}${named}) — the surplus is NOT in the plan; confirm it belongs here or remove it`, "unverified"];
+    return ["⚠ verify", `${expected} expected, ${b} built (+${b - expected}${named}) — the surplus is NOT in the plan; confirm it belongs here or remove it${note}`, "unverified"];
   }
   return null; // shortfall — the caller owns the ⚠-partial / ❌-none split, which differs per row kind
 }
@@ -3421,8 +3479,13 @@ function resolveFieldsVk(vk, ctx) {
   const names = [...new Set(vk.names || [])];
   if (names.length) return resolveFieldsByIdentity(vk, names, ctx.ops);
   const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
-  if (b === vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present by TYPE — this deliverable published no expected field names, so identity was not checkable`, "ok"];
-  if (b > vk.n) return ["⚠ verify", `${vk.n} expected, ${b} field-typed component(s) built (+${b - vk.n}) — identity was not checkable (no expected field names published), so the surplus cannot be named; confirm the extra field(s) belong here`, "unverified"];
+  // PR #157 review (Major) — DELEGATE the D2 equality rule instead of open-coding it. This used to carry its own
+  // `b === vk.n` / `b > vk.n` chain with its own surplus wording, so a change to the rule had to be made twice and
+  // the two spellings already differed. `types: []` is `countVerdict`'s documented case for exactly this call site:
+  // the count came from a field-TYPE scan, not from the accepted-type list the names are sliced from, so the
+  // surplus cannot be named — which is the note passed through here rather than a second comparison chain.
+  const eq = countVerdict(b, vk.n, "field-typed component(s)", ctx, [], NO_FIELD_NAMES_NOTE);
+  if (eq) return eq;
   return ["⚠ verify", `${b}/${vk.n} components of a field type present — this deliverable published no expected field names, so identity was not checkable`, "unverified"];
 }
 // Own fn so `resolveCountVk` gains no nested branch when the D6 tri-state arrives (Sonar CC 15).
@@ -3524,13 +3587,36 @@ function resolveFeatureVk(vk, ctx) {
 // and `"processlisteners".includes("process")` is true. Without a type gate the Process row would have closed ✅ on
 // a field, which is the same false positive in a new costume.
 const CARD_ACTION_TYPES = ["crt.Button", "crt.MenuItem"];
+// PR #157 review (Minor) — BOTH SIDES NORMALIZED, or the `names` half of the match is inert. A stand-reported
+// printable/process name is a human caption ("Business rule report"); a Freedom element name is identifier-shaped
+// (`PrintButton`). `"printbutton".includes("business rule report")` is false for every pair of those, so the row
+// was decided by the bare action word alone. Stripping everything that is not a letter or a digit and lowercasing
+// makes `BusinessRuleReportButton` match "Business rule report", which is what the check was written to do.
+const alnum = (v) => String(v).toLowerCase().replace(/[^a-z0-9]+/g, "");
+// The two KIND words a card-action row is selected by (`checklistGroups` filters `cardActions` on /process|print/i).
+// A name containing one of these is a candidate; a name containing the action's OWN identity is proof.
+const GENERIC_ACTION_WORDS = new Set(["print", "process"]);
 function resolveCardVk(vk, ctx) {
   const action = String(vk.action || "the card action");
-  const wanted = [action, ...(vk.names || [])].map((n) => String(n).toLowerCase()).filter(Boolean);
-  const hit = ctx.ops.find((o) => o.name && CARD_ACTION_TYPES.includes(o.type || "")
-    && wanted.some((w) => String(o.name).toLowerCase().includes(w)));
-  if (hit) return ["✅ Done", `\`${esc(String(hit.name))}\` on the built page is bound to the ${esc(action)} action`, "ok"];
+  const isAction = (o) => o.name && CARD_ACTION_TYPES.includes(o.type || "");
+  // TWO STRENGTHS OF SIGNAL, and they must not resolve to the same mark. A component whose name carries the
+  // reported printable/process IDENTITY is proof the action is wired → ✅. A component whose name merely carries
+  // the bare action WORD ("print", "process") is a candidate, not proof — any `crt.Button`/`crt.MenuItem` named
+  // `PrintFormButton` closes it, the same shape as the `ProcessListeners` false positive the type gate was added
+  // for — so it yields ⚠ WITH THE CANDIDATE NAMED, which is the honest answer and still asks for a look.
+  // WHICH needles are an identity. An on-stand reported printable/process name always is. The `action` string is
+  // too when it is the action's own name (`SecurityCheckProcess` — a real process on the Classic page): matching it
+  // is proof. It is NOT when it is the bare KIND word the row was selected by — `Print` / `Process`, the two words
+  // `checklistGroups` filters `cardActions` on — because then any `crt.Button` whose name merely contains "print"
+  // closes the row, which is the false positive this whole resolver exists to remove.
+  const wantedNames = (vk.names || []).map(alnum).filter(Boolean);
+  const actionWord = alnum(action);
+  const strongNeedles = [...wantedNames, ...(GENERIC_ACTION_WORDS.has(actionWord) ? [] : [actionWord])].filter(Boolean);
+  const strong = strongNeedles.length ? ctx.ops.find((o) => isAction(o) && strongNeedles.some((w) => alnum(o.name).includes(w))) : null;
+  if (strong) return ["✅ Done", `\`${esc(String(strong.name))}\` on the built page is bound to the ${esc(action)} action (its name carries the action's own identity)`, "ok"];
+  const weak = actionWord ? ctx.ops.find((o) => isAction(o) && alnum(o.name).includes(actionWord)) : null;
   const named = (vk.names || []).length ? ` (reported on-stand: ${(vk.names || []).map((n) => esc(String(n))).join(", ")})` : "";
+  if (weak) return ["⚠ verify", `\`${esc(String(weak.name))}\` on the built page names the ${esc(action)} action but NOT the reported identity${named} — a name containing "${esc(action.toLowerCase())}" is a candidate, not proof of a binding; open the page and confirm this component runs it`, "unverified"];
   return ["⚠ verify", `no built component names the ${esc(action)} action${named} — the page's buttons are template-supplied unless one is bound to it; confirm the action is wired (a handler binding is not visible in get-page)`, "unverified"];
 }
 export function resolveComponentVk(vk, ctx) {
@@ -3881,8 +3967,9 @@ const VK_EVIDENCE = new Set(["evidence"]);
 // face) rather than quietly sink to the bottom of the list. So this map names only the fidelity side.
 // KEYED ON THE `vk`, never on the group TITLE: titles are `esc`d and carry a page-key prefix for a sub-page
 // (`child:Education · Form — Logic`), so matching on them would classify `main`'s rows one way and a child's the
-// other. Layout rows carry NO `vk` at all — they resolve `skip` and never reach an open row — so there is nothing
-// for this to say about them; the fidelity side is reachable only through the quality-gate rows today.
+// other. Layout rows carry NO `vk` at all — they resolve `pending` (`human: true`) and land in `pendingRows`, not
+// in `openRows`, so there is nothing for this to say about them; the fidelity side is reachable only through the
+// quality-gate rows today.
 const QUALITY_GATE_SUFFIX = "#quality-gates";
 export function rowSeverity(vk) {
   // The mandatory `creatio-ui-guidelines` design pass — the one open row that is about presentation rather than
@@ -3909,13 +3996,39 @@ const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
 // `vk` lookup and tallied as `skip`, so it can never become MISSING or unverified — there is nothing to build. It
 // stays a visible row: a boundary the reader cannot see is a boundary the next round re-litigates.
 const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan — nothing to build, nothing to check", "skip"];
+// A vk-less NOTE row: visible, and tallied in nothing.
+const noteRow = () => ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
+// ENG-96458 D4 — a DELIBERATELY human-checked row is PENDING. `skip` tallied in nothing, so the five Layout rows
+// handed to a human printed and then vanished from the verdict: the run reported every machine row green while the
+// one item that actually failed a human check (a lost Feed tab) sat in a ☐ row nobody closed. `pending` keeps the
+// row out of `missing`/`unverified` — it is not a build defect and no builder can close it — while stopping the
+// RUN from calling itself done, so the verdict says "complete pending N confirmation(s)" and the rows are a worklist.
+const confirmRow = () => ["☐ confirm on-stand", "not derivable from get-page — OPEN THIS PAGE ON THE STAND and confirm the placement matches the plan; nothing machine-checkable can close this row", "pending"];
+// ONE row's verdict, from the row rather than from its `vk` alone — the three row-level mechanisms in the order
+// they override each other.
+//
+// PR #157 review (Blocker 2) — `pending` IS OPT-IN, and that is the whole point of `human`. (Named `human`, not
+// `confirm`: `r.confirm` is already taken on this row shape — it carries the `{ kind, item }` of a ⚠ Confirm
+// worklist question — and a boolean there breaks every reader that does `r.confirm.kind`.) It was briefly the
+// FALLBACK for every vk-less row, which swept in the informational rows (per-ported-handler notes, `Card actions —
+// native (…)`, the per-deviation rows, the `… — separate page?` child identity rows, `List page → <template>`, the
+// reused-child reconcile row) and the `pages-only-no-menu` "deliberately NOT built" row. Two costs, both measured
+// from the diff: a correctly executed `pages-only-no-menu` plan could never report complete, and `pending` scaled
+// with handler/child count — tens of rows per real page — inflating the run's first structured answer against its
+// ~16000-byte wire ceiling. So only the rows the engine deliberately hands to a human (`buildLayoutGroupRows`)
+// carry `human: true`, and a note stays a note.
+function resolveRow(r, ctx) {
+  if (r.na) return naRow(r);
+  if (!r.vk) return r.human ? confirmRow() : noteRow();
+  return resolveVk(r.vk, ctx);
+}
 export function resolveVk(vk, ctx) {
-  // ENG-96458 D4 — a ☐ row is PENDING, not skipped. `skip` tallied in nothing, so five Layout rows handed to a
-  // human printed and then vanished from the verdict: the run reported every machine row green while the one item
-  // that actually failed a human check (a lost Feed tab) sat in a ☐ row nobody closed. `pending` keeps the row out
-  // of `missing`/`unverified` — it is not a build defect and no builder can close it — while stopping `complete`
-  // from reading true, so the verdict says "complete pending N confirmation(s)" and the rows become a worklist.
-  if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "pending"];
+  // A vk-LESS row is the file's generic "render a NOTE" mechanism — one row per ported handler, `Card actions —
+  // native (…)`, the per-deviation rows, the `… — separate page?` child identity rows, `List page → <template>`,
+  // the reused-child reconcile row. None of those is an open question a human owes an answer to, so none of them
+  // tallies (`skip`), exactly as before ENG-96458. The rows that DO owe a human look opt in with `confirm: true`
+  // and are resolved by `resolveRow` below; see the comment there for why the default had to flip back.
+  if (!vk) return noteRow();
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
   if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
@@ -4222,16 +4335,44 @@ function planGapBanner(result) {
 // number is not (it shifts the moment a deliverable is added), and the label is too long to type. So, in order of
 // how specific the row already is:
 //   · an EVIDENCE row publishes its own id (`main#confirm:tab-caption:…`) — use it;
-//   · an ON-STAND row names the evidence boolean it reads (`sectionRegistered`) — that is the key the ticket's
-//     own example writes, and it is already unique per page tree;
+//   · an ON-STAND row gets `<pageKey>#onstand:<evidence>`, plus `:<slug of `r.about`>` when several rows on ONE
+//     page read the SAME evidence boolean (one row per typed form, all reading `typedFormsBuilt`);
 //   · anything else, including every ☐ row, gets `<pageKey>#<vk type or "confirm">:<slug of the label>`.
 // The slug is deterministic for an unchanged plan, which is the guarantee that matters: an answer recorded today
 // still matches tomorrow unless the deliverable itself was rewritten, and then it SHOULD stop matching.
-const rowSlug = (label) => String(label).toLowerCase().replace(/`[^`]*`/g, " ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+//
+// PR #157 review (Blocker 1) — THE KEY MUST BE INJECTIVE, because `acceptedFor` matches on it ALONE and an
+// acceptance is an override of a safety gate: one key shared by N sibling rows renders `☑ accepted` on all N,
+// asserting a human ruled on each. Three collisions were live and all three are closed here:
+//   1. an on-stand row returned the BARE evidence name — no page prefix (the same key recurred across page trees)
+//      and no discriminator for the loop-emitted rows (`typedFormsBuilt` once per typed form, `reuseBindings` as a
+//      summary row on `main` AND as a per-child row);
+//   2. `rowSlug` DELETED backticked content, the exact part that distinguishes siblings, so every
+//      `Handler — \`<method>\`` row collapsed to `handler`. The backticks are now stripped and their content KEPT;
+//   3. the 48-char truncation collapsed long Layout/Tab labels. The cap is 96, and `dedupeRowKey` below is the
+//      backstop for whatever still lands twice — a suffix is a last resort, never the primary identity.
+const rowSlug = (label) => String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
 function verifyRowKey(r, pageKey) {
-  if (r.id) return String(r.id);
-  if (r.vk?.type === "onstand" && r.vk.evidence) return String(r.vk.evidence);
+  // `part` (PR #157 review, Blocker 1): the quality-gate deliverable is TWO rows on ONE evidence id — the record was
+  // FILED, and it was independently JUDGED — so the id alone names both. The part is the row's own identity within
+  // that id, exactly as `about` is within a shared evidence key.
+  if (r.id) return r.vk?.part ? `${r.id}:${r.vk.part}` : String(r.id);
+  if (r.vk?.type === "onstand" && r.vk.evidence) {
+    // `about` is the row's OWN identity within the shared evidence key (the typed form's schema). Derived from the
+    // deliverable, not from the row's ordinal, so the key survives a deliverable being added above it.
+    const about = blankStr(r.about) ? "" : `:${rowSlug(r.about)}`;
+    return `${pageKey}#onstand:${String(r.vk.evidence)}${about}`;
+  }
   return `${pageKey}#${r.vk?.type || "confirm"}:${rowSlug(r.label)}`;
+}
+// The LAST-RESORT disambiguator, applied over the rows of ONE rendered table in table order: a key that has
+// already been handed out gets `~2`, `~3`, … . It exists so injectivity is a property of the output rather than a
+// property nobody re-checks after adding a row shape; every row shape that HAS a stable identity carries one
+// above, so a `~N` suffix appearing in a real run is a signal that a new row shape needs an `about`.
+function dedupeRowKey(seen, key) {
+  const n = (seen.get(key) || 0) + 1;
+  seen.set(key, n);
+  return n === 1 ? key : `${key}~${n}`;
 }
 // An `accepted` resolution for this row, or null. Only `kind: "accepted"` counts — an ordinary ⚠ Confirm answer is
 // an INPUT to the build and closes no row, a rule this must not quietly undo.
@@ -4246,8 +4387,24 @@ function acceptedFor(resIndex, key) {
 // decided, and the outcome takes the row out of every gate count. A decision the reader cannot audit is worse than
 // a red row, so `decidedBy` / `date` are printed whenever they were recorded.
 function acceptedRow(entry, key) {
-  const who = [entry.decidedBy, entry.date].filter(Boolean).map((x) => esc(String(x))).join(", ");
-  return [`☑ accepted`, `ACCEPTED BY DECISION${who ? ` (${who})` : ""} — ${esc(String(entry.answer))} [row \`${esc(key)}\`]`, "accepted"];
+  // `decidedBy` and `date` are REQUIRED for this kind (`acceptedProblem`), so the attribution is always here for an
+  // entry that came through `readResolutions`. The `??` fallbacks cover a direct API caller that hands
+  // `renderVerify` a raw array it built itself — they make an unattributed acceptance VISIBLY unattributed in the
+  // table rather than silently anonymous, which is the state the validation exists to prevent.
+  const who = [entry.decidedBy, entry.date].map((x) => (blankStr(x) ? "NOT RECORDED" : esc(String(x)))).join(", ");
+  return [`☑ accepted`, `ACCEPTED BY DECISION (${who}) — ${esc(String(entry.answer))} [row \`${esc(key)}\`]`, "accepted"];
+}
+// EVERY rendered row's key, in table order, for the table `renderVerify` would render from the same inputs — the
+// full set including the rows that tally in nothing, which `openRows`/`pendingRows` do not carry. Exported because
+// injectivity of these keys is what makes an `accepted` resolution address ONE row (PR #157 review, Blocker 1), and
+// a property of the whole set can only be asserted on the whole set. Deliberately re-derived from `checklistGroups`
+// + the same two helpers `renderVerify` uses, so the two cannot disagree about a key.
+export function verifyRowKeys(result, opts = {}) {
+  const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
+  const seen = new Map();
+  const keys = [];
+  for (const g of groups) for (const r of g.rows) keys.push(dedupeRowKey(seen, verifyRowKey(r, r.pageKey || g.pageKey || "main")));
+  return keys;
 }
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
@@ -4266,12 +4423,15 @@ export function renderVerify(result, opts = {}, built = {}) {
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
   const L = []; let n = 0;
+  // ONE map for the whole rendered table (PR #157 review, Blocker 1): the keys an operator writes into
+  // resolutions.json must be unique across the document they are read from, not merely within a group.
+  const seenKeys = new Map();
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
       const key = r.pageKey || g.pageKey || "main";
-      const rowKey = verifyRowKey(r, key);
-      const resolved = r.na ? naRow(r) : resolveVk(r.vk, ctxFor(key));
+      const rowKey = dedupeRowKey(seenKeys, verifyRowKey(r, key));
+      const resolved = resolveRow(r, ctxFor(key));
       // ENG-96458 D3 — a row the operator ACCEPTED by decision is not a build gap. The measured case: `create-app`
       // always registers into `My applications`, so a section deliberately kept in two workplaces held a fully
       // built migration at ⛔ INCOMPLETE with no way to say "yes, on purpose (D6)". An acceptance only ever
@@ -4425,8 +4585,39 @@ export function verifyDigest(result, v) {
 // How many ☐ rows one page contributes to the counts-only summary before the rest are counted instead of named.
 // Five is the measured size of a real page's Layout worklist, so a normal run loses nothing to the cap.
 const PENDING_ROW_CAP = 5;
+// How many characters of a ☐ row's label travel. `deliverable` is what the close report NAMES the row by, so it
+// cannot be dropped — but at 100 characters a localized label costs 600 bytes under `encodedAsciiBytes` (6 per
+// non-ASCII UTF-16 unit), so five rows on one page could cost ~3 KB against this summary's documented ~16000-byte
+// wire ceiling. Forty characters is enough to recognise a row next to its `n` and `rowKey`, both of which address
+// it exactly. (PR #157 review, Major — the worklist travelled uncapped at this boundary.)
+const PENDING_DELIVERABLE_CAP = 40;
+// THE RUN-LEVEL BUDGET, in the summary's own wire unit. The per-page cap alone bounds nothing across a plan: 80
+// pages × 5 rows is 400 rows no matter how small each one is. So the pages are walked in order and each one's rows
+// are named only while the budget lasts; past it a page keeps its EXACT `pending` count and reports every row it
+// could not name in `pendingMore`. Both invariants the reviewer asked for hold by construction: `pending` is never
+// approximated, and `pendingMore` is always `pending - pendingRows.length` for that page.
+// 6000 is ~37% of the ceiling, leaving the counts-only fields their measured room on a 160-page plan.
+const PENDING_WIRE_BUDGET = 6000;
+// One row's cost on the wire, measured with the SAME function the writer's own ceiling warning uses, so the budget
+// and the warning cannot disagree about what a row costs.
+function pendingRowBytes(r) {
+  return encodedAsciiBytes(String(r.deliverable ?? "")) + encodedAsciiBytes(String(r.rowKey ?? "")) + 40; // + the JSON scaffolding of `{ n, deliverable, rowKey }`
+}
+// The rows of ONE page that fit: at most `PENDING_ROW_CAP`, and only while the run-level budget lasts. Returns the
+// named rows plus what the budget consumed, so the caller stays a single loop (Sonar CC 15).
+function pendingRowsFor(all, budget) {
+  const rows = []; let spent = 0;
+  for (const r of all.slice(0, PENDING_ROW_CAP)) {
+    const row = { n: r.n, deliverable: String(r.deliverable).slice(0, PENDING_DELIVERABLE_CAP), rowKey: r.rowKey };
+    const cost = pendingRowBytes(row);
+    if (rows.length && spent + cost > budget) break;   // always name at least ONE row per pending page
+    rows.push(row); spent += cost;
+  }
+  return { rows, spent };
+}
 export function verifySummary(result, v) {
   const pages = {};
+  let budget = PENDING_WIRE_BUDGET;
   for (const [k, p] of Object.entries(v.pages || {})) {
     // ENG-96458 D4 — ONE bounded exception to counts-only, and it is deliberate. `openRows` stays out because it
     // is unbounded (a fresh stand opens every row of every page — measured ~21 KB, which truncated the run's first
@@ -4440,7 +4631,8 @@ export function verifySummary(result, v) {
     // accepted deviation carries none of them; the reader's default for an absent field is 0 / empty, the same
     // default `verifyTally` starts every page from.
     const all = p?.pendingRows || [];
-    const pendingRows = all.slice(0, PENDING_ROW_CAP).map((r) => ({ n: r.n, deliverable: String(r.deliverable).slice(0, 100), rowKey: r.rowKey }));
+    const { rows: pendingRows, spent } = pendingRowsFor(all, budget);
+    budget -= spent;
     pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen,
       openCorrectness: p?.openCorrectness, openFidelity: p?.openFidelity,
       ...(p?.pending ? { pending: p.pending, pendingRows } : {}),

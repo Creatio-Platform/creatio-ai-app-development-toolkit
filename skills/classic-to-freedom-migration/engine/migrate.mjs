@@ -2630,6 +2630,8 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 // The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
 const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
   " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`" +
+  '; a `kind: "accepted"` entry (the `--verify` row override) ALSO needs a non-blank `decidedBy` and a parseable ISO `date` —' +
+  " an acceptance turns a red completeness row green, so the decision must name the human who took it and when" +
   '; the reserved kind `run` carries the RUN-level answers — `{"kind":"run","item":"control-mode","answer":"round1"}`' +
   " and `item: \"round-<N>\"` to authorise round N";
 // THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:

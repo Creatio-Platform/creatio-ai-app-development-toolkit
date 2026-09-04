@@ -128,19 +128,31 @@ ENG-96458 adds two axes NEXT TO `complete`, neither of them build state, and del
 - **`pending` / `pendingRows`** — the `☐ confirm on-stand` rows. They used to tally in nothing, so five Layout rows
   handed to a human printed once and then vanished from the verdict, while the ONE item that actually failed a
   human check (a lost Feed tab) was one of them and every machine row read green. They are now counted, each with a
-  stable `rowKey`, and the Markdown verdict says `COMPLETE PENDING N CONFIRMATION(S)`. They are NOT build state:
+  stable `rowKey`, and the Markdown verdict says `COMPLETE PENDING N CONFIRMATION(S)`. `pending` is **opt-in per
+  row**: only the rows the engine deliberately hands to a human (the `Form — Layout (by tab/region)` rows, whose
+  placement `get-page` cannot confirm) count. Every other `☐ confirm on-stand` row is a NOTE — a per-handler row, a
+  native card-action row, a child identity row — and tallies in nothing, so `pending` measures human work rather
+  than handler count. `pendingRows` names at most five rows per page, each `deliverable` clipped to 40 characters,
+  and only while a run-level wire budget lasts; a page's own `pending` count is always exact and `pendingMore` is
+  always the rows that page could not name. They are NOT build state:
   `missing`, `unverified`, `builderOpen` and `buildComplete` are untouched, `complete` still means "nothing left to
   build", and the CLI exit code is unchanged. The hold belongs to the RUN — the build executor refuses to close
   green while any confirmation is open and returns the worklist as `pendingConfirmations`.
 - **`accepted`** — rows an operator closed BY DECISION rather than by building. Recorded in `resolutions.json` as
   `{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }` (`item` is the same key; `row` is an alias), it
-  renders `☑ accepted` with the decider and date and leaves `missing`. It only ever overrides an OPEN row, so a
+  renders `☑ accepted` with the decider and date and leaves `missing`. `decidedBy` and `date` are **required** for
+  this kind — an unattributed acceptance is exit 1, not a green row. It only ever overrides an OPEN row, so a
   stale entry cannot mask a later regression. Without it a fully-built migration could not reach green on a
   deviation the operator had already approved — the measured case being a section deliberately kept in two
   workplaces because `create-app` always registers into `My applications`.
 
-A row's `rowKey` is what an acceptance addresses: the evidence id where the row publishes one, the reachability
-key for an on-stand row (`sectionRegistered`), otherwise `<pageKey>#<vk type>:<slug of the label>`. `buildComplete` (no open row the
+A row's `rowKey` is what an acceptance addresses, and it is INJECTIVE per rendered table — one key names exactly
+one row, because an acceptance matches on the key alone: the evidence id where the row publishes one,
+`<pageKey>#onstand:<evidence>` for an on-stand row (`main#onstand:sectionRegistered`, plus a `:<subject>` tail when
+several rows on one page read the same boolean — `main#onstand:typedFormsBuilt:usrtypeda`), otherwise
+`<pageKey>#<vk type>:<slug of the label>`. The label's slug keeps backticked identifiers, so sibling rows
+(`Handler — \`<method>\``) do not collapse; a key that still lands twice gets a `~2` / `~3` suffix in table order.
+**Read the key from `--verify-json`'s `openRows[].rowKey` / `pendingRows[].rowKey`; never construct one.** `buildComplete` (no open row the
 BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate above reads for ITS exit code — the
 two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
 each row's `owner` (`"builder"` / `"verifier"`), NOT on its `missing`/`unverified` label: `unverified` is also what a
@@ -163,8 +175,13 @@ creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each
 package and `expect` counts (including
 `expect.fieldNames`, the element names the fields check matches on, and `expect.fieldLayout`, each field's CELL as
 `{ name, row, column, colSpan?, rowSpan? }` — ENG-96457, so a unit that owns one page can place the fields the way
-the plan does), plus the six reachability keys with
-`appliesWhen` already decided by the engine, the evidence-record ids, the ⚠ Confirm preflight items and a
+the plan does), plus the reachability keys with
+`appliesWhen` already decided by the engine — five WIRING keys (`typedFormsBuilt`, `typedRouting`, `miniPageWired`,
+`reuseBindings`, `sectionRegistered`), each of which the executor schedules a build unit for when it applies, and
+`noOrphanScaffold`, which is published with `verifierOnly: true` and `appliesWhen: false`: it is a CLEANUP fact the
+gate row REPORTS, its removal is owned end to end by the app unit that minted the debris, and a wiring unit told to
+"do the wiring" for it would hold a delete-capable CLI with no removal scope on a customer package. `emitted` says
+whether this run gated the row — the evidence-record ids, the ⚠ Confirm preflight items and a
 leaf-first `buildOrder`. A key identifies exactly ONE physical page: when two distinct pages would land on the
 same key (two related lists opening the same entity, or two same-entity child pages on different branches) the
 engine appends a disambiguator — `@<Via>`, `@<Schema>`, `#2` — while one page reached along two paths keeps a
@@ -181,7 +198,10 @@ is exit 1. Matching trims both sides, and an entry carrying both key forms count
 
 **ENG-96458 — one kind is read by `--verify` as well: `accepted`.** `{ "kind": "accepted", "row": "<rowKey>",
 "answer": "<why>", "decidedBy": "<who>", "date": "<when>" }` marks a verify row as a deviation the operator approved:
-it renders `☑ accepted` with the decider and date, and leaves `missing`. `row` is an alias for `item` — the two are
+it renders `☑ accepted` with the decider and date, and leaves `missing`. **`decidedBy` (a non-blank name) and
+`date` (a parseable ISO `YYYY-MM-DD`) are REQUIRED for this kind and only for this kind** — every other resolution
+is an input to the build, while this one overrides a completeness gate, so an entry that names nobody is exit 1
+with the entry named. That check is the same boundary that already rejects a blank `answer`. `row` is an alias for `item` — the two are
 the same key, indexed once. It only ever overrides an OPEN row, never an ✅ or an N/A, so a stale entry cannot mask a
 later regression. The rule above is untouched for every other kind: an ordinary answer is still an INPUT to the
 build and still closes no row. The row key to address is in `--verify-json`'s `openRows[].rowKey`.

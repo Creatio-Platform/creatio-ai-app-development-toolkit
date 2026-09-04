@@ -1,5 +1,9 @@
 # `BusinessRule1Section` — the two runs ENG-96458 was written from
 
+**These files are REFERENCE, not fixtures.** Nothing loads them; they are the human-readable evidence behind
+the ENG-96458 assertions in `run-mapper.mjs`, which reconstruct their inputs inline. They sit under
+`references/` rather than `fixtures/` so no reader mistakes them for a regression input.
+
 `ENG-96444-verify.md` and `ENG-96445-verify.md` are the `verify.md` tables the two paired test runs of
 2026-09-02 actually produced on `BusinessRule1Section` — ENG-96444 without the build workflow, ENG-96445
 with it. They are the evidence behind every defect in ENG-96458, and they are here because they are the
@@ -28,7 +32,8 @@ only surviving artefact of those runs.
 | 18 Card action — Print | `✅ Done · a crt.Button is present` | same | D1 — the plan says Not migrated: no row |
 | 19 Card action — Process | `✅ Done · a crt.Button is present` | same | D1 — same |
 | Section registered | `❌` (two workplaces, kept by D6) | `✅` | D3 — an `accepted` resolution closes it |
-| 1 / 12 / 13 / 14 / 20 | `☐ confirm on-stand` | `☐ confirm on-stand` | D4 — a counted worklist, not a footnote |
+| 12 / 13 / 14 (Layout) | `☐ confirm on-stand` | `☐ confirm on-stand` | D4 — a counted worklist, not a footnote |
+| 1 (`List page → …`) / 20 (`Card actions — native`) | `☐ confirm on-stand` | `☐ confirm on-stand` | still `☐`, still tallied in nothing — informational notes, not human checks (PR #157 review, Blocker 2) |
 
 Row 13 (`Header — 16 fields · Feed (ESN)`) is the one row that actually failed a human check on
 ENG-96445 — the Feed tab was lost — while every machine-checked row on that page was green. That is the
