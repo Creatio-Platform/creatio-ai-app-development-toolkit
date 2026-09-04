@@ -11663,6 +11663,22 @@ check("ENG-96457 (item 4): it is a QUESTION with a published id, not a note — 
   (br1Units.preflight || []).some((p) => p.kind === "list-add-routing")
   && (br1Units.evidenceRows || []).some((e) => /#confirm:list-add-routing:/.test(e.id || "")),
   () => ({ preflight: (br1Units.preflight || []).map((p) => p.kind) }));
+// The NEGATIVE half of the same guard (review #156). `listNeedsDecision` emits the routing question inside
+// `if (section)`, so a page with no section behind it — a child fold, a typed fold — must raise NONE. Without
+// this, dropping the guard would put an unanswerable object-level question on every child page's worklist and
+// the positive check above would stay green, because it only ever looks at the section page.
+check("ENG-96457 (item 4): the routing question is SECTION-scoped — a page with no section behind it raises none, because the ADD-purpose binding is the SECTION's `Add` and a child/typed fold has no such button to re-point",
+  () => {
+    const sectionless = (br1Units.pages || []).filter((pg) => pg.key !== "list" && pg.key !== "main");
+    const offenders = (br1Units.preflight || [])
+      .filter((pf) => pf.kind === "list-add-routing")
+      .filter((pf) => sectionless.some((pg) => pg.key === pf.pageKey));
+    return offenders.length === 0
+      && (br1Units.preflight || []).filter((pf) => pf.kind === "list-add-routing").length === 1;
+  },
+  () => ({ addRouting: (br1Units.preflight || []).filter((pf) => pf.kind === "list-add-routing")
+    .map((pf) => ({ pageKey: pf.pageKey, item: pf.item })),
+    pages: (br1Units.pages || []).map((pg) => pg.key) }));
 
 // ---- item 5: plan.md is regenerated with the answers ----------------------------------------------------------
 check("ENG-96457 (item 5): `--plan --resolutions` renders each answered ⚠ row AS its answer and says how many are answered — every question could be answered and `plan.md` still showed the unanswered worklist, so the approved document and the payload the builder acted on said different things",

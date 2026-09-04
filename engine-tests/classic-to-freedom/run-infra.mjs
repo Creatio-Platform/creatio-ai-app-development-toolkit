@@ -6544,9 +6544,12 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
 // growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
 const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
-  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 9,
+  // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 9 and the check stays
+  // green. Naming the kind this PR adds is what makes the assertion say which set it is pinning (review #156).
+  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 9
+    && LIST_DECISION_KINDS.includes("list-add-routing"),
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
-    registrySize: LIST_DECISION_KINDS.length }));
+    registrySize: LIST_DECISION_KINDS.length, hasAddRouting: LIST_DECISION_KINDS.includes("list-add-routing") }));
 
 // --- blockedByParked: exact with the parent edge, honestly approximated without it. ---
 const parents = { "child:Leaf": "child:Mid", "child:Mid": "main", main: null, "child:Other": "main" };

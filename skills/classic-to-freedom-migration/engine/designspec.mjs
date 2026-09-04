@@ -630,8 +630,8 @@ function renderListPageBlock(result, section, opts = {}) {
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-      L.push(answeredListColumnLine(section, opts.resolutions || null,
-        (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
+    L.push(answeredListColumnLine(section, opts.resolutions || null,
+      (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and

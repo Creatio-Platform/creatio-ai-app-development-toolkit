@@ -2861,7 +2861,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null;
-  if (planMode) output = result.plan + "\n";
+  if (planMode) {
+    output = result.plan + "\n";
+    // ENG-96457 review — the two discarded-answer reports run under `--plan` as well, not only `--units`.
+    // They are computed inside `pageUnits`, which `--plan` never called, so a typo'd or stale key was
+    // dropped with NO diagnostic on the one mode whose whole point is that the approved document and the
+    // payload the builder acts on say the same thing. Gated on an answers file actually being passed, so a
+    // plain `--plan` run pays nothing for it.
+    if (resolutionIndex) {
+      const planUnits = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionIndex });
+      if (planUnits.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(planUnits.resolutionsUnmatched));
+      if (planUnits.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(planUnits.resolutionsConflicts));
+    }
+  }
   else if (specMode) output = pageScopedSpec(result, pageArg, fail) + "\n";
   else if (checklistMode) output = pageArg
     // Re-rendered rather than cut out of `result.checklist`: that string is already assembled, and slicing a
