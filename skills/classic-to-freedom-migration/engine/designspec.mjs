@@ -481,19 +481,20 @@ function stripNoteTail(note) {
 // approved document must state the decision, not re-ask it. The original question is kept behind the answer (in
 // parentheses) rather than dropped — an answer whose question is invisible cannot be audited, and a reader has no
 // way to tell a recorded decision from a guessed default.
-function answeredListColumnLine(section, resolutions) {
+function answeredListColumnLine(section, resolutions, askedItem) {
   const line = listColumnLine(section);
-  const r = matchResolution(resolutions, { kind: "list-columns", item: listColumnsAnsweredItem(section) });
+  // The item comes from the question the run actually PUBLISHED, never re-derived here. A second copy of the
+  // mapper's literals drifted on two branches (PR #156 review): it ignored `listColumnsDecision`'s `!columns.length`
+  // precedence, and for `schema-default` — the shape that asks NOTHING — it returned "no list columns resolved", so a
+  // stale answers file carrying that key rendered `supersedes the engine's unresolved reading` over a column set the
+  // Classic section had declared. No published question means no answer to file: keep the plain line.
+  if (!askedItem) return line;
+  const r = matchResolution(resolutions, { kind: "list-columns", item: askedItem });
   if (!r) return line;
   // Strip the leading `- **List columns:** ` so the answer takes its place; whatever the line said becomes the
   // parenthetical. The prefix is this module's own literal, so the slice is safe.
   const asked = line.replace(/^- \*\*List columns:\*\* /, "");
   return `- **List columns:** ${answeredText(r)} — supersedes the engine's unresolved reading (${asked})`;
-}
-function listColumnsAnsweredItem(section) {
-  if (section?.listColumnSource === "entity-default") return "fallback list column set";
-  if (section?.listColumnSource === "profile") return "profile-sourced list column set";
-  return "no list columns resolved";
 }
 function listColumnLine(section) {
   // Notes arrive from several producers (the on-stand resolver, the disagreement note), so their trailing
@@ -629,7 +630,8 @@ function renderListPageBlock(result, section, opts = {}) {
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-      L.push(answeredListColumnLine(section, opts.resolutions || null));
+      L.push(answeredListColumnLine(section, opts.resolutions || null,
+        (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
