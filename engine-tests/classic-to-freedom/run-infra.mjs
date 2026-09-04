@@ -5856,6 +5856,57 @@ check("PR #159 (Major 1) mid-run twin: `acceptReconciled` reads POST-re-read own
   !rc1MidRunReread.threw && rc1MidRunReread.stopped !== "plan-invalid-against-stand" && rc1MidRunReread.dryRun === true,
   () => (rc1MidRunReread.threw ? `threw: ${rc1MidRunReread.threw}` : `stopped=${rc1MidRunReread.stopped} dryRun=${rc1MidRunReread.dryRun} identity=${JSON.stringify(rc1MidRunReread.appIdentityMismatch)}`));
 
+// --- PR #159 review (m-dymytrova): the plan-unvalidated stop carries NO phantom identity axis. -----------------
+// Same phantom as RC-1, at the ONE gate RC-1 did not reach: `plan-unvalidated-against-stand` returns BEFORE
+// `confirmPackageStop`'s re-read (it deliberately skips it — a round that reached no stand cannot settle a
+// stand-dependent axis), so the pre-re-read `appIdentityMismatch` is a PHANTOM on a resumed new-app run. Carrying it
+// rendered a re-plan `--plan --out` clause inside a `next` whose whole point is "do NOT re-plan — make the stand
+// answerable and re-run". The fix drops identity from this stop (and its mid-run twin); component/template are pure
+// over the Reconcile facts and still travel. Driven with a catalog-sourced sweep so the provenance stop fires FIRST.
+const unvalNoPhantomIdentity = await runWith({}, async (_p, opts = {}) => {
+  if ((opts.label || "") === "reconcile:baseline") return {
+    approval: { found: true, version: "v1" }, planVersion: "v1",
+    // new-app identity contradiction (code UsrApplicantApp vs package UsrApplicant under an empty prefix) — PHANTOM
+    // here, because appUnitDone() is false only for want of the re-read this stop skips.
+    targetPackage: "UsrApplicant", packageState: "exists", sectionHost: "new-app",
+    applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+    // catalog-sourced answer → the round validated nothing → plan-unvalidated fires before the package re-read.
+    componentTypes: ["crt.CommunicationOptions"],
+    componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }],
+  };
+  return null;
+}).catch((e) => ({ threw: e.message }));
+check("PR #159 (m-dymytrova): the BASELINE plan-unvalidated stop carries NO identity axis — a resumed new-app run with a catalog-sourced sweep stops `plan-unvalidated-against-stand` with `appIdentityMismatch: null` and a `next` that prescribes no re-plan (no `--plan --out`), not a phantom identity contradiction",
+  !unvalNoPhantomIdentity.threw
+    && unvalNoPhantomIdentity.stopped === "plan-unvalidated-against-stand"
+    && unvalNoPhantomIdentity.appIdentityMismatch === null
+    && !/--plan --out/.test(unvalNoPhantomIdentity.next || ""),
+  () => (unvalNoPhantomIdentity.threw ? `threw: ${unvalNoPhantomIdentity.threw}` : `stopped=${unvalNoPhantomIdentity.stopped} identity=${JSON.stringify(unvalNoPhantomIdentity.appIdentityMismatch)} next=${JSON.stringify(unvalNoPhantomIdentity.next)}`));
+const unvalMidRunNoPhantom = await (async () => {
+  const agentStub = async (_p, opts = {}) => {
+    const label = opts.label || "";
+    if (label === "reconcile:baseline") return midRunBaseline;
+    if (label === "reconcile:after-preflight") return {
+      ...midRunBaseline, targetPackage: "UsrApplicant", packageState: "exists", sectionHost: "new-app",
+      applicationCode: "UsrApplicantApp", schemaNamePrefix: "",
+      componentTypes: ["crt.CommunicationOptions"],
+      componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }],
+    };
+    if (label === "preflight:merge") return { written: true, evidenceWritten: ["pf1"] };
+    if (label.startsWith("preflight:")) return { resolved: [{ id: "pf1" }], unresolved: [] };
+    if (label.startsWith("judge:")) return {};
+    return null;
+  };
+  const parallelStub = async (thunks) => Promise.all((thunks || []).map((t) => t()));
+  return runWith({ dryRun: true }, agentStub, parallelStub);
+})().catch((e) => ({ threw: e.message }));
+check("PR #159 (m-dymytrova) mid-run twin: `acceptReconciled`'s plan-unvalidated stop carries NO identity axis — a post-preflight catalog sweep on a new-app flip stops `plan-unvalidated-against-stand` with `appIdentityMismatch: null` and no `--plan --out` in `next`",
+  !unvalMidRunNoPhantom.threw
+    && unvalMidRunNoPhantom.stopped === "plan-unvalidated-against-stand"
+    && unvalMidRunNoPhantom.appIdentityMismatch === null
+    && !/--plan --out/.test(unvalMidRunNoPhantom.next || ""),
+  () => (unvalMidRunNoPhantom.threw ? `threw: ${unvalMidRunNoPhantom.threw}` : `stopped=${unvalMidRunNoPhantom.stopped} identity=${JSON.stringify(unvalMidRunNoPhantom.appIdentityMismatch)} next=${JSON.stringify(unvalMidRunNoPhantom.next)}`));
+
 // --- ENG-95683: the plan-invalid component stop branches BY KIND -------------------------------------------
 // Until now the component clause gave ONE re-plan instruction for every unresolved type. A gated COMPOSITE (a real
 // component whose package/feature is un-installed on the stand) is recoverable WITHOUT a re-plan: install the package,

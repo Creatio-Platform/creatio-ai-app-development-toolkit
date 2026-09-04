@@ -2701,15 +2701,15 @@ Return the schema. Nothing else.`
   return packageStopReturn(stopOnPackage, packageRecordUnread, componentMismatches, templateMismatchesNow, appIdentity)
   }
 
-  function planUnvalidatedAgainstStandStop(unconfirmed, componentMismatches, templateMismatchesNow, appIdentity) {
+  function planUnvalidatedAgainstStandStop(unconfirmed, componentMismatches, templateMismatchesNow) {
   if (!unconfirmed.length) return null
-  log(`STOP — the plan was NOT validated against this stand this round: ${unconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(unconfirmed)}` + alsoAxesLog(componentMismatches, templateMismatchesNow, appIdentity))
+  log(`STOP — the plan was NOT validated against this stand this round: ${unconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(unconfirmed)}` + alsoAxesLog(componentMismatches, templateMismatchesNow, null))
   return runReturn({
     stopped: 'plan-unvalidated-against-stand',
     standUnconfirmedComponents: unconfirmed,
     componentMismatches,
     templateMismatches: templateMismatchesNow,
-    appIdentityMismatch: appIdentity,
+    appIdentityMismatch: null,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -2718,7 +2718,7 @@ Return the schema. Nothing else.`
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
     next: [standUnvalidatedNext(unconfirmed, 'Nothing was built.'),
-      ...alsoAxesClauses(componentMismatches, templateMismatchesNow, appIdentity)].join(' '),
+      ...alsoAxesClauses(componentMismatches, templateMismatchesNow, null)].join(' '),
   })
   }
 
@@ -2763,7 +2763,7 @@ Return the schema. Nothing else.`
   }
   const unvalidated = planUnvalidatedAgainstStandStop(
     standUnconfirmedComponents(state.componentResolution, state.componentTypes),
-    componentMismatches, templateMismatchesNow, appIdentity)
+    componentMismatches, templateMismatchesNow)
   if (unvalidated) return unvalidated
   const packageStop = yield* hardStopOnPackage(componentMismatches, templateMismatchesNow, appIdentity)
   if (packageStop) return packageStop
@@ -3880,22 +3880,21 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     }
     const midRunMismatches = componentTypeMismatches(standAnsweredResolutions(state.componentResolution), state.componentTypes)
     const midRunTemplates = templateMismatches(state.templateResolution, state.templateNames)
-    const midRunIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode, appUnitDone())
     const midRunUnconfirmed = standUnconfirmedComponents(state.componentResolution, state.componentTypes)
     if (midRunUnconfirmed.length) {
-      log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}` + alsoAxesLog(midRunMismatches, midRunTemplates, midRunIdentity))
+      log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}` + alsoAxesLog(midRunMismatches, midRunTemplates, null))
       return {
         stopped: 'plan-unvalidated-against-stand',
         standUnconfirmedComponents: midRunUnconfirmed,
         componentMismatches: midRunMismatches,
         templateMismatches: midRunTemplates,
-        appIdentityMismatch: midRunIdentity,
+        appIdentityMismatch: null,
         targetPackage: state.targetPackage || null,
         packageState: state.packageState || null,
         approval: state.approval || approval,
         planVersion: state.planVersion || null,
         next: [standUnvalidatedNext(midRunUnconfirmed, 'Anything already built this run is on disk.'),
-          ...alsoAxesClauses(midRunMismatches, midRunTemplates, midRunIdentity)].join(' '),
+          ...alsoAxesClauses(midRunMismatches, midRunTemplates, null)].join(' '),
       }
     }
     let stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
