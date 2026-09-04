@@ -1265,9 +1265,14 @@ console.log("\n===== the migration-workflow CLI =====");
    9. THE BUILD EXECUTOR — the second workflow on the same core
    --------------------------------------------------------------------------- */
 console.log("\n===== build-executor core =====");
+// ENG-96204 — `mode` IS NOW PART OF A VALID RUN INPUT. It used to be omittable and default to `auto`; the run now
+// refuses to start until a mode is resolved (AC 1), because the default was the one answer nobody can un-choose —
+// a run the operator meant to watch had already written the whole section by the time they found out it never
+// stopped. So this fixture states the mode it means, and the refusal has its own check below.
 const BEX_INPUT = {
   manifest: "/mig/manifest.json", environment: "dev", outDir: "/mig", planFile: "/mig/plan.md",
   engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "DealSection",
+  mode: "auto",
 };
 check("build-executor: `independentRoles` is a RUN-level requirement, not merely a per-step one — the builder / verifier / judge split is what the whole workflow rests on, so a host that cannot provide it is refused before the first stand WRITE",
   bex.WORKFLOW_REQUIRES.includes("independentRoles") && bex.WORKFLOW === "creatio-freedom-build-executor",
@@ -1403,6 +1408,18 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       // them is refused by the schema exactly as a live agent would be. `[]` is the honest first-run value for all
       // three: no answer has gone unconsumed, and no repair grant has been spent.
       unconsumedResolutions: [], resolutionsReopened: [], resolutionsPending: [],
+      // `runResolutions: []` is REQUIRED of a Reconcile answer as of the ENG-96204 PR review (F7): it is the one
+      // channel the mode choice and every round authorisation travel through, and `[]` versus "field omitted"
+      // had to stop being indistinguishable. This fixture is also the CLI's proof that the requirement is really
+      // enforced on the submit path — drop the key and the submit is REJECTED against the item's responseSchema,
+      // which is exactly what an agent-mediated Reconcile used to be allowed to get away with silently.
+      runResolutions: [],
+      // `roundState` is REQUIRED for the same reason (ENG-96474, re-homed by ENG-96455): its
+      // `consumedRoundAnswers` is the record of which of those round answers are already spent, and an omitted
+      // list would read every spent `go` as live. The three facts became ONE object when the merge with PR #128's
+      // answers channel put `RECONCILE_SCHEMA` over the host's 4096-byte cap (DR-7), so this fixture is also the
+      // CLI's proof of the NEW wire form: drop the object and the submit is rejected against the responseSchema.
+      roundState: { layoutPassDone: false, roundsSpent: 0, consumedRoundAnswers: [] },
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       schemaNamePrefixEmpty: false,
@@ -1428,6 +1445,49 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       () => JSON.stringify(done.result).slice(0, 400));
     check("build-executor cli: the return names the artifacts an operator has to read, on every exit",
       done.result.verifyTable === "/mig/verify.md" && done.result.queueFile === "/mig/build-queue.json" && done.result.mode === "auto");
+    check("ENG-96204: the return also says WHERE the mode came from — `argument` here, because this run passed one; a caller reading a completed run must be able to tell an operator's choice from a configured default",
+      done.result.modeSource === "argument", () => JSON.stringify({ mode: done.result.mode, source: done.result.modeSource }));
+
+    /* ENG-96204 (T1) — THE REFUSE-TO-START GATE, through the real CLI on the real adapter. The SAME green baseline
+       that closes the run above is submitted to a run whose input names NO mode and NO defaultMode: it must stop
+       `mode-not-chosen`, list the valid modes, and dispatch nothing. This is the whole point of AC 1, and the two
+       halves matter separately — a gate that fired but let the round run would pass a `stopped` assertion. */
+    {
+      const noModeInput = path.join(tmp, "no-mode.json");
+      const noMode = { ...BEX_INPUT };
+      delete noMode.mode;
+      writeFileSync(noModeInput, JSON.stringify(noMode));
+      const noModeRun = path.join(tmp, "no-mode-run.json");
+      cli("start", noModeRun, "--workflow", "freedom-build-executor", "--input", noModeInput, "--host", "codex");
+      const first = JSON.parse(cli("next", noModeRun).stdout);
+      check("ENG-96204 (T1): a run with no mode still asks for the BASELINE Reconcile first — the gate cannot fire earlier, because the operator's recorded answer arrives with `--units.runResolutions`, and that phase is read-only against the stand by contract",
+        first.items[0].id === "reconcile.baseline" && first.items[0].access === "stand-read-only",
+        () => JSON.stringify(first.items[0]).slice(0, 200));
+      cli("submit", noModeRun, "reconcile.baseline", gFile);
+      const refused = JSON.parse(cli("next", noModeRun).stdout);
+      check("ENG-96204 (T1): with no mode, no defaultMode and no run-scoped answer the run STOPS `mode-not-chosen` and LISTS the valid modes — the absent mode is no longer read as `auto`",
+        refused.result?.stopped === "mode-not-chosen"
+          && Array.isArray(refused.result.validModes) && refused.result.validModes.includes("round1") && refused.result.validModes.includes("layout-first")
+          && /round1/.test(refused.result.next || "") && /layout-first/.test(refused.result.next || ""),
+        () => JSON.stringify(refused.result).slice(0, 500));
+      check("ENG-96204 (T1): the refusal reports `mode: null` and `modeSource: null` rather than a mode nobody chose — the one return where `null` is the honest answer",
+        refused.result?.mode === null && refused.result?.modeSource === null,
+        () => JSON.stringify({ mode: refused.result?.mode, source: refused.result?.modeSource }));
+      check("ENG-96204 (T1): NOTHING was built and NOTHING was written to the stand — `rounds: 0`, and the journal holds only the read-only baseline Reconcile, so a gate that fired but let the round run fails here",
+        refused.result?.rounds === 0
+          && JSON.parse(readFileSync(noModeRun, "utf8")).journal.every((j) => j.id === "reconcile.baseline"),
+        () => JSON.stringify(JSON.parse(readFileSync(noModeRun, "utf8")).journal.map((j) => j.id)));
+      check("ENG-96204 (R8): the SAME input with a `defaultMode` PROCEEDS and reports `modeSource: default` — the declared non-interactive path, so a run nobody is watching says so on file instead of being guessed for",
+        () => { const dFile = path.join(tmp, "default-mode.json");
+          writeFileSync(dFile, JSON.stringify({ ...noMode, defaultMode: "auto" }));
+          const dRun = path.join(tmp, "default-run.json");
+          cli("start", dRun, "--workflow", "freedom-build-executor", "--input", dFile, "--host", "codex");
+          cli("next", dRun);
+          cli("submit", dRun, "reconcile.baseline", gFile);
+          const r = JSON.parse(cli("next", dRun).stdout).result;
+          return r?.stopped === null && r?.mode === "auto" && r?.modeSource === "default" && r?.complete === true; },
+        "the defaultMode path must reach the same green close the explicit-argument run does");
+    }
 
     /* ENG-95857 (T3) — HARD STOP 2 must fire from the ENGINE'S OWN ARTIFACT and from nothing else.
        The answer below carries `planGaps` exactly as `--units.planGaps` published it: no plan-level stderr line

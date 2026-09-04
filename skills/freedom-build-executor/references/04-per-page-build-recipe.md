@@ -84,6 +84,18 @@ the verifier files that page's contents as this unit's evidence.
 
 ## Order inside the page
 
+> **`layout-first` runs this recipe in TWO PASSES over the same unit** (ENG-96204). On the LAYOUT pass you own
+> steps 1-5 and 7-11 and **not step 6** — no business rules, no handlers, no converters, no validators. They are
+> SCHEDULED for the next invocation, not dropped. Leave every `Business rules` and `Handler — …` row out of
+> `claimedBuilt` and file no evidence for one. **Your own step-10 gate will report the unit short, and that is the
+> correct verdict**, not a defect to repair: spend your one bounded fix only on a row that belongs to this pass (a
+> field, a container, a component, the package, the entity binding) and report `selfCheck` honestly with the logic
+> rows still open. The run knows those rows are scheduled — it charges this pass no repair round and parks nothing
+> over them. On the LOGIC pass the queue file records the layout pass as done: step 6 is your whole deliverable,
+> you `get-page` the page and add only what is missing rather than rebuilding it, and any still-open layout row is
+> yours again because nothing is scheduled for later any more. Your build prompt states which pass you are on; if
+> it says nothing about a pass, this is an ordinary single-pass unit and the whole recipe is yours.
+
 1. **Create the page on the right template** — `expectedTemplate`, confirmed against
    `list-page-templates`. Scaffolding tools register a DEFAULT page; when the template differs
    you create a new page and **re-bind the object to it, dropping the old binding**. A page built
