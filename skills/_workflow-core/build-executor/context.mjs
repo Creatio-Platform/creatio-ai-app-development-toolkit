@@ -13,6 +13,8 @@
 // against the hand-written original byte for byte, which is how that was caught the first time.
 
 import { buildMode, buildVerificationSurface, findingKeySet, unitNo, unitStem } from './helpers.mjs'
+// ENG-96204 — the mode is RESOLVED in `core.mjs` (it needs `--units.runResolutions`, which only exists once the
+// baseline Reconcile has answered), so this module owns only the two REQUESTED values and their validation.
 
 export const REQUIRED_INPUTS = ['manifest', 'environment', 'outDir', 'planFile']
 
@@ -164,9 +166,23 @@ export function makeContext(input, selfPath) {
     : 2
   // Preflight is READ-ONLY, so it parallelises. Kept well under the host's concurrency ceiling.
   const MAX_PREFLIGHT = Number(input.maxPreflightAgents) > 0 ? Number(input.maxPreflightAgents) : 6
-  // HOW MUCH THE OPERATOR WATCHES. Three modes, one mechanism: the run stops at a PAGE BOUNDARY so a human can
-  // open the built page on the stand and look, then re-runs to continue. `auto` never stops; `checkpoints` stops
-  // after the units named in `checkpointAfter`; `guided` stops after every unit.
+  // HOW MUCH THE OPERATOR WATCHES. Five modes on TWO mechanisms. The UNIT-boundary stop: the run stops after a
+  // page so a human can open it on the stand and look, then re-runs to continue — `auto` never stops,
+  // `checkpoints` stops after the units named in `checkpointAfter`, `guided` stops after every unit. The
+  // ROUND-boundary stop (ENG-96204): `round1` runs exactly one round per invocation and stops while anything is
+  // open, and `layout-first` does the same with round 1 scoped to layout only.
+  //
+  // WHY A ROUND BOUNDARY AS WELL AS A UNIT ONE. A unit-boundary stop reports one page. A deviation from the plan
+  // is usually not about one page — it is about how the whole section is being read — and the run that measured
+  // this spent six repair rounds re-deriving a shortfall an operator would have settled after round 1. The round
+  // boundary is where the verifier has read the whole stand back, the judge has ruled and Reconcile has re-run the
+  // gate, so it is the first point where "is this going the way I meant" has a complete answer.
+  //
+  // THE MODE IS NOT DEFAULTED HERE ANY MORE. `buildMode` returns `null` for an absent value and the run refuses to
+  // start (see `resolveControlMode` in helpers, and the `mode-not-chosen` stop in core): the mode has to be
+  // resolved from the operator's own answer, and this context cannot ask. `defaultMode` is the escape hatch a
+  // NON-INTERACTIVE run declares for itself. Both are the REQUESTED values — the resolved one is run state, not
+  // context, because the recorded answer arrives with `--units.runResolutions` on the baseline Reconcile.
   //
   // WHY A PAUSE IS WORTH ITS COMPLEXITY. `Form — Logic` handler rows carry NO verification key (`designspec.mjs`
   // pushes them with a label and nothing else), so a ported handler is the ONE deliverable class `--verify` does
@@ -178,7 +194,11 @@ export function makeContext(input, selfPath) {
   // mid-unit would mean telling a builder to deliver less than the plan — a deviation, which contract rule 6 makes
   // a proposal rather than an action. Building the page that carries the row and stopping before the NEXT unit
   // costs the operator the rest of that page's logic and buys a model that cannot lie about what is done.
-  const MODE = buildMode(input.mode)
+  const MODE_REQUESTED = buildMode(input.mode)
+  // The configured fallback for a run nobody is watching. Validated here, at launch, and NOT at the moment it is
+  // used: a typo'd `defaultMode` must fail before the run starts rather than at the first stop it was supposed to
+  // prevent. `null` when the caller declared none, which is what makes the refusal fire.
+  const DEFAULT_MODE = buildMode(input.defaultMode)
   // The migration skill's verification-surface preflight answer for THIS section (ENG-95855), handed over as an
   // explicit argument rather than left for each page unit to read from `decisions.md` — that file's prose does
   // not reach a fresh-context build agent. `null` when the caller omitted it (an older invocation, or a run this
@@ -209,6 +229,13 @@ export function makeContext(input, selfPath) {
   // `MAX_PREFLIGHT` agents were once told to write their records into the ONE `built.json`. Read-modify-write of a
   // shared file with no lock is last-write-wins at best; a torn write destroys the gate's own input. Preflight agents
   // therefore return structured records; the existing Judge/Reconcile sequence performs the single sequential write.
+  // THE STATUS DOCUMENT (ENG-96204, AC 5). A stop's payload reaches whoever launched the run and nobody else; the
+  // operator who comes back to this folder later — or the next session, on the other route — has only the files.
+  // So a stop writes the same four facts down here: what was built, what is open (per-unit and total severity
+  // COUNTS, with a pointer to the engine-written verify table for the rows themselves — DR-4), what is parked and
+  // why, and the one next step. Overwritten at each stop, deliberately: it is the CURRENT status, and the history
+  // is `worklog.md` plus the per-unit files.
+  const RUN_STATUS_FILE = `${input.outDir}/run-status.md`
   const VERIFY_TABLE = `${input.outDir}/verify.md`
   // The machine-readable verdict (`--verify-json`). The table is the HUMAN report and stays the run's
   // closing artifact; this file is what the scheduling arithmetic reads.
@@ -289,10 +316,11 @@ Read the card for each imperative row this page owns before you write the handle
   })()
 return {
   input, ENGINE, SKILLS_ROOT, REF_RECIPE, REF_MAPPING, REF_POLICY, REF_BLOCK,
-  SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS, MAX_PREFLIGHT, MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
+  SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS, MAX_PREFLIGHT,
+  MODE_REQUESTED, DEFAULT_MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
   VERIFICATION_SURFACE, VERIFICATION_SURFACE_NOTE,
   FINDINGS, FINDING_KEYS,
-  QUEUE_FILE, BUILT_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
+  QUEUE_FILE, BUILT_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
   REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
   cli, CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
   dataFence, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
