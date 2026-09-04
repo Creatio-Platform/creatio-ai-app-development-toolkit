@@ -179,7 +179,7 @@ const H_CONTROL_MODE = ["buildModes", "offeredModes", "modeLabel", "buildModeMen
   "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "openCountsOf",
   "runStatusDoc", "passScopeText",
   // ENG-96204 (ENG-96474) — the spent-answer union the queue-file record and the resume gate are built on.
-  "mergeConsumed"];
+  "mergeConsumed", "roundStateOf", "roundsSpentOnFile"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
@@ -905,12 +905,14 @@ check("ENG-96204 (AC 2): the status document's per-unit line carries the split O
       && /`main` — 3 open row\(s\): 2 MISSING \+ 1 unconfirmed$/m.test(legacy) && /3 stamped per row in/.test(legacy); },
   () => wf.runStatusDoc({ mode: "round1", openCounts: wf.openCountsOf([{ unit: "main", open: 3, missing: 2, unverified: 1, correctness: 2, fidelity: 1 }]), next: "x" }).split("\n").filter((l) => /main|Total/.test(l)).join(" | "));
 check("ENG-96204 (AC 2): `RECONCILE_SHAPE.verify` TYPES the two per-page counts as integers and does NOT require them — a string there is a fault the retry names, an absent pair (a summary older than the field) is a legal answer",
-  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openCorrectness: "1", openFidelity: 0 } } } }).length === 1
-    && wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false } } } }).length === 0
+  // `buildMissing` on both levels is REQUIRED (ENG-95901), so these probes carry it: without it every probe
+  // returns the two `buildMissing: required` faults and the counts below stop measuring what they are about.
+  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openCorrectness: "1", openFidelity: 0 } } } }).length === 1
+    && wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1 } } } }).length === 0
     && wf.RECONCILE_SHAPE?.verify?.map?.pages?.types?.openCorrectness === "integer"
     && wf.RECONCILE_SHAPE?.verify?.map?.pages?.types?.openFidelity === "integer"
     && !(wf.RECONCILE_SHAPE?.verify?.map?.pages?.required || []).includes("openCorrectness"),
-  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, openCorrectness: "1" } } } }));
+  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openCorrectness: "1" } } } }));
 /* ENG-96204 (AC 5) — THE STATUS DOCUMENT. Composed here rather than by an agent: a status an agent writes in its
    own words is a paraphrase of the verdict, and the reason this run computes rather than asserts is that
    paraphrases of verdicts drift. Every fact AC 5 names must be in it — and the open section is COUNTS plus a
@@ -2176,31 +2178,78 @@ check("ENG-96204 (PR review F9): `runResolutions` is declared as an array and it
 check("ENG-96204 (PR review F7/F9): and `runResolutions` is in RECONCILE_SCHEMA.required — only `required` forces an LLM to populate it, the same rule the three evidence lists already follow, and `[]` versus 'field absent' had to stop being indistinguishable",
   (wf.RECONCILE_SCHEMA?.required || []).includes('runResolutions'),
   () => wf.RECONCILE_SCHEMA?.required);
-check("ENG-96204 (PR review F9): RECONCILE_SCHEMA declares `layoutPassDone: boolean` and `roundsSpent: integer` — the two ROOT keys of the queue file that tell a resumed run which pass it is on and whether the next round needs the operator's authorisation",
-  wf.RECONCILE_SCHEMA?.properties?.layoutPassDone?.type === 'boolean'
-    && wf.RECONCILE_SCHEMA?.properties?.roundsSpent?.type === 'integer',
-  () => ({ layoutPassDone: wf.RECONCILE_SCHEMA?.properties?.layoutPassDone, roundsSpent: wf.RECONCILE_SCHEMA?.properties?.roundsSpent }));
-// ENG-96204 (ENG-96474) — THE CONSUMPTION RECORD IS DECLARED, REQUIRED AND ASKED FOR. It is a plain string array, so
-// the host types it fully and `RECONCILE_SHAPE` (which by its own contract carries only what the schema stopped
-// describing) needs no entry — which also means the derived "every shape-bound name is in the prompt" check below
-// does NOT cover it, so the prompt naming is pinned here explicitly.
-check("ENG-96204 (ENG-96474): RECONCILE_SCHEMA declares `consumedRoundAnswers` as a string array under the standing `maxItems` cap AND lists it in `required` — `[]` and 'field absent' must not be indistinguishable on the list that says which recorded `go` is already used up",
-  wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers?.type === 'array'
-    && wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers?.items?.type === 'string'
-    && Number.isInteger(wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers?.maxItems)
-    && (wf.RECONCILE_SCHEMA?.required || []).includes('consumedRoundAnswers'),
-  () => ({ prop: wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers, required: wf.RECONCILE_SCHEMA?.required }));
-check("ENG-96204 (ENG-96474): the Reconcile prompt asks for `consumedRoundAnswers` verbatim off the queue file's ROOT key, with `[]` when the key is absent — the normal first run — and forbids inferring, adding or dropping an entry",
-  wfSrc.includes(String.raw`\`consumedRoundAnswers\` — the file's ROOT \`consumedRoundAnswers\` array, verbatim (\`[]\` when the file has no such key`)
-    && /never infer, add or drop one — REQUIRED, so return the empty array rather than omitting it/.test(wfSrc),
-  () => wfSrc.slice(wfSrc.indexOf("`consumedRoundAnswers` — the file's ROOT"), wfSrc.indexOf("`consumedRoundAnswers` — the file's ROOT") + 300));
+// ENG-96204 (ENG-96455) — THE THREE ROUND-RECORD KEYS ARE ONE `roundState` OBJECT. They were three ROOT properties
+// until the merge with PR #128's answers channel put RECONCILE_SCHEMA 118 bytes over the host's HARD 4096-byte cap
+// (DR-7). The DECLARATION moved; the guarantee did not, and this is where that is asserted on both halves: the
+// schema declares the property and requires it, and `RECONCILE_SHAPE.roundState` describes and requires its
+// insides. Either half alone is a field only one side of the boundary checks.
+check("ENG-96204 (ENG-96455 / PR review F9): RECONCILE_SCHEMA declares `roundState` as a BARE object and REQUIRES it — the queue-file record that tells a resumed run which pass it is on, how many rounds the folder has spent, and which round answers are used up. Bare because the per-key form costs 173 bytes on the run's FIRST agent's schema, which the host refuses over 4096",
+  wf.RECONCILE_SCHEMA?.properties?.roundState?.type === 'object'
+    && !wf.RECONCILE_SCHEMA?.properties?.roundState?.properties
+    && !wf.RECONCILE_SCHEMA?.properties?.roundState?.additionalProperties
+    && (wf.RECONCILE_SCHEMA?.required || []).includes('roundState')
+    // AND THE THREE ROOT PROPERTIES ARE GONE. Anti-vacuity: a re-add would put the bytes straight back over the
+    // cap while this pin stayed green on the object that is still there beside them.
+    && !wf.RECONCILE_SCHEMA?.properties?.layoutPassDone
+    && !wf.RECONCILE_SCHEMA?.properties?.roundsSpent
+    && !wf.RECONCILE_SCHEMA?.properties?.consumedRoundAnswers,
+  () => ({ roundState: wf.RECONCILE_SCHEMA?.properties?.roundState, required: (wf.RECONCILE_SCHEMA?.required || []).includes('roundState'),
+    strays: ['layoutPassDone', 'roundsSpent', 'consumedRoundAnswers'].filter((k) => wf.RECONCILE_SCHEMA?.properties?.[k]) }));
+check("ENG-96204 (ENG-96455): `RECONCILE_SHAPE.roundState` TYPES all three facts and REQUIRES `consumedRoundAnswers` — the requirement moved UP a level with the fold (a bare object cannot carry a per-key `required`), so `[]` and 'key absent' still cannot be the same answer on the list that says which recorded `go` is used up. `layoutPassDone`/`roundsSpent` stay typed-not-required: absent is the correct reading for a fresh folder",
+  () => { const sh = wf.RECONCILE_SHAPE?.roundState;
+    const missingList = wf.reconcileShapeErrors({ roundState: { layoutPassDone: true, roundsSpent: 2 } });
+    const badType = wf.reconcileShapeErrors({ roundState: { roundsSpent: "2", consumedRoundAnswers: [] } });
+    const clean = wf.reconcileShapeErrors({ roundState: { layoutPassDone: false, roundsSpent: 0, consumedRoundAnswers: [] } });
+    return sh?.kind === 'object'
+      && (sh?.required || []).join(',') === 'consumedRoundAnswers'
+      && sh?.types?.layoutPassDone === 'boolean' && sh?.types?.roundsSpent === 'integer'
+      && sh?.types?.consumedRoundAnswers === 'string[]'
+      && missingList.some((f) => /roundState\.consumedRoundAnswers: required/.test(f))
+      && badType.some((f) => /roundState\.roundsSpent: expected integer/.test(f))
+      && clean.length === 0; },
+  () => ({ shape: wf.RECONCILE_SHAPE?.roundState,
+    onMissingList: wf.reconcileShapeErrors({ roundState: { layoutPassDone: true, roundsSpent: 2 } }),
+    onBadType: wf.reconcileShapeErrors({ roundState: { roundsSpent: "2", consumedRoundAnswers: [] } }) }));
+check("ENG-96204 (ENG-96455): `roundStateOf` reads `roundState` first and falls back PER KEY to the ROOT key — a migration folder written before the fold holds all three at the root with no `roundState`, and reading only the new shape would report it as a folder nobody has built in. Fail-closed on garbage: a non-object `roundState`, a non-integer count and a non-array list can never raise the round count or authorise a round",
+  () => { const nu = wf.roundStateOf({ roundState: { layoutPassDone: true, roundsSpent: 3, consumedRoundAnswers: ["round-2"] } });
+    const legacy = wf.roundStateOf({ layoutPassDone: true, roundsSpent: 3, consumedRoundAnswers: ["round-2"] });
+    const mixed = wf.roundStateOf({ roundState: { roundsSpent: 5 }, layoutPassDone: true, consumedRoundAnswers: ["round-1"] });
+    return nu.layoutPassDone === true && nu.roundsSpent === 3 && nu.consumedRoundAnswers[0] === "round-2"
+      // THE LEGACY FOLDER READS IDENTICALLY — that is the whole claim.
+      && JSON.stringify(legacy) === JSON.stringify(nu)
+      // PER KEY, not whole-object: `roundState` wins where it has the key, the root fills the rest.
+      && mixed.roundsSpent === 5 && mixed.layoutPassDone === true && mixed.consumedRoundAnswers[0] === "round-1"
+      && wf.roundStateOf({}).layoutPassDone === false
+      && wf.roundsSpentOnFile({ roundState: { roundsSpent: 4 }, roundOf: {} }) === 4
+      && wf.roundsSpentOnFile({ roundsSpent: 4, roundOf: {} }) === 4
+      // GARBAGE FALLS BACK TO THE PER-UNIT COUNTERS rather than inflating the count.
+      && wf.roundsSpentOnFile({ roundState: { roundsSpent: "x" }, roundOf: { main: 2 } }) === 2
+      && wf.roundStateOf({ roundState: "nope" }).layoutPassDone === false
+      && wf.mergeConsumed([], wf.roundStateOf({ roundState: { consumedRoundAnswers: "nope" } }).consumedRoundAnswers).length === 0; },
+  () => ({ nu: wf.roundStateOf({ roundState: { layoutPassDone: true, roundsSpent: 3, consumedRoundAnswers: ["round-2"] } }),
+    legacy: wf.roundStateOf({ layoutPassDone: true, roundsSpent: 3, consumedRoundAnswers: ["round-2"] }),
+    mixed: wf.roundStateOf({ roundState: { roundsSpent: 5 }, layoutPassDone: true, consumedRoundAnswers: ["round-1"] }) }));
+// ENG-96204 (ENG-96474 / ENG-96455) — THE CONSUMPTION RECORD IS DECLARED, REQUIRED AND ASKED FOR. It lives inside
+// `roundState` now (see the pins above for the declaration and the moved requirement); what is pinned HERE is the
+// third leg, the PROMPT. The schema stopped describing the insides of this object, so the prompt is the only thing
+// that tells the copying agent these keys exist — and a fact an agent is not told about is a fact it drops.
+check("ENG-96204 (ENG-96474 / ENG-96455): the Reconcile prompt asks for `roundState` as ONE object, NAMES all three keys with the value to use when the file records none, states the ROOT-key fallback for a folder written before the fold, and forbids inferring, adding or dropping an entry",
+  wfSrc.includes(String.raw`\`roundState\` — THE FOLDER'S ROUND RECORD, as ONE object with three keys`)
+    && wfSrc.includes(String.raw`\`consumedRoundAnswers\` — the array, verbatim (\`[]\` when the file records none)`)
+    && wfSrc.includes(String.raw`\`roundsSpent\` — the number, verbatim (\`0\` when the file records none`)
+    && wfSrc.includes(String.raw`\`layoutPassDone\` — the flag, verbatim (\`false\` when the file records none)`)
+    && /READ \\`roundState\\` FIRST, and fall back PER KEY to a ROOT key of the same name/.test(wfSrc)
+    && /Copy the strings exactly and never infer, add or drop one/.test(wfSrc)
+    && /REQUIRED: return the object even on a fresh folder/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("`roundState` — THE FOLDER'S ROUND RECORD"), wfSrc.indexOf("`roundState` — THE FOLDER'S ROUND RECORD") + 400));
 check("ENG-96204 (ENG-96474): `mergeConsumed` is a UNION — deduplicated, order kept, non-strings and blanks dropped, and NOTHING is ever removed — so a spent answer stays spent whichever of the file and the process learned of it first",
   () => JSON.stringify(wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "])) === JSON.stringify(["round-2", "round-3", "round-4"])
     && JSON.stringify(wf.mergeConsumed(undefined, undefined)) === "[]"
     && JSON.stringify(wf.mergeConsumed(["round-2"], undefined)) === JSON.stringify(["round-2"]),
   () => wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "]));
-check("ENG-96204 (ENG-96474): the carry fingerprint includes `consumedRoundAnswers` — the F10 lesson: a fact in the carry but outside the 'is there anything unwritten?' question is a fact a no-op persist may drop",
-  /const carryFingerprint = \(\) => JSON\.stringify\(\[.*roundsBefore \+ round, consumedRoundAnswers\]\)/.test(wfSrc),
+check("ENG-96204 (ENG-96474 / ENG-96455): the carry fingerprint covers the round record AS THE OBJECT THE CARRY WRITES — the F10 lesson (a fact in the carry but outside the 'is there anything unwritten?' question is a fact a no-op persist may drop), and taken over `carryNow().roundState` rather than a re-typed list of its keys, so a fourth key joining the object is covered the day it lands instead of silently escaping",
+  /const carryFingerprint = \(\) => JSON\.stringify\(\[.*carryNow\(\)\.roundState\]\)/.test(wfSrc)
+    && /roundState: \{/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const carryFingerprint ="), wfSrc.indexOf("const carryFingerprint =") + 260));
 check("ENG-96204 (ENG-96474): the status document lists the SPENT answers against the one AWAITED — the operator's answer file is append-only input the run never writes into, so this section is where they see consumption",
   () => { const doc = wf.runStatusDoc({ mode: "round1", stopped: "awaiting-round-decision", rounds: 0, consumedRoundAnswers: ["round-2"], awaitingRound: "round-3", next: "x" });
@@ -2228,10 +2277,30 @@ const reconcileSchemaBytes = wf.RECONCILE_SCHEMA ? JSON.stringify(wf.RECONCILE_S
 // `RECONCILE_SHAPE`), so the shrink convention is already spent on it. Measured after the merge with PR #128's
 // answers channel: 3908 bytes — 8 over the 3900 margin that number was a working margin for, and 4000 still leaves
 // 96 bytes under the host's hard 4096-byte cap, which is the number that actually stops a run.
-const RECONCILE_SCHEMA_BUDGET = 4000;
+//
+// ENG-96455 — AND THIS NUMBER IS NOW THE MEASURED SIZE ITSELF, 4085, not a round number above it. There is no
+// working margin left to give: the ENG-96204 control-mode branch and PR #128's answers channel each grew this
+// object independently (+306 and +495 over ENG-95930's 3413) and the two are exactly additive, so the merge
+// measured 4214 — 118 bytes OVER the host's HARD 4096-byte cap, which refuses the run's FIRST agent before the
+// model runs. Folding `layoutPassDone`/`roundsSpent`/`consumedRoundAnswers` into one bare `roundState` object
+// bought 129 bytes back (DR-7) and landed it at 4085: ELEVEN bytes under the cap.
+//
+// A budget ABOVE the thing it guards is the defect this file already shipped once (`RECONCILE_ANSWER_MAX_BYTES`
+// sat at 6000 over a real 4096-byte cap and let the schema grow straight past it). So this is pinned to the exact
+// measurement: the next property added here turns this check RED before the host ever sees it, which is the point.
+// Eleven bytes is NOT a margin. Anything added to this contract from here needs bytes bought back first — the
+// shrink convention (declare bare, describe in `RECONCILE_SHAPE`) is the tool, and DR-7 is the worked example.
+const RECONCILE_SCHEMA_BUDGET = 4085;
 check(`ENG-95930: the Reconcile structured-output schema stays inside its stated budget of ${RECONCILE_SCHEMA_BUDGET} serialized bytes — a working margin under the host's hard ${SCHEMA_CLASSIFIER_CAP}-byte cap, because this is the schema that blocked the run and the one still being extended`,
   reconcileSchemaBytes > 0 && reconcileSchemaBytes <= RECONCILE_SCHEMA_BUDGET,
-  () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET}, host cap ${SCHEMA_CLASSIFIER_CAP})`);
+  () => `serialized ${reconcileSchemaBytes} bytes (budget ${RECONCILE_SCHEMA_BUDGET}, host cap ${SCHEMA_CLASSIFIER_CAP}, margin under the cap ${SCHEMA_CLASSIFIER_CAP - reconcileSchemaBytes})`);
+// ENG-96455 — AND THE MARGIN IS REPORTED WHETHER OR NOT ANYTHING FAILED. The budget check above only speaks when it
+// is already too late; the number the next person needs is how much room is left BEFORE they spend it, and the
+// margin is eleven bytes. This check states it, fails if the hard cap is breached, and names the exact byte counts
+// in its detail so the reason is legible without reading this file.
+check(`ENG-96455: RECONCILE_SCHEMA serializes to ${reconcileSchemaBytes} bytes against the host's HARD ${SCHEMA_CLASSIFIER_CAP}-byte cap — ${SCHEMA_CLASSIFIER_CAP - reconcileSchemaBytes} bytes of room left on the run's FIRST agent's schema. An agent over the cap is refused before the model runs, which costs the whole run; adding a property here means buying bytes back first (DR-7)`,
+  reconcileSchemaBytes > 0 && reconcileSchemaBytes <= SCHEMA_CLASSIFIER_CAP,
+  () => `serialized ${reconcileSchemaBytes} bytes, host cap ${SCHEMA_CLASSIFIER_CAP}, OVER by ${reconcileSchemaBytes - SCHEMA_CLASSIFIER_CAP}`);
 // EVERY property still declared. The fix for the byte count was to stop describing the INSIDES of the nested
 // objects — not to drop fields — and the core computes on all 41 of them, so a shrink that removed one would be a
 // silent contract change no other test here would notice.
@@ -2241,8 +2310,8 @@ check(`ENG-95930: the Reconcile structured-output schema stays inside its stated
 // omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
 // `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
 // `resolutions*` keys are the reopen bookkeeping that must survive a resume.
-check("ENG-95930: the loosened Reconcile schema still declares all 50 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions`, `layoutPassDone`, `roundsSpent` and `consumedRoundAnswers`) and its 20-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 50 && (wf.RECONCILE_SCHEMA?.required || []).length === 20
+check("ENG-95930: the loosened Reconcile schema still declares all 48 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions` and `roundState`) and its 20-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on. 48 and not 50 because ENG-96455 folded three root keys into `roundState` under the host's cap; no property was dropped, only its nested shape description (DR-7)",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 48 && (wf.RECONCILE_SCHEMA?.required || []).length === 20
     && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
@@ -2507,7 +2576,8 @@ check("ENG-95930: every LOOSENED property (a bare object / array of objects, whi
   // `resolutionsReopened`) in the same compacted form, so both are loosened and both carry a shape entry.
   // ENG-96204 -> 18: `runResolutions` is the control-mode channel's own object array, declared in the same
   // compacted form for the same byte reason, so it is loosened and carries a `RECONCILE_SHAPE` entry too.
-  looseProps.length === 18 && looseWithoutShape.length === 0,
+  // ENG-96455 -> 19: `roundState` is a BARE object for the same reason, so its insides live in the shape table too.
+  looseProps.length === 19 && looseWithoutShape.length === 0,
   () => `${looseProps.length} loosened: ${looseProps.join(", ")} | without a shape entry: ${looseWithoutShape.join(", ") || "(none)"}`);
 // The table can only enforce what its own vocabulary covers: a mistyped token (`'bool'`) accepts every value, so it
 // is a disabled check that no answer-shaped probe would reveal.
@@ -3409,8 +3479,11 @@ check("PR #128 review (round 18): the PER-INVOCATION LIMIT of `unsettledResoluti
     // ANTI-VACUITY: the note describes the code that is actually there — the tally is still absent from `carryNow()`
     // in the SHIPPED artifact, so a future change that DOES carry it makes this pin red and the note gets corrected
     // with it rather than standing as a stale claim.
-    && /const carryNow = \(\) => \(\{[^}]*\}\)/.test(wfSrc)
-    && !/carryNow = \(\) => \(\{[^}]*resolutionCheckTally/.test(wfSrc)
+    // ENG-96455 — `[\s\S]*?` rather than `[^}]*`: `carryNow` NESTS `roundState: { … }` now, so a
+    // no-inner-brace window stops at that object's own closing brace and can no longer reach the end of the
+    // expression. The window is bounded and the negative below keeps its teeth over the whole expression.
+    && /const carryNow = \(\) => \(\{[\s\S]{0,4000}?\} \}\)/.test(wfSrc)
+    && !/carryNow = \(\) => \(\{[\s\S]{0,4000}?resolutionCheckTally/.test(wfSrc)
     // ...and the field it is about is genuinely still there and still per-invocation.
     && /let resolutionCheckTally = new Map\(\)/.test(wfSrc),
   () => "the stated limit and the code must agree");
@@ -3607,13 +3680,18 @@ check("PR #128 review (RC-10): the answers-blocked row is DEDUPED on `(unit, wha
 // that derivation over-marked those units and denied them their one repair round. Both grant sets now RIDE THE CARRY
 // and are seeded straight from the queue, exactly like `unconsumed` — the fact is exact instead of inferred.
 check("PR #128 review (N2): both repair-grant sets RIDE THE CARRY — `carryNow` and `carryFingerprint` carry `resolutionsReopened`/`resolutionsPending`, so the grant fact survives a resume by persistence, not by a lossy derivation from `unconsumed`",
-  /const carryNow = \(\) => \(\{[^}]*unconsumed, resolutionsReopened: grantPairsToPersist\(resolutionsReopened\), resolutionsPending: \[\.\.\.resolutionsPending\] \}\)/.test(wfSrc)
+  // ENG-96455 — the trailing `})` anchor is now a trailing COMMA: `roundState: { … }` follows these two inside
+  // `carryNow`, so the grant sets are no longer the last members of the expression. The CLAIM is unchanged — both
+  // sets ride the carry, through the persist-shaping helper — and it is still anchored to `carryNow` itself.
+  /const carryNow = \(\) => \(\{[\s\S]{0,2000}?unconsumed, resolutionsReopened: grantPairsToPersist\(resolutionsReopened\), resolutionsPending: \[\.\.\.resolutionsPending\],/.test(wfSrc)
     // The pair leaves the process as `{unit, id}`, never as the composite key -- the key is this mechanism's internal
     // identity, not a contract an agent writes or a human reads. Round 17 made it a JSON-encoded pair rather than a
     // NUL-joined string, so the pin is on the DECODE existing at all, not on a particular slicing.
     && /const pairParts = \(key\) => \{/.test(wfSrc)
     && /const \[unit, id\] = JSON\.parse\(String\(key\)\)/.test(wfSrc)
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[[\s\S]*?unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\]\]\)/.test(wfSrc));
+    // ENG-96455 — a trailing COMMA, not the closing `])`: `carryNow().roundState` follows these two in the
+    // fingerprint now. The claim (both sets are fingerprinted, spread so a later mutation cannot alias them) holds.
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[[\s\S]*?unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\],/.test(wfSrc));
 check("PR #128 review (N2): the carry block instructs the writer to persist BOTH grant sets EVEN WHEN `[]`, and the queue-read step reads them back — a dropped `resolutionsReopened` re-grants a spent round, a dropped `resolutionsPending` strands one owed",
   /ANSWER-CHANNEL REPAIR GRANTS[\s\S]{0,260}?resolutionsReopened[\s\S]{0,120}?resolutionsPending[\s\S]{0,200}?EVEN WHEN \\`\[\]\\`/.test(wfSrc)
     && /- \\`resolutionsReopened\\` and \\`resolutionsPending\\` — the two answer-channel repair-grant arrays the file holds/.test(wfSrc));
@@ -4605,8 +4683,13 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // it, transcribed by Reconcile out of the digest.
   const ROW_CORRECTNESS = { n: 1, deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "missing: Amount", outcome: "missing", owner: "builder", severity: "correctness" };
   const ROW_FIDELITY = { n: 2, deliverable: "`creatio-ui-guidelines` design pass", status: "⚠ verify", evidence: "filed but NOT judged", outcome: "unverified", owner: "verifier", severity: "fidelity", id: "main#quality-gates" };
-  const SHORT_VERIFY = { complete: false, missing: 1, unverified: 1, planGaps: [],
-    pages: { main: { complete: false, buildComplete: false, missing: 1, unverified: 1, builderOpen: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } };
+  // `buildMissing` beside `missing`, top level AND per page (ENG-95901). It is REQUIRED of a Reconcile answer on
+  // both levels, so a golden without it is not a valid answer at all — the run refuses it and every scenario in
+  // this block dies `reconcile-failed` before it reaches the behaviour it is about. The value is `1` because the
+  // one MISSING row here is BUILDER-owned (`ROW_CORRECTNESS`, `owner: "builder"`), so the whole shortfall is a
+  // build gap and `rejected` is `missing - buildMissing === 0` — which is what these scenarios mean.
+  const SHORT_VERIFY = { complete: false, missing: 1, buildMissing: 1, unverified: 1, planGaps: [],
+    pages: { main: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 1, builderOpen: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } };
   const RECONCILE_R = (over = {}) => ({
     approval: APPROVED_R, planVersion: "plan-r1",
     unitKeys: ["main"], buildOrder: ["main"],
@@ -4806,7 +4889,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
      they had lowered the number by hand. The fixtures were green over it because they answered 2 regardless.
      Both checks below read what the run itself emits, so neither can pass on a fixture's say-so. */
   check("Fable review (Blocker): the LOGIC pass instructs the queue writer to advance `roundsSpent` to 2 — the carry's number must be the folder's real count, not the per-unit repair counters, which a layout pass never charges",
-    /set the ROOT key `roundsSpent` to `2`/.test(persistPrompt(logicPass.calls)),
+    /set `roundState\.roundsSpent` to `2`/.test(persistPrompt(logicPass.calls)),
     () => (/ROUNDS SPENT[^\n]*/.exec(persistPrompt(logicPass.calls)) || ["(no ROUNDS SPENT instruction in the persist prompt)"])[0]);
   check("Fable review (Blocker): and the LOGIC pass stop asks for `round-3`, NOT the `round-2` it just consumed — a stop that re-asks a spent item deadlocks the mode on the next invocation, because the gate refuses it by record",
     /round-3/.test(logicPass.res.next || "") && !/`round-2`/.test(logicPass.res.next || ""),
@@ -4832,7 +4915,9 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
       && /const itemId = continuationsSpent \? `build\.\$\{unit\.key\}\.r\$\{nth\}\.c\$\{continuationsSpent\}\$\{passMark\}` : `build\.\$\{unit\.key\}\.r\$\{nth\}\$\{passMark\}`/.test(wfSrc),
     () => wfSrc.slice(wfSrc.indexOf("const passMark"), wfSrc.indexOf("const passMark") + 320));
   /* --- the stop is never `complete`, and a round that closes everything is never a stop ------------------- */
-  const GREEN_R = RECONCILE_R({ verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } }, roundOf: { main: 1 } });
+  // `buildMissing: 0` on both levels — REQUIRED of a Reconcile answer (ENG-95901), and on a fully green verdict
+  // the honest value: nothing is missing, so no part of the shortfall is a build gap.
+  const GREEN_R = RECONCILE_R({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } }, roundOf: { main: 1 } });
   const closed = await scriptRun({ mode: "round1" }, [RECONCILE_R(), GREEN_R]);
   check("ENG-96204: a `round1` round that CLOSES everything is not stopped at the boundary — there is nothing left for a human to gate, so the run falls through to the normal close, exactly as a reached checkpoint does",
     !closed.res.threw && closed.res.stopped === null && closed.res.complete === true && closed.res.rounds === 1,
@@ -4945,7 +5030,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // outside the carry fingerprint, the closing `persistPending` saw "nothing new to write", skipped its agent,
   // and the folder recorded a completed layout pass as never having happened.
   const layoutClosedAll = await scriptRun({ mode: "layout-first" },
-    [RECONCILE_R(), RECONCILE_R({ verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } } })]);
+    [RECONCILE_R(), RECONCILE_R({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } } })]);
   check("PR review F10: a `layout-first` round that CLOSES everything still persists `layoutPassDone` — it takes no boundary stop, so the closing write is the marker's only remaining carrier, and the marker was not part of the 'is anything unwritten?' question at all",
     !layoutClosedAll.res.threw && layoutClosedAll.res.complete === true
       && layoutClosedAll.res.layoutPassDone === true
@@ -4998,8 +5083,11 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   const bulkRowsAnswer = RECONCILE_R({ roundOf: { main: 1 },
     verify: { ...SHORT_VERIFY, pages: { main: { ...SHORT_VERIFY.pages.main, missing: 40, unverified: 0, openRows: MANY_ROWS } } } });
   const bulkAnswer = RECONCILE_R({ roundOf: { main: 1 },
-    verify: { complete: false, missing: 40, unverified: 0, planGaps: [],
-      pages: { main: { complete: false, buildComplete: false, missing: 40, unverified: 0, builderOpen: 40 } } } });
+    // `buildMissing` on both levels (ENG-95901): REQUIRED of a Reconcile answer, so a golden without it is refused
+    // on arrival and this scenario would measure the wire size of an answer the run never accepts. All 40 rows here
+    // are builder-owned MISSING deliverables, so the build gap IS the shortfall.
+    verify: { complete: false, missing: 40, buildMissing: 40, unverified: 0, planGaps: [],
+      pages: { main: { complete: false, buildComplete: false, missing: 40, buildMissing: 40, unverified: 0, builderOpen: 40 } } } });
   // The ceiling is READ OFF THE SHIPPED SOURCE, the same way the ENG-95930 check that pins it does: it is a
   // `const` inside the pure block, not one of the exported helpers, so there is no `wf.` handle for it.
   const ANSWER_CEILING = Number((wfSrc.match(/RECONCILE_ANSWER_MAX_BYTES = (\d+)/) || [])[1]);
@@ -5041,8 +5129,8 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     () => wf.runStatusDoc({ mode: "round1", parked: [{ key: "child:X", rounds: 3, parkedWhy: "x".repeat(2000) }], next: "y" })
       .split("\n").map((l) => l.length).join(","));
   /* --- F6: a stop never reports "nothing is open" while it stopped BECAUSE something is ----------------------- */
-  const GREEN_PAGE = { complete: false, missing: 0, unverified: 0, planGaps: [],
-    pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, openRows: [] } } };
+  const GREEN_PAGE = { complete: false, missing: 0, buildMissing: 0, unverified: 0, planGaps: [],
+    pages: { main: { complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [] } } };
   // The APP unit is the case: `packageState: 'absent'` with a package NAME is not a stop (this unit creates it),
   // its openness comes from that recorded state and never from the gate's page map, and `main` is green — so the
   // only thing left open is a unit `pageStateOf` structurally cannot describe. Exactly the shape F6 describes.
@@ -5064,8 +5152,12 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // The verdict is produced by the ENGINE's `verifySummary` (imported at the top of this file), fed a per-page tally
   // in the shape `renderVerify` emits — so this drives the exact object the Reconcile agent copies, through the real
   // generated script, and checks that the executor reads back what the engine published, field for field.
-  const STAMPED_VERIFY = verifySummary({}, { complete: false, missing: 1, unverified: 1,
-    pages: { main: { complete: false, buildComplete: false, builderOpen: 1, missing: 1, unverified: 1, openCorrectness: 1, openFidelity: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } });
+  // `buildMissing` is fed to the ENGINE's tally, not patched onto its output: `verifySummary` copies what the
+  // tally holds (ENG-95901), so a tally without it publishes a summary without it — and that summary is then a
+  // Reconcile answer the run refuses. Feeding it here keeps this fixture what it claims to be: the exact object
+  // the engine really emits for this page.
+  const STAMPED_VERIFY = verifySummary({}, { complete: false, missing: 1, buildMissing: 1, unverified: 1,
+    pages: { main: { complete: false, buildComplete: false, builderOpen: 1, missing: 1, buildMissing: 1, unverified: 1, openCorrectness: 1, openFidelity: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } });
   const stampedStop = await scriptRun({ mode: "round1" }, [RECONCILE_R({ verify: STAMPED_VERIFY }), RECONCILE_R({ verify: STAMPED_VERIFY, roundOf: { main: 1 } })]);
   check("ENG-96204 (AC 2): with the engine's per-page `openCorrectness`/`openFidelity` in the summary, the `paused-at-round` stop reports a REAL severity tally for the page — 1 correctness, 1 fidelity, 0 unstamped — where the same open set used to be 2 `unstamped` because the summary carried no band",
     !stampedStop.res.threw && stampedStop.res.stopped === "paused-at-round"
@@ -5077,8 +5169,11 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     /`main` — 2 open row\(s\): 1 MISSING \+ 1 unconfirmed · 1 correctness \/ 1 fidelity/.test(persistPrompt(stampedStop.calls))
       && /1 step\(s\) still open · 2 open row\(s\) — 1 correctness · 1 fidelity$/m.test(persistPrompt(stampedStop.calls)),
     () => persistPrompt(stampedStop.calls).split("\n").filter((l) => /`main`|Total/.test(l)).join(" | "));
-  const QG_ONLY_VERIFY = verifySummary({}, { complete: false, missing: 0, unverified: 1,
-    pages: { main: { complete: false, buildComplete: true, builderOpen: 0, missing: 0, unverified: 1, openCorrectness: 0, openFidelity: 1, openRows: [ROW_FIDELITY] } } });
+  // `buildMissing: 0` — fed to the engine tally like `STAMPED_VERIFY` above (ENG-95901 requires it on the wire).
+  // Zero is the honest value AND the point of this scenario: nothing is MISSING here, the only open row is the
+  // design pass, so the build axis is clean and the whole shortfall is on the fidelity band.
+  const QG_ONLY_VERIFY = verifySummary({}, { complete: false, missing: 0, buildMissing: 0, unverified: 1,
+    pages: { main: { complete: false, buildComplete: true, builderOpen: 0, missing: 0, buildMissing: 0, unverified: 1, openCorrectness: 0, openFidelity: 1, openRows: [ROW_FIDELITY] } } });
   const qgOnlyStop = await scriptRun({ mode: "round1" }, [RECONCILE_R({ verify: QG_ONLY_VERIFY }), RECONCILE_R({ verify: QG_ONLY_VERIFY, roundOf: { main: 1 } })]);
   check("ENG-96204 (AC 2): a page whose only open row is the design pass stops with `fidelity: 1, correctness: 0` — the operator is told the page is complete-but-unpolished, not that something is missing, and not that the band is somewhere else",
     !qgOnlyStop.res.threw && qgOnlyStop.res.stopped === "paused-at-round"
@@ -5089,7 +5184,9 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
       && r1.res.openCounts?.units?.[0]?.correctness === null && r1.res.openCounts?.units?.[0]?.fidelity === null,
     () => r1.res.openCounts);
   check("ENG-96204 (AC 2): the Reconcile prompt NAMES both per-page counts beside the fields it already lists — a field the prose does not name is a field the copying agent drops, and the shape table types it so a string there is a fault",
-    /pages\["<key>"\] = \{ complete, buildComplete, builderOpen, missing, unverified, openCorrectness, openFidelity \}/.test(wfSrc),
+    // `buildMissing` sits between `missing` and `unverified` (ENG-95901 added it to the same copy list). Both
+    // tickets' fields are named in ONE sentence, which is the only place the copying agent learns they exist.
+    /pages\["<key>"\] = \{ complete, buildComplete, builderOpen, missing, buildMissing, unverified, openCorrectness, openFidelity \}/.test(wfSrc),
     () => wfSrc.slice(wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY"), wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY") + 400));
 
   /* --- ENG-96474 (folded into ENG-96204): ONE ANSWER AUTHORISES ONE ROUND — BY RECORD, not only by arithmetic.
@@ -5104,8 +5201,8 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   const spend1Persist = persistPrompt(spend1.calls);
   check("ENG-96474: the invocation that SPENDS `round-2` builds exactly one round and writes the answer into the queue file's `consumedRoundAnswers` in the SAME carry block as `roundsSpent` — one write, two sides of one fact — and reports the spent list on its return",
     !spend1.res.threw && buildCalls(spend1.calls).length === 1 && spend1.res.stopped === "paused-at-round"
-      && /CONSUMED ROUND ANSWERS — set the ROOT key `consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(spend1Persist)
-      && /ROUNDS SPENT — set the ROOT key `roundsSpent`/.test(spend1Persist)
+      && /CONSUMED ROUND ANSWERS — set `roundState\.consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(spend1Persist)
+      && /ROUNDS SPENT — set `roundState\.roundsSpent`/.test(spend1Persist)
       && JSON.stringify(spend1.res.consumedRoundAnswers) === JSON.stringify(["round-2"])
       && /round-3/.test(spend1.res.next || ""),
     () => (spend1.res.threw ? `threw: ${spend1.res.threw}` : { builds: buildCalls(spend1.calls).length, consumed: spend1.res.consumedRoundAnswers, carry: spend1Persist.split("\n").filter((l) => /CONSUMED|ROUNDS SPENT/.test(l)).map((l) => l.slice(0, 120)) }));
@@ -5150,11 +5247,11 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // closing `persistPending`. The spent answer must be on the queue file by then — it travels in the round's own
   // write and is part of the carry fingerprint (pinned at source above), so the close cannot drop it.
   const spentAndClosed = await scriptRun({ mode: "round1" },
-    [ROUND_ANSWERED("go"), RECONCILE_R({ verify: { complete: true, missing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true } } }, roundOf: { main: 2 }, roundsSpent: 1, consumedRoundAnswers: [], runResolutions: [{ item: "round-2", answer: "go" }] })]);
+    [ROUND_ANSWERED("go"), RECONCILE_R({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } }, roundOf: { main: 2 }, roundsSpent: 1, consumedRoundAnswers: [], runResolutions: [{ item: "round-2", answer: "go" }] })]);
   check("ENG-96474: an authorised round that closes the run still records the spent answer — the LAST queue-file write of the run carries `consumedRoundAnswers: [\"round-2\"]` beside `roundsSpent`, and the closing return reports it",
     !spentAndClosed.res.threw && spentAndClosed.res.complete === true && buildCalls(spentAndClosed.calls).length === 1
-      && /`consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(lastPersistPrompt(spentAndClosed.calls))
-      && /ROUNDS SPENT — set the ROOT key `roundsSpent` to `2`/.test(lastPersistPrompt(spentAndClosed.calls))
+      && /`roundState\.consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(lastPersistPrompt(spentAndClosed.calls))
+      && /ROUNDS SPENT — set `roundState\.roundsSpent` to `2`/.test(lastPersistPrompt(spentAndClosed.calls))
       && JSON.stringify(spentAndClosed.res.consumedRoundAnswers) === JSON.stringify(["round-2"]),
     () => (spentAndClosed.res.threw ? `threw: ${spentAndClosed.res.threw}` : { complete: spentAndClosed.res.complete, consumed: spentAndClosed.res.consumedRoundAnswers, last: lastPersistPrompt(spentAndClosed.calls).split("\n").filter((l) => /CONSUMED|ROUNDS SPENT/.test(l)).map((l) => l.slice(0, 120)) }));
   check("ENG-96474: a fresh folder reports `consumedRoundAnswers: []` on every return and its `paused-at-round` status says nothing is spent yet — the list is present, empty, and never absent",
@@ -6712,7 +6809,7 @@ check("ENG-95474 C3: the dispatched set rides in the carry, so it is written by 
     // new fact was one of them wrote nothing at all, and a layout round that closed everything then recorded a
     // completed layout pass as never having happened.
     // ENG-96474 — and `consumedRoundAnswers` joins them, for the same reason (see its own pin above).
-    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\], layoutPassDone, roundsBefore \+ round, consumedRoundAnswers\]\)/.test(wfSrc)
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\], continuations, preflightEvidence, standWrites, unconsumed, \[\.\.\.resolutionsReopened\], \[\.\.\.resolutionsPending\], carryNow\(\)\.roundState\]\)/.test(wfSrc)
     && /markCarryPersisted\(\)/.test(wfSrc)
     && /queueWritten/.test(wfSrc));
 check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",

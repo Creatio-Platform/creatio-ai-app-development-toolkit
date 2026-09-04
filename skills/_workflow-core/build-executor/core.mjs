@@ -58,7 +58,7 @@ import {
   isLayoutPassMode, openCountsOf, passScopeText, resolveControlMode, roundDecisionItem,
   runResolutionAnswer, runStatusDoc, stopsAtRoundBoundary,
   roundAnswerVocabulary, roundAuthorised, roundsSpentOnFile,
-  mergeConsumed,
+  mergeConsumed, roundStateOf,
 } from './helpers.mjs'
 import {
   BUILD_SCHEMAS, JUDGE_SCHEMA, PACKAGE_RECORD_SCHEMA, PERSIST_SCHEMA,
@@ -487,18 +487,18 @@ let resolutionCheckTally = new Map()
     // spends none of it, so a `layout-first` folder's counters stay at zero after a full round of stand writes.
     // The gate that decides whether the next round needs the operator's word reads THIS number, so a round that
     // is not written here is a round that never happened as far as the next invocation can tell.
-    if (carry.roundsSpent > 0) {
-      out.push(`\nROUNDS SPENT — set the ROOT key \`roundsSpent\` to \`${carry.roundsSpent}\` (create it if absent), UNLESS the file already records a HIGHER number, in which case leave the higher one. It is the count of build rounds this migration folder has been through, it only ever goes up, and it is what tells the next invocation whether the operator still has to authorise a round. Drop it and the next run reads this folder as untouched and builds another round against the stand without asking.`)
+    if (carry.roundState.roundsSpent > 0) {
+      out.push(`\nROUNDS SPENT — set \`roundState.roundsSpent\` to \`${carry.roundState.roundsSpent}\` (create the ROOT \`roundState\` object if absent), UNLESS the file already records a HIGHER number there, in which case leave the higher one. It is the count of build rounds this migration folder has been through, it only ever goes up, and it is what tells the next invocation whether the operator still has to authorise a round. Drop it and the next run reads this folder as untouched and builds another round against the stand without asking. If this file still carries a ROOT \`roundsSpent\` from an older invocation, leave it where it is and write the new number under \`roundState\` — the run reads \`roundState\` first and the root key only as a fallback, so the two never disagree in the direction that grants a round.`)
     }
     // ENG-96204 (ENG-96474) — THE SPENT ROUND ANSWERS, in the SAME block and the same write as `roundsSpent`: the two
     // are one fact seen from two sides (a round happened; the answer that authorised it is used up), and a write
     // that records one without the other is what lets a `go` be read twice. A UNION, never a replacement — an
     // entry here is never un-spent — and emitted only when there is one, like every other section.
-    if ((carry.consumedRoundAnswers || []).length) {
-      out.push(`\nCONSUMED ROUND ANSWERS — set the ROOT key \`consumedRoundAnswers\` to the UNION of what the file already holds and this list, copying each item EXACTLY: ${j(carry.consumedRoundAnswers)}\nEach item names a \`round-<N>\` answer in ${RESOLUTIONS_FILE} that has ALREADY authorised the one round it was recorded for. The next invocation refuses to build on an item listed here whatever else the file says, so this is what stops one recorded \`go\` from authorising a second round against the stand. NEVER remove an item, and do NOT write anything into ${RESOLUTIONS_FILE} — that file is the operator's input and this key is the run's own record of having used it.`)
+    if ((carry.roundState.consumedRoundAnswers || []).length) {
+      out.push(`\nCONSUMED ROUND ANSWERS — set \`roundState.consumedRoundAnswers\` to the UNION of what the file already holds (under \`roundState\`, or at the ROOT if that is where an older invocation left it) and this list, copying each item EXACTLY: ${j(carry.roundState.consumedRoundAnswers)}\nEach item names a \`round-<N>\` answer in ${RESOLUTIONS_FILE} that has ALREADY authorised the one round it was recorded for. The next invocation refuses to build on an item listed here whatever else the file says, so this is what stops one recorded \`go\` from authorising a second round against the stand. NEVER remove an item, and do NOT write anything into ${RESOLUTIONS_FILE} — that file is the operator's input and this key is the run's own record of having used it.`)
     }
-    if (carry.layoutPassDone) {
-      out.push(`\nLAYOUT PASS — set the ROOT key \`layoutPassDone\` to \`true\` (create it if absent). This run's \`layout-first\` LAYOUT pass is complete: the next invocation reads this and ports the business logic instead of laying the pages out a second time. Both invocations see the same open logic rows, so this key is the ONLY thing that tells them apart — drop it and the next run rebuilds the layout and never ports the behaviour.`)
+    if (carry.roundState.layoutPassDone) {
+      out.push(`\nLAYOUT PASS — set \`roundState.layoutPassDone\` to \`true\` (create the ROOT \`roundState\` object if absent). This run's \`layout-first\` LAYOUT pass is complete: the next invocation reads this and ports the business logic instead of laying the pages out a second time. Both invocations see the same open logic rows, so this key is the ONLY thing that tells them apart — drop it and the next run rebuilds the layout and never ports the behaviour.`)
     }
     if (Object.keys(carry.pageSchemas).length) {
       const schemaLines = Object.entries(carry.pageSchemas).map(([k, s]) => `- \`${k}\` → \`${s}\``).join('\n')
@@ -593,9 +593,11 @@ DO SIX THINGS, in order:
    - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, id, kind, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had). \`id\` and \`kind\` are on the rows that have them and absent from the rest — COPY BOTH VERBATIM WHEREVER THE FILE CARRIES THEM, and do NOT invent either for a row without them. They are a row's IDENTITY, not description: this run matches a repeated builder-vs-stand disagreement on \`(unit, id)\` to REFRESH the existing row, so an \`id\` dropped here comes back as a SECOND row for the same disagreement, on every resume, into a list nothing prunes.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
-   - \`roundsSpent\` — the file's ROOT \`roundsSpent\` number, verbatim (\`0\` when the file has no such key, which is the normal first run and every folder written before the key existed). It is how many build rounds this migration folder has been through, and it is what decides whether the next round needs the operator's authorisation. Report what the file says: do NOT add up the per-unit \`rounds\` counters and do NOT infer it from the built pages — the per-unit counters are the REPAIR budget and a \`layout-first\` layout pass deliberately increments none of them, so a folder one full round deep can legitimately show \`rounds: 0\` on every unit.
-   - \`consumedRoundAnswers\` — the file's ROOT \`consumedRoundAnswers\` array, verbatim (\`[]\` when the file has no such key, which is the normal first run). Each entry is a \`round-<N>\` item whose answer in ${RESOLUTIONS_FILE} has ALREADY authorised the round it names; this script refuses to build on one of them again, whatever \`roundsSpent\` says. Copy the strings exactly and never infer, add or drop one — REQUIRED, so return the empty array rather than omitting it.
-   - \`layoutPassDone\` — the file's ROOT \`layoutPassDone\` flag, verbatim (\`false\` when the file has no such key, which is the normal first run). It records that a \`layout-first\` run has already done its LAYOUT-ONLY pass, and it is the ONLY thing that tells "round 1 of a layout-first run" from "the logic pass of one" — both see the same open logic rows. Report what the file says; do NOT infer it from the built pages.
+   - \`roundState\` — THE FOLDER'S ROUND RECORD, as ONE object with three keys, copied off the file. REQUIRED: return the object even on a fresh folder (\`{ "layoutPassDone": false, "roundsSpent": 0, "consumedRoundAnswers": [] }\`), because \`[]\` and a missing \`consumedRoundAnswers\` must not be the same answer — one says no round answer has been spent, the other says nothing at all, and this script would then read every spent answer as unspent.
+     - \`roundsSpent\` — the number, verbatim (\`0\` when the file records none, which is the normal first run). It is how many build rounds this migration folder has been through, and it is what decides whether the next round needs the operator's authorisation. Report what the file says: do NOT add up the per-unit \`rounds\` counters and do NOT infer it from the built pages — the per-unit counters are the REPAIR budget and a \`layout-first\` layout pass deliberately increments none of them, so a folder one full round deep can legitimately show \`rounds: 0\` on every unit.
+     - \`consumedRoundAnswers\` — the array, verbatim (\`[]\` when the file records none). Each entry is a \`round-<N>\` item whose answer in ${RESOLUTIONS_FILE} has ALREADY authorised the round it names; this script refuses to build on one of them again, whatever \`roundsSpent\` says. Copy the strings exactly and never infer, add or drop one.
+     - \`layoutPassDone\` — the flag, verbatim (\`false\` when the file records none). It records that a \`layout-first\` run has already done its LAYOUT-ONLY pass, and it is the ONLY thing that tells "round 1 of a layout-first run" from "the logic pass of one" — both see the same open logic rows. Report what the file says; do NOT infer it from the built pages.
+     READ \`roundState\` FIRST, and fall back PER KEY to a ROOT key of the same name when \`roundState\` has no such key — a folder built before this contract holds all three at the ROOT and has no \`roundState\` at all, and it must not read as a folder nobody has built in. Where both carry a key, \`roundState\` wins.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
 
 4. REFRESH THE BUILT FILE AND RUN THE GATE.
@@ -682,16 +684,22 @@ const resolutionsReopened = new Set()
     dispatched: [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, resolutionsReopened: grantPairsToPersist(resolutionsReopened), resolutionsPending: [...resolutionsPending],
     // ENG-96204 — the layout-pass marker travels in the SAME carry every other durable decision does, so it is
     // written by whichever phase writes the queue file this round and cannot be forgotten by one of them.
-    layoutPassDone,
-    // THE FOLDER'S ROUND COUNT (PR review F2/F4), in the same carry and for a stricter version of the same
-    // reason. It is NOT derivable from the per-unit repair counters: the layout pass charges none of them, so a
-    // `layout-first` folder came back reporting zero rounds and the resume gate read that as a fresh folder and
-    // authorised itself. `roundsBefore + round` is what THIS invocation knows first-hand — the count it
-    // inherited plus the rounds it actually ran — and it is a plain monotonic number, so the writer's
-    // instruction can be "never lower it" and a lagging write cannot walk the authorisation backwards.
-    roundsSpent: roundsBefore + round,
-    // ENG-96204 (ENG-96474) — the spent answers travel beside `roundsSpent`, always: see the carry block.
-    consumedRoundAnswers: [...consumedRoundAnswers] })
+    // ENG-96455 — the three round-record facts travel as ONE `roundState` object, because that is the shape the
+    // Reconcile contract carries now (`RECONCILE_SCHEMA.roundState`, DR-7) and the queue file is the other end of
+    // exactly that contract. One nesting, not three root keys, so the writer cannot record two of them and
+    // forget the third — which is the same argument that put them in one carry to begin with.
+    roundState: {
+      layoutPassDone,
+      // THE FOLDER'S ROUND COUNT (PR review F2/F4), in the same carry and for a stricter version of the same
+      // reason. It is NOT derivable from the per-unit repair counters: the layout pass charges none of them, so a
+      // `layout-first` folder came back reporting zero rounds and the resume gate read that as a fresh folder and
+      // authorised itself. `roundsBefore + round` is what THIS invocation knows first-hand — the count it
+      // inherited plus the rounds it actually ran — and it is a plain monotonic number, so the writer's
+      // instruction can be "never lower it" and a lagging write cannot walk the authorisation backwards.
+      roundsSpent: roundsBefore + round,
+      // ENG-96204 (ENG-96474) — the spent answers travel beside `roundsSpent`, always: see the carry block.
+      consumedRoundAnswers: [...consumedRoundAnswers],
+    } })
 
   // RECONCILE IS RETRIED BEFORE IT IS BELIEVED. Reconcile is the run's FIRST agent and every later phase depends on
   // it, so a failure here costs the whole run. The budget covers three failures a second dispatch can clear: a host
@@ -1305,7 +1313,12 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // ENG-96204 — seeded from the queue file, so a `layout-first` run resumed in a new session ports the logic
   // instead of running a second layout pass. `=== true` and not truthiness: an absent field on a folder written
   // before this marker existed must read as "no layout pass on record", which is the correct answer for it.
-  layoutPassDone = state.layoutPassDone === true
+  // ENG-96455 — SEEDED THROUGH `roundStateOf`, which reads the queue file's `roundState` object first and falls
+  // back PER KEY to a ROOT key of the same name. A folder written before the three keys were folded into one
+  // object holds them at the root with no `roundState` at all, and reading only the new shape would report such
+  // a folder as never having been built in — the exact defect F2/F4 fixed, re-introduced by a wire change.
+  const roundRecord = roundStateOf(state)
+  layoutPassDone = roundRecord.layoutPassDone
   // THE FOLDER'S OWN COUNT, and it must be the SAME number `roundsSpentNow()` computes — `roundsSpentOnFile`, not
   // `roundsOnFile`. Seeding this from the per-unit repair counters alone dropped the root `roundsSpent` key, which
   // is the very record added to stop a `layout-first` folder reading as fresh: the layout pass charges no per-unit
@@ -1316,7 +1329,7 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // `roundsSpentNow`: a layout pass IS a round whichever record survived. With this seed
   // `roundsBefore + round === roundsSpentNow()` by construction, which is what the F4 comment below claims.
   roundsBefore = Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0)
-  consumedRoundAnswers = mergeConsumed([], state.consumedRoundAnswers)
+  consumedRoundAnswers = mergeConsumed([], roundRecord.consumedRoundAnswers)
   if (isLayoutPassMode(mode)) {
     log(layoutPassDone
       ? 'mode `layout-first`: the queue file records the layout pass as DONE — this invocation is the LOGIC pass'
@@ -1526,7 +1539,11 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // ENG-96204 (ENG-96474) — `consumedRoundAnswers` IS PART OF THE FINGERPRINT, by the same F10 lesson: it is in the
   // carry, so it is a thing the queue file must hold, and a fact outside the "is there anything unwritten?"
   // question is a fact a no-op persist is allowed to drop.
-  const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending], layoutPassDone, roundsBefore + round, consumedRoundAnswers])
+  // ENG-96455 — the three round-record facts are fingerprinted AS THE OBJECT THE CARRY NOW WRITES, not as three
+  // loose values. The F10 guarantee is that everything in the carry is in the fingerprint; after the fold, the
+  // thing in the carry is `roundState`, so a fingerprint over the old three would still be complete today and
+  // would silently stop being complete the moment a fourth key joins the object.
+  const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending], carryNow().roundState])
   let carryPersisted = carryFingerprint()
   // THE STATUS DOCUMENT, as literal text for the agent to write (ENG-96204). The content is composed by
   // `runStatusDoc` — a pure function over the stop's own payload — and handed over as bytes, not as a brief. An
@@ -2890,7 +2907,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     pageSchemas = { ...state.pageSchemas, ...pageSchemas }   // this process is authoritative for what it learned
     // ENG-96204 (ENG-96474) — a UNION, like the orphan list below and for the same reason: an answer spent in an
     // earlier session is still spent, and the one this process just spent is not in the file yet.
-    consumedRoundAnswers = mergeConsumed(consumedRoundAnswers, state.consumedRoundAnswers)
+    consumedRoundAnswers = mergeConsumed(consumedRoundAnswers, roundStateOf(state).consumedRoundAnswers)
     // ENG-95850 (B4/C3) — the orphan list is a UNION, deliberately NOT the `pageSchemas` precedence rule above. An
     // orphan an earlier session recorded is still an orphan, so "this process wins" would silently drop it; and a
     // page this process orphaned is not in the file yet. Keyed on the schema name, first record kept.

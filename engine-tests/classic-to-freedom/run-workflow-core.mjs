@@ -1123,9 +1123,12 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       // enforced on the submit path — drop the key and the submit is REJECTED against the item's responseSchema,
       // which is exactly what an agent-mediated Reconcile used to be allowed to get away with silently.
       runResolutions: [],
-      // `consumedRoundAnswers: []` is REQUIRED for the same reason (ENG-96474): it is the record of which of those
-      // round answers are already spent, and an omitted list would read every spent `go` as live.
-      consumedRoundAnswers: [],
+      // `roundState` is REQUIRED for the same reason (ENG-96474, re-homed by ENG-96455): its
+      // `consumedRoundAnswers` is the record of which of those round answers are already spent, and an omitted
+      // list would read every spent `go` as live. The three facts became ONE object when the merge with PR #128's
+      // answers channel put `RECONCILE_SCHEMA` over the host's 4096-byte cap (DR-7), so this fixture is also the
+      // CLI's proof of the NEW wire form: drop the object and the submit is rejected against the responseSchema.
+      roundState: { layoutPassDone: false, roundsSpent: 0, consumedRoundAnswers: [] },
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
       schemaNamePrefixEmpty: false,

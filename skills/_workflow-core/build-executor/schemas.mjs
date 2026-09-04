@@ -55,7 +55,7 @@ export const CARRY_TEXT_CAP = 400
 // `RECONCILE_SHAPE` now carries.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
-// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3600 —
+// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 4085 —
 // it is the run's first agent, so its refusal costs the whole run.
 //
 // Nested objects are therefore declared as a bare `object` / `array of object`. Every property and the `required`
@@ -100,10 +100,16 @@ export const RECONCILE_SCHEMA = {
     // nothing regresses by demanding it — `[]` and "field absent" were the two states that had to stop being
     // indistinguishable, exactly as they did for `evidenceFiled`.
     'runResolutions',
-    // ENG-96204 (ENG-96474) — `consumedRoundAnswers` is REQUIRED by the same rule: `[]` and "field absent" must
-    // not be indistinguishable on the list that decides whether a recorded `go` is still live. An answer that
-    // dropped it would read every spent answer as unspent, which is the one failure the list exists to remove.
-    'consumedRoundAnswers',
+    // ENG-96204 (ENG-96455) — `roundState` is REQUIRED for the reason `consumedRoundAnswers` was, and it is the
+    // object that list now travels inside: `[]` and "field absent" must not be indistinguishable on the list that
+    // decides whether a recorded `go` is still live. An answer that dropped it would read every spent answer as
+    // unspent, which is the one failure the list exists to remove.
+    // THE REQUIREMENT MOVED UP A LEVEL, not away (DR-7). The three round-record keys became one object because the
+    // merge with PR #128's answers channel put this schema 118 bytes over the host's HARD 4096-byte cap, and a
+    // per-key `required` cannot be expressed on a bare object. So the SCHEMA requires the object and
+    // `RECONCILE_SHAPE.roundState` requires `consumedRoundAnswers` INSIDE it: a `roundState` that omits the list
+    // is still a refused answer. The guarantee is unchanged; only which of the two checkers states it moved.
+    'roundState',
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
     // The empty-prefix flag is REQUIRED so it can never be silently dropped: `{ schemaNamePrefix: null }` alone is
     // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
@@ -271,27 +277,38 @@ export const RECONCILE_SCHEMA = {
     // first agent. `item`/`answer` are REQUIRED all the same; the requirement lives in `RECONCILE_SHAPE`
     // .runResolutions below and is checked when the answer arrives, exactly like `preflightItems`' resolution.
     runResolutions: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // ENG-96204 — has the LAYOUT-ONLY first pass of a `layout-first` run already happened? Read off the queue
-    // file's own root key. It is what makes the two-pass build resume into the LOGIC pass instead of running a
-    // second layout pass over pages that already have their layout — the marker is the only thing that can tell
-    // "round 1 of a layout-first run" from "round 2 of one", since both see the same open logic rows.
-    // NOT REQUIRED: absent/`false` means no layout pass is on record, which is the correct reading for a fresh run
-    // and for every folder written before this field existed.
-    layoutPassDone: { type: 'boolean' },
-    // ENG-96204 (PR review F2/F4) — how many build rounds this migration FOLDER has been through, off the queue
-    // file's own root key. The per-unit `roundOf` counters below are the REPAIR budget and answer a different
-    // question: a `layout-first` layout pass deliberately charges none of them, so a folder one full round deep
-    // legitimately shows `rounds: 0` on every unit — and the resume gate, keyed on those counters, read that as
-    // a folder nobody had built in and authorised itself. This is the number the gate reads now.
-    // NOT REQUIRED, deliberately: `0`/absent is the correct reading for a fresh folder and for every folder
-    // written before this key existed, and `roundsSpentOnFile` falls back to the per-unit counters for those.
-    roundsSpent: { type: 'integer' },
-    // ENG-96204 (ENG-96474) — the `round-<N>` items whose answer has ALREADY authorised the round it names, off the
-    // queue file's own root key. The resume gate refuses one of these by RECORD, whatever `roundsSpent` says, so
-    // one recorded answer authorises exactly one round even against a hand-lowered count. A plain string array —
-    // fully host-typed, so it needs no `RECONCILE_SHAPE` entry (that table carries only what the schema stopped
-    // describing, and `evidenceIds` / `unitKeys` set the precedent). REQUIRED (see above); `[]` on a fresh folder.
-    consumedRoundAnswers: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
+    // ENG-96204 (ENG-96455) — THE FOLDER'S ROUND RECORD, read off the queue file's own `roundState` object. THREE
+    // facts, and each one is why the gate can be trusted:
+    //   `layoutPassDone`       — has the LAYOUT-ONLY first pass of a `layout-first` run already happened? It is
+    //                            what makes the two-pass build resume into the LOGIC pass instead of laying out
+    //                            pages that already have their layout: the marker is the only thing that can tell
+    //                            "round 1 of a layout-first run" from "round 2 of one", since both see the same
+    //                            open logic rows. Absent/`false` means no layout pass is on record, which is the
+    //                            correct reading for a fresh run.
+    //   `roundsSpent`          — how many build rounds this migration FOLDER has been through. The per-unit
+    //                            `roundOf` counters below are the REPAIR budget and answer a different question: a
+    //                            `layout-first` layout pass deliberately charges none of them, so a folder one
+    //                            full round deep legitimately shows `rounds: 0` on every unit — and the resume
+    //                            gate, keyed on those counters, read that as a folder nobody had built in and
+    //                            authorised itself. This is the number the gate reads now. `0`/absent is correct
+    //                            for a fresh folder, and `roundsSpentOnFile` falls back to the per-unit counters.
+    //   `consumedRoundAnswers` — the `round-<N>` items whose answer has ALREADY authorised the round it names. The
+    //                            resume gate refuses one of these by RECORD, whatever `roundsSpent` says, so one
+    //                            recorded answer authorises exactly one round even against a hand-lowered count.
+    //
+    // ONE BARE OBJECT rather than three root properties, and that is measured rather than preferred: the three
+    // separate declarations plus the `required` entry cost 173 bytes, and the merge with PR #128's answers channel
+    // (`unconsumedResolutions` / `resolutionsReopened` / `resolutionsPending`, +495) landed this schema at 4214 —
+    // 118 bytes OVER the host's HARD 4096-byte cap, which refuses the run's FIRST agent before the model runs.
+    // Folding them takes it to 4085. This is this file's standing shrink convention applied once more: no property
+    // is dropped, only its nested SHAPE description, which `RECONCILE_SHAPE.roundState` now carries and
+    // `reconcileShapeErrors` checks when the answer arrives. DR-7 records the decision and the rejected
+    // alternative. REQUIRED (see above) — and `consumedRoundAnswers` is required INSIDE it, which is the half of
+    // the guarantee a bare object cannot state here.
+    // BACKWARD-TOLERANT ON READ: a folder written before this change holds the three keys at the ROOT and no
+    // `roundState` at all. `roundStateOf` reads `roundState` first and falls back to the root key PER KEY, so an
+    // in-flight migration folder keeps working — see its own comment in `helpers.mjs`.
+    roundState: { type: 'object' },
     evidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
@@ -414,6 +431,17 @@ export const RECONCILE_SHAPE = {
   // byte reason stated there — the schema declares the property loosened, this table checks its insides on arrival.
   runResolutions: { kind: 'array', required: ['item', 'answer'],
     types: { item: 'string', answer: 'string', decidedBy: 'string', date: 'string' } },
+  // ENG-96204 (ENG-96455) — THE FOLDER'S ROUND RECORD's insides, moved here when the three root properties became
+  // one bare object under the host's 4096-byte cap (see `RECONCILE_SCHEMA.roundState` above, and DR-7).
+  // `consumedRoundAnswers` is REQUIRED: it is the list that decides whether a recorded `go` is still live, and `[]`
+  // versus "key absent" had to stop being the same answer. That requirement was a `RECONCILE_SCHEMA.required`
+  // entry until this change; a bare object cannot carry a per-key `required`, so it is enforced HERE, on arrival —
+  // the same trade every other compacted property on this contract already makes.
+  // `layoutPassDone` and `roundsSpent` are TYPED, NOT required, deliberately: absent/`false`/`0` is the correct
+  // reading for a fresh folder and for every folder written before these keys existed, so requiring them would
+  // reject a well-formed answer about a folder that has nothing to report.
+  roundState: { kind: 'object', required: ['consumedRoundAnswers'],
+    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]' } },
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },

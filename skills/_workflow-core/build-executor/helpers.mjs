@@ -712,8 +712,39 @@ export function roundsOnFile(roundOf) {
 // one round. ONE function, called by both the stop that ASKS for the authorisation and the gate that CHECKS it —
 // two formulas for one number is how the stop came to advertise `round-3` while the gate looked for `round-2`.
 export function roundsSpentOnFile(state) {
-  const declared = Number.isInteger(state?.roundsSpent) && state.roundsSpent > 0 ? state.roundsSpent : 0
+  const { roundsSpent } = roundStateOf(state)
+  const declared = Number.isInteger(roundsSpent) && roundsSpent > 0 ? roundsSpent : 0
   return Math.max(declared, roundsOnFile(state?.roundOf))
+}
+
+// ENG-96204 (ENG-96455) — THE FOLDER'S ROUND RECORD, READ THROUGH ONE FUNCTION. `layoutPassDone`, `roundsSpent` and
+// `consumedRoundAnswers` used to be three ROOT properties of `RECONCILE_SCHEMA`; they travel inside ONE `roundState`
+// object now, because the merge with PR #128's answers channel put that schema 118 bytes over the host's HARD
+// 4096-byte cap and the run's FIRST agent is refused before the model runs (DR-7). The queue file follows the
+// contract, so the carry writes them under `roundState` too.
+//
+// BUT A FOLDER WRITTEN BEFORE THIS CHANGE HOLDS THEM AT THE ROOT, with no `roundState` at all, and an in-flight
+// migration must not break on the day this ships. So `roundState` is read FIRST and the ROOT key is the fallback,
+// PER KEY rather than as a whole-object either/or: a folder can legitimately carry a fresh `roundState` beside a
+// root key an older invocation wrote, and an object-level choice would then drop whichever record it did not pick.
+// ONE function, called by `roundsSpentOnFile` here and by the three seed sites in the core, because two copies of a
+// fallback rule drift — and the drift would be silent in the direction that grants a round.
+//
+// FAIL-CLOSED, unchanged from when these were root keys. `layoutPassDone` is `=== true`, so anything else reads as
+// "no layout pass on record" (which re-runs the layout rather than skipping it). `roundsSpent` is returned RAW and
+// `roundsSpentOnFile` above is what validates it — a non-integer or a negative falls through to the per-unit
+// counters via `Math.max`, so garbage can only ever leave the count where it was, never raise it. And
+// `consumedRoundAnswers` is returned raw for `mergeConsumed` to shape-filter: a non-array becomes `[]` there, which
+// REFUSES nothing and grants nothing on its own — the round gate still has to find a live answer to proceed.
+export function roundStateOf(state) {
+  const rs = state?.roundState
+  const src = rs && typeof rs === 'object' && !Array.isArray(rs) ? rs : {}
+  const pick = (k) => (src[k] !== undefined ? src[k] : state?.[k])
+  return {
+    layoutPassDone: pick('layoutPassDone') === true,
+    roundsSpent: pick('roundsSpent'),
+    consumedRoundAnswers: pick('consumedRoundAnswers'),
+  }
 }
 // THE SPENT ROUND ANSWERS AS A UNION (ENG-96204 / ENG-96474). Strings only, deduplicated, insertion order kept,
 // anything that is not a non-blank string dropped: the list is copied by an agent out of the queue file and back,

@@ -269,3 +269,71 @@ of an operator as a choice, and a caller that asks for it by name gets it.
 - *Dropping the "NO DESCRIPTION" fallback in `buildModeMenu()` now that the map is hand-kept.*
   Rejected: it is the property that makes a mode added to `offeredModes()` and left undescribed
   render loudly instead of vanishing from the operator's menu.
+
+## DR-7 (ENG-96204, forced by ENG-96455) — the folder's three round-record keys became one `roundState` object, to stay under a hard host cap
+
+`RECONCILE_SCHEMA` used to declare `layoutPassDone`, `roundsSpent` and `consumedRoundAnswers` as
+three ROOT properties. It declares one bare `roundState: { type: 'object' }` instead, with the three
+facts described in `RECONCILE_SHAPE.roundState` and checked when the answer arrives.
+
+**Why.** Not tidiness — arithmetic. An agent whose serialized output schema exceeds **4096 bytes** is
+refused by the host *before the model runs*, and `RECONCILE_SCHEMA` belongs to the run's FIRST agent,
+so its refusal costs the whole run with nothing built and nothing said. Two branches grew that one
+object independently and neither was over the line alone:
+
+| | serialized bytes | delta vs ENG-95930's 3413 |
+|---|---|---|
+| ENG-95930 baseline | 3413 | — |
+| ENG-96204 (this ticket) alone | 3719 | +306 |
+| PR #128 answers channel (`unconsumedResolutions` / `resolutionsReopened` / `resolutionsPending`) plus ENG-96147 `sectionRouteByRun` alone | 3908 | +495 |
+| **both merged** | **4214** | **+801 — 118 bytes OVER the cap** |
+| both merged, with this fold | **4085** | +672 — 11 bytes under the cap |
+
+The two deltas are exactly additive: there is no overlap to reclaim, and each branch was green on its
+own. The collision is a property of the merge, which is why it appears at rebase time rather than in
+either PR's own CI.
+
+The three keys cost 173 bytes as separate declarations plus a `required` entry. One bare object costs
+about 30. That is the whole 118 and 11 bytes over.
+
+**What is unchanged.** Every fact still crosses the boundary, and every guarantee still holds:
+
+- `consumedRoundAnswers` is still REQUIRED — `[]` and "key absent" must not be the same answer on the
+  list that decides whether a recorded `go` is still live. The requirement moved UP one level and one
+  level IN: `RECONCILE_SCHEMA.required` names `roundState`, and `RECONCILE_SHAPE.roundState.required`
+  names `consumedRoundAnswers`, so an answer that sends the object without the list is still refused.
+  A bare object cannot express a per-key `required`, so the shape table is where that check has to
+  live — the same trade every other compacted property on this contract already makes.
+- `layoutPassDone` / `roundsSpent` stay typed-but-not-required: absent is the correct reading for a
+  fresh folder and for one written before the keys existed.
+- The queue file, the carry block and `carryFingerprint` all moved to the same nesting, so the two
+  ends of the contract still describe one shape and a fourth key joining the object is fingerprinted
+  the day it lands.
+
+**Reading a folder written before this change.** Such a folder holds the three keys at the ROOT and
+has no `roundState` at all, and an in-flight migration must not break. `roundStateOf(state)` reads
+`roundState` first and falls back to the root key **per key**, not as a whole-object either/or — a
+folder can legitimately carry a fresh `roundState` beside a root key an older invocation wrote, and an
+object-level choice would drop whichever record it did not pick. It stays fail-closed in the one
+direction that matters: garbage in `roundsSpent` falls through to the per-unit counters via `Math.max`
+(it can lower nothing and raise nothing), and a non-array `consumedRoundAnswers` becomes `[]` in
+`mergeConsumed`, which grants no round by itself.
+
+**What was rejected, and why.**
+
+- *Raising `RECONCILE_SCHEMA_BUDGET` past 4096.* Not available. The budget is a working margin under a
+  host rule; the host rule is not a budget. A 4214-byte schema is a phase that cannot start.
+- *Folding PR #128's `resolutionsReopened` + `resolutionsPending` into one object instead* (it buys 69
+  bytes more, landing at 4027). Rejected as out of scope: that is a merged PR's contract, and a rebase
+  is not the place to redesign someone else's channel. If more room is needed later it is the obvious
+  next candidate, and it should be its own reviewed change.
+- *Dropping a field.* Never on the table. Each of the three is the sole record of a fact that decides
+  whether the next invocation builds against a live stand without asking.
+- *Spelling the three keys out under `roundState.properties`.* That is the 173 bytes back, i.e. the
+  original problem, and it is the exact convention ENG-95930 established against: declare bare,
+  describe in `RECONCILE_SHAPE`, check on arrival.
+
+**The margin is eleven bytes, and that is not a margin.** `RECONCILE_SCHEMA_BUDGET` is pinned to the
+measured 4085 rather than to a round number above it, precisely so the next property added here turns
+a check red locally instead of turning into a refused agent on a live run. Adding anything to this
+contract means buying the bytes back first; this record is the worked example of how.
