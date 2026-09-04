@@ -26,6 +26,7 @@ _workflow-core/
   run-state.mjs        the run + its journal, as pure data (no I/O)
   driver.mjs           drive() — execute now;  advance() — replay-only, stop at pending
   cli.mjs              migration-workflow start | next | submit | status | resume
+  workflows.json       GENERATED — each shipped workflow's {name, script, phases}
   behaviour-analysis/  step 5.1: the Classic-behaviour analysis run
     core.mjs           function* run(input, io) — the state machine
     helpers.mjs        the decisions: batching, coverage arithmetic, the retry

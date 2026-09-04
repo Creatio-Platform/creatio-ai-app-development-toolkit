@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 // scripts/build-workflows.mjs — generate the shipped Claude `.workflow.js` files
-// from the host-neutral workflow core.
+// from the host-neutral workflow core, plus the identity manifest that names them.
 //
 //   node scripts/build-workflows.mjs            # write the generated files
 //   node scripts/build-workflows.mjs --check    # exit 1 if a shipped file drifted
+//
+// TWO OUTPUTS, one table. Each `TARGETS` entry produces its inlined `.workflow.js`
+// and one row of `skills/_workflow-core/workflows.json` — the structured
+// `{name, script, phases}` a consumer reads instead of parsing the generated
+// JavaScript (see MANIFEST_OUT). `--check` covers both.
 //
 // WHY A GENERATOR. A Claude Workflow script is evaluated as a function body with
 // only `args`, `log`, `phase`, `agent` and `parallel` injected — it cannot
