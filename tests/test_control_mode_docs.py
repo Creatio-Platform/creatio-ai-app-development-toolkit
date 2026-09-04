@@ -137,7 +137,7 @@ class ControlModeDocTests(unittest.TestCase):
         missing = [mode for mode in MODES if f"`{mode}`" not in content]
         self.assertFalse(missing, f"a mode the run accepts but the launcher never offers is unreachable; missing {missing}")
 
-    def test_launcher_pairs_each_offered_mode_with_a_human_label(self):
+    def test_launcher_offers_the_label_and_keeps_the_token_to_itself(self):
         """The user picks by NAME; the agent passes the TOKEN.
 
         A bare `round1` in front of a reader looks like a version number, so the launcher shows a
@@ -150,12 +150,48 @@ class ControlModeDocTests(unittest.TestCase):
         for token, label in (("guided", "Guided"), ("round1", "Round by round"),
                              ("layout-first", "Layout first")):
             self.assertIn(
+                f"| **{label}** | `{token}` |", content,
+                f"the launcher must map the label {label!r} to `{token}` in the table the agent reads",
+            )
+            self.assertIn(
+                f"- **{label}** — ", content,
+                f"the option offered to the user must be the bare label {label!r}",
+            )
+            self.assertNotIn(
                 f"**{label}** (`{token}`)", content,
-                f"the launcher must offer `{token}` under its label {label!r}, with the token beside it",
+                f"the token must NOT ride along in brackets beside {label!r}: the user picks from a "
+                f"list and never types a mode, so the token is an implementation detail there",
             )
         self.assertIn(
-            "The label is presentation, the token is identity", content,
-            "the launcher must say which of the two is passed to the run, or the pairing is decorative",
+            "Offer the LABEL ALONE", content,
+            "the launcher must say the token is not shown, or an agent will paste it into the question",
+        )
+
+    def test_launcher_describes_steps_without_showing_unit_keys(self):
+        """The user hears page names; the agent keeps the keys.
+
+        `mini:Applicant` is an internal identifier. Putting it in the question that asks how closely
+        someone wants to watch a build is noise, and the agent does not need the user to repeat it --
+        it holds the mapping and translates "the record page came back wrong" into the right
+        ``findings`` entry itself. Pinned because the instruction it replaced said the opposite
+        ("SHOW EACH STEP'S KEY"), so a future edit could reinstate it without anything objecting.
+        """
+        content = flat(read_text(MIGRATION_SKILL))
+        missing = missing_markers(
+            content,
+            [
+                "NAME THE STEPS, NOT THEIR KEYS",
+                "Do NOT put unit keys in front of the user",
+                "You hold the mapping, they do not",
+            ],
+        )
+        self.assertFalse(
+            missing,
+            f"the launcher must describe steps in plain language and keep unit keys internal; missing {missing}",
+        )
+        self.assertNotIn(
+            "SHOW EACH STEP'S KEY", content,
+            "the superseded instruction to show unit keys must be gone, not merely contradicted later",
         )
 
     def test_launcher_names_the_non_interactive_escape(self):
