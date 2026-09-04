@@ -559,6 +559,9 @@ Details of the record shapes, the ids and the judge tri-state:
   supported (the driver's drift check already declares it). This is a fast stop, not a re-execution: nothing is
   re-spent, and a **fresh** run off the same folder is unaffected — the arithmetic leaves a provenance-less entry
   alone, so only an interrupted run carried across the upgrade starts over.
+  **The deliberate no-override** — why this terminal stop offers no flag, answer, or run-scoped acknowledgement to
+  proceed on a catalog answer, and the alternatives that were rejected — is recorded in
+  `./references/05-decision-records.md` (DR-1).
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.
@@ -573,6 +576,7 @@ Read the file that matches what you are doing. Do not read them all up front.
 | starting, resuming, or reconciling the queue against a re-planned manifest | `./references/02-queue-and-built-files.md` |
 | deciding whether to repair, park, or stop | `./references/03-failure-and-park-policy.md` |
 | building one page | `./references/04-per-page-build-recipe.md` |
+| understanding a deliberate refusal (why a stop offers no override) | `./references/05-decision-records.md` |
 | mapping a Classic construct to a Freedom one | `../classic-to-freedom-migration/references/classic-to-freedom-mapping.md` |
 
 ## How to run it — the three routes, in preference order
