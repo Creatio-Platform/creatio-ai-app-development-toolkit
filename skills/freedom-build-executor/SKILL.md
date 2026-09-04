@@ -433,7 +433,11 @@ matches on, and `expect.fieldLayout`, each field's CELL as `{ name, row, column,
 — **build every field AT its published cell**, ENG-96457: the plan's field order is not its layout, and
 pouring the Layout table top-to-bottom into a multi-column container is what shipped `City1 | Country1`
 where the Classic page had `City1 | City2`. `--verify` measures the built cells against these, so a page
-with every field present and the pairing wrong is ❌ MISSING, not ✅) — plus the reachability keys with `appliesWhen` already decided, the evidence-record
+with every field present and the pairing wrong does NOT pass — but the placement leg is ADVISORY today, so
+it reports `⚠ verify` / `unverified`, NOT `❌ MISSING`: the row stays open and the text says the coordinate
+space `get-page` reports in is not yet confirmed against the one the plan publishes. There is a third state
+too — `only k of n published cell(s) could be compared`, also `⚠ verify`, when some built components carry no
+`layoutConfig`; a payload where NONE does is reported as *placement not checked* rather than failed) — plus the reachability keys with `appliesWhen` already decided, the evidence-record
 ids, the ⚠ Confirm preflight items, and a leaf-first `buildOrder`. **An invented key is silently
 "not checked", never an error** — which is why keys are read, never constructed.
 

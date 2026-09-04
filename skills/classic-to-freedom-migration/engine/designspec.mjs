@@ -2040,11 +2040,7 @@ function buildCoverageRows(cs, pm, result, opts = {}) {
   // queue must publish them (a builder that owns one unit sees only its row) and `--verify` must be able to check
   // them: a page whose fields are all present but re-paired is not the page the plan approved.
   if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name), layout: fieldLayoutOf(fieldOps) } });
-  // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
-  // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
-  // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
-  // only image is an IMAGELOOKUP-column field gets NO image vk row, `renderVerify` never runs the crt.ImageInput
-  // MISSING check, and a dropped image field passes `--verify` with exit 0 (the AC2 gap two reviewers flagged).
+  // Why a value-bound `crt.ImageInput` is counted here too (the AC2 gap): see `expectedImageCount`'s doc.
   const expImages = expectedImageCount(cs);
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
@@ -3250,7 +3246,7 @@ function resolveStructuralVk(vk, ctx) {
 // yet trustworthy, look at the page". When the read-back confirms the space (normalise HERE if it differs), flip
 // the deviation arm back to `❌ MISSING` and delete this paragraph — the check is not being weakened, its verdict is
 // being matched to its evidence.
-function resolvePlacement(vk, ops, okText) {
+function resolveFieldCells(vk, ops, okText) {
   const want = (vk.layout || []).filter((e) => e && typeof e.name === "string" && Number.isInteger(e.row) && Number.isInteger(e.column));
   if (!want.length) return ["✅ Done", okText, "ok"];
   const byName = new Map(ops.filter((o) => o.name).map((o) => [o.name, o]));
@@ -3288,7 +3284,7 @@ function resolveFieldsByIdentity(vk, names, ops) {
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
   const missing = names.filter((n) => !builtNames.has(n));
   const b = names.length - missing.length;
-  if (b >= vk.n) return resolvePlacement(vk, ops, `${b} of ${vk.n} expected fields matched BY NAME on the built page`);
+  if (b >= vk.n) return resolveFieldCells(vk, ops, `${b} of ${vk.n} expected fields matched BY NAME on the built page`);
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];

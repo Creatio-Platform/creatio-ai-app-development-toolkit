@@ -161,16 +161,25 @@ assembled by the reader:
 ```
 
 The same cells are published per field in `--units.expect.fieldLayout` (`{ name, row, column, colSpan?, rowSpan? }`),
-and `--verify` MEASURES them: a page with every expected field present by name but at different cells is
-❌ MISSING, naming both the planned and the built cell. A built payload that carries no `layoutConfig` at all is
-reported as *placement not checked* rather than failed.
+and `--verify` MEASURES them. **The placement leg is ADVISORY today**, so a deviation is `⚠ verify` /
+`unverified`, never `❌ MISSING`: a page with every expected field present by name but at different cells names
+both the planned and the built cell, the row stays OPEN (the done-gate does not pass), and the text says the
+comparison itself is not yet trustworthy. Three states in all:
 
-> ⚠ **The placement check rests on one assumption that still needs an on-stand run:** that clio `get-page`'s merged
-> `bundle.viewConfig` returns `layoutConfig.row`/`.column` in the same 1-based integer space the engine emits. The
-> engine emits per TARGET GRID and one page can use two (a wide Header keeps the classic 24-column grid → columns
-> 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the coordinates would fire ❌ on a correctly
-> built page. Until that is confirmed, read a placement ❌ as "look at the page", and fix any space difference by
-> normalising in the engine — never by weakening the check.
+| What the built payload carries | Verdict | Meaning |
+| --- | --- | --- |
+| every compared field at its published cell | `✅ Done` | the name-identity verdict stands |
+| some field at a different cell | `⚠ verify` / `unverified` | look at the page — the row stays open |
+| only *k* of *n* published cells carry a `layoutConfig` | `⚠ verify` / `unverified` | *"only k of n published cell(s) could be compared"* — the rest are UNKNOWN |
+| no built component carries a `layoutConfig` at all | `✅ Done` | *placement not checked* — the payload predates the field, so it is not failed on evidence it could not have carried |
+
+> ⚠ **Why advisory, and what flips it:** the leg rests on one assumption that still needs an on-stand run — that
+> clio `get-page`'s merged `bundle.viewConfig` returns `layoutConfig.row`/`.column` in the same 1-based integer
+> space the engine emits. The engine emits per TARGET GRID and one page can use two (a wide Header keeps the
+> classic 24-column grid → columns 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the
+> coordinates would flag a correctly built page. Until that read-back lands, read a placement `⚠ verify` as "look
+> at the page". Confirming the space is what unlocks flipping the deviation arm back to `❌ MISSING` — the fix for
+> a space difference is normalising in the engine, never weakening the check.
 
 **A `Source` cell never claims "provided by the Freedom template" on its own.** What a template ships is a fact
 about that template, so it comes from the engine's measured capability table (tabs · Feed · Attachments ·
