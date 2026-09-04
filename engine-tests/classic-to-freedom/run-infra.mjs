@@ -179,7 +179,10 @@ const H_CONTROL_MODE = ["buildModes", "offeredModes", "modeLabel", "buildModeMen
   "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "openCountsOf",
   "runStatusDoc", "passScopeText",
   // ENG-96204 (ENG-96474) — the spent-answer union the queue-file record and the resume gate are built on.
-  "mergeConsumed", "roundStateOf", "roundsSpentOnFile"];
+  "mergeConsumed", "roundStateOf", "roundsSpentOnFile",
+  // ENG-96458 D4 (PR #157 follow-up review) — the ☐-count contradiction's memory, filed with the other
+  // queue-file round record because that is where it lives and what it is compared across.
+  "pendingContradictionSignature", "pendingContradictionRecord", "pendingContradictionHalts"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
@@ -243,7 +246,10 @@ check("PR #128 review (round 16): the grouped helper surface has no name in two 
 const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS", "RESOLUTIONS_RETURN",
   "CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED", "UNCONSUMED_CARRY_WARN",
   "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH",
-  "RESOLUTION_NOT_APPLIED", "CONTROL_MODE_ITEM"];
+  "RESOLUTION_NOT_APPLIED", "CONTROL_MODE_ITEM",
+  // ENG-96458 D4 — the sighting threshold, read from the shipped block for the same reason `DEFAULT_MAX_ROUNDS`
+  // is: a copy of the number here would let the assertion pass against a block whose threshold had drifted.
+  "PENDING_CONTRADICTION_STOP_AT"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
@@ -2247,7 +2253,7 @@ check("ENG-96204 (ENG-96455): `roundStateOf` reads `roundState` first and falls 
 // third leg, the PROMPT. The schema stopped describing the insides of this object, so the prompt is the only thing
 // that tells the copying agent these keys exist — and a fact an agent is not told about is a fact it drops.
 check("ENG-96204 (ENG-96474 / ENG-96455): the Reconcile prompt asks for `roundState` as ONE object, NAMES all three keys with the value to use when the file records none, states the ROOT-key fallback for a folder written before the fold, and forbids inferring, adding or dropping an entry",
-  wfSrc.includes(String.raw`\`roundState\` — THE FOLDER'S ROUND RECORD, as ONE object with three keys`)
+  wfSrc.includes(String.raw`\`roundState\` — THE FOLDER'S ROUND RECORD, as ONE object, copied off the file: three keys always`)
     && wfSrc.includes(String.raw`\`consumedRoundAnswers\` — the array, verbatim (\`[]\` when the file records none)`)
     && wfSrc.includes(String.raw`\`roundsSpent\` — the number, verbatim (\`0\` when the file records none`)
     && wfSrc.includes(String.raw`\`layoutPassDone\` — the flag, verbatim (\`false\` when the file records none)`)
@@ -2255,6 +2261,46 @@ check("ENG-96204 (ENG-96474 / ENG-96455): the Reconcile prompt asks for `roundSt
     && /Copy the strings exactly and never infer, add or drop one/.test(wfSrc)
     && /REQUIRED: return the object even on a fresh folder/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("`roundState` — THE FOLDER'S ROUND RECORD"), wfSrc.indexOf("`roundState` — THE FOLDER'S ROUND RECORD") + 400));
+// ENG-96458 D4 (PR #157 follow-up review) — the FOURTH key of `roundState`, and the only optional one: the
+// folder's memory of a ☐-count contradiction it has already been told about. It is what turns a hold no operator
+// action can release into a stop with a repair in it, and the case it exists for (the zero-work close) performs
+// exactly one Reconcile per invocation — so the record HAS to travel through the queue file.
+check("ENG-96458 D4 (follow-up review): the Reconcile prompt asks for `roundState.pendingContradiction` VERBATIM, says to OMIT it when the file has none, and forbids recomputing the signature or lowering the count — a recomputed signature would reset the counter on every read and the run would hold for ever",
+  wfSrc.includes(String.raw`\`pendingContradiction\` — the object \`{ signature, rounds }\`, verbatim`)
+    && /OMIT the key entirely when it does not/.test(wfSrc)
+    && /do NOT recompute the signature from the numbers you are reporting now, and do NOT lower \\`rounds\\`/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("`pendingContradiction` — the object"), wfSrc.indexOf("`pendingContradiction` — the object") + 400));
+check("ENG-96458 D4 (follow-up review): `RECONCILE_SHAPE.roundState` checks the record's INSIDES when it is present — both fields required, typed — and still accepts a `roundState` without the key, which is every healthy folder",
+  () => wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: "0|main#x", rounds: 1 } } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [] } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: "0|main#x" } } })
+      .some((e) => /pendingContradiction\.rounds: required/.test(e))
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: 7, rounds: 1 } } })
+      .some((e) => /pendingContradiction\.signature: expected string/.test(e)),
+  () => JSON.stringify(wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: "0|main#x" } } })));
+check("ENG-96458 D4 (follow-up review): the SIGNATURE is `null` unless there really is a contradiction (no rows, a non-integer count, or a count that already covers the rows), keys on the engine's injective `rowKey` and is order-independent — so a re-publication that reorders or renumbers the rows is not read as a NEW fault with a free sighting",
+  () => wf.pendingContradictionSignature([], 0) === null
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 1) === null
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], "0") === null
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }, { unit: "main", rowKey: "b" }], 0)
+      === wf.pendingContradictionSignature([{ unit: "main", rowKey: "b", n: 9 }, { unit: "main", rowKey: "a", n: 4 }], 0)
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 0) !== wf.pendingContradictionSignature([{ unit: "list", rowKey: "a" }], 0),
+  () => JSON.stringify([wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 0),
+    wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 1)]));
+check("ENG-96458 D4 (follow-up review): the RECORD counts consecutive sightings of the SAME signature, restarts at 1 for a different one, and treats garbage on file as a first sighting — which HOLDS the run rather than stopping it, the safe direction",
+  () => wf.pendingContradictionRecord(null, "s1").rounds === 1
+    && wf.pendingContradictionRecord({ signature: "s1", rounds: 1 }, "s1").rounds === 2
+    && wf.pendingContradictionRecord({ signature: "s0", rounds: 1 }, "s1").rounds === 1
+    && wf.pendingContradictionRecord("nonsense", "s1").rounds === 1
+    && wf.pendingContradictionRecord({ signature: "s1", rounds: "2" }, "s1").rounds === 1
+    && wf.pendingContradictionRecord({ signature: "s1", rounds: 1 }, null) === null,
+  () => JSON.stringify(wf.pendingContradictionRecord({ signature: "s1", rounds: 1 }, "s1")));
+check("ENG-96458 D4 (follow-up review): and only the SECOND sighting halts — one transcription slip can self-heal on the next Reconcile, and stopping on the first would spend the operator's session on a fault that was about to disappear",
+  () => wf.PENDING_CONTRADICTION_STOP_AT === 2
+    && !wf.pendingContradictionHalts({ signature: "s1", rounds: 1 })
+    && wf.pendingContradictionHalts({ signature: "s1", rounds: 2 })
+    && !wf.pendingContradictionHalts(null),
+  () => wf.PENDING_CONTRADICTION_STOP_AT);
 check("ENG-96204 (ENG-96474): `mergeConsumed` is a UNION — deduplicated, order kept, non-strings and blanks dropped, and NOTHING is ever removed — so a spent answer stays spent whichever of the file and the process learned of it first",
   () => JSON.stringify(wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "])) === JSON.stringify(["round-2", "round-3", "round-4"])
     && JSON.stringify(wf.mergeConsumed(undefined, undefined)) === "[]"

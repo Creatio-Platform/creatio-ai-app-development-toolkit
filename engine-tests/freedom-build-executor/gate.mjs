@@ -36,8 +36,8 @@ check("the Applicant `list` blocker is classified SOURCE — a runtime error in 
   () => classifyBlocker(APPLICANT_LIST_BLOCKER).class === "source",
   () => JSON.stringify(classifyBlocker(APPLICANT_LIST_BLOCKER)));
 
-check("a 'could not be performed' render blocker is SOURCE even without the baseline signal",
-  () => classifyBlocker({ unit: "list", what: "render check could not be performed", why: "" }).class === "source");
+check("a 'could not be performed' render blocker that NAMES the source surface is SOURCE even without the baseline signal",
+  () => classifyBlocker({ unit: "list", what: "render check could not be performed — `#Section/Applicant` does not open", why: "" }).class === "source");
 
 check("a builder-shaped blocker (a field the builder was to place is missing) is UNKNOWN → retryable, the safe default",
   () => classifyBlocker({ unit: "main", what: "Field `UsrStage` is missing from the built page", why: "the builder did not add it" }).class === "unknown");
@@ -78,14 +78,19 @@ check("sourceParkWhy is never blank even when the blocker carries no text",
   () => sourceParkWhy({}, "reason x").trim().length > 0);
 
 /* ---------------------------------------------------------------------------
-   3. SUBJECT, NOT ONLY MODE (PR #157 review, Major on `gate.mjs:46`)
+   3. SUBJECT, NOT ONLY MODE (PR #157 review, Major on `gate.mjs:46`, extended by the follow-up review)
    ---------------------------------------------------------------------------
-   `does not compile` / `fails to compile|load|render` describe the BUILT artifact at least as naturally as the
-   Classic source, and `classifyBlocker` runs over a GENERAL-PURPOSE channel: build-agent blockers, the
-   partial-app-unit blocker, the guidelines close row, resolutions blockers and judge page defects all land in
-   `blockedItems`. A misclassified builder defect parks TERMINALLY (`rounds: 0`), is re-parked on every resumed
-   run, and tells the operator the blocker is in the source — a false diagnosis on exactly the class a build round
-   would have fixed. So those two verbs now require a SOURCE SUBJECT in the same text.
+   `classifyBlocker` runs over a GENERAL-PURPOSE channel: build-agent blockers, the partial-app-unit blocker, the
+   guidelines close row, resolutions blockers and judge page defects all land in `blockedItems`. A misclassified
+   builder defect parks TERMINALLY (`rounds: 0`), is re-parked on every resumed run, and tells the operator the
+   blocker is in the source — a false diagnosis on exactly the class a build round would have fixed.
+
+   So a failure MODE is never a source verdict on its own. FIVE patterns are modes — `does not compile`,
+   `fails to compile|load|render`, `errors at runtime`, `could not be performed` and `render check … could not…` —
+   and each describes the page THIS RUN BUILT at least as naturally as the Classic source; the render-check pair is
+   the sharpest, because the per-page recipe and `reachKindBlock` TELL the build agent to report an unreachable
+   verification surface in `blocked`. All five require a SOURCE SUBJECT in the same text. Only `Script error` (the
+   Classic runtime's own wording) and an uninstalled dependency still stand alone.
    --------------------------------------------------------------------------- */
 console.log("\n===== classifyBlocker: a failure MODE without a source SUBJECT stays retryable =====");
 
@@ -106,10 +111,34 @@ check("PR #157 review: the source subject may arrive in `why` rather than `what`
   () => cls("does not compile", "the original Classic section schema is what fails") === "source");
 check("PR #157 review: `#Section/<Name>` counts as the source subject — it is the render-surface identifier the migration publishes for a Classic surface",
   () => cls("`#Section/Applicant` fails to load") === "source");
-check("PR #157 review: the patterns that already NAME the source surface are untouched — a runtime error, a `Script error`, a render check that could not be performed and a missing dependency still park on their own, with no subject word required",
-  () => cls("the page errors at runtime") === "source" && cls("Script error") === "source"
-    && cls("Live render check on surface automatic:3 could not be performed") === "source"
-    && cls("a dependency is not installed") === "source");
+check("follow-up review: the two patterns that name the SOURCE SIDE by themselves still park with no subject word — the Classic runtime's own `Script error for \"<schema>\"` wording, and a dependency the migration reads from that is not installed",
+  () => cls("Script error for \"Applicant...\"") === "source" && cls("a dependency is not installed") === "source",
+  () => JSON.stringify([classifyBlocker({ what: "Script error for \"Applicant...\"" }), classifyBlocker({ what: "a dependency is not installed" })]));
+check("follow-up review: a BARE `Script error` is NOT parked — `references/03-failure-and-park-policy.md` (ENG-96147) calls that text ambiguous by construction, because a `#Section/<code>` URL composed for the BUILT section produces exactly it, and one real run reported a working page as broken on that basis",
+  () => cls("opening the built section shows Script error") === "unknown",
+  () => classifyBlocker({ what: "opening the built section shows Script error" }));
+check("follow-up review: \"the page errors at runtime\" is NOT parked — \"the page\" is the page THIS RUN BUILT at least as naturally as the Classic one, and a runtime error in the built page is the plainest case for a repair round",
+  () => cls("the page errors at runtime") === "unknown",
+  () => classifyBlocker({ what: "the page errors at runtime" }));
+check("follow-up review: \"Live render check on surface automatic:3 could not be performed\" is NOT parked on its own — `context.mjs`/`reachKindBlock` and the per-page recipe TELL the build agent to report an unreachable verification surface in `blocked`, so this is the run's own check of its own page and a terminal park would diagnose it as a source bug",
+  () => cls("Live render check on surface automatic:3 could not be performed") === "unknown",
+  () => classifyBlocker({ what: "Live render check on surface automatic:3 could not be performed" }));
+check("follow-up review: \"the render check on the page I built could not be performed\" is NOT parked — the subject is named, and it is the BUILT page",
+  () => cls("the render check on the page I built could not be performed") === "unknown",
+  () => classifyBlocker({ what: "the render check on the page I built could not be performed" }));
+
+/* The ENG-94859 cost regression the split must NOT reintroduce: a GENUINE source blocker, phrased the way a
+   build agent phrases one, still parks — otherwise the `list` unit buys a full round (Reconcile + Build +
+   Verify + Judge) to re-learn the same dead end, six runs in a row. */
+check("ENG-94859 not reintroduced: \"the Classic `ApplicantSection` page errors at runtime\" IS parked — the subject is the Classic source",
+  () => cls("the Classic `ApplicantSection` page errors at runtime") === "source");
+check("ENG-94859 not reintroduced: \"render check could not be performed — `#Section/Applicant` does not open at all\" IS parked — the render-surface identifier names the source surface",
+  () => cls("render check could not be performed — `#Section/Applicant` does not open at all") === "source");
+check("ENG-94859 not reintroduced: \"the source page errors at runtime, so nothing can be read off it\" IS parked",
+  () => cls("the source page errors at runtime, so nothing can be read off it") === "source");
+check("ENG-94859 not reintroduced: the MEASURED Applicant blocker still parks — its own text carries both `#Section/Applicant` and `Script error`, which is why the subject requirement costs it nothing",
+  () => classifyBlocker(APPLICANT_LIST_BLOCKER).class === "source",
+  () => JSON.stringify(classifyBlocker(APPLICANT_LIST_BLOCKER)));
 check("PR #157 review: and the REASON distinguishes the two source verdicts, so the parked list reads as a diagnosis rather than one blanket sentence",
   () => /SUBJECT is not named/.test(classifyBlocker({ what: "the built page fails to render" }).reason)
     && /names the Classic\/source side/.test(classifyBlocker({ what: "the Classic schema does not compile" }).reason),

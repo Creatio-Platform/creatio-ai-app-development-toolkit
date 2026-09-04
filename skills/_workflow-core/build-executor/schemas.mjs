@@ -242,7 +242,9 @@ export const RECONCILE_SCHEMA = {
     // below degrades to an APPROXIMATION and says so in the return.
     parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
     // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
-    // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default.
+    // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default. `appliesWhen: false`
+    // does NOT mean the row is empty — a verifier-only row (`noOrphanScaffold`) carries real `what`/`miss` text
+    // with it; see the compacted declaration's own note below.
     reachability: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
@@ -415,9 +417,16 @@ export const RECONCILE_SHAPE = {
     types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
-  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key
+  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: an ORDINARY non-applicable key
   // (`appliesWhen: false`) carries `what: null, miss: null`, the prompt orders a verbatim copy, and a string-only
-  // rule rejected that copy on the FIRST attempt of every Reconcile. Applicable rows always carry real strings.
+  // rule rejected that copy on the FIRST attempt of every Reconcile.
+  // AND `appliesWhen: false` DOES NOT IMPLY THE NULLS (PR #157 follow-up review — this comment used to claim
+  // "applicable rows always carry real strings", which reads as the converse and is false). `noOrphanScaffold`
+  // (ENG-96458 D6) is published `appliesWhen: false, verifierOnly: true, emitted: true` WITH a real `what`/`miss`:
+  // it schedules no build unit, and its text is exactly what the VERIFIER is told to check. So the four
+  // combinations are all legal here and the shape cannot express the correlation — `string-or-null` on both
+  // fields is the accurate declaration, not a concession. Anything that reads `what`/`miss` must therefore
+  // handle a null on an emitted row and a string on a non-applicable one (see `reachKindBlock`'s fallbacks).
   // ENG-96458 D6 — `verifierOnly`/`emitted` are TYPED, NOT required. `--units` publishes them only on a row that has
   // no build unit of its own (`noOrphanScaffold`: the verifier reads it, the app unit does the removal), so a plan
   // whose reachability rows are all schedulable legitimately carries neither, and requiring them would reject an
@@ -449,8 +458,15 @@ export const RECONCILE_SHAPE = {
   // `layoutPassDone` and `roundsSpent` are TYPED, NOT required, deliberately: absent/`false`/`0` is the correct
   // reading for a fresh folder and for every folder written before these keys existed, so requiring them would
   // reject a well-formed answer about a folder that has nothing to report.
+  // ENG-96458 D4 (PR #157 follow-up review) — `pendingContradiction` is TYPED AND OPTIONAL like the two above, and
+  // for the same reason: the overwhelming majority of folders have no ☐-count contradiction to remember, and
+  // requiring the key would reject a well-formed answer about a healthy folder. When it IS present both its
+  // fields are required — a record with no signature cannot be compared and one with no round count cannot be
+  // counted, and either half missing would silently reset the counter that stops an unclosable run.
   roundState: { kind: 'object', required: ['consumedRoundAnswers'],
-    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]' } },
+    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]' },
+    nested: { pendingContradiction: { kind: 'object-or-null', required: ['signature', 'rounds'],
+      types: { signature: 'string', rounds: 'integer' } } } },
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },

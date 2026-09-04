@@ -747,8 +747,57 @@ export function roundStateOf(state) {
     layoutPassDone: pick('layoutPassDone') === true,
     roundsSpent: pick('roundsSpent'),
     consumedRoundAnswers: pick('consumedRoundAnswers'),
+    // ENG-96458 D4 (PR #157 follow-up review) — the folder's memory of a ☐-count contradiction it has already
+    // seen once. Returned RAW for `pendingContradictionRecord` to shape-check, the same division of labour
+    // `roundsSpent` and `consumedRoundAnswers` already make: garbage on file can only ever reset the counter to 1,
+    // which HOLDS the run (the safe direction) rather than stopping it.
+    pendingContradiction: pick('pendingContradiction'),
   }
 }
+
+// ---------------------------------------------------------------------------
+// THE ☐-COUNT CONTRADICTION, AND WHY IT MUST NOT HOLD FOR EVER
+// ---------------------------------------------------------------------------
+// `verify.pending` is a top-level scalar while the ☐ rows are nested per page, so a Reconcile answer that
+// transcribes `pending: 0` beside a non-empty `pendingRows` is entirely plausible — a copy from an older
+// `verify.md`, or one dropped scalar. The run fails CLOSED on it (`pendingHoldNow`: a named row is a hold in its
+// own right), which is right, and it used to be the WHOLE response: a WARNING in the log and `complete: false`.
+//
+// That is a run that can never finish. The documented way to close a ☐ row is to confirm it on the stand or record
+// an `{ kind: "accepted", row, … }` entry — and BOTH release the row through the ENGINE's count, which this answer
+// already reports as 0. So no operator action can clear the hold: every re-run reads the same file, holds again,
+// and warns again. The honest response after the SECOND time is to stop and say what to repair.
+//
+// SECOND time, not first: one transcription slip can self-heal on the next Reconcile (the engine re-publishes the
+// summary, the agent copies the scalar correctly), and stopping on the first sighting would spend the operator's
+// session on a fault that was about to disappear. So the observation is REMEMBERED — in this process for the
+// rounds it runs, and in the queue file's `roundState` for the next invocation, because the case that motivated
+// this is the zero-work close, where one invocation performs exactly one Reconcile.
+export const PENDING_CONTRADICTION_STOP_AT = 2
+
+// WHICH contradiction this is, as one comparable string. `null` when there is no contradiction: no rows, a count
+// that is not an integer (nothing to contradict), or a count that already covers the rows.
+// Keyed on `rowKey` — the engine's own injective row identity (ENG-96458) — and only then on `n`/`deliverable`,
+// so the signature survives a re-publication that renumbers the rows. Sorted, so row ORDER is not a difference.
+export function pendingContradictionSignature(rows, count) {
+  if (!Array.isArray(rows) || !rows.length) return null
+  if (!Number.isInteger(count) || count >= rows.length) return null
+  const ids = rows.map((r) => `${r?.unit ?? ''}#${r?.rowKey ?? r?.n ?? r?.deliverable ?? ''}`).sort()
+  return `${count}|${ids.join(',')}`
+}
+
+// THE RECORD TO CARRY, given what the folder already held. `null` when there is nothing to record. A DIFFERENT
+// signature restarts the count at 1: a contradiction about other rows is a new fault and gets its own free sighting.
+export function pendingContradictionRecord(onFile, signature) {
+  if (!signature) return null
+  const prev = onFile && typeof onFile === 'object' && !Array.isArray(onFile) ? onFile : null
+  const same = prev?.signature === signature && Number.isInteger(prev?.rounds) && prev.rounds > 0
+  return { signature, rounds: same ? prev.rounds + 1 : 1 }
+}
+
+// Whether this record has been seen often enough to stop the run instead of holding it again.
+export const pendingContradictionHalts = (rec) =>
+  Number.isInteger(rec?.rounds) && rec.rounds >= PENDING_CONTRADICTION_STOP_AT
 // THE SPENT ROUND ANSWERS AS A UNION (ENG-96204 / ENG-96474). Strings only, deduplicated, insertion order kept,
 // anything that is not a non-blank string dropped: the list is copied by an agent out of the queue file and back,
 // so it is defended the way `roundsSpentOnFile` defends its integer. A union and never a replacement — an entry is
