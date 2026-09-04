@@ -118,7 +118,11 @@ there is no "resume" command: there is one command, and it does the next undone 
   ],
   "discrepancies": [
     { "round": 2, "unit": "main", "claim": "crt.ApprovalList added",
-      "found": "get-page shows no crt.ApprovalList" }
+      "found": "get-page shows no crt.ApprovalList" },
+    { "round": 2, "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)",
+      "kind": "resolution-not-applied",
+      "claim": "applied the answer to \"main#confirm:entity-filter:(1 lookup)\" — added the filter",
+      "found": "no lookupListConfig anywhere in viewConfig" }
   ],
   "unconsumedResolutions": [
     { "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)", "kind": "entity-filter",
@@ -161,6 +165,13 @@ Rules that make it trustworthy:
   are the run's answer to the caller; a usage limit, or a reconcile step that returns nothing, must not take
   them with it. They are written again when the run exits, so a park or a proposal decided after the last
   round is on disk too.
+- **A `discrepancies` row's `id` and `kind` are its IDENTITY, and both must be copied back verbatim.**
+  Rows come from three places and only one of them has an identity: a refuted operator answer carries
+  `id` plus `kind: "resolution-not-applied"`, while the verifier's own builder-vs-stand rows and the
+  in-context-gate mismatches are keyed on `unit` alone and carry neither. The run matches a repeated
+  refutation on `(unit, id)` to REFRESH the existing row rather than append beside it, so a resume that
+  drops `id` re-files the same disagreement as a second row — every resume, into a list nothing prunes,
+  rendered whole into every round-close prompt. Never invent either field for a row that has none.
 - **`rounds` is incremented BEFORE the round runs, not after.** A process killed mid-build must
   not come back with the counter reset — that is how a unit loops forever. Over-counting a round
   that never happened is the safe direction: it parks earlier, never later.

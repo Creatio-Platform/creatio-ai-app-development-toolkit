@@ -424,7 +424,7 @@ const RECONCILE_SHAPE = {
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
   blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
   discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
-    types: { unit: 'string', claim: 'string', found: 'string', round: 'integer' } },
+    types: { unit: 'string', id: 'string', kind: 'string', claim: 'string', found: 'string', round: 'integer' } },
   unconsumedResolutions: { kind: 'array', required: ['unit', 'id', 'source'],
     types: { unit: 'string', id: 'string', kind: 'string', answer: 'string', why: 'string', source: 'string' } },
   resolutionsReopened: { kind: 'array', required: ['unit', 'id'], types: { unit: 'string', id: 'string' } },
@@ -1670,6 +1670,15 @@ function checkRowsByPair(checks) {
 }
 const RULE_SHAPED_KINDS = new Set(['lookup-value', 'rule', 'visibility-rule'])
 const isRuleShapedKind = (kind) => RULE_SHAPED_KINDS.has(String(kind))
+
+const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
+function upsertResolutionDiscrepancy(rows, row) {
+  const key = idKey(row.id)
+  const at = key ? (rows || []).findIndex((d) => d.kind === RESOLUTION_NOT_APPLIED
+    && idKey(d.unit) === idKey(row.unit) && idKey(d.id) === key) : -1
+  if (at < 0) return [...(rows || []), row]
+  return (rows || []).map((d, i) => (i === at ? row : d))
+}
 function releasedResolutionPairs(checks) {
   const out = new Map()
   for (const c of checkRowsByPair(checks).values()) {
@@ -2152,7 +2161,7 @@ DO SIX THINGS, in order:
 3. READ THE QUEUE FILE. From \`${QUEUE_FILE}\` (absent ⇒ every list below is empty and the run is starting fresh) return:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
-   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
+   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, id, kind, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had). \`id\` and \`kind\` are on the rows that have them and absent from the rest — COPY BOTH VERBATIM WHEREVER THE FILE CARRIES THEM, and do NOT invent either for a row without them. They are a row's IDENTITY, not description: this run matches a repeated builder-vs-stand disagreement on \`(unit, id)\` to REFRESH the existing row, so an \`id\` dropped here comes back as a SECOND row for the same disagreement, on every resume, into a list nothing prunes.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
@@ -3542,13 +3551,9 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     for (const c of resolutionContradictions(claims, lastVerifier?.resolutionChecks)) {
       log(`answer NOT on the page: ${JSON.stringify(c.unit)} claims it applied ${JSON.stringify(c.id)}, the verifier reads the page and finds ${capCarryText(c.found)}. The claim is not trusted; the answer is recorded UNCONSUMED.`)
       const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
-      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+      const notApplied = { round, unit: c.unit, id: c.id, kind: RESOLUTION_NOT_APPLIED,
         claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
-      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-      discrepancies = seenAt >= 0
-        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-        : [...discrepancies, notApplied]
+      discrepancies = upsertResolutionDiscrepancy(discrepancies, notApplied)
       if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
         unconsumed = [...unconsumed, { unit: c.unit, id: c.id, kind: c.kind, item: c.item, answer: c.answer, how: c.how, source: c.source, why: c.found }]
       }

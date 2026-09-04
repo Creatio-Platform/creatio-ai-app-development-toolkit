@@ -38,7 +38,7 @@ import {
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, shortfallOf, shortfallText, parkableKeys, planGapKindLabel, planGapNext, planInvalidNextAll,
   preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
-  resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
+  RESOLUTION_NOT_APPLIED, resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, sectionRouteFrom, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
   // ENG-95503 — the answers channel. Named here because the MODULE path (Codex, the CLI) resolves these through this
@@ -50,7 +50,7 @@ import {
   tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause,
   unnamedRuleSurfaceChecks, unnamedRuleSurfaceLogLine, unsettledResolutionClaims,
   verifierSchemaWithChecks,
-  unconsumedResolutions,
+  unconsumedResolutions, upsertResolutionDiscrepancy,
   UNCONSUMED_CARRY_WARN,
 } from './helpers.mjs'
 import {
@@ -487,7 +487,7 @@ DO SIX THINGS, in order:
 3. READ THE QUEUE FILE. From \`${QUEUE_FILE}\` (absent ⇒ every list below is empty and the run is starting fresh) return:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
-   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
+   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, id, kind, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had). \`id\` and \`kind\` are on the rows that have them and absent from the rest — COPY BOTH VERBATIM WHEREVER THE FILE CARRIES THEM, and do NOT invent either for a row without them. They are a row's IDENTITY, not description: this run matches a repeated builder-vs-stand disagreement on \`(unit, id)\` to REFRESH the existing row, so an \`id\` dropped here comes back as a SECOND row for the same disagreement, on every resume, into a list nothing prunes.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
@@ -2709,24 +2709,28 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
       // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
       // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
-      // DEDUPED ON `(unit, id, kind)` (PR #128 review, round 19). `discrepancies` is re-seeded from the queue file
-      // and rendered into EVERY close prompt via `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention
-      // is deliberate (`helpers.mjs`: the historical row the `no` filed stays regardless). So a refutation repeated
-      // across rounds and across resumes appended a fresh ~900-byte row every time, all of them counted against
-      // `RECONCILE_ANSWER_MAX_BYTES`. Same fix, same reason, as the `blockedItems` `(unit, what)` dedup above: keep
-      // ONE row per refuted answer and REFRESH it in place, so the operator reads the CURRENT `found` rather than a
-      // stale round-1 one. The per-round history of a repeated refutation is already in the round logs and in
-      // `unconsumedResolutions`; what is lost here is presentational.
-      // `how` clause first, then a single-level claim string (S4624). Byte-identical to what it replaced, which
-      // matters here beyond tidiness: `claim` is the DEDUP KEY two lines down, so any drift in it re-appends.
+      // ONE ROW PER REFUTED ANSWER, keyed on `(unit, id)` (round 19 intent, corrected in round 21 Major 1).
+      // `discrepancies` is re-seeded from the queue file and rendered into EVERY close prompt via
+      // `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention is deliberate (`helpers.mjs`: the
+      // historical row the `no` filed stays regardless). So a refutation repeated across rounds and across resumes
+      // appended a fresh ~900-byte row every time, all of them counted against `RECONCILE_ANSWER_MAX_BYTES`.
+      // ROUND 19 CLAIMED THIS FIX AND DID NOT MAKE IT: the predicate compared the rendered `claim`, which embeds
+      // `capCarryText(c.how)` -- the builder's own free-form prose -- so it deduped only while the builder re-worded
+      // nothing, and `id` was never compared at all. The identity is a FIELD on the row now and the keying lives in
+      // `upsertResolutionDiscrepancy`, which is pure and executed by the offline suite rather than pinned by regex.
+      // `claim`/`found` stay refreshed DATA, so the operator reads the CURRENT wording, not a stale round-1 one.
+      // The per-round history of a repeated refutation is already in the round logs and in `unconsumedResolutions`;
+      // what is lost here is presentational.
+      // AND ACROSS RESUMES ONLY BECAUSE THE IDENTITY ROUND-TRIPS (round 21 review, finding 2). This row is re-seeded
+      // from what the RECONCILE AGENT transcribes, not from the file directly, so `id` had to be added to
+      // `RECONCILE_SHAPE.discrepancies` and NAMED in the read step of `reconcilePrompt` above -- an agent reproduces
+      // the fields it is told about and drops the rest. Round 21 shipped the key while the prompt still enumerated
+      // the row as `{ unit, claim, found, round }`, which bounded the growth for one process and left the resume
+      // axis -- the unbounded one, since in-session repeats stop at `DEFAULT_MAX_ROUNDS` -- exactly as it was.
       const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
-      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+      const notApplied = { round, unit: c.unit, id: c.id, kind: RESOLUTION_NOT_APPLIED,
         claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
-      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-      discrepancies = seenAt >= 0
-        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-        : [...discrepancies, notApplied]
+      discrepancies = upsertResolutionDiscrepancy(discrepancies, notApplied)
       if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
         // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
         // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
