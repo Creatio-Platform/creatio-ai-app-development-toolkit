@@ -70,7 +70,10 @@ export const CARRY_TEXT_CAP = 400
 // string an array-of-object item carries. Named once so a future re-budgeting (they exist to keep the answer
 // under the host's tool-input cap; ENG-96071 owns tightening them) is one edit, not twenty.
 const RECONCILE_LIST_CAP = 400
-const RECONCILE_TEXT_CAP = 400
+// EXPORTED (PR #157 review, Blocker 3): `core.mjs` caps the judge's `pageDefect.what` and its evidence id to the
+// same bound before either reaches a build prompt. `JUDGE_SCHEMA` caps `what` and not the id, and a second literal
+// would be a second number to keep in step.
+export const RECONCILE_TEXT_CAP = 400
 
 export const RECONCILE_SCHEMA = {
   type: 'object',
@@ -415,8 +418,14 @@ export const RECONCILE_SHAPE = {
   // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key
   // (`appliesWhen: false`) carries `what: null, miss: null`, the prompt orders a verbatim copy, and a string-only
   // rule rejected that copy on the FIRST attempt of every Reconcile. Applicable rows always carry real strings.
+  // ENG-96458 D6 — `verifierOnly`/`emitted` are TYPED, NOT required. `--units` publishes them only on a row that has
+  // no build unit of its own (`noOrphanScaffold`: the verifier reads it, the app unit does the removal), so a plan
+  // whose reachability rows are all schedulable legitimately carries neither, and requiring them would reject an
+  // honest answer. The run schedules on `appliesWhen` alone; `verifierOnly && emitted` only widens the set of keys
+  // the VERIFIER is told to write a boolean for.
   reachability: { kind: 'array', required: ['key', 'appliesWhen'],
-    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null' } },
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null',
+      verifierOnly: 'boolean', emitted: 'boolean' } },
   // `resolution: null` is a LEGAL answer and is checked as such — the engine publishes it on every unanswered item.
   preflightItems: { kind: 'array', required: ['id', 'pageKey'],
     types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },

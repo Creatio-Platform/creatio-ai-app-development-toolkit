@@ -34,8 +34,17 @@ _workflow-core/
     claude-template.js the shell the generated .workflow.js is built from
   build-executor/      step 7: build the approved plan on a live stand
     core.mjs           function* run(input, io, { selfPath }) — the round loop
-    helpers.mjs        the decisions: schedule, parks, approval + package gates,
-                       and the walker that checks an answer against a shape table
+    helpers.mjs        the decisions: schedule, the BUDGET/in-context parks,
+                       approval + package gates, and the walker that checks an
+                       answer against a shape table
+    gate.mjs           the "spend nothing you don't have to" decisions, pure and
+                       host-neutral: is a blocker the BUILDER's to fix (retry) or
+                       the SOURCE's (park once, never re-attempt)?
+                       THE PARK BOUNDARY BETWEEN THE TWO FILES IS A RULE, not an
+                       accident: helpers.mjs parks a unit that has SPENT something
+                       (its round budget, or its one in-context fix); gate.mjs parks
+                       a unit that can never spend anything usefully, because the
+                       blocker is in the Classic source it reads from
     schemas.mjs        the response contracts: the host schemas AND `RECONCILE_SHAPE`,
                        the inner shape of the fields the schema declares loosely to
                        stay under the host's 4096-byte cap

@@ -2536,20 +2536,31 @@ export function unconsumedNextClause(entries) {
 // a set of `☐ confirm on-stand` rows that no agent can close, because they are not derivable from get-page. Telling
 // that state "NOT COMPLETE — 0 MISSING + 0 unconfirmed" reads as a broken gate; telling it "COMPLETE" is the bug
 // this ticket exists for (a run shipped a page that had lost its Feed tab, and every machine row was green).
-export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount, pendingCount = 0 } = {}) {
+// ENG-96458 D4, PR #157 review — ONE SPELLING OF THE PENDING SENTENCE, for both places that emit it. The
+// zero-work early return in `core.mjs` reaches this state too (a finished build IS a run with nothing open), and it
+// used to hand-spell its own copy of this sentence, which had already drifted: it dropped the remediation tail.
+// `completionLine`'s own PENDING branch composes from this, so the two cannot diverge again.
+export function pendingConfirmationLine(pendingCount) {
+  return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — answer each on-stand, or record \`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }\` in resolutions.json and re-run`
+}
+
+// PR #157 review (Major on `helpers.mjs:2053`) — BUILD-GREEN IS THE CALLER'S DECISION, NOT A SECOND DERIVATION HERE.
+// This branch used to re-derive it (`missing === 0 && buildMissing === 0 && !unverified && !parked && !unconsumed`)
+// while `core.mjs` had already decided the same thing as `runComplete(verify.complete, parked, unconsumed)`. Two
+// derivations of one predicate can disagree, and when they did the operator got exactly the "NOT COMPLETE …
+// 0 MISSING + 0 unconfirmed · 0 parked · 0 unconsumed" line this branch exists to prevent. So `buildComplete` is
+// now passed IN: the PENDING branch fires on the caller's verdict and on nothing this function computes.
+// A caller that does not pass it gets the NOT COMPLETE branch — an unmeasured run has not proven its build is
+// done, and reporting "COMPLETE PENDING" on a round that measured nothing is the failure the old `measured` guard
+// was there for.
+export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount, pendingCount = 0, buildComplete = false } = {}) {
   if (complete) return `COMPLETE after ${round} round(s): the engine gate is green`
   // ENG-95901 — the shortfall half of the line goes through `shortfallText`, so a judge-rejected record is named as
   // such instead of being folded into one "N MISSING" count. A caller that knows only `missing` still reads the same.
   const measured = missing != null || buildMissing != null
   const shortfall = measured ? shortfallText({ missing, buildMissing }) : '?'
-  // The D4 branch is gated on `measured` for the reason `shortfallText` refuses to render an unmeasured run as
-  // `0 MISSING`: a run with NO verdict read has not proven its build is done, and `missing ?? 0` would have called
-  // it "COMPLETE PENDING" on exactly the round that measured nothing. Both axes of the ENG-95901 split are checked,
-  // so a caller passing only `buildMissing` cannot slip past a `missing === 0` test it never set.
-  const st = shortfallOf({ missing, buildMissing })
-  const buildDone = measured && st.missing === 0 && st.buildMissing === 0 && (unverified ?? 0) === 0 && !parkedCount && !unconsumedCount
-  if (buildDone && pendingCount) {
-    return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S) after ${round} round(s): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — answer each on-stand, or record \`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }\` in resolutions.json and re-run`
+  if (buildComplete === true && pendingCount) {
+    return `${pendingConfirmationLine(pendingCount)} (after ${round} round(s))`
   }
   return `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }

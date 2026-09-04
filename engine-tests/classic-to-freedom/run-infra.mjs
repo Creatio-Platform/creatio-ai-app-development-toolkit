@@ -2368,6 +2368,23 @@ const missingBuildMissing = wf.reconcileShapeErrors
 check("ENG-95901 (reopened): the shipped shape check REFUSES a verify page entry with no `buildMissing` — without it the answer degrades to the conflated `missing` and a judge-rejected row is reported as a build gap again",
   missingBuildMissing.some((m) => m.includes("buildMissing")),
   () => missingBuildMissing);
+// PR #157 review (Major on `schemas.mjs:379`) — THE SAME DRIFT GATE FOR `pending`. `RECONCILE_SHAPE.verify.required`
+// gained it in ENG-96458, and its own code comment states the stake: an answer that omits the count leaves the ☐
+// hold INERT — the gate silently off on exactly the run that needs it. Every `run-infra.mjs` change for that ticket
+// went the other way (12 fixtures gained `pending: 0` so they kept passing), so nothing pinned the loud failure.
+// The MESSAGE is asserted, not just the refusal, so an in-flight branch that merges this is told WHICH key it
+// dropped: the shape checker's own wording is `verify.pending: required, and it is absent` (the CLI's
+// "missing required key(s)" text is a different layer — it checks the answer's TOP-LEVEL keys against
+// `RECONCILE_SCHEMA.required`, where the required entry is `verify`, not `verify.pending`).
+const missingPending = wf.reconcileShapeErrors
+  ? wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pages: {} } })
+  : [];
+check("PR #157 review: the shipped shape check REFUSES a verify object with no `pending`, and the fault NAMES the key — an omitted count would leave the D4 confirmations hold inert, the gate silently off on the run that needs it",
+  () => missingPending.some((m) => /^verify\.pending: required/.test(m)),
+  () => missingPending);
+check("PR #157 review: and `pending: 0` is a legal answer — the hold is opt-in on a COUNT, so a run with nothing pending must pass the same check unchanged",
+  () => (wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pending: 0, pages: {} } }) || []).length === 0,
+  () => wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pending: 0, pages: {} } }));
 // PR REVIEW — the WORKFLOW-side helper, exercised with `rejected > 0`. Finding 7: every page fixture in
 // `run-workflow-parity.mjs` sets `buildMissing === missing`, and the one executed park-reason golden carries neither
 // field, so the old `${st.missing ?? 0} MISSING` and the new `shortfallText(st)` rendered byte-identically —
@@ -3118,7 +3135,14 @@ check("PR #128 review (Major): `completionLine` is the ONE verdict line — its 
     const open = wf.completionLine(false, { round: 3, missing: 1, unverified: 2, parkedCount: 1, unconsumedCount: 4 });
     return done.startsWith("COMPLETE after 2 round(s)") && !/unconsumed/.test(done)
       && open.startsWith("NOT COMPLETE after 3 round(s)") && /· 4 unconsumed answer\(s\)/.test(open) && /· 1 parked unit\(s\)/.test(open)
-      && (wfSrc.match(/log\(completionLine\(complete\b/g) || []).length === 1
+      // STILL 1, DELIBERATELY (PR #157 review, Tetiana Minor 1). The zero-work early return also emits a pending
+    // verdict sentence, and it used to hand-spell its own drifted copy of it. It now shares the SENTENCE through
+    // `pendingConfirmationLine`, which `completionLine` composes from — not the whole verdict line, because
+    // routing the zero-work not-complete case through `completionLine` would add a SECOND verdict log to that
+    // path, which is exactly what this guard exists to prevent. So one `log(completionLine(complete` site remains
+    // the right count, and the shared-sentence half is pinned in `run-workflow-core.mjs`.
+    && (wfSrc.match(/log\(completionLine\(complete\b/g) || []).length === 1
+    && (wfSrc.match(/log\(pendingConfirmationLine\(/g) || []).length === 1
       && !/log\(\s*complete\s*\?[\s\S]{0,40}COMPLETE after/.test(wfSrc); },
   () => ({ done: wf.completionLine(true, { round: 2 }), open: wf.completionLine(false, { round: 3, missing: 1, unverified: 2, parkedCount: 1, unconsumedCount: 4 }),
     verdictLogSites: (wfSrc.match(/log\(completionLine\(complete\b/g) || []).length }));
@@ -3166,7 +3190,13 @@ check("ENG-95503 wiring (RC-3): an unconsumed answer keeps the run from reportin
     && /const buildGreen = runComplete\(state\.verify\?\.complete, parked, unconsumed\)/.test(wfSrc)
     && !/state\.verify\?\.complete === true && !parked\.length/.test(wfSrc)
     // …and the confirmations term is the ONLY thing added on top, at both sites.
-    && (wfSrc.match(/buildGreen && pendingCount === 0/g) || []).length === 2);
+    // PR #157 review (Major on core.mjs:1403) — the term is now `!pendingHold`, one shared predicate over BOTH
+    // sources of truth (`verify.pending` and the named rows), rather than a bare `pendingCount === 0`: a reconcile
+    // answer carrying rows beside a transcribed `pending: 0` used to close green next to a worklist the run still
+    // printed. Same shape of pin — the build half through `runComplete`, the confirmations half added on top, both
+    // sites spelled identically.
+    && (wfSrc.match(/buildGreen && !pendingHold/g) || []).length === 2
+    && (wfSrc.match(/const pendingHoldNow = /g) || []).length === 1);
 /* PR #128 review (round 19) — NO ROOT KEY IS DOCUMENTED TWICE IN THE QUEUE-READ STEP.
    A duplicate `proposals`/`blocked`/`discrepancies` bullet shipped in the Reconcile prompt on this branch: the
    detailed bullet that lists each row shape, immediately followed by a terse "whatever the file holds, verbatim."
@@ -7411,7 +7441,10 @@ const VERIFICATION_SURFACE = "automatic:2"
 const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automatic:2"
 // ENG-96458 D7 — the settle-and-retry rule the reachability arm appends. A module-scope constant in the shipped
 // script, so it is a free variable here and gets a stub, exactly as this check demands of every new one.
-const SETTLE_RULE = " <settle-and-retry>"
+// PR #157 review (Major on core.mjs:1701) — the constant SPLIT in two, because the record-the-outcome half
+// belongs to the verifier and not to a build agent. This is the build-agent half, and it is now appended to the
+// PAGE arm as well as the reachability one: the measured hard block happened in the main page unit.
+const SETTLE_RETRY_RULE = " <settle-and-retry>"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -7537,6 +7570,18 @@ export { buildPrompt };
         app: /<IN-CONTEXT GATE>/.test(rendered.app || ""), reach: /<IN-CONTEXT GATE>/.test(rendered.reach || "") }));
     check("ENG-95469: buildPrompt hands `gate: inContextGateBlock(unit)` to the composer",
       /gate: inContextGateBlock\(unit\)/.test(wfSrc));
+    // PR #157 review (Major on `core.mjs:1701`) — D7's settle-and-retry rule reaches the PAGE unit, which is where
+    // the measured hard block actually happened: `main` re-pointed the object's `RelatedPage` add-on, did three
+    // cache-busted loads plus a hard reload, and blocked the run on a route that read correctly two hours later.
+    // `main`'s deliverable includes routing (the RelatedPage re-point), and `main` is a page unit — so it went
+    // through `pageKindBlock`, which received no settle window at all while the reachability arm did.
+    check("PR #157 review (D7): the settle-and-retry rule is in BOTH build prompts that can hit the contradiction — the PAGE unit (where the hard block was measured, its deliverable including the RelatedPage re-point) and the reachability unit",
+      () => /<settle-and-retry>/.test(rendered.main || "") && /<settle-and-retry>/.test(rendered.reach || ""),
+      () => ({ main: /<settle-and-retry>/.test(rendered.main || ""), reach: /<settle-and-retry>/.test(rendered.reach || ""),
+        list: /<settle-and-retry>/.test(rendered.list || "") }));
+    check("PR #157 review (D7): and the RECORD half is NOT in a build prompt — `false`-vs-OMIT instructs whoever writes `reachability` into the built file, which is the read-only verifier, so a build agent handed it would be told to write a file it may not touch",
+      () => !/AN UNSETTLED READ IS NOT A/.test(rendered.main || "") && !/AN UNSETTLED READ IS NOT A/.test(rendered.reach || ""),
+      () => ({ main: /AN UNSETTLED READ IS NOT A/.test(rendered.main || "") }));
   }
 }
 

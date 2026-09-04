@@ -274,8 +274,11 @@ function buildScenarios() {
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
   // ENG-95930 — the per-page `buildComplete` is REQUIRED by `RECONCILE_SHAPE.verify` and checked on arrival, so a
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
-  // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
-  // and a realistic fixture should look like the real answer, not because the checker demands it.
+  // `required` is complete/missing/unverified/buildMissing/pending/pages) — it is carried here because the engine's
+  // summary publishes it and a realistic fixture should look like the real answer, not because the checker demands
+  // it. `pending` joined that list in ENG-96458 and is why this fixture carries `pending: 0`: an omitted count
+  // leaves the ☐ confirmations hold inert, so the shape refuses the answer rather than defaulting it (the refusal
+  // itself is pinned in `run-infra.mjs`).
   // PR review — `buildMissing` at the TOP LEVEL as well as per page: it is `required` by `RECONCILE_SHAPE` now (the
   // close line reads exactly that field), so an answer without it is refused and the run stops at `reconcile-failed`.
   const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, pending: 0, builderOpen: 1, planGaps: [], pages, ...extra });

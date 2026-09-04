@@ -37,15 +37,37 @@
 // source-failure shape is `unknown`, and the caller retries `unknown`, because a wrongly-parked builder bug
 // is a silently-dropped deliverable while a wrongly-retried source bug costs at most the rounds the budget
 // already caps.
+//
+// SUBJECT, NOT ONLY MODE (PR #157 review, Major on `gate.mjs:46`). Two of the original patterns —
+// `does not compile` and `fails to compile/load/render` — describe the BUILT artifact at least as naturally as
+// the Classic source ("the schema I just wrote does not compile", "the page fails to render after the merge"),
+// and `blockedItems` is a general-purpose channel that carries build-agent blockers, the partial-app-unit
+// blocker, the guidelines close row, resolutions blockers and judge page defects. A misclassified builder
+// defect parks TERMINALLY (`rounds: 0`), is re-parked on every resumed run, and tells the operator the blocker
+// is in the source — a false diagnosis on the one class a build round would have fixed. So those two generic
+// failure verbs now need a SOURCE SUBJECT in the same text; the patterns that already name the source surface
+// (a runtime error, a `Script error`, a render check that could not be performed, a missing dependency) stand
+// on their own, exactly as before.
 const SOURCE_PATTERNS = [
   /errors?\s+at\s+runtime/i,
   /script\s+error/i,
   /could\s+not\s+be\s+performed/i,
   /render\s+check\b[^.]*\b(could\s+not|cannot|failed)/i,
   /dependency\b[^.]*\b(missing|not\s+installed|absent)/i,
+]
+
+// The generic failure verbs. On their own they say nothing about WHICH artifact failed, so each one is paired
+// with a subject test below and never matched alone.
+const FAILURE_MODE_PATTERNS = [
   /does\s+not\s+(compile|load)/i,
   /fails?\s+to\s+(compile|load|render)/i,
 ]
+
+// A SOURCE SUBJECT — the text names the Classic/source side rather than the page this run is building.
+// `#Section/<Name>` is the render-surface identifier the migration skill publishes for a Classic surface, and
+// the four words are the ones the run's own prompts use for it. Deliberately NOT `schema`: "the schema I just
+// wrote" is the builder's own artifact, so `schema` would re-admit the very case this split exists to exclude.
+const SOURCE_SUBJECT = /(\bclassic\b|\bsource\b|\boriginal\b|\blegacy\b|#Section\/)/i
 
 // The key a blocker names, whichever field carries it (the round loop uses `unit`, some records use `key`).
 export function blockerKey(b) {
@@ -56,10 +78,18 @@ export function blockerKey(b) {
 // needs no separate 'builder' label to act on — the caller retries everything that is not 'source').
 export function classifyBlocker(blocker) {
   const text = `${blocker?.what || ''} ${blocker?.why || ''}`.trim()
-  if (text && SOURCE_PATTERNS.some((re) => re.test(text))) {
+  if (!text) return { class: 'unknown', reason: 'blocker carries no `what`/`why` text to classify on' }
+  if (SOURCE_PATTERNS.some((re) => re.test(text))) {
     return { class: 'source', reason: 'blocker text matches a source-failure shape (runtime/render/dependency failure a rebuild cannot change)' }
   }
-  if (!text) return { class: 'unknown', reason: 'blocker carries no `what`/`why` text to classify on' }
+  // A generic failure verb counts ONLY when the same text also names the source side. Without that subject the
+  // sentence describes the built page just as well, and the safe reading of an ambiguous blocker is `unknown`.
+  if (FAILURE_MODE_PATTERNS.some((re) => re.test(text))) {
+    if (SOURCE_SUBJECT.test(text)) {
+      return { class: 'source', reason: 'blocker text names the Classic/source side failing to compile, load or render — a rebuild of the Freedom page cannot change it' }
+    }
+    return { class: 'unknown', reason: 'a compile/load/render failure whose SUBJECT is not named as the Classic source — it describes the built page just as well, so it stays retryable' }
+  }
   return { class: 'unknown', reason: 'no source-failure signal — treated as retryable (the safe default)' }
 }
 

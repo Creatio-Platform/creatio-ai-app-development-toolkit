@@ -190,11 +190,18 @@ Rules that make it trustworthy:
   (Freedom)". A user cannot tell those apart, and a later diagnosis read the dead page as the live one. The app unit
   returns `appScaffold` = `{ stubSection, stubEntity, starterPages[], details[], removed[], couldNotRemove[{what,
   why}] }` — everything it created, removed or not — and it is recorded here MERGED, never replaced, so a unit that
-  reports twice does not lose the first report's `removed` list.
+  reports twice does not lose the first report's `removed` list. The merge is recorded on EVERY outcome of the app
+  unit, not only the complete one (PR #157 review): the run that could not remove the stub is the one whose
+  `couldNotRemove` list matters most. Scalars merge defensively — an incoming `null` (which the prompt asks the
+  agent to send where there is none) never erases a recorded `stubSection`/`stubEntity`, because that record is
+  what licenses the removal — and `couldNotRemove` is de-duplicated by `what` + `why`.
   **This is the line between the run's own debris and somebody else's property**: a later unit may remove what is
   named here and nothing that is not. A page you cannot tie to this record is an `orphanedPages` entry — reported
   for a human, never deleted. The verify row `noOrphanScaffold` is the gate: `list-pages` on the target package
-  returns no starter page bound to nothing, and the menu shows one section for the entity.
+  returns no starter page bound to nothing, and the menu shows one section for the entity. That row is
+  VERIFIER-ONLY — no build unit is scheduled for it (`appliesWhen: false`, `verifierOnly: true`, `emitted: true`),
+  because the READING is the verifier's and the REMOVAL is the app unit's — and its menu half drops under
+  `pages-only-no-menu`, where the plan registers no section at all.
 
 - **`standWrites.orphanedPages` are pages a RE-BIND left pointing at nothing (ENG-95850 / B4).** `create-app` seeds
   start pages (`<Code>_FormPage`, `_ListPage`, `_Detail`); a builder that builds the real page as a NEW schema on a

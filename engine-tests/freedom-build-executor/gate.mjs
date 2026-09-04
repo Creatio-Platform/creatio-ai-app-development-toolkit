@@ -77,6 +77,48 @@ check("a mixed list parks only the source ones",
 check("sourceParkWhy is never blank even when the blocker carries no text",
   () => sourceParkWhy({}, "reason x").trim().length > 0);
 
+/* ---------------------------------------------------------------------------
+   3. SUBJECT, NOT ONLY MODE (PR #157 review, Major on `gate.mjs:46`)
+   ---------------------------------------------------------------------------
+   `does not compile` / `fails to compile|load|render` describe the BUILT artifact at least as naturally as the
+   Classic source, and `classifyBlocker` runs over a GENERAL-PURPOSE channel: build-agent blockers, the
+   partial-app-unit blocker, the guidelines close row, resolutions blockers and judge page defects all land in
+   `blockedItems`. A misclassified builder defect parks TERMINALLY (`rounds: 0`), is re-parked on every resumed
+   run, and tells the operator the blocker is in the source — a false diagnosis on exactly the class a build round
+   would have fixed. So those two verbs now require a SOURCE SUBJECT in the same text.
+   --------------------------------------------------------------------------- */
+console.log("\n===== classifyBlocker: a failure MODE without a source SUBJECT stays retryable =====");
+
+const cls = (what, why = "") => classifyBlocker({ unit: "main", what, why }).class;
+
+check("PR #157 review: \"the built page fails to render\" is NOT parked — it names the artifact this run wrote, which is the one thing a build round can fix",
+  () => cls("the built page fails to render") === "unknown",
+  () => classifyBlocker({ what: "the built page fails to render" }));
+check("PR #157 review: \"the schema I just wrote does not compile\" is NOT parked — the reviewer's own counter-example, and the reason the subject test deliberately excludes the bare word `schema`",
+  () => cls("the schema I just wrote does not compile") === "unknown",
+  () => classifyBlocker({ what: "the schema I just wrote does not compile" }));
+check("PR #157 review: \"the page fails to load after the merge\" is NOT parked — a re-check or a repair round is the right response, and a terminal park spends neither",
+  () => cls("the page fails to load after the merge") === "unknown");
+check("PR #157 review: \"the Classic schema does not compile\" IS parked — the source side is named, and no rebuild of the Freedom page changes it",
+  () => cls("the Classic schema does not compile") === "source",
+  () => classifyBlocker({ what: "the Classic schema does not compile" }));
+check("PR #157 review: the source subject may arrive in `why` rather than `what` — the classifier reads the concatenation, so a blocker that states the mode in one field and the subject in the other still parks",
+  () => cls("does not compile", "the original Classic section schema is what fails") === "source");
+check("PR #157 review: `#Section/<Name>` counts as the source subject — it is the render-surface identifier the migration publishes for a Classic surface",
+  () => cls("`#Section/Applicant` fails to load") === "source");
+check("PR #157 review: the patterns that already NAME the source surface are untouched — a runtime error, a `Script error`, a render check that could not be performed and a missing dependency still park on their own, with no subject word required",
+  () => cls("the page errors at runtime") === "source" && cls("Script error") === "source"
+    && cls("Live render check on surface automatic:3 could not be performed") === "source"
+    && cls("a dependency is not installed") === "source");
+check("PR #157 review: and the REASON distinguishes the two source verdicts, so the parked list reads as a diagnosis rather than one blanket sentence",
+  () => /SUBJECT is not named/.test(classifyBlocker({ what: "the built page fails to render" }).reason)
+    && /names the Classic\/source side/.test(classifyBlocker({ what: "the Classic schema does not compile" }).reason),
+  () => [classifyBlocker({ what: "the built page fails to render" }).reason,
+    classifyBlocker({ what: "the Classic schema does not compile" }).reason]);
+check("PR #157 review: a builder-shaped failure mode therefore does NOT become a terminal park record either — the whole point is that it keeps its build rounds",
+  () => sourceBlockerParks([{ unit: "main", what: "the page I built does not load", why: "" }]).length === 0,
+  () => sourceBlockerParks([{ unit: "main", what: "the page I built does not load", why: "" }]));
+
 /* --------------------------------------------------------------------------- */
 console.log(`\n=================\nGATE GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
