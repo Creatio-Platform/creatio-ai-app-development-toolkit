@@ -857,13 +857,17 @@ export const HANDOFF_MEMBER_KINDS = MEMBER_WORKLIST_KINDS;
 // own (what it does): the criteria that gate a behaviour usually live in the body card.
 function describedInText(h) {
   const d = h.describedIn;
-  if (!d || (!d.card && !d.bodyCard && !(d.ac || []).length)) return "⚠ not described";
+  // PR #147 review — bare acceptance criteria are NOT a description. An ac-only entry used to reach `cite(null,
+  // ac)` and render `? AC-1`, a citation naming no card the operator can open, while the ⚠ that exists for that
+  // row went quiet. `describedInOf` (migrate.mjs) no longer produces one; this leg refuses it too, so a plan
+  // rendered from an older `behaviour-index.json` reads honestly rather than citing a question mark.
+  if (!d || (!d.card && !d.bodyCard)) return "⚠ not described";
   const cite = (card, ac) => {
     const acText = (ac || []).length ? ` ${ac.map(esc).join(", ")}` : "";
     return esc(card || "?") + acText;
   };
   const parts = [];
-  if (d.card || (d.ac || []).length) parts.push(cite(d.card, d.ac));
+  if (d.card) parts.push(cite(d.card, d.ac));
   if (d.bodyCard) parts.push(`body ${cite(d.bodyCard, d.bodyAc)}`);
   return parts.join(" · ");
 }

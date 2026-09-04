@@ -6405,6 +6405,29 @@ check("handoff BACK: a `<kind>:<name>` key describes its ⚠ Confirm member row"
 check("handoff BACK: a key matching no row anywhere is reported, never swallowed",
   hoBack.behaviourIndex.unmatched.includes("ghostMethod") && hoBack.behaviourIndex.unmatched.length === 1);
 
+// PR #147 review — AN ENTRY WITH ACCEPTANCE CRITERIA AND NO CARD IS NOT DESCRIBED, ON EITHER LEG.
+// `INDEX_ENTRY` sets no `minLength`, so `{ card: "", ac: ["AC-1"] }` is schema-valid and is what a merge agent
+// emits for "nowhere to put one". `describedInOf` used to accept it on `ac.length`, so the engine counted the row
+// as carrying a behaviour card while the workflow's `hasCard` counted it as uncovered — and the plan cited
+// `? AC-1`, a card reference the operator cannot open, with the ⚠ that exists for that row gone quiet.
+const hoAcOnly = runMigration({ ...handoffManifest, behaviourIndex: {
+  privateHelper: { card: "", ac: ["AC-1"] },
+  onStageChanged: { ac: ["AC-2"] },
+  "message:RefreshThing": { card: "", ac: ["AC-3"] },
+} });
+const acOnlyStub = (m) => hoAcOnly.changeSet.handlerStubs.find(h => h.sourceMethod === m);
+check("handoff BACK: an index entry carrying only acceptance criteria describes NOTHING — a blank card is not coverage, and the two legs must agree on the same entry",
+  !acOnlyStub("privateHelper").describedIn && !acOnlyStub("onStageChanged").describedIn
+    && !hoAcOnly.changeSet.needsDecision.find(n => n.kind === "message" && n.item === "RefreshThing")?.describedIn,
+  () => JSON.stringify({ helper: acOnlyStub("privateHelper").describedIn, traced: acOnlyStub("onStageChanged").describedIn }));
+const acOnlyPlan = renderPlan(hoAcOnly, {});
+check("handoff BACK: the plan renders `⚠ not described` for such a row instead of citing `? AC-1` — a citation naming no card is worse than a blank, because it reads as covered",
+  !/\? AC-/.test(acOnlyPlan) && /⚠ not described/.test(acOnlyPlan),
+  () => (acOnlyPlan.match(/.*\? AC-.*/g) || []).join(" | "));
+check("handoff BACK: a bodyCard alone still counts — the criteria that gate a behaviour defined elsewhere live in the body's own card, which is a card",
+  runMigration({ ...handoffManifest, behaviourIndex: { privateHelper: { card: "", bodyCard: "shared/C09", bodyAc: ["AC-1"] } } })
+    .changeSet.handlerStubs.find(h => h.sourceMethod === "privateHelper").describedIn.bodyCard === "shared/C09");
+
 // The plan is the artifact that has to CARRY the reference — an Adjustments section did not survive a re-run.
 const hoPlan = renderPlan(hoBack, {});
 check("handoff BACK: the generated ⚠ Imperative logic table carries a `Described in` cell per row",

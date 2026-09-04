@@ -551,7 +551,13 @@ function describedInOf(entry) {
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
   const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
-  return card || ac.length || bodyCard ? { card, ac, bodyCard, bodyAc } : null;
+  // PR #147 review — a CARD is what makes a row described; bare acceptance criteria are not. `INDEX_ENTRY` sets
+  // no `minLength`, so `{ key, card: "", ac: ["AC-1"] }` is schema-valid and is exactly what a merge agent emits
+  // for "nowhere to put one". Accepting it on `ac.length` made the two legs disagree about the same entry: the
+  // engine counted the row as carrying a behaviour card while the workflow's `hasCard` (helpers.mjs) counted it
+  // as uncovered, and the plan then cited `? AC-1` — a citation the operator cannot follow. The comment on
+  // `cardRef` above states the invariant every leg reads a card by; this is the leg that broke it.
+  return card || bodyCard ? { card, ac, bodyCard, bodyAc } : null;
 }
 
 // A behaviour report covers a whole SURFACE, so its answers span several scopes (the record page, the mini page,
