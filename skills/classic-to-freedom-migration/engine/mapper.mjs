@@ -530,6 +530,8 @@ export function mapToFreedom(eff, opts = {}) {
     baseFieldOverrides,
     // "wide" ⇒ the Classic page has a populated Header block → recommend the top-area Freedom template.
     headerLayout: F.headerLayout,
+    // …and its column count, so the recommendation can be checked against the template's measured top-area columns.
+    headerColumns: F.headerColumns,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
     // ENG-95543 tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
@@ -660,6 +662,17 @@ function createContainers(ctx) {
 // two controls bound to the same classic method still get their own request (the classic method is a shared
 // handler; the request is the element's own entry point).
 const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
+// The Header block's SHAPE, as the two fields the plan reads off it. `headerLayout: "wide"` says the Classic page
+// carries a populated Header (fields in the header, not just the title) → the Freedom target should be the top-area
+// template, so the header elements land in `TopAreaProfileContainer` instead of the narrow left profile.
+// `headerColumns` (ENG-96457, item 2) says HOW MANY columns it has, which is what makes the recommendation
+// checkable: `PageWithTopAreaAndTabsFreedomTemplate` has a ONE-column top area, so recommending it for a 2-column
+// Classic Header (measured on the ENG-96445 page) silently promises a layout the template cannot render.
+// One pure function rather than two ternaries inside `mapFields` — it keeps that function under Sonar CC 15 and
+// makes the two fields impossible to set inconsistently.
+const headerShape = (columnCount) => (columnCount > 1
+  ? { headerLayout: "wide", headerColumns: columnCount }
+  : { headerLayout: null, headerColumns: null });
 
 function mapFields(ctx, containers) {
   const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
@@ -1119,7 +1132,7 @@ function mapFields(ctx, containers) {
     // ENG-95543 — tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
-    headerLayout: headerIsWide ? "wide" : null };
+    ...headerShape(headerCols.size) };
 }
 
 // details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
@@ -2134,7 +2147,9 @@ function mapWidgets(eff, opts = {}) {
     seenWidget.add(w.widget);
     // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
     if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+    // `capability` (ENG-96457) travels with the widget: the renderer needs it to ask the measured template-capability
+    // table whether the CHOSEN template really ships this, instead of asserting "provided by the Freedom template".
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null, capability: w.capability || null });
     let tail;
     if (w.note) tail = ` — ${w.note}`;
     else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
@@ -2397,6 +2412,7 @@ export const LIST_DECISION_KIND = {
   commandBar: "list-command-bar",
   rowAction: "list-row-action",
   process: "list-process",
+  addRouting: "list-add-routing",
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
 // THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
@@ -2480,6 +2496,18 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
       + gapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
     out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
       reason: `only \`getSectionActions()\` items are read; a button the section adds through its view \`diff\` (and a \`DataGridActiveRow…\` row action) is not folded at all, so neither reaches this ChangeSet${helperGap} — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar` });
+  }
+  // ENG-96457 (item 4) — THE CLASSIC SIDE EFFECT THE PLAN USED TO DENY. "The Classic section stays untouched" is
+  // false: which page an entity's `Add` opens is an ADD-purpose RelatedPage binding on the OBJECT, not on a page,
+  // and Classic's section `Add` reads the SAME binding. So the moment this migration points that binding at the
+  // Freedom form (or at the Freedom mini page), the Classic section's `Add` opens the Freedom page too — confirmed
+  // on-stand in ENG-96445, where Classic `BusinessRule1Section` → `ДОБАВИТЬ` began opening
+  // `UsrBusinessRule_TopAreaFormPage`. It is a DECISION, not a note: the operator either accepts it or asks for
+  // Classic routing to be kept, and either answer changes what the build does. Emitted for every section
+  // migration, because the binding is object-level whatever this page's layout turns out to be.
+  if (section) {
+    out.push({ kind: LIST_DECISION_KIND.addRouting, item: "Classic `Add` will open the Freedom page",
+      reason: "which page an `Add` opens is an ADD-purpose RelatedPage binding on the OBJECT, and the Classic section reads the same binding — so pointing it at the Freedom form/mini page ALSO re-points Classic's `Add`, and the Classic section is NOT left untouched once that binding exists. Accept that (the usual answer for a switch-over), or say the Classic routing must be kept — in which case the Freedom page needs its own binding scope and the plan's approach must stop claiming the two run in isolation" });
   }
   for (const ra of rowActions) {
     const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";

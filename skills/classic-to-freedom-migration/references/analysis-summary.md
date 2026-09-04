@@ -57,7 +57,10 @@ Migration call vocabulary (the `Call` column in `Pages`):
 
 - **Size:** <P> pages · <F> fields · <R> page rules · <D> details/features
 - **Approach:** <strategy in ONE sentence — parallel rebuild / reconcile / switch-over. Do NOT restate the
-  package, lock state or scope — those are the lines above.>
+  package, lock state or scope — those are the lines above. **Do NOT claim the Classic side is untouched or
+  isolated** (ENG-96457): the object's ADD-purpose RelatedPage binding is object-level, so pointing it at the
+  Freedom page ALSO re-points the Classic section's `Add`. The engine raises that as a `[list-add-routing]`
+  ⚠ Confirm row; the approach sentence must not contradict it.>
 
 ### What it does
 <1–2 sentences in business language: what the app is for and who uses it.>
@@ -94,7 +97,8 @@ Whole-package only, before the design specs:
 **Package:** HRApplicant / HRRequest / WorkHrBase (Classic, locked) → new UsrApplicantFreedom
 
 - **Size:** 2 pages · 19 fields · 6 page rules · 8 details/features
-- **Approach:** parallel rebuild over the existing Applicant entity — Classic stays live, no switch-over.
+- **Approach:** parallel rebuild over the existing Applicant entity — the Classic pages stay in place, and the
+  Classic section's `Add` re-points to the Freedom page with the object binding (see the `[list-add-routing]` row).
 
 ### What it does
 The HR/Recruiting candidates register — each applicant card carries a contact/vacancy profile,

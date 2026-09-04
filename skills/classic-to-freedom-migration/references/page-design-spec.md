@@ -98,8 +98,8 @@ that DOES have an answer is not a note: it is a ⚠ Confirm item, gated on the `
 it reaches `--units.preflight` and cannot be read past. The list page raises its own:
 
 #### ⚠ Confirm before I build (<n>)
-All eight kinds the list page can raise — the set is closed, so a kind absent from a run's plan means the run had
-nothing to ask, never that the question went unasked. Nine bullets, eight kinds: `list-columns` is listed twice
+All nine kinds the list page can raise — the set is closed, so a kind absent from a run's plan means the run had
+nothing to ask, never that the question went unasked. Ten bullets, nine kinds: `list-columns` is listed twice
 because it asks about an EMPTY set and about a FALLBACK one, and the two are answered separately:
 - **[list-columns]** no list columns resolved — the grid would be built empty …
 - **[list-columns]** fallback list column set — the Classic section declares no list columns, so the grid would
@@ -115,6 +115,13 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 - **[list-row-action]** row action: `<DataGridActiveRow…>` — its enablement condition must become Freedom state …
 - **[list-process]** section process: `<names>` — the Classic section launches it; wire it as a list-page
   run-process action …
+- **[list-add-routing]** Classic `Add` will open the Freedom page — which page an `Add` opens is an ADD-purpose
+  RelatedPage binding on the OBJECT, and the Classic section reads the same binding, so pointing it at the Freedom
+  form/mini page ALSO re-points Classic's `Add`. Raised on EVERY section migration, because the binding is
+  object-level whatever this page's layout turns out to be: once that binding exists the Classic section is not
+  left untouched, and the operator either accepts that or asks for the Classic routing to be kept. (Under
+  `placement.sectionHost.mode = pages-only-no-menu` the pages are reachable only by URL and through those same
+  object bindings, so the question is the same one — it is the binding, not the menu entry, that re-points `Add`.) …
 
 The FORM page raises its own kinds the same way, and one of them is worth naming here because it used to be the
 exception: **[lookup-value]** `lookup-record GUIDs in business-rule conditions` — raised when a business rule
@@ -126,14 +133,59 @@ evidence id and no `--units.preflight` row — a question an operator was asked 
 
 ### <entity> form page
 #### Layout
-| Region | Element | Type | Source | Rule | Additional |
-| --- | --- | --- | --- | --- | --- |
-| Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
-| Tab · <name> | <field label> | … | PDS.<col> | … | … |
-| Tab · <name> | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
-| Tab · <name> | <feature> | Approvals / Attachments / Feed (component) | template-provided / native — confirm component on-stand | — | — |
-| Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
-| Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
+| Region | Placement | Element | Type | Source | Rule | Additional |
+| --- | --- | --- | --- | --- | --- | --- |
+| Side profile › <island> | r<row> · c<col> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
+| Tab · <name> | r<row> · c<col> (span <n>) | <field label> | … | PDS.<col> | … | … |
+| Tab · <name> | — | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
+| Tab · <name> | — | <feature> | Approvals / Attachments / Feed (component) | template context — `<Template>` ships it (measured) / ⚠ ADD — `<Template>` ships NO <feature> (measured) / ⚠ confirm on-stand — `<Template>`'s capabilities are NOT measured | — | — |
+| Tab · <name> | — | Activities / Emails | Related list | Activity · native | — | — |
+| Card actions | — | <action> | Action | — | — | ⚠ which process / verify print reports |
+
+**`Placement` is the cell, and the rows are SORTED BY IT** (row, then column) — not by the order the Classic
+`diff` declares the fields. `r<row> · c<col>` is the field's cell in the TARGET Freedom grid (1-based; `(span n)` /
+`(rows n)` only when wider than one cell); `—` means the element has no computed cell (a detail, a placed widget,
+a card action). Reading the table top-to-bottom into a multi-column container is what shipped
+`City1 | Country1` instead of `City1 | City2` — the classic page declared the four fields in that order while
+placing them as two rows of two.
+
+**Every multi-column region also renders as its grid**, one line per row, so the pairing is visible rather than
+assembled by the reader:
+
+```md
+##### Grid of `Header` — 2 columns, 8 rows (build the fields at THESE cells)
+| Row | Column 1 | Column 13 |
+| --- | --- | --- |
+| 7 | City1 | City2 |
+| 8 | Country1 | Country2 |
+```
+
+The same cells are published per field in `--units.expect.fieldLayout` (`{ name, row, column, colSpan?, rowSpan? }`),
+and `--verify` MEASURES them. **The placement leg is ADVISORY today**, so a deviation is `⚠ verify` /
+`unverified`, never `❌ MISSING`: a page with every expected field present by name but at different cells names
+both the planned and the built cell, the row stays OPEN (the done-gate does not pass), and the text says the
+comparison itself is not yet trustworthy. Three states in all:
+
+| What the built payload carries | Verdict | Meaning |
+| --- | --- | --- |
+| every compared field at its published cell | `✅ Done` | the name-identity verdict stands |
+| some field at a different cell | `⚠ verify` / `unverified` | look at the page — the row stays open |
+| only *k* of *n* published cells carry a `layoutConfig` | `⚠ verify` / `unverified` | *"only k of n published cell(s) could be compared"* — the rest are UNKNOWN |
+| no built component carries a `layoutConfig` at all | `✅ Done` | *placement not checked* — the payload predates the field, so it is not failed on evidence it could not have carried |
+
+> ⚠ **Why advisory, and what flips it:** the leg rests on one assumption that still needs an on-stand run — that
+> clio `get-page`'s merged `bundle.viewConfig` returns `layoutConfig.row`/`.column` in the same 1-based integer
+> space the engine emits. The engine emits per TARGET GRID and one page can use two (a wide Header keeps the
+> classic 24-column grid → columns 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the
+> coordinates would flag a correctly built page. Until that read-back lands, read a placement `⚠ verify` as "look
+> at the page". Confirming the space is what unlocks flipping the deviation arm back to `❌ MISSING` — the fix for
+> a space difference is normalising in the engine, never weakening the check.
+
+**A `Source` cell never claims "provided by the Freedom template" on its own.** What a template ships is a fact
+about that template, so it comes from the engine's measured capability table (tabs · Feed · Attachments ·
+top-area columns · profile island). Three states, and the third is the point: measured-and-ships-it is template
+context, measured-and-does-not is an explicit build step **with its own expected count**, and never-measured is
+`⚠ confirm on-stand` — never an assertion in either direction.
 
 #### Logic
 | Behaviour | Trigger | Effect | Freedom target |
@@ -194,21 +246,21 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 
 ### Applicant form page
 #### Layout
-| Region | Element | Type | Source | Rule | Additional |
-| --- | --- | --- | --- | --- | --- |
-| Side profile › Contact | Contact | Lookup (Contact) | PDS.Contact | — | — |
-| Side profile › Contact | Mobile phone | Phone | PDS.MobilePhone | read-only | Value from linked Contact |
-| Side profile › Contact | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | — | — |
-| Side profile › Request | Request | Lookup (InternalRequest) | PDS.InternalRequest | — | — |
-| Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
-| Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
-| Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
-| Tab · Basic information | Attachments | Attachments | template-provided | — | — |
-| Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
-| Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
-| Tab · History | Activities | Related list | Activity · native | — | — |
-| Tab · Approvals | Visas | Approvals | native — confirm component on-stand | — | — |
-| Card actions | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
+| Region | Placement | Element | Type | Source | Rule | Additional |
+| --- | --- | --- | --- | --- | --- | --- |
+| Side profile › Contact | r1 · c1 | Contact | Lookup (Contact) | PDS.Contact | — | — |
+| Side profile › Contact | r2 · c1 | Mobile phone | Phone | PDS.MobilePhone | read-only | Value from linked Contact |
+| Side profile › Contact | r3 · c1 | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | — | — |
+| Side profile › Request | r4 · c1 | Request | Lookup (InternalRequest) | PDS.InternalRequest | — | — |
+| Side profile › Request | r5 · c1 | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
+| Tab · Basic information | r1 · c1 | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
+| Tab · Basic information | — | Contact comms | Related list | ContactCommunication · by Contact | — | — |
+| Tab · Basic information | — | Attachments | Attachments | ⚠ confirm on-stand — `PageWithTabsFreedomTemplate`'s capabilities are NOT measured, so whether it ships Attachments is unknown | — | — |
+| Tab · Current vacancies | — | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
+| Tab · History | — | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
+| Tab · History | — | Activities | Related list | Activity · native | — | — |
+| Tab · Approvals | — | Visas | Approvals | native — confirm component on-stand | — | — |
+| Card actions | — | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
 #### Logic
 | Behaviour | Trigger | Effect | Freedom target |

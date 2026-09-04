@@ -1,0 +1,168 @@
+{
+ "entity": "BusinessRule",
+ "entityColumns": {
+  "BOOLEAN": {
+   "type": "Boolean"
+  },
+  "City": {
+   "type": "Lookup",
+   "ref": "City"
+  },
+  "City1": {
+   "type": "Lookup",
+   "ref": "City"
+  },
+  "City2": {
+   "type": "Lookup",
+   "ref": "City"
+  },
+  "Country": {
+   "type": "Lookup",
+   "ref": "Country"
+  },
+  "Country1": {
+   "type": "Lookup",
+   "ref": "Country"
+  },
+  "Country2": {
+   "type": "Lookup",
+   "ref": "Country"
+  },
+  "CreatedBy": {
+   "type": "Lookup",
+   "ref": "Contact"
+  },
+  "CreatedOn": {
+   "type": "DateTime"
+  },
+  "DATE": {
+   "type": "8"
+  },
+  "DATE1": {
+   "type": "8"
+  },
+  "FLOAT": {
+   "type": "Float"
+  },
+  "Id": {
+   "type": "Guid"
+  },
+  "INTEGER": {
+   "type": "Integer"
+  },
+  "LOOKUP1": {
+   "type": "Lookup",
+   "ref": "Contact"
+  },
+  "LOOKUP2": {
+   "type": "Lookup",
+   "ref": "Account"
+  },
+  "ModifiedBy": {
+   "type": "Lookup",
+   "ref": "Contact"
+  },
+  "ModifiedOn": {
+   "type": "DateTime"
+  },
+  "Name": {
+   "type": "Text"
+  },
+  "ProcessListeners": {
+   "type": "Integer"
+  },
+  "STRING": {
+   "type": "Text"
+  },
+  "STRING1": {
+   "type": "Text"
+  },
+  "STRING2": {
+   "type": "Text"
+  },
+  "STRING3": {
+   "type": "Text"
+  },
+  "STRING4": {
+   "type": "Text"
+  }
+ },
+ "seed": [
+  {
+   "pkg": "BaseModulePageV2",
+   "body": "define(\"BaseModulePageV2\",[],function(){return{diff:[{operation:\"insert\",name:\"ProfileContainer\",values:{itemType:15}},{operation:\"insert\",name:\"Header\",values:{itemType:15}},{operation:\"insert\",name:\"Tabs\",values:{itemType:15}},{operation:\"insert\",name:\"ESNTab\",parentName:\"Tabs\",propertyName:\"tabs\",values:{itemType:15}},{operation:\"insert\",name:\"ESNFeedContainer\",parentName:\"ESNTab\",propertyName:\"items\",values:{itemType:15}},{operation:\"insert\",name:\"ChangesHistoryTab\",parentName:\"Tabs\",propertyName:\"tabs\",values:{itemType:15}}],methods:{init:function(){return;},getActions:function(){return;},onSaved:function(){return;},setColumns:function(){return;},loadValues:function(){return;},onRender:function(){return;}}};});"
+  }
+ ],
+ "schemas": [
+  {
+   "pkg": "UsrCustomPackage",
+   "body": "define(\"BusinessRule1Page\", [], function() {\n\treturn {\n\t\tentitySchemaName: \"BusinessRule\",\n\t\tdetails: /**SCHEMA_DETAILS*/{}/**SCHEMA_DETAILS*/,\n\t\tmodules: /**SCHEMA_MODULES*/{}/**SCHEMA_MODULES*/,\n\t\tdataModels: /**SCHEMA_DATA_MODELS*/{}/**SCHEMA_DATA_MODELS*/,\n\t\tdiff: /**SCHEMA_DIFF*/[\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"Name995584ef-3f5c-42ea-8918-d218a3fc82ed\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 24,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 0,\n\t\t\t\t\t\t\"layoutName\": \"ProfileContainer\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"Name\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"ProfileContainer\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 0\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"CreatedBy171e3274-552d-496b-9a98-11489fe31fbe\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 24,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 1,\n\t\t\t\t\t\t\"layoutName\": \"ProfileContainer\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"CreatedBy\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"ProfileContainer\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 1\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"DATE1cb9d78af-7dce-436a-a0c9-e583eb93ba82\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 0,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"DATE1\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 0\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"STRING6c2d5114-a230-4034-9e57-ffebfe48ddd5\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 0,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"STRING\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 1\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"FLOAT044d3528-648e-4451-980c-4b252d46db95\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 1,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"bindTo\": \"FLOAT\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 2\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"STRING2fd4e1f4e-eee8-4e66-bac2-d34d72b945b6\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 1,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"STRING2\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 3\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"BOOLEANfec75a88-690f-42b3-9cb6-56e870769604\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 2,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"BOOLEAN\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 4\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"STRING361d43522-c0f2-4f2e-aabd-924ae5534572\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 2,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"STRING3\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 5\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"INTEGER50aa7b0b-7fb5-424e-90b5-58de8ea879c4\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 3,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"INTEGER\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 6\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"STRING42378e836-a18b-4b98-84eb-cb090a397b52\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 3,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"STRING4\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 7\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"LOOKUP106741adf-265b-4fe1-ae89-23f16ef214d9\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 4,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3,\n\t\t\t\t\t\"bindTo\": \"LOOKUP1\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 8\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"Cityb1750352-d066-4317-b6ec-b023a86191ec\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 4,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"City\",\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 9\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"LOOKUP246c15d67-9554-4186-94ff-163a08d7460f\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 5,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3,\n\t\t\t\t\t\"bindTo\": \"LOOKUP2\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 10\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"Countrycfa4549b-17f0-4b77-ae53-fc8c7ec69df5\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 5,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"Country\",\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 11\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"LOOKUP5163ee29-e265-4360-8816-48390dd3587f\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 6,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"City1\",\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 12\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"LOOKUP4a1e8e98-f5d1-41f6-b05e-dd99dbb783d4\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 7,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"Country1\",\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 13\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"LOOKUP89dde9c4-0204-458e-ae5d-f7a0f28325b4\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 6,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"City2\",\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 14\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"LOOKUPf191b445-4d4f-4764-adde-fb2a2865905f\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 7,\n\t\t\t\t\t\t\"layoutName\": \"Header\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"Country2\",\n\t\t\t\t\t\"enabled\": true,\n\t\t\t\t\t\"contentType\": 3\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Header\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 15\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"Tab733e368eTabLabel\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"caption\": \"New Tab\",\n\t\t\t\t\t\"items\": [],\n\t\t\t\t\t\"order\": 0\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Tabs\",\n\t\t\t\t\"propertyName\": \"tabs\",\n\t\t\t\t\"index\": 0\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"Tab733e368eTabLabelGroup3e32f147\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"caption\": {\n\t\t\t\t\t\t\"bindTo\": \"Resources.Strings.Tab733e368eTabLabelGroup3e32f147GroupCaption\"\n\t\t\t\t\t},\n\t\t\t\t\t\"itemType\": 15,\n\t\t\t\t\t\"markerValue\": \"added-group\",\n\t\t\t\t\t\"items\": []\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Tab733e368eTabLabel\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 0\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"Tab733e368eTabLabelGridLayout3840a908\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"itemType\": 0,\n\t\t\t\t\t\"items\": []\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Tab733e368eTabLabelGroup3e32f147\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 0\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"ModifiedBy1184ee88-7ea6-4e48-a0da-d9743ac7ea35\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 0,\n\t\t\t\t\t\t\"row\": 0,\n\t\t\t\t\t\t\"layoutName\": \"Tab733e368eTabLabelGridLayout3840a908\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"ModifiedBy\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Tab733e368eTabLabelGridLayout3840a908\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 0\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"CreatedOn346a65bb-5177-430d-8e62-b9d5211e6697\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 0,\n\t\t\t\t\t\t\"layoutName\": \"Tab733e368eTabLabelGridLayout3840a908\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"CreatedOn\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Tab733e368eTabLabelGridLayout3840a908\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 1\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"insert\",\n\t\t\t\t\"name\": \"ProcessListenersc4127480-3d74-434b-81a0-706ae906687e\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"layout\": {\n\t\t\t\t\t\t\"colSpan\": 12,\n\t\t\t\t\t\t\"rowSpan\": 1,\n\t\t\t\t\t\t\"column\": 12,\n\t\t\t\t\t\t\"row\": 1,\n\t\t\t\t\t\t\"layoutName\": \"Tab733e368eTabLabelGridLayout3840a908\"\n\t\t\t\t\t},\n\t\t\t\t\t\"bindTo\": \"ProcessListeners\"\n\t\t\t\t},\n\t\t\t\t\"parentName\": \"Tab733e368eTabLabelGridLayout3840a908\",\n\t\t\t\t\"propertyName\": \"items\",\n\t\t\t\t\"index\": 2\n\t\t\t},\n\t\t\t{\n\t\t\t\t\"operation\": \"merge\",\n\t\t\t\t\"name\": \"ESNTab\",\n\t\t\t\t\"values\": {\n\t\t\t\t\t\"order\": 1\n\t\t\t\t}\n\t\t\t}\n\t\t]/**SCHEMA_DIFF*/,\n\t\tmethods: {},\n\t\trules: {},\n\t\tbusinessRules: /**SCHEMA_BUSINESS_RULES*/{}/**SCHEMA_BUSINESS_RULES*/\n\t};\n});\n"
+  }
+ ],
+ "section": [
+  {
+   "pkg": "UsrCustomPackage",
+   "body": "define(\"BusinessRule1Section\", [], function() {\n\treturn {\n\t\tentitySchemaName: \"BusinessRule\",\n\t\tdetails: /**SCHEMA_DETAILS*/{}/**SCHEMA_DETAILS*/,\n\t\tdiff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/,\n\t\tmethods: {}\n\t};\n});\n"
+  }
+ ],
+ "addRecordMiniPage": false,
+ "targetPackage": "UsrBusinessRuleFreedom",
+ "planMeta": {
+  "scope": "single-section",
+  "environment": "test-migration-3",
+  "package": "UsrCustomPackage (editable) \u2192 UsrBusinessRuleFreedom",
+  "approach": "Parallel rebuild \u2014 a new Freedom section beside the Classic one; the object's Add binding re-points, so Classic's Add opens the Freedom page too (see the [list-add-routing] row).",
+  "whatItDoes": "A register of business-rule records used to exercise the migration engine.",
+  "sectionSchema": "BusinessRule1Section",
+  "listTemplate": "ListPageV3",
+  "formTemplate": "PageWithTopAreaAndTabsFreedomTemplate"
+ },
+ "signals": {
+  "dcm": {
+   "resolved": true,
+   "present": false
+  },
+  "processes": {
+   "resolved": true,
+   "present": false
+  },
+  "printables": {
+   "resolved": true,
+   "present": false
+  },
+  "deduplication": {
+   "resolved": true,
+   "present": false,
+   "serviceConfigured": false
+  },
+  "schemaNamePrefix": {
+   "resolved": true,
+   "value": "Usr"
+  }
+ },
+ "placement": {
+  "targetPackageEditable": {
+   "resolved": true,
+   "value": true,
+   "evidence": "InstallType 0"
+  },
+  "application": {
+   "resolved": true,
+   "code": "UsrBusinessRuleFreedom",
+   "mode": "new-app"
+  },
+  "primaryPackage": {
+   "resolved": true,
+   "name": "UsrBusinessRuleFreedom",
+   "editable": true
+  },
+  "targetPackageInApplication": {
+   "resolved": true,
+   "value": true
+  },
+  "sectionHost": {
+   "resolved": true,
+   "mode": "new-app"
+  }
+ }
+}
