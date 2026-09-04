@@ -467,7 +467,7 @@ const happyAnswer = (item) => {
   // and round 1's `C01…` sequence, and one that wrote the file fresh dropped round 1's cards from the deliverable
   // while `coveredKeys` still counted those rows from round 1's index entries. Asserted on the PROMPTS, because
   // the prompt is the only place the agent learns where to write.
-  const partOf = (prompt) => (String(prompt).match(/written to `([^`]+)`/) || [])[1] || null;
+  const partOf = (prompt) => /written to `([^`]+)`/.exec(String(prompt))?.[1] || null;
   const describePrompts = asked.filter((i) => i.phase === "Describe");
   const round1 = describePrompts.filter((i) => i.id.startsWith("describe.")).map((i) => partOf(i.prompt));
   const round2 = describePrompts.filter((i) => i.id.startsWith("repair.")).map((i) => partOf(i.prompt));

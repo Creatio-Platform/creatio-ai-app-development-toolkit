@@ -328,5 +328,8 @@ export function itemId(phase, ...parts) {
 // prevent, reached with no agent misbehaviour. The batch index is deliberately NOT in the path: `packBatches`
 // partitions the scope list, so within one round the lead scope's label is already unique, and the round is the
 // only axis that collided. Round 1 keeps the historical name so a caller's existing part files still resolve.
-export const partFile = (outDir, label, round = 1) =>
-  `${outDir}/customizations-part-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}${round > 1 ? `-round${round}` : ''}.md`
+export const partFile = (outDir, label, round = 1) => {
+  const slug = String(label).replace(/[^A-Za-z0-9_-]/g, '-')
+  const roundSuffix = round > 1 ? `-round${round}` : ''
+  return `${outDir}/customizations-part-${slug}${roundSuffix}.md`
+}

@@ -692,7 +692,10 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const manifestPath = path.join(repoRoot, "skills/_workflow-core/workflows.json");
   const shipped = existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null;
   check("build-workflows: the shipped workflow manifest is exactly what TARGETS generates — a stale mapping fails an install, not a test, so it is pinned on both sides",
-    shipped === buildManifest(), () => `shipped ${shipped === null ? "MISSING" : `${shipped.length} bytes`} vs generated ${buildManifest().length} bytes`);
+    shipped === buildManifest(), () => {
+      const shippedSize = shipped === null ? "MISSING" : `${shipped.length} bytes`;
+      return `shipped ${shippedSize} vs generated ${buildManifest().length} bytes`;
+    });
   const manifest = shipped ? JSON.parse(shipped) : { workflows: [] };
   check("build-workflows: every manifest row names a script that EXISTS, and every shipped `*.workflow.js` has a row — a row without a file provisions nothing, a file without a row refuses to install",
     () => {

@@ -6423,7 +6423,7 @@ check("handoff BACK: an index entry carrying only acceptance criteria describes 
 const acOnlyPlan = renderPlan(hoAcOnly, {});
 check("handoff BACK: the plan renders `⚠ not described` for such a row instead of citing `? AC-1` — a citation naming no card is worse than a blank, because it reads as covered",
   !/\? AC-/.test(acOnlyPlan) && /⚠ not described/.test(acOnlyPlan),
-  () => (acOnlyPlan.match(/.*\? AC-.*/g) || []).join(" | "));
+  () => acOnlyPlan.split("\n").filter((line) => line.includes("? AC-")).join(" | "));
 check("handoff BACK: a bodyCard alone still counts — the criteria that gate a behaviour defined elsewhere live in the body's own card, which is a card",
   runMigration({ ...handoffManifest, behaviourIndex: { privateHelper: { card: "", bodyCard: "shared/C09", bodyAc: ["AC-1"] } } })
     .changeSet.handlerStubs.find(h => h.sourceMethod === "privateHelper").describedIn.bodyCard === "shared/C09");
