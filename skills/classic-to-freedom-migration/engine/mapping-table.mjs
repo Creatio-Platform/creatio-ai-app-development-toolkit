@@ -325,7 +325,9 @@ const FEATURE_ROWS = [
     // widget builder reads. Feed was in BOTH catalogs before (a FEATURE_TYPE entry and a WIDGET_BY_CONTAINER entry)
     // — the clearest case of the duplication this table exists to end.
     meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
-      widgets: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }] } }),
+      // `capability: "feed"` (ENG-96457) — the key `FREEDOM_TEMPLATE_CAPABILITIES` is consulted under. Without it
+      // the plan called a base-declared Feed "provided by the Freedom template" for a template that ships none.
+      widgets: [{ widget: "Feed (ESN)", freedom: "Freedom Feed", capability: "feed" }] } }),
 ];
 
 // The ENTITY fallbacks (`mapper.mjs` L1185-1186 before this): a detail whose SCHEMA name matches nothing but whose
@@ -646,4 +648,60 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
     if ("feature" in g && !nonEmptyString(g.feature)) bad("a gate's `feature`, when present, must be a non-empty string");
   }
   return out;
+}
+
+/* ---- FREEDOM TEMPLATE CAPABILITIES (ENG-96457, item 2) ----------------------------------------------------------
+   WHY THIS TABLE EXISTS. The plan used to assert, for any base-declared widget, "template context — provided by the
+   Freedom template" — an unconditional claim about a template it had never looked at. In ENG-96445 that claim was
+   made for Feed on `PageWithTopAreaAndTabsFreedomTemplate`, which ships no Feed at all: so the plan promised an
+   element nothing would build, its own `Tabs — 1 expected` criterion turned adding Feed into a gate violation, and
+   the Feed was simply lost. A template's contents are a FACT about the template, so they belong in a table that is
+   either measured or admits it is not.
+
+   WHAT AN ENTRY MEANS. `measuredIn` names where the capability was READ — a migration run against a stand, whose
+   evidence is on the ticket. An entry is a measurement, never a guess, which is why this table starts with the one
+   template the paired ENG-96444/ENG-96445 runs actually measured. Every other template resolves to `null`
+   (UNKNOWN), and the plan then says the capabilities are unconfirmed and to check on-stand — the honest state, and
+   a far better one than the assertion it replaces. Add a row when a run measures one; do NOT populate it from the
+   template's name, from documentation prose, or from what a similar template ships.
+
+   FIELDS. `tabs` — the template ships a tab container. `feed` / `attachments` — it ships THAT tab/component
+   (so a classic page's Feed is genuinely template context). `topAreaColumns` — how many columns its top area has
+   (`null` = it has no top area), which is what decides whether a multi-column Classic Header survives the move.
+   `profileIsland` — it ships a left profile island.                                                              */
+export const FREEDOM_TEMPLATE_CAPABILITIES = Object.freeze({
+  // Measured on the ENG-96445 stand: the template ships tabs and a ONE-column top area, and ships neither Feed nor
+  // Attachments — both had to be built explicitly (the workflow run lost Feed; the inline run hand-built it).
+  PageWithTopAreaAndTabsFreedomTemplate: Object.freeze({
+    tabs: true, feed: false, attachments: false, topAreaColumns: 1, profileIsland: false,
+    measuredIn: "ENG-96445 / ENG-96444 (2026-09-02, paired migration run)",
+  }),
+  // NOT A STAND MEASUREMENT — a named fixture, kept in the table for one reason: every template measured so far
+  // ships NO Feed and NO Attachments, so the `provided` verdict (and the "ships … (measured); re-bind it, do not
+  // rebuild" Source cell it renders) is unreachable from any real manifest and therefore untested. The first stand
+  // template that DOES ship Feed would then exercise that rendering for the first time in production — reviving
+  // the very false-promise this feature removes. The `__` prefix is not a legal Creatio schema name, so no real
+  // manifest can name it by accident; delete this entry once a real feed-shipping template is measured into the
+  // table above and the tests point at that one instead.
+  __FixtureTemplateShippingFeed: Object.freeze({
+    tabs: true, feed: true, attachments: false, topAreaColumns: 1, profileIsland: false,
+    measuredIn: "NOT MEASURED — test fixture for the template-PROVIDED verdict (PR #156 review, finding 2)",
+  }),
+});
+
+// The capabilities of `name`, or `null` when this template has never been measured. `null` is a THIRD state, not a
+// "no": a caller must say "unconfirmed — check on-stand", never "the template does not ship it".
+export function templateCapabilities(name) {
+  if (typeof name !== "string" || !name.trim()) return null;
+  return FREEDOM_TEMPLATE_CAPABILITIES[name.trim()] || null;
+}
+
+// Does `name` provide `capability` (`"feed"` / `"attachments"` / `"tabs"` / `"profileIsland"`)?
+//   `true`  — measured, and it ships it (genuine template context)
+//   `false` — measured, and it does NOT (an explicit build step with its own expected count)
+//   `null`  — never measured, or the capability is not one this table tracks (confirm on-stand)
+export function templateProvides(name, capability) {
+  const caps = templateCapabilities(name);
+  if (!caps || typeof caps[capability] !== "boolean") return null;
+  return caps[capability];
 }
