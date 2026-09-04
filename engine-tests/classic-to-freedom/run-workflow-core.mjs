@@ -608,6 +608,39 @@ check("ambiguousEntryKeys: only a key that matches SEVERAL inventory rows is lis
 check("ambiguousEntryKeys: an entry with NO card is not listed — a blank card is not coverage anywhere else in this arithmetic, so it cannot be reported as coverage that failed to attribute",
   () => helpers.ambiguousEntryKeys([{ key: "init", card: "" }], new Set(["A::init", "B::init"])).length === 0);
 
+check("keyCollapse: two scopes that both omit `schema` share the bare key form, so rows dispatched exceed coverage rows countable — the reviewer's own 5-rows/3-keys measurement",
+  () => {
+    const collapse = helpers.keyCollapse(helpers.normalizeScopes([
+      { role: "main page", schema: null, methodKeys: ["init", "save"], memberKeys: ["onSaved"] },
+      { role: "child page", schema: null, methodKeys: ["init"], memberKeys: ["onSaved"] },
+    ]));
+    return collapse.totalRows === 5 && collapse.keyCount === 3
+      && collapse.duplicated.sort().join(",") === "init,onSaved";
+  });
+check("keyCollapse: a well-formed inventory is NOT a finding — at most one schema-less scope keeps every key distinct, which is the shape the engine's `sectionStubScopes` pays the `Section` literal to guarantee",
+  () => helpers.keyCollapse(helpers.normalizeScopes(CTX.scopes)) === null
+    && helpers.keyCollapse(helpers.normalizeScopes(CTX_COLLIDING.scopes)) === null);
+{
+  const CTX_COLLAPSED = {
+    ...CTX,
+    scopes: [
+      { role: "main page", schema: null, methodKeys: ["init", "save"], memberKeys: ["onSaved"], unresolvedCount: 0 },
+      { role: "child page", schema: null, methodKeys: ["init"], memberKeys: ["onSaved"], unresolvedCount: 0 },
+    ],
+  };
+  const { result, asked } = await runCba(INPUT, (i) => i.phase === "Context"
+    ? { outcome: OUTCOME.VALUE, value: CTX_COLLAPSED }
+    : happyAnswer(i));
+  check("core: a collapsed key space STOPS the run — one agent describing one `init` would mark the other scope's `init` described and the verdict would read `complete` over a denominator smaller than the surface (ENG-96529 defect 2, consumer side)",
+    result.stopped === "key-collapse" && result.coverage.complete === false,
+    () => JSON.stringify(result));
+  check("core: the stop happens BEFORE any Describe item is spent — the collapse is arithmetic and is visible from the inventory alone, so there is nothing to gain by dispatching the fan-out",
+    asked.length === 1 && asked[0].phase === "Context", () => asked.map((i) => i.phase).join(","));
+  check("core: the stop names the keys more than one scope claims, so the operator knows which scope needs a `schema` rather than only that something collapsed",
+    /init/.test(result.reason) && /onSaved/.test(result.reason) && /schema/.test(result.reason),
+    () => result.reason);
+}
+
 check("censusShortfall: FEWER scopes than the digest declares is a finding; the same number is not, and MORE is not — a census that found something the digest missed is reported through `refusals`, not stopped",
   () => helpers.censusShortfall({ scopes: 18 }, new Array(1)).missing === 17
     && helpers.censusShortfall({ scopes: 2 }, new Array(2)) === null

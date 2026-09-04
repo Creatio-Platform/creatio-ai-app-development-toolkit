@@ -890,6 +890,21 @@ function declaredNothingToDo(totals) {
 const qualifyKey = (schema, key) =>
   schema && typeof key === 'string' && key !== '' && !key.includes('::') ? `${schema}::${key}` : key
 
+// Rows the inventory would DISPATCH against coverage keys it can COUNT. Returns null when they agree, and the
+// shortfall plus the keys more than one scope claims when they do not. See `keyCollapseReturn` in core.mjs for
+// why a bare (schema-less) key form is deliberate and why the check belongs on this side.
+function keyCollapse(worked) {
+  const seen = new Map()
+  for (const scope of worked || []) {
+    for (const key of [...(scope.methodKeys || []), ...(scope.memberKeys || [])]) {
+      seen.set(key, (seen.get(key) || 0) + 1)
+    }
+  }
+  const totalRows = (worked || []).reduce((n, s) => n + s.rows, 0)
+  const duplicated = [...seen.entries()].filter(([, count]) => count > 1).map(([key]) => key)
+  return duplicated.length ? { totalRows, keyCount: seen.size, duplicated } : null
+}
+
 // The scope inventory, normalised once: row counts, the qualified key forms, and the label every later
 // decision (batch packing, prompts, logs) keys on. Qualifying HERE — rather than at each reader — is what keeps
 // the prompt an agent is handed, the coverage denominator, the repair round's owner lookup and `digestKeyOf`'s
@@ -1385,6 +1400,30 @@ function censusShortfallReturn(shortfall, ctx, surface, log) {
   }
 }
 
+// KEY COLLAPSE: two scopes that both omit `schema` share the bare key form, so their rows land on ONE coverage
+// row and the denominator silently shrinks below the surface. `qualifyKey` keeps the bare form on purpose - the
+// engine's `stubScope` writes a deliberate null and the two sides have to match - and the engine defends the
+// invariant by spending the `"Section"` literal in `sectionStubScopes` so a second null-schema scope cannot
+// happen there. Nothing checked it HERE, on the consumer side, and `SCOPE.required` does not list `schema`, so a
+// schema-validating host permits the omission. `censusShortfall` cannot see it either: the collapse changes no
+// scope COUNT, so the run passes the census gate and reports `complete` over a fraction of the surface - the
+// exact failure ENG-96529 defect 2 exists to close. The check is arithmetic, which is the standard this module
+// sets for itself: rows dispatched must equal rows counted.
+function keyCollapseReturn(collapse, ctx, surface, log) {
+  const { totalRows, keyCount, duplicated } = collapse
+  log(`${totalRows} row(s) would be dispatched but only ${keyCount} coverage row(s) exist - ${duplicated.length} key(s) are claimed by more than one scope: ${duplicated.join(', ')}`)
+  return {
+    surface,
+    skipped: false,
+    stopped: 'key-collapse',
+    reason: `${totalRows} row(s) across the inventory collapse into ${keyCount} coverage key(s), so one agent describing one row would mark another scope's row described and the run would report \`complete\` over a smaller denominator than the surface has. Key(s) claimed by more than one scope: ${duplicated.join(', ')}. CAUSE: more than one scope was returned WITHOUT a \`schema\`, and a schema-less scope keeps the bare key form so it can match the engine's own stub scope. FIX: give every scope but at most one a \`schema\` in the Context answer (the engine does this with a deterministic literal - see \`sectionStubScopes\` in engine/migrate.mjs), then re-run. Nothing was written.`,
+    coverage: { described: 0, total: keyCount, complete: false, uncovered: [], wiringOnly: [] },
+    scopes: (ctx.scopes || []).map((s) => ({ role: s.role, schema: s.schema ?? null })),
+    censusNote: ctx.censusNote || null,
+    conflicts: [], settledElsewhere: [], gaps: [], refusals: ctx.refusals || [],
+  }
+}
+
 // Coverage alone is not completion: the report and the index are the DELIVERABLES, and a Merge item that returned
 // nothing wrote neither. Returns `mergeOk` so the caller keeps computing the verdict from it.
 function reportMerge(merged, mergeOutcome, log) {
@@ -1478,6 +1517,11 @@ function* run(rawInput, io = {}) {
       refusals: ctx.refusals || [],
     })
   }
+
+  // Rows dispatched vs rows countable: see `keyCollapseReturn`. Checked BEFORE any agent is dispatched, because
+  // the cost of the collapse is paid in the coverage arithmetic that runs after them.
+  const collapse = keyCollapse(worked)
+  if (collapse) return keyCollapseReturn(collapse, ctx, SURFACE, log)
 
   // --- Size-adaptive fan-out, decided here from the inventory -----------------
   const plan = planBatches(worked, totalRows, ROWS_PER_AGENT, MAX_DESCRIBE)

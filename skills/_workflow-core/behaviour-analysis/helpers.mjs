@@ -237,6 +237,21 @@ export function declaredNothingToDo(totals) {
 export const qualifyKey = (schema, key) =>
   schema && typeof key === 'string' && key !== '' && !key.includes('::') ? `${schema}::${key}` : key
 
+// Rows the inventory would DISPATCH against coverage keys it can COUNT. Returns null when they agree, and the
+// shortfall plus the keys more than one scope claims when they do not. See `keyCollapseReturn` in core.mjs for
+// why a bare (schema-less) key form is deliberate and why the check belongs on this side.
+export function keyCollapse(worked) {
+  const seen = new Map()
+  for (const scope of worked || []) {
+    for (const key of [...(scope.methodKeys || []), ...(scope.memberKeys || [])]) {
+      seen.set(key, (seen.get(key) || 0) + 1)
+    }
+  }
+  const totalRows = (worked || []).reduce((n, s) => n + s.rows, 0)
+  const duplicated = [...seen.entries()].filter(([, count]) => count > 1).map(([key]) => key)
+  return duplicated.length ? { totalRows, keyCount: seen.size, duplicated } : null
+}
+
 // The scope inventory, normalised once: row counts, the qualified key forms, and the label every later
 // decision (batch packing, prompts, logs) keys on. Qualifying HERE — rather than at each reader — is what keeps
 // the prompt an agent is handed, the coverage denominator, the repair round's owner lookup and `digestKeyOf`'s
