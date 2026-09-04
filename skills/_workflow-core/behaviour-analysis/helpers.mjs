@@ -320,4 +320,13 @@ export function itemId(phase, ...parts) {
 
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
-export const partFile = (outDir, label) => `${outDir}/customizations-part-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}.md`
+//
+// PR #147 review — the ROUND is part of the path. Both rounds order scopes by rows descending
+// (`planBatches`/`packBatches`), so the largest scope leads a batch in each and the repair round was handed round
+// 1's file: a repair agent writing it fresh dropped round 1's cards from the deliverable while `coveredKeys` still
+// counted those rows — the coverage-says-covered / report-does-not-contain-it divergence this workflow exists to
+// prevent, reached with no agent misbehaviour. The batch index is deliberately NOT in the path: `packBatches`
+// partitions the scope list, so within one round the lead scope's label is already unique, and the round is the
+// only axis that collided. Round 1 keeps the historical name so a caller's existing part files still resolve.
+export const partFile = (outDir, label, round = 1) =>
+  `${outDir}/customizations-part-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}${round > 1 ? `-round${round}` : ''}.md`

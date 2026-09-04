@@ -462,6 +462,45 @@ const happyAnswer = (item) => {
   check("core: the verdict reads the REPAIRED counts — computed after the repair round, so a run is never reported complete that the repair round had not finished",
     result.coverage.complete === true && result.coverage.described === 4 && logs.some((l) => /coverage after repair/.test(l)),
     () => JSON.stringify({ coverage: result.coverage, logs }));
+  // PR #147 review — the two rounds must not share a part file or a card id namespace. Both rounds order scopes
+  // by rows descending, so the largest scope leads a batch in each: the repair agent was handed round 1's path
+  // and round 1's `C01…` sequence, and one that wrote the file fresh dropped round 1's cards from the deliverable
+  // while `coveredKeys` still counted those rows from round 1's index entries. Asserted on the PROMPTS, because
+  // the prompt is the only place the agent learns where to write.
+  const partOf = (prompt) => (String(prompt).match(/written to `([^`]+)`/) || [])[1] || null;
+  const describePrompts = asked.filter((i) => i.phase === "Describe");
+  const round1 = describePrompts.filter((i) => i.id.startsWith("describe.")).map((i) => partOf(i.prompt));
+  const round2 = describePrompts.filter((i) => i.id.startsWith("repair.")).map((i) => partOf(i.prompt));
+  check("core: the repair round writes its OWN part file — a round marker in the path, so a repair agent cannot overwrite the first pass's cards while the coverage arithmetic still counts them",
+    round1.length === 1 && round2.length === 1 && round1[0] === "out/customizations-part-main-page.md"
+      && round2[0] === "out/customizations-part-main-page-round2.md",
+    () => JSON.stringify({ round1, round2 }));
+  check("core: the repair round numbers its cards in its OWN namespace — the prompt names the collision hazard itself, and two rounds numbering from `C01` off the same scope label is that hazard",
+    /Namespace every card id `<scope>\/C01`/.test(describePrompts[0].prompt)
+      && /Namespace every card id `<scope>\/R2-C01`/.test(describePrompts[1].prompt),
+    () => describePrompts.map((i) => (i.prompt.match(/Namespace every card id [^:]+/) || [])[0]).join(" | "));
+  check("core: the repair prompt says its part file is its own and the first pass is KEPT — nothing used to mention the file at all, so an agent had no reason to suspect it was overwriting a first pass",
+    /this round's own, empty file: the first pass's part is KEPT/.test(describePrompts[1].prompt),
+    () => describePrompts[1].prompt.slice(0, 400));
+  check("core: neither round's part file appears twice in Merge's inputs — the same path from two items is what made one round's cards invisible to the operator reading the report",
+    (() => {
+      const inputs = asked.find((i) => i.phase === "Merge").inputFiles;
+      return inputs.length === new Set(inputs).size;
+    })(), () => JSON.stringify(asked.find((i) => i.phase === "Merge").inputFiles));
+}
+{
+  // PR #147 review — an agent that writes somewhere OTHER than the path it was handed is NAMED. The core used to
+  // accept whatever `reportPart` came back, so a part-file collision left no trace in the run at all; this line
+  // is what makes a recurrence visible. A warning rather than a rejection on purpose: the returned path is the one
+  // Merge folds in, so the cards are still merged and the coverage numbers still describe what the report holds.
+  const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Describe"
+    ? { outcome: OUTCOME.VALUE, value: { ...FULL_DESCRIBE, reportPart: "out/somewhere-else.md" } }
+    : happyAnswer(i)));
+  check("core: a Describe answer whose `reportPart` is not the path the item was asked for is REPORTED, naming both paths — the core never checked this, which is what let a shared part file go unnoticed",
+    logs.some((l) => /was asked for/.test(l) && /somewhere-else\.md/.test(l) && /customizations-part-main-page\.md/.test(l)),
+    () => logs.join("\n"));
+  check("core: the mismatched answer is KEPT, not dropped — its cards are merged from the path it returned, and discarding real analysis over a path string is the worse failure",
+    result.coverage.described === 4 && result.coverage.complete === true, () => JSON.stringify(result.coverage));
 }
 {
   // PR #147 review — a Critique answering with a BARE method key must route into the repair round. ENG-96529
@@ -614,8 +653,9 @@ check("keyCollapse: two scopes that both omit `schema` share the bare key form, 
       { role: "main page", schema: null, methodKeys: ["init", "save"], memberKeys: ["onSaved"] },
       { role: "child page", schema: null, methodKeys: ["init"], memberKeys: ["onSaved"] },
     ]));
+    const duplicated = [...collapse.duplicated].sort((a, b) => a.localeCompare(b));
     return collapse.totalRows === 5 && collapse.keyCount === 3
-      && collapse.duplicated.sort().join(",") === "init,onSaved";
+      && duplicated.join(",") === "init,onSaved";
   });
 check("keyCollapse: a well-formed inventory is NOT a finding — at most one schema-less scope keeps every key distinct, which is the shape the engine's `sectionStubScopes` pays the `Section` literal to guarantee",
   () => helpers.keyCollapse(helpers.normalizeScopes(CTX.scopes)) === null

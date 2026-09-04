@@ -151,6 +151,24 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "no `bodyCard`: mixin:LeadMixin, DealMini::initMini",
       why: "the repair round targets the same qualified inventory keys (ENG-96529)",
     },
+    {
+      // The repair round now writes its OWN part file and numbers its cards in its own namespace. Both rounds
+      // order scopes by rows descending, so the same lead scope led a batch in each round and the repair agent
+      // was handed round 1's path and round 1's `C01…` sequence: a repair agent writing that file fresh dropped
+      // round 1's cards from the deliverable while `coveredKeys` still counted those rows. One entry, spanning
+      // BOTH halves of the line, so a change to only the path or only the ids does not ride in on the other.
+      baseline: "written to `out/customizations-part-main-page.md` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id `<scope>/C01`, `<scope>/C02`",
+      shipped: "written to `out/customizations-part-main-page-round2.md` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id `<scope>/R2-C01`, `<scope>/R2-C02`",
+      why: "the repair round gets its own part file and card id namespace, so it cannot overwrite or collide with the first pass (PR #147 review)",
+    },
+    {
+      // The other half of the same fix: nothing in the repair prompt mentioned the part file at all, so an agent
+      // handed round 1's path had no reason to suspect it was overwriting a first pass. Saying the first pass is
+      // KEPT is also what stops this round paying to restate cards already in the deliverable.
+      baseline: "a second silent omission is worse than a stated gap.",
+      shipped: "Your part file above is this round's own, empty file: the first pass's part is KEPT and merged alongside it",
+      why: "the repair round is told its part file is its own and that the first pass is kept (PR #147 review)",
+    },
   ],
 }
 
@@ -174,6 +192,13 @@ const ALLOWED_FINGERPRINT_DIVERGENCES = {
       from: "Merge/merge:report+index/general-purpose/cardCount+indexPath+reportPath",
       to: "Merge/merge:report+index/general-purpose/cardCount+indexPath+reportPath | Merge/merge:report+index-retry/general-purpose/cardCount+indexPath+reportPath",
       why: "Merge is retried once on death: it is the only phase whose failure leaves the run with full coverage and no deliverable (ENG-96529)",
+    },
+    {
+      scenario: "dead Merge — coverage stands, run not complete",
+      field: "result",
+      from: "merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`",
+      to: "NOTHING to fold in: the Merge phase died and wrote neither indexPath nor reportPath. Re-run this analysis — the coverage numbers above stand, but there is no deliverable.",
+      why: "`next` is conditional on `mergeOk`: an unconditional instruction told the operator to fold in an index file a dead Merge never wrote (PR #147 review)",
     },
   ],
 }

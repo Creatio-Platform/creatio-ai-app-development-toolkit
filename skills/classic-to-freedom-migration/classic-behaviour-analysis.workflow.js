@@ -973,7 +973,16 @@ function itemId(phase, ...parts) {
 
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
-const partFile = (outDir, label) => `${outDir}/customizations-part-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}.md`
+//
+// PR #147 review — the ROUND is part of the path. Both rounds order scopes by rows descending
+// (`planBatches`/`packBatches`), so the largest scope leads a batch in each and the repair round was handed round
+// 1's file: a repair agent writing it fresh dropped round 1's cards from the deliverable while `coveredKeys` still
+// counted those rows — the coverage-says-covered / report-does-not-contain-it divergence this workflow exists to
+// prevent, reached with no agent misbehaviour. The batch index is deliberately NOT in the path: `packBatches`
+// partitions the scope list, so within one round the lead scope's label is already unique, and the round is the
+// only axis that collided. Round 1 keeps the historical name so a caller's existing part files still resolve.
+const partFile = (outDir, label, round = 1) =>
+  `${outDir}/customizations-part-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}${round > 1 ? `-round${round}` : ''}.md`
 
 // ===== inlined from _workflow-core/behaviour-analysis/schemas.mjs =====
 // behaviour-analysis/schemas.mjs — the response contracts.
@@ -1168,7 +1177,12 @@ DO THREE THINGS, in order:
 Return the schema. The cards live in the FILE; the return carries the inventory, the card index and the register.`
 }
 
-function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote }) {
+function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote, round = 1 }) {
+  // PR #147 review — the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
+  // the collision hazard itself two clauses later ("bare `C01` ids collide across parts and the migration plan
+  // would then point at two different cards"), and a repair round numbering from `C01` off the same scope label
+  // reproduced exactly that between round 1's part and its own. Round 1 keeps the historical spelling.
+  const cardIds = round > 1 ? [`R${round}-C01`, `R${round}-C02`] : ['C01', 'C02']
   const scopeBlock = batch.scopes
     .map(
       (s) =>
@@ -1189,7 +1203,7 @@ ${sharedCardList}
 Shared-core cards file: \`${sharedCorePath}\`
 
 WHAT TO PRODUCE:
-1. Behaviour cards for what YOUR scopes add, written to \`${partPath}\` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id \`<scope>/C01\`, \`<scope>/C02\`, … using your scope's label: bare \`C01\` ids collide across parts and the migration plan would then point at two different cards.
+1. Behaviour cards for what YOUR scopes add, written to \`${partPath}\` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id \`<scope>/${cardIds[0]}\`, \`<scope>/${cardIds[1]}\`, … using your scope's label: bare \`C01\` ids collide across parts and the migration plan would then point at two different cards.
 2. \`indexEntries\` — one entry per key listed above that you covered, keyed EXACTLY as written above, naming the card and the AC numbers. Where you resolved a trigger the engine could not trace (typically a helper invoked from another method's body), add \`trigger\` and \`from\`. For a row whose behaviour is defined outside your scope — a \`mixin:\` member or the method wiring one in, an externally-assigned method, a \`message:\` counterpart in another schema, a module dependency — ALSO name the body's own card as \`bodyCard\`/\`bodyAc\` (usually a shared-core card from the list above): the criteria that gate the behaviour live there, not in the wiring card.
 3. \`gaps\` — every key you could NOT describe, each with why and the query that would settle it. A key you leave out of BOTH lists reads as forgotten; a gap reads as honest. Prefer a gap over a guess.
 
@@ -1198,7 +1212,11 @@ Your member ledger proves completeness for YOUR scopes only — say so; the surf
 
 function repairNote(toRepair, batch, critiqueNotes) {
   const mine = toRepair.filter((k) => batch.scopes.some((s) => [...s.methodKeys, ...s.memberKeys].includes(k)))
-  return `\nTHIS IS A REPAIR ROUND. A first pass already ran on these scopes and left these rows with no card — or, for a body-elsewhere row, no \`bodyCard\`: ${mine.join(', ')}\nDescribe THOSE rows. If a row genuinely cannot be described, return it as a \`gap\` with the settling query — a second silent omission is worse than a stated gap.\nCritique notes: ${critiqueNotes || '(none)'}\n`
+  // PR #147 review — the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
+  // file at all, so an agent handed round 1's path (the defect `partFile`'s round marker fixes) had no reason to
+  // suspect it was overwriting a first pass. Saying the first pass is KEPT is also what stops this round paying to
+  // restate cards that are already in the deliverable.
+  return `\nTHIS IS A REPAIR ROUND. A first pass already ran on these scopes and left these rows with no card — or, for a body-elsewhere row, no \`bodyCard\`: ${mine.join(', ')}\nDescribe THOSE rows. If a row genuinely cannot be described, return it as a \`gap\` with the settling query — a second silent omission is worse than a stated gap. Your part file above is this round's own, empty file: the first pass's part is KEPT and merged alongside it, so describe only the rows named here and do not restate cards it already carries.\nCritique notes: ${critiqueNotes || '(none)'}\n`
 }
 
 function critiquePrompt({ RULES, allKeys, described, uncoveredKeys, wiringOnly, sharedCardList, messageRegister }) {
@@ -1532,35 +1550,63 @@ function* run(rawInput, io = {}) {
   const sharedCardList = (ctx.sharedCore?.cards || []).map((c) => `${c.id} — ${c.title}`).join('\n') || '(none returned)'
   const sharedCorePath = ctx.sharedCore?.path || sharedCoreDefault
 
-  const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => ({
-    id: itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+')),
-    phase: 'Describe',
-    // The analysis contract itself — the member ledger, counted zeros, refusals
-    // and acceptance criteria a card must close with — is the `classic-ui-expert`
-    // skill, so the ROLE names it. A host without that skill installed cannot
-    // satisfy the item, and naming the role is what lets it say so.
-    role: 'classic-ui-expert',
-    prompt: describePrompt({
-      RULES,
-      batch,
-      sharedCardList,
-      sharedCorePath,
-      partPath: partFile(input.outDir, batch.scopes[0].label),
-      roundNote,
-    }),
-    inputFiles: [input.digest, sharedCorePath],
-    responseSchema: DESCRIBE_SCHEMA,
-    access: ACCESS.STAND_READ_ONLY,
-    label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
-  })
+  // The part file each dispatched item was ASKED for, by item id. Read back by `acceptParts` below.
+  const askedPart = new Map()
+
+  // PR #147 review — an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
+  // The core used to accept whatever path came back, so an agent writing round 1's file from the repair round left
+  // no trace at all; this line is what makes a recurrence, or any other path drift, visible in the run log.
+  //
+  // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the
+  // cards are still merged and the coverage arithmetic still describes what the report contains. Dropping the
+  // answer would discard real analysis over a path string, which is a worse failure than reporting the mismatch.
+  // PR #147 review — the parts to READ, deduplicated. `described` is round 1 plus the repair round, so a part
+  // path returned by an item in each round listed the same file twice; the round marker in `partFile` stops that
+  // arising from the rounds, and this stops it arising at all. A duplicate input file is never useful — it either
+  // reads the same cards twice or hides that two items claimed one file.
+  const partsToRead = () => [...new Set(described.map((r) => r.reportPart).filter(Boolean))]
+
+  const acceptParts = (items, results) => results.map((r, i) => {
+    const want = askedPart.get(items[i]?.id)
+    if (r && want && r.reportPart !== want) {
+      log(`⚠ \`${items[i].id}\` wrote \`${r.reportPart}\` but was asked for \`${want}\` — its cards are merged from the path it returned, and the two must not drift: a part file shared by two items loses one of them`)
+    }
+    return r
+  }).filter(Boolean)
+
+  // The ROUND is threaded into both the part path and the card id namespace: a repair round handed round 1's file
+  // and round 1's `C01…` numbering overwrote the first pass's cards and collided with its ids, while `coveredKeys`
+  // still counted round 1's rows as described. See `partFile` for why the round, and not the batch index, is the
+  // axis that collided.
+  const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => {
+    const round = repair ? 2 : 1
+    const id = itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+'))
+    const partPath = partFile(input.outDir, batch.scopes[0].label, round)
+    askedPart.set(id, partPath)
+    return {
+      id,
+      phase: 'Describe',
+      // The analysis contract itself — the member ledger, counted zeros, refusals
+      // and acceptance criteria a card must close with — is the `classic-ui-expert`
+      // skill, so the ROLE names it. A host without that skill installed cannot
+      // satisfy the item, and naming the role is what lets it say so.
+      role: 'classic-ui-expert',
+      prompt: describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, round, roundNote }),
+      inputFiles: [input.digest, sharedCorePath],
+      responseSchema: DESCRIBE_SCHEMA,
+      access: ACCESS.STAND_READ_ONLY,
+      label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
+    }
+  }
 
   phase('Describe')
-  let described = (yield step({
-    items: batches.map((b, i) => describeItem(b, i)),
+  const describeItems = batches.map((b, i) => describeItem(b, i))
+  let described = acceptParts(describeItems, yield step({
+    items: describeItems,
     parallel: true,
     requires: ['subAgents', 'structuredOutput', 'parallelism'],
     note: 'one item per scope batch — count decided from the inventory, not fixed',
-  })).filter(Boolean)
+  }))
 
   // --- Coverage is COMPUTED, never asserted ----------------------------------
   const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
@@ -1606,7 +1652,7 @@ function* run(rawInput, io = {}) {
         sharedCardList,
         messageRegister: ctx.sharedCore?.messageRegister || [],
       }),
-      inputFiles: described.map((r) => r.reportPart).filter(Boolean),
+      inputFiles: partsToRead(),
       responseSchema: CRITIQUE_SCHEMA,
       access: ACCESS.STAND_READ_ONLY,
       label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
@@ -1662,12 +1708,13 @@ function* run(rawInput, io = {}) {
     // small surface" shortcut to apply — it is already scoped to the owners of
     // the uncovered rows, and the cap is one lower so the round always has room.
     const repairBatches = packBatches(owners, ROWS_PER_AGENT, Math.max(1, MAX_DESCRIBE - 1))
-    const repaired = (yield step({
-      items: repairBatches.map((b, i) => describeItem(b, i, { repair: true, roundNote: repairNote(toRepair, b, critique?.notes) })),
+    const repairItems = repairBatches.map((b, i) => describeItem(b, i, { repair: true, roundNote: repairNote(toRepair, b, critique?.notes) }))
+    const repaired = acceptParts(repairItems, yield step({
+      items: repairItems,
       parallel: true,
       requires: ['subAgents', 'structuredOutput', 'parallelism'],
       note: 'repair round: the rows the arithmetic says are not described yet',
-    })).filter(Boolean)
+    }))
     described = [...described, ...repaired]
     covered = coveredKeys(described, allKeys)
     uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
@@ -1707,7 +1754,7 @@ function* run(rawInput, io = {}) {
           outDir: input.outDir,
           censusNote: ctx.censusNote,
         }),
-        inputFiles: [sharedCorePath, ...described.map((r) => r.reportPart).filter(Boolean)],
+        inputFiles: [sharedCorePath, ...partsToRead()],
         responseSchema: MERGE_SCHEMA,
         access: ACCESS.STAND_READ_ONLY,
         label: attempt > 1 ? 'merge:report+index-retry' : 'merge:report+index',
@@ -1749,7 +1796,13 @@ function* run(rawInput, io = {}) {
     censusNote: ctx.censusNote || null,
     // What the caller does next: merge indexPath into the manifest as `behaviourIndex` and re-run `--plan --out`.
     // The plan's own worklist headers then report the same coverage from the engine's side.
-    next: 'merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`',
+    //
+    // PR #147 review — CONDITIONAL on `mergeOk`. `reportPath`/`indexPath` above fall back to their default names so
+    // a caller that checks `complete` still learns where the deliverable would have gone; `next` was unconditional,
+    // so a run whose Merge died twice told the operator to fold an index file that was never written.
+    next: mergeOk
+      ? 'merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`'
+      : 'NOTHING to fold in: the Merge phase died and wrote neither indexPath nor reportPath. Re-run this analysis — the coverage numbers above stand, but there is no deliverable.',
   }
 }
 

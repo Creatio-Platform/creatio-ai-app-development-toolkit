@@ -289,35 +289,63 @@ export function* run(rawInput, io = {}) {
   const sharedCardList = (ctx.sharedCore?.cards || []).map((c) => `${c.id} — ${c.title}`).join('\n') || '(none returned)'
   const sharedCorePath = ctx.sharedCore?.path || sharedCoreDefault
 
-  const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => ({
-    id: itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+')),
-    phase: 'Describe',
-    // The analysis contract itself — the member ledger, counted zeros, refusals
-    // and acceptance criteria a card must close with — is the `classic-ui-expert`
-    // skill, so the ROLE names it. A host without that skill installed cannot
-    // satisfy the item, and naming the role is what lets it say so.
-    role: 'classic-ui-expert',
-    prompt: describePrompt({
-      RULES,
-      batch,
-      sharedCardList,
-      sharedCorePath,
-      partPath: partFile(input.outDir, batch.scopes[0].label),
-      roundNote,
-    }),
-    inputFiles: [input.digest, sharedCorePath],
-    responseSchema: DESCRIBE_SCHEMA,
-    access: ACCESS.STAND_READ_ONLY,
-    label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
-  })
+  // The part file each dispatched item was ASKED for, by item id. Read back by `acceptParts` below.
+  const askedPart = new Map()
+
+  // PR #147 review — an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
+  // The core used to accept whatever path came back, so an agent writing round 1's file from the repair round left
+  // no trace at all; this line is what makes a recurrence, or any other path drift, visible in the run log.
+  //
+  // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the
+  // cards are still merged and the coverage arithmetic still describes what the report contains. Dropping the
+  // answer would discard real analysis over a path string, which is a worse failure than reporting the mismatch.
+  // PR #147 review — the parts to READ, deduplicated. `described` is round 1 plus the repair round, so a part
+  // path returned by an item in each round listed the same file twice; the round marker in `partFile` stops that
+  // arising from the rounds, and this stops it arising at all. A duplicate input file is never useful — it either
+  // reads the same cards twice or hides that two items claimed one file.
+  const partsToRead = () => [...new Set(described.map((r) => r.reportPart).filter(Boolean))]
+
+  const acceptParts = (items, results) => results.map((r, i) => {
+    const want = askedPart.get(items[i]?.id)
+    if (r && want && r.reportPart !== want) {
+      log(`⚠ \`${items[i].id}\` wrote \`${r.reportPart}\` but was asked for \`${want}\` — its cards are merged from the path it returned, and the two must not drift: a part file shared by two items loses one of them`)
+    }
+    return r
+  }).filter(Boolean)
+
+  // The ROUND is threaded into both the part path and the card id namespace: a repair round handed round 1's file
+  // and round 1's `C01…` numbering overwrote the first pass's cards and collided with its ids, while `coveredKeys`
+  // still counted round 1's rows as described. See `partFile` for why the round, and not the batch index, is the
+  // axis that collided.
+  const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => {
+    const round = repair ? 2 : 1
+    const id = itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+'))
+    const partPath = partFile(input.outDir, batch.scopes[0].label, round)
+    askedPart.set(id, partPath)
+    return {
+      id,
+      phase: 'Describe',
+      // The analysis contract itself — the member ledger, counted zeros, refusals
+      // and acceptance criteria a card must close with — is the `classic-ui-expert`
+      // skill, so the ROLE names it. A host without that skill installed cannot
+      // satisfy the item, and naming the role is what lets it say so.
+      role: 'classic-ui-expert',
+      prompt: describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, round, roundNote }),
+      inputFiles: [input.digest, sharedCorePath],
+      responseSchema: DESCRIBE_SCHEMA,
+      access: ACCESS.STAND_READ_ONLY,
+      label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
+    }
+  }
 
   phase('Describe')
-  let described = (yield step({
-    items: batches.map((b, i) => describeItem(b, i)),
+  const describeItems = batches.map((b, i) => describeItem(b, i))
+  let described = acceptParts(describeItems, yield step({
+    items: describeItems,
     parallel: true,
     requires: ['subAgents', 'structuredOutput', 'parallelism'],
     note: 'one item per scope batch — count decided from the inventory, not fixed',
-  })).filter(Boolean)
+  }))
 
   // --- Coverage is COMPUTED, never asserted ----------------------------------
   const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
@@ -363,7 +391,7 @@ export function* run(rawInput, io = {}) {
         sharedCardList,
         messageRegister: ctx.sharedCore?.messageRegister || [],
       }),
-      inputFiles: described.map((r) => r.reportPart).filter(Boolean),
+      inputFiles: partsToRead(),
       responseSchema: CRITIQUE_SCHEMA,
       access: ACCESS.STAND_READ_ONLY,
       label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
@@ -419,12 +447,13 @@ export function* run(rawInput, io = {}) {
     // small surface" shortcut to apply — it is already scoped to the owners of
     // the uncovered rows, and the cap is one lower so the round always has room.
     const repairBatches = packBatches(owners, ROWS_PER_AGENT, Math.max(1, MAX_DESCRIBE - 1))
-    const repaired = (yield step({
-      items: repairBatches.map((b, i) => describeItem(b, i, { repair: true, roundNote: repairNote(toRepair, b, critique?.notes) })),
+    const repairItems = repairBatches.map((b, i) => describeItem(b, i, { repair: true, roundNote: repairNote(toRepair, b, critique?.notes) }))
+    const repaired = acceptParts(repairItems, yield step({
+      items: repairItems,
       parallel: true,
       requires: ['subAgents', 'structuredOutput', 'parallelism'],
       note: 'repair round: the rows the arithmetic says are not described yet',
-    })).filter(Boolean)
+    }))
     described = [...described, ...repaired]
     covered = coveredKeys(described, allKeys)
     uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
@@ -464,7 +493,7 @@ export function* run(rawInput, io = {}) {
           outDir: input.outDir,
           censusNote: ctx.censusNote,
         }),
-        inputFiles: [sharedCorePath, ...described.map((r) => r.reportPart).filter(Boolean)],
+        inputFiles: [sharedCorePath, ...partsToRead()],
         responseSchema: MERGE_SCHEMA,
         access: ACCESS.STAND_READ_ONLY,
         label: attempt > 1 ? 'merge:report+index-retry' : 'merge:report+index',
@@ -506,6 +535,12 @@ export function* run(rawInput, io = {}) {
     censusNote: ctx.censusNote || null,
     // What the caller does next: merge indexPath into the manifest as `behaviourIndex` and re-run `--plan --out`.
     // The plan's own worklist headers then report the same coverage from the engine's side.
-    next: 'merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`',
+    //
+    // PR #147 review — CONDITIONAL on `mergeOk`. `reportPath`/`indexPath` above fall back to their default names so
+    // a caller that checks `complete` still learns where the deliverable would have gone; `next` was unconditional,
+    // so a run whose Merge died twice told the operator to fold an index file that was never written.
+    next: mergeOk
+      ? 'merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`'
+      : 'NOTHING to fold in: the Merge phase died and wrote neither indexPath nor reportPath. Re-run this analysis — the coverage numbers above stand, but there is no deliverable.',
   }
 }

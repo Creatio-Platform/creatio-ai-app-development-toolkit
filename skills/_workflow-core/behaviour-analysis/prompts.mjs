@@ -41,7 +41,12 @@ DO THREE THINGS, in order:
 Return the schema. The cards live in the FILE; the return carries the inventory, the card index and the register.`
 }
 
-export function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote }) {
+export function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote, round = 1 }) {
+  // PR #147 review — the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
+  // the collision hazard itself two clauses later ("bare `C01` ids collide across parts and the migration plan
+  // would then point at two different cards"), and a repair round numbering from `C01` off the same scope label
+  // reproduced exactly that between round 1's part and its own. Round 1 keeps the historical spelling.
+  const cardIds = round > 1 ? [`R${round}-C01`, `R${round}-C02`] : ['C01', 'C02']
   const scopeBlock = batch.scopes
     .map(
       (s) =>
@@ -62,7 +67,7 @@ ${sharedCardList}
 Shared-core cards file: \`${sharedCorePath}\`
 
 WHAT TO PRODUCE:
-1. Behaviour cards for what YOUR scopes add, written to \`${partPath}\` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id \`<scope>/C01\`, \`<scope>/C02\`, … using your scope's label: bare \`C01\` ids collide across parts and the migration plan would then point at two different cards.
+1. Behaviour cards for what YOUR scopes add, written to \`${partPath}\` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id \`<scope>/${cardIds[0]}\`, \`<scope>/${cardIds[1]}\`, … using your scope's label: bare \`C01\` ids collide across parts and the migration plan would then point at two different cards.
 2. \`indexEntries\` — one entry per key listed above that you covered, keyed EXACTLY as written above, naming the card and the AC numbers. Where you resolved a trigger the engine could not trace (typically a helper invoked from another method's body), add \`trigger\` and \`from\`. For a row whose behaviour is defined outside your scope — a \`mixin:\` member or the method wiring one in, an externally-assigned method, a \`message:\` counterpart in another schema, a module dependency — ALSO name the body's own card as \`bodyCard\`/\`bodyAc\` (usually a shared-core card from the list above): the criteria that gate the behaviour live there, not in the wiring card.
 3. \`gaps\` — every key you could NOT describe, each with why and the query that would settle it. A key you leave out of BOTH lists reads as forgotten; a gap reads as honest. Prefer a gap over a guess.
 
@@ -71,7 +76,11 @@ Your member ledger proves completeness for YOUR scopes only — say so; the surf
 
 export function repairNote(toRepair, batch, critiqueNotes) {
   const mine = toRepair.filter((k) => batch.scopes.some((s) => [...s.methodKeys, ...s.memberKeys].includes(k)))
-  return `\nTHIS IS A REPAIR ROUND. A first pass already ran on these scopes and left these rows with no card — or, for a body-elsewhere row, no \`bodyCard\`: ${mine.join(', ')}\nDescribe THOSE rows. If a row genuinely cannot be described, return it as a \`gap\` with the settling query — a second silent omission is worse than a stated gap.\nCritique notes: ${critiqueNotes || '(none)'}\n`
+  // PR #147 review — the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
+  // file at all, so an agent handed round 1's path (the defect `partFile`'s round marker fixes) had no reason to
+  // suspect it was overwriting a first pass. Saying the first pass is KEPT is also what stops this round paying to
+  // restate cards that are already in the deliverable.
+  return `\nTHIS IS A REPAIR ROUND. A first pass already ran on these scopes and left these rows with no card — or, for a body-elsewhere row, no \`bodyCard\`: ${mine.join(', ')}\nDescribe THOSE rows. If a row genuinely cannot be described, return it as a \`gap\` with the settling query — a second silent omission is worse than a stated gap. Your part file above is this round's own, empty file: the first pass's part is KEPT and merged alongside it, so describe only the rows named here and do not restate cards it already carries.\nCritique notes: ${critiqueNotes || '(none)'}\n`
 }
 
 export function critiquePrompt({ RULES, allKeys, described, uncoveredKeys, wiringOnly, sharedCardList, messageRegister }) {
