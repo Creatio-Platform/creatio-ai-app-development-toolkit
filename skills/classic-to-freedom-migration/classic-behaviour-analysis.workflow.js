@@ -1385,6 +1385,43 @@ function skippedReturn(surface, extra = {}) {
   }
 }
 
+// THE DESCRIBE ANSWERS THAT SURVIVE, with a wrong part path NAMED on the way through. Module scope, like the other
+// reporters here, so `run()` keeps its Sonar cognitive-complexity headroom.
+//
+// Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the cards
+// are still merged and the coverage arithmetic still describes what the report contains. Dropping the answer would
+// discard real analysis over a path string, which is the worse failure. What this closes is that the core used to
+// accept whatever path came back, so a part file shared by two items left no trace in the run at all.
+function acceptedParts(items, results, askedPart, log) {
+  return results.map((r, i) => {
+    const want = askedPart.get(items[i]?.id)
+    if (r && want && r.reportPart !== want) {
+      log(`⚠ \`${items[i].id}\` wrote \`${r.reportPart}\` but was asked for \`${want}\` — its cards are merged from the path it returned, and the two must not drift: a part file shared by two items loses one of them`)
+    }
+    return r
+  }).filter(Boolean)
+}
+
+// THE CRITIQUE KEYS THIS RUN COULD NOT PLACE, as the two buckets and the two log lines that go with them. Its own
+// function for the same reason `reportCritique` below is: `run()` sits at the repo's pinned Sonar cognitive
+// complexity 15, and a reporter that returns what the caller then carries keeps the two branches out of it.
+//
+// AMBIGUOUS — several inventory rows end in `::<key>` — is a finding about a REAL row the run cannot pin down, and
+// the remedy is to re-key the answer. UNKNOWN — none does — names no row this run owns, so it is stale, copied
+// from another surface or invented, and the remedy is to discard it. Merged (as one `null` from `digestKeyOf`)
+// neither an operator nor a consumer could tell a dropped real signal from agent noise.
+function reportUnattributable(resolved, log) {
+  const bucket = (reason) => [...new Set(resolved.filter((r) => r.reason === reason).map((r) => r.k))]
+  const unattributable = { ambiguous: bucket('ambiguous'), unknown: bucket('unknown') }
+  if (unattributable.ambiguous.length) {
+    log(`⚠ ${unattributable.ambiguous.length} critique key(s) match SEVERAL inventory rows, so they cannot route into the repair round: ${unattributable.ambiguous.join(', ')} — re-key them \`<schema>::<method>\` as the inventory lists them. These are findings about REAL rows that this run cannot place.`)
+  }
+  if (unattributable.unknown.length) {
+    log(`⚠ ${unattributable.unknown.length} critique key(s) match NO inventory row on this surface, so they describe nothing this run owns: ${unattributable.unknown.join(', ')} — stale, copied from another surface, or invented`)
+  }
+  return unattributable
+}
+
 // WHAT THE CALLER IS TOLD ABOUT THE ADVERSARIAL PASS, and the two log lines that go with it. Narrowed from the
 // retry loop's `ran` through `isCritiqueShape`, because the two questions are not the same one: a non-nullish value
 // that is not a critique stops the loop legitimately, and reporting it as a pass that RAN claims
@@ -1620,13 +1657,7 @@ function* run(rawInput, io = {}) {
   // reads the same cards twice or hides that two items claimed one file.
   const partsToRead = () => [...new Set(described.map((r) => r.reportPart).filter(Boolean))]
 
-  const acceptParts = (items, results) => results.map((r, i) => {
-    const want = askedPart.get(items[i]?.id)
-    if (r && want && r.reportPart !== want) {
-      log(`⚠ \`${items[i].id}\` wrote \`${r.reportPart}\` but was asked for \`${want}\` — its cards are merged from the path it returned, and the two must not drift: a part file shared by two items loses one of them`)
-    }
-    return r
-  }).filter(Boolean)
+  const acceptParts = (items, results) => acceptedParts(items, results, askedPart, log)
 
   // The ROUND and the BATCH INDEX are threaded into the part path, and the round into the card id namespace.
   // A repair round handed round 1's file and round 1's `C01…` numbering overwrote the first pass's cards and
@@ -1756,14 +1787,7 @@ function* run(rawInput, io = {}) {
   // surface, so it is a stale, copied or invented key. The remedies are opposite — re-key the answer versus
   // discard it — and merged they were indistinguishable both in the log and to a consumer. `resolveKey` is the
   // one lookup `digestKeyOf` delegates to, so there is no second source of truth for the resolution.
-  const unattributableOf = (reason) => [...new Set(critiqueResolved.filter((r) => r.reason === reason).map((r) => r.k))]
-  const critiqueUnattributable = { ambiguous: unattributableOf('ambiguous'), unknown: unattributableOf('unknown') }
-  if (critiqueUnattributable.ambiguous.length) {
-    log(`⚠ ${critiqueUnattributable.ambiguous.length} critique key(s) match SEVERAL inventory rows, so they cannot route into the repair round: ${critiqueUnattributable.ambiguous.join(', ')} — re-key them \`<schema>::<method>\` as the inventory lists them. These are findings about REAL rows that this run cannot place.`)
-  }
-  if (critiqueUnattributable.unknown.length) {
-    log(`⚠ ${critiqueUnattributable.unknown.length} critique key(s) match NO inventory row on this surface, so they describe nothing this run owns: ${critiqueUnattributable.unknown.join(', ')} — stale, copied from another surface, or invented`)
-  }
+  const critiqueUnattributable = reportUnattributable(critiqueResolved, log)
   const toRepair = repairKeys(uncoveredKeys, critiqueUncovered, wiringOnly)
   if (toRepair.length) {
     const owners = worked.filter((s) => [...s.methodKeys, ...s.memberKeys].some((k) => toRepair.includes(k)))
