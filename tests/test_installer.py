@@ -48,6 +48,42 @@ def write_release_manifest(repo_root, plugin_runtime=None):
     )
 
 
+def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, body=""):
+    """Write a `skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
+
+    The manifest is what the installer reads: the script's own `meta.name` is still written so the
+    fixture looks like the real artifact, but no consumer parses it any more (PR #147 review).
+    """
+    skill_dir = source_root / "skills" / skill_dir_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    script = skill_dir / f"{script_stem}.workflow.js"
+    script.write_text(
+        f"export const meta = {{\n  name: '{meta_name}',\n}}\n{body}",
+        encoding="utf-8",
+    )
+    add_workflow_manifest_entry(source_root, script, meta_name)
+    return script
+
+
+def add_workflow_manifest_entry(source_root, script, meta_name, phases=("Describe",)):
+    """Append `{name, script, phases}` to `skills/_workflow-core/workflows.json`."""
+    installer = load_installer()
+    manifest_path = source_root / installer.WORKFLOW_MANIFEST_RELATIVE
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.is_file()
+        else {"workflows": []}
+    )
+    manifest["workflows"].append({
+        "name": meta_name,
+        "script": script.relative_to(source_root).as_posix(),
+        "phases": list(phases),
+    })
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
 def write_minimal_plugin_checkout(repo_root):
     """Lay out the files the install_* functions read from the local checkout."""
     (repo_root / ".mcp.json").write_text(
@@ -535,6 +571,304 @@ class InstallClaudeTests(unittest.TestCase):
             repo_root.mkdir()
             with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
                 installer.install_claude(repo_root, Path(temp) / "home")
+
+    def test_provisions_bundled_workflows_as_named_workflows(self):
+        # The marketplace install cannot register a named workflow, so the
+        # skills' `Workflow({ name: ... })` calls only resolve if install_claude
+        # mirrors the bundled scripts into user scope.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            write_bundled_workflow(repo_root, "demo-skill", "demo", "creatio-demo-workflow")
+            home = Path(temp) / "home"
+            (home / ".claude").mkdir(parents=True)
+
+            with patch.object(
+                installer.agent_cli, "preflight_claude", return_value="claude"
+            ), patch.object(installer, "run_checked"):
+                installer.install_claude(repo_root, home)
+
+            mirrored = home / ".claude" / "workflows" / "creatio-demo-workflow.js"
+            self.assertTrue(mirrored.exists())
+            # Byte-identical: the mirror is a copy, never a rewritten variant.
+            self.assertEqual(
+                mirrored.read_text(encoding="utf-8"),
+                (repo_root / "skills" / "demo-skill" / "demo.workflow.js").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+
+class ProvisionNamedWorkflowsTests(unittest.TestCase):
+    def test_names_the_mirror_after_meta_name_not_the_filename(self):
+        # Resolution may key on either identity, so the two must agree — the
+        # bundled filename (`<x>.workflow.js`) never does on its own.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "a-skill", "build", "creatio-build-thing")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            provisioned = installer.provision_named_workflows(source_root, claude_home)
+
+            self.assertEqual(provisioned, ["creatio-build-thing"])
+            self.assertTrue((claude_home / "workflows" / "creatio-build-thing.js").exists())
+            self.assertFalse((claude_home / "workflows" / "build.js").exists())
+
+    def test_refuses_a_meta_name_that_escapes_the_workflows_directory(self):
+        # `pathlib` does not sanitise the right-hand side of `/`, and update.py re-runs this
+        # provisioner over the marketplace cache unattended, so a traversing name would be an
+        # arbitrary-file-write primitive running with the user's privileges.
+        installer = load_installer()
+        for meta_name in ("creatio-../../evil", "creatio-a/b", "..", "", "/tmp/evil", "evil"):
+            with self.subTest(meta_name=meta_name), tempfile.TemporaryDirectory() as temp:
+                source_root = Path(temp) / "src"
+                write_bundled_workflow(source_root, "a-skill", "build", meta_name)
+                claude_home = Path(temp) / "home" / ".claude"
+
+                with self.assertRaises(RuntimeError):
+                    installer.provision_named_workflows(source_root, claude_home)
+
+                written = sorted(
+                    path.relative_to(temp).as_posix()
+                    for path in Path(temp).rglob("*.js")
+                    if path.is_file()
+                )
+                self.assertEqual(
+                    written,
+                    ["src/skills/a-skill/build.workflow.js"],
+                    "nothing may be written outside the source tree for a rejected name",
+                )
+
+    def test_refuses_two_scripts_claiming_one_meta_name(self):
+        # Named workflows share one flat user-scope directory, so the second copy would silently
+        # replace the first while both were reported as provisioned.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-same")
+            write_bundled_workflow(source_root, "skill-b", "two", "creatio-same")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            with self.assertRaises(RuntimeError):
+                installer.provision_named_workflows(source_root, claude_home)
+
+    def test_reads_the_name_from_the_manifest_not_from_the_script_text(self):
+        # PR #147 review — the identity comes from the generated manifest, so a line beginning
+        # `name:` anywhere in the inlined prompt text or core modules cannot supply the destination
+        # filename, and no JavaScript is parsed to find out. The script here declares one name in
+        # its own `meta` and a decoy further down; only the manifest decides.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir.mkdir(parents=True)
+            script = skill_dir / "build.workflow.js"
+            script.write_text(
+                "export const meta = {\n"
+                "  // the host's own scope, with a `template ${literal}` and a /regex{/ in prose\n"
+                "  name: 'creatio-ignored-by-the-consumer',\n"
+                "}\n"
+                "const agentSpec = {\n"
+                "name: 'creatio-../../evil',\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            add_workflow_manifest_entry(source_root, script, "creatio-real")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            self.assertEqual(
+                installer.provision_named_workflows(source_root, claude_home), ["creatio-real"]
+            )
+            self.assertTrue((claude_home / "workflows" / "creatio-real.js").exists())
+
+    def test_a_tree_with_no_manifest_refuses_rather_than_falling_back_to_a_parser(self):
+        # Fails CLOSED, with the remedy named. A fallback parser no test exercises would preserve
+        # exactly the coupling the manifest replaced.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "build.workflow.js").write_text(
+                "export const meta = {\n  name: 'creatio-real',\n}\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "carries no workflow manifest"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+            self.assertFalse((Path(temp) / ".claude" / "workflows").exists())
+
+    def test_a_script_missing_from_the_manifest_refuses_and_names_it(self):
+        # The drift gate in `scripts/build-workflows.mjs --check` is what stops this reaching a
+        # release; the installer still refuses rather than guessing a name from the filename.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            unlisted = source_root / "skills" / "skill-b"
+            unlisted.mkdir(parents=True)
+            (unlisted / "two.workflow.js").write_text(
+                "export const meta = {\n  name: 'creatio-two',\n}\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "skills/skill-b/two.workflow.js"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_an_unreadable_manifest_refuses_rather_than_provisioning_part_of_the_tree(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                "{ not json", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "could not be read as JSON"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_a_manifest_without_a_workflows_list_refuses(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                '{"generatedBy": "x"}\n', encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "no `workflows` list"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_a_manifest_entry_missing_name_or_script_refuses(self):
+        installer = load_installer()
+        for entry in ({"name": "creatio-one"}, {"script": "skills/a/b.workflow.js"}, "not-an-object"):
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temp:
+                source_root = Path(temp) / "src"
+                write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+                (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                    json.dumps({"workflows": [entry]}) + "\n", encoding="utf-8"
+                )
+
+                with self.assertRaises(RuntimeError):
+                    installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_provisions_every_bundled_workflow(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            write_bundled_workflow(source_root, "skill-b", "two", "creatio-two")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            self.assertEqual(
+                installer.provision_named_workflows(source_root, claude_home),
+                ["creatio-one", "creatio-two"],
+            )
+
+    def test_overwrites_a_stale_mirror(self):
+        # The plugin auto-updates, so the mirror must be rewritten rather than
+        # left in place — a stale copy runs an older args contract.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one", body="// v2\n")
+            claude_home = Path(temp) / "home" / ".claude"
+            workflows_dir = claude_home / "workflows"
+            workflows_dir.mkdir(parents=True)
+            (workflows_dir / "creatio-one.js").write_text("// v1 stale\n", encoding="utf-8")
+
+            installer.provision_named_workflows(source_root, claude_home)
+
+            self.assertIn(
+                "// v2", (workflows_dir / "creatio-one.js").read_text(encoding="utf-8")
+            )
+
+    def test_source_without_workflows_provisions_nothing(self):
+        # Not every checkout or release the installer runs against bundles one;
+        # that is not an error and must not create an empty workflows dir owner.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            (source_root / "skills" / "plain-skill").mkdir(parents=True)
+            claude_home = Path(temp) / "home" / ".claude"
+
+            self.assertEqual(installer.provision_named_workflows(source_root, claude_home), [])
+            self.assertFalse((claude_home / "workflows").exists())
+
+    def test_missing_skills_dir_provisions_nothing(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(
+                installer.provision_named_workflows(Path(temp) / "src", Path(temp) / ".claude"),
+                [],
+            )
+
+    def test_a_script_the_generator_never_declared_is_a_hard_error(self):
+        # Was "a script with no `meta.name`". The identity no longer lives in the script, so the
+        # equivalent failure is a script the generator's `TARGETS` table never declared.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "skill-a"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "broken.workflow.js").write_text(
+                "export const meta = { description: 'no name' }\n", encoding="utf-8"
+            )
+            add_workflow_manifest_entry(
+                source_root, skill_dir / "other.workflow.js", "creatio-other"
+            )
+            with self.assertRaisesRegex(RuntimeError, "has no entry in"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+
+class ShippedWorkflowScriptTests(unittest.TestCase):
+    """The repository's own workflow scripts must be provisionable."""
+
+    def test_every_shipped_workflow_declares_a_namespaced_meta_name(self):
+        installer = load_installer()
+        scripts = installer.discover_workflow_scripts(ROOT)
+        self.assertTrue(scripts, "the repository ships no *.workflow.js")
+        declared = installer.workflow_manifest_names(ROOT)
+        for script in scripts:
+            with self.subTest(script=script.name):
+                name = declared[script.relative_to(ROOT).as_posix()]
+                # ~/.claude/workflows/ is shared across every project and
+                # plugin, and project scope wins a name collision.
+                self.assertTrue(
+                    name.startswith("creatio-"),
+                    f"{script.name} declares meta.name {name!r}, which is not namespaced",
+                )
+
+    def test_skills_call_their_workflow_by_script_path_first(self):
+        """`scriptPath` is the PRIMARY documented call form; `name:` is the exception.
+
+        A name resolves only from `~/.claude/workflows/`, and on Claude Code
+        nothing provisions that mirror: the plugin declares no hook, so neither
+        `install.py` nor `update.py` runs on a marketplace install/update. A real
+        run therefore spent a guaranteed-failing `name:` call before falling back.
+        The bundled script is always present and version-matched, so it goes
+        first — and a stale mirror (the normal state after a plugin-branch switch)
+        resolves the right name to the wrong script, which is worse than a
+        resolution error. `name:` stays documented for the installer-based
+        targets, but it must not lead.
+        """
+        installer = load_installer()
+        declared = installer.workflow_manifest_names(ROOT)
+        for script in installer.discover_workflow_scripts(ROOT):
+            with self.subTest(script=script.name):
+                name = declared[script.relative_to(ROOT).as_posix()]
+                skill_doc = (script.parent / "SKILL.md").read_text(encoding="utf-8")
+                self.assertIn("scriptPath", skill_doc)
+                self.assertIn(f'name: "{name}"', skill_doc)
+                self.assertLess(
+                    skill_doc.index("scriptPath"),
+                    skill_doc.index(f'name: "{name}"'),
+                    f"{script.parent.name}/SKILL.md documents name: before scriptPath — "
+                    "the named form does not resolve on a marketplace-installed Claude Code",
+                )
 
 
 class RemoveTomlTableBlockTests(unittest.TestCase):

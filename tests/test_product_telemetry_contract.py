@@ -94,6 +94,9 @@ ALLOWED_NON_STAGE_IDENTIFIERS = {
     # The payload FIELD clio validates against the allow-list, named in the installer's
     # Cursor-rule docstring — not itself a stage value.
     "event_name",
+    # An MCP TOOL name, not a stage: classic-to-freedom-migration/SKILL.md tells a run to establish
+    # its browser surface by calling it before the first stand write, rather than assuming one.
+    "list_connected_browsers",
 }
 
 

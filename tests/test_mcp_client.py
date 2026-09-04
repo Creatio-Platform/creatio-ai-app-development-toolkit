@@ -13,6 +13,9 @@ if str(ROOT) not in sys.path:
 
 from runtime.scripts import mcp_client
 from runtime.scripts.mcp_client import (
+    TOOL_TREE_ROOT,
+    PathOutsideStore,
+    PathStore,
     PersistentMcpClient,
     USAGE,
     _HelpRequested,
@@ -252,13 +255,14 @@ class McpClientTests(unittest.TestCase):
         self.assertEqual(parsed["timeout"], 30)
 
     def test_parse_cli_request_accepts_args_file_mode(self):
-        temp_path = ROOT / ".tmp-tests" / "mcp-client-args.json"
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
-        try:
+        # The fixture goes under TOOL_TREE_ROOT, one of the two bases load_cli_arguments accepts.
+        # The repository root itself is not a base: on a Windows CI runner the checkout sits on
+        # `D:\a\...` while the profile is on `C:`, so a fixture at the repo root is under neither
+        # the home store nor the tool tree and the resolution is refused.
+        with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
+            temp_path = Path(temp) / "mcp-client-args.json"
+            temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
             parsed = parse_cli_request(["list-apps", "--args-file", str(temp_path), "--timeout", "45"])
-        finally:
-            temp_path.unlink(missing_ok=True)
         self.assertEqual(parsed["tool_name"], "list-apps")
         self.assertEqual(parsed["arguments"], {"environment-name": "local"})
         self.assertEqual(parsed["timeout"], 45)
@@ -266,6 +270,71 @@ class McpClientTests(unittest.TestCase):
     def test_load_cli_arguments_accepts_stdin_mode(self):
         arguments = load_cli_arguments(args_stdin=True, stdin_text='{"environment-name":"local"}')
         self.assertEqual(arguments, {"environment-name": "local"})
+
+    def test_load_cli_arguments_reads_a_file_through_the_path_store(self):
+        # The taint class path_store.py exists to close: the value must not reach `open()` as the
+        # caller's own string. Resolution is by listing, so a real file under the home store works.
+        with tempfile.TemporaryDirectory(dir=os.path.expanduser("~")) as temp:
+            args_file = os.path.join(temp, "args.json")
+            with open(args_file, "w", encoding="utf-8") as handle:
+                handle.write('{"environment-name":"local"}')
+
+            self.assertEqual(
+                load_cli_arguments(args_file=args_file),
+                {"environment-name": "local"},
+            )
+
+    def test_load_cli_arguments_reads_a_file_under_the_tool_tree(self):
+        # The SECOND base, and the home store is patched to somewhere unrelated so this test can
+        # only pass if the TOOL-TREE store is the one that resolved. Previously the fixture went
+        # under os.getcwd(), which on a Linux CI runner is itself inside $HOME — so the home store
+        # served it on the first iteration and the second base was never exercised at all.
+        with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
+            args_file = os.path.join(temp, "args.json")
+            with open(args_file, "w", encoding="utf-8") as handle:
+                handle.write('{"environment-name":"local"}')
+
+            with tempfile.TemporaryDirectory() as unrelated_home:
+                with patch("runtime.scripts.mcp_client.home_store",
+                           return_value=PathStore(unrelated_home)):
+                    self.assertEqual(
+                        load_cli_arguments(args_file=args_file),
+                        {"environment-name": "local"},
+                    )
+
+    def test_load_cli_arguments_refuses_a_file_under_neither_base(self):
+        # PathOutsideStore specifically, not the base ValueError: PathOutsideStore subclasses it,
+        # but so does json.JSONDecodeError, so `assertRaises(ValueError)` stayed green with the
+        # whole containment loop deleted — /etc/hosts reads fine and simply fails to parse.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        traversal = os.path.join(os.path.expanduser("~"), "..", "..", "etc", "hosts")
+        for requested in (outside, traversal):
+            with self.subTest(requested=requested):
+                with self.assertRaisesRegex(
+                    PathOutsideStore, "under neither your home directory nor the tool tree"
+                ):
+                    load_cli_arguments(args_file=requested)
+
+    def test_load_cli_arguments_refuses_before_reading_the_file(self):
+        # "Refused BEFORE any read" was a comment, not an assertion. Now it is one.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        with patch.object(Path, "read_text") as read_text:
+            with self.assertRaises(PathOutsideStore):
+                load_cli_arguments(args_file=outside)
+        read_text.assert_not_called()
+
+    def test_load_cli_arguments_is_not_widened_by_the_working_directory(self):
+        # The base must be a program constant. When it was derived from os.getcwd(), running from
+        # the filesystem root rooted the second store there and resolved every file on the volume,
+        # including other accounts' profiles.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        previous = os.getcwd()
+        try:
+            os.chdir(os.path.abspath(os.sep))
+            with self.assertRaises(PathOutsideStore):
+                load_cli_arguments(args_file=outside)
+        finally:
+            os.chdir(previous)
 
     def test_load_cli_arguments_rejects_multiple_sources(self):
         with self.assertRaisesRegex(ValueError, "exactly one argument source"):

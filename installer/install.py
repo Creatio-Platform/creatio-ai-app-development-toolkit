@@ -32,6 +32,16 @@ from agent_cli import (  # noqa: E402
 
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
+NAMED_WORKFLOW_DIR_NAME = "workflows"
+WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
+WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
+# A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
+# than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
+# the base and an absolute value discards the base entirely, which would turn the installer into an
+# arbitrary-file-write primitive running with the user's privileges. The namespace prefix is part of
+# the pattern because every shipped script already carries it and it keeps the mirror out of the way
+# of unrelated user-scope workflows.
+WORKFLOW_META_NAME_ALLOWED = re.compile(r"creatio-[A-Za-z0-9._-]+")
 TELEMETRY_RULE_NAME = "creatio-telemetry"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
@@ -376,6 +386,143 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
             target_skill_dir,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+
+
+def workflow_manifest_names(source_root: Path) -> dict[str, str]:
+    """Map each bundled workflow script (repo-relative POSIX path) to its declared name.
+
+    Read from the GENERATED manifest at ``skills/_workflow-core/workflows.json``, which
+    ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
+    from, under the same ``--check`` drift gate.
+
+    This used to be recovered by lexing the generated JavaScript: a hand-written JS sub-lexer in
+    Python whose only job was to pull ``name`` out of an ``export const meta = {...}`` literal the
+    generator already held in structured form. It needed comment, string, unterminated-literal and
+    decoy-name hardening across four review rounds, and the constructs it still could not handle are
+    ordinary in generated JS - a template literal with ``${...}``, a regex literal carrying a brace
+    or a quote, the regex-versus-division ambiguity. Its failures were quiet: a wrong name written
+    to ``~/.claude/workflows/`` so ``Workflow({ name })`` resolves to nothing while the install
+    reports success, or a hard abort on a language path the generator's own goldens never exercise.
+    It is also what AGENTS.md forbids twice over - a generated artifact is a verification tool, not
+    a source to reverse-engineer a format from, and parsing text is not a substitute for a source
+    that returns the same data as fields.
+
+    Fails CLOSED: a tree with no manifest, or an unreadable one, raises rather than falling back to
+    a parser. There is deliberately no fallback - one that no test exercises would preserve exactly
+    the coupling this replaced and re-introduce the silent mis-parse.
+    """
+    manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
+            f"bundled workflow script cannot be provisioned as a named workflow: {source_root}. "
+            f"Re-run the installer from a current release, or run "
+            f"`node scripts/build-workflows.mjs` in a checkout."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            f"Workflow manifest {manifest_path} could not be read as JSON: {error}"
+        ) from error
+    entries = manifest.get("workflows")
+    if not isinstance(entries, list):
+        raise RuntimeError(
+            f"Workflow manifest {manifest_path} carries no `workflows` list, so it declares no "
+            f"workflow identities."
+        )
+    names: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Workflow manifest {manifest_path} carries a non-object entry: {entry!r}")
+        name, script = entry.get("name"), entry.get("script")
+        if not isinstance(name, str) or not isinstance(script, str) or not name or not script:
+            raise RuntimeError(
+                f"Workflow manifest {manifest_path} carries an entry without both `name` and "
+                f"`script`: {entry!r}"
+            )
+        # Validated HERE, before the value becomes a path component. The manifest arrives with the
+        # rest of the tree - from a marketplace update rather than a reviewed checkout - and
+        # `installer/update.py` re-runs this provisioner over `~/.claude/plugins/cache/`
+        # unattended, on every plugin update.
+        if not WORKFLOW_META_NAME_ALLOWED.fullmatch(name) or Path(name).name != name:
+            raise RuntimeError(
+                f"Workflow name is not usable as a filename: {name!r} in {manifest_path}. "
+                f"A provisioned name must match creatio-[A-Za-z0-9._-]+ and contain no path "
+                f"separator, because it is written to ~/.claude/workflows/<name>.js."
+            )
+        names[script] = name
+    return names
+
+
+def discover_workflow_scripts(source_root: Path) -> list[Path]:
+    """Bundled ``skills/*/**.workflow.js`` scripts, sorted for a stable order."""
+    skills_dir = source_root / "skills"
+    if not skills_dir.is_dir():
+        return []
+    return sorted(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+
+
+def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]:
+    """Mirror bundled workflow scripts into user scope as NAMED workflows.
+
+    The marketplace ships skills, agents and MCP servers — it cannot register a
+    named workflow, so a skill can otherwise only reach its own orchestration
+    through `Workflow({ scriptPath })` with a hand-resolved absolute path into
+    the versioned plugin cache. Copying each script to
+    ``~/.claude/workflows/<meta.name>.js`` makes `Workflow({ name })` work
+    instead, which is the same convention the `creatio-development` plugin uses.
+
+    This is a MIRROR, not a second source: it is rewritten on every install and
+    on every Claude update, because the plugin itself auto-updates and a stale
+    user-scope copy would run an older `args` contract against a newer skill.
+    That is also why both skills keep `scriptPath` documented as the fallback —
+    the in-tree script is version-matched by construction, and user-scope
+    discovery only happens at session start, so a freshly provisioned workflow
+    is not resolvable by name until the next session.
+
+    Returns the provisioned workflow names. A source tree without workflow
+    scripts provisions nothing rather than failing — not every checkout or
+    release the installer runs against bundles one.
+    """
+    scripts = discover_workflow_scripts(source_root)
+    if not scripts:
+        return []
+
+    declared = workflow_manifest_names(source_root)
+    workflows_dir = claude_home / NAMED_WORKFLOW_DIR_NAME
+    workflows_dir.mkdir(parents=True, exist_ok=True)
+    provisioned: list[str] = []
+    sources: dict[str, Path] = {}
+    for script in scripts:
+        relative = script.relative_to(source_root).as_posix()
+        name = declared.get(relative)
+        if name is None:
+            raise RuntimeError(
+                f"Bundled workflow script {relative} has no entry in "
+                f"{WORKFLOW_MANIFEST_RELATIVE}, so its named identity is unknown. Run "
+                f"`node scripts/build-workflows.mjs` in a checkout, or re-run the installer from a "
+                f"current release."
+            )
+        # Two scripts claiming one name used to overwrite each other silently while BOTH were
+        # reported as provisioned, so one skill would run the other's orchestration.
+        if name in sources:
+            raise RuntimeError(
+                f"Two bundled workflow scripts declare the same `meta.name` {name!r}: "
+                f"{sources[name]} and {script}. Named workflows share one flat user-scope "
+                f"directory, so the second copy would silently replace the first."
+            )
+        sources[name] = script
+        target = workflows_dir / f"{name}.js"
+        # Containment is asserted on the resolved destination as well as on the name. The name check
+        # above is the real guard; this one holds even if it is ever loosened.
+        if target.resolve().parent != workflows_dir.resolve():
+            raise RuntimeError(
+                f"Workflow {name!r} would be written outside {workflows_dir}: {target}"
+            )
+        shutil.copyfile(script, target)
+        provisioned.append(name)
+    return provisioned
 
 
 def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
@@ -813,6 +960,10 @@ def install_claude(repo_root: Path, home: Path) -> None:
         pre_remove_marketplace=True,
     )
     enable_claude_marketplace_auto_update(claude_home / "settings.json")
+    # Named workflows are user scope, not plugin scope — the marketplace install
+    # above cannot register them, so mirror them here (see
+    # provision_named_workflows). Claude-only: no other agent reads this dir.
+    provision_named_workflows(repo_root, claude_home)
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
