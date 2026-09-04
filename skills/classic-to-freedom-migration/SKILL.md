@@ -334,10 +334,19 @@ The build is a separate skill: **`freedom-build-executor`** (`../freedom-build-e
 
    **First say what the build will do, in the user's own words and in order — and SHOW EACH STEP'S KEY.** You have `--units` here, which the stop's own menu does not, so name every step by what it BUILDS and put its key in backticks beside it: *"The build has three steps: create the app (`app`), build the Applicants list page (`main`), build the Applicant record page (`mini:Applicant`). After each round a verify pass checks the result."* **The keys are not decoration — do not drop them:** `findings` names them and so does `checkpointAfter`, so a user who never saw `mini:Applicant` cannot say which page came back wrong. **"Step" is the word for the user; `unit` stays the key** — and a step is not always a page (`app` creates the application and package; a reachability step registers a section).
 
-   **Then offer these three, say what each costs, and pass what they choose:**
-   - **`guided`** — pause after every step, so the user can check each page on the stand as it lands.
-   - **`round1`** — build everything once, then pause and show what was built and what is still open, before any repair round. Offer this when the plan is large or the user is unsure the section is being read the way they meant: a deviation surfaces after round 1 instead of after round 6, and a measured run spent six repair rounds re-deriving a shortfall the user would have settled at the start.
-   - **`layout-first`** — build the page layouts first and pause; the business logic is ported on the next run. Offer this when the layout itself is the thing in doubt — porting behaviour onto a layout that is about to change is the waste it avoids.
+   **Then offer these three, say what each costs, and pass what they choose. PRESENT THE LABEL, PASS THE TOKEN:**
+
+   | What the user sees | What you pass as `mode` |
+   |---|---|
+   | **Guided** | `guided` |
+   | **Round by round** | `round1` |
+   | **Layout first** | `layout-first` |
+
+   - **Guided** (`guided`) — pause after every step, so the user can check each page on the stand as it lands.
+   - **Round by round** (`round1`) — build everything once, then pause and show what was built and what is still open, before any repair round. Offer this when the plan is large or the user is unsure the section is being read the way they meant: a deviation surfaces after round 1 instead of after round 6, and a measured run spent six repair rounds re-deriving a shortfall the user would have settled at the start.
+   - **Layout first** (`layout-first`) — build the page layouts first and pause; the business logic is ported on the next run. Offer this when the layout itself is the thing in doubt — porting behaviour onto a layout that is about to change is the waste it avoids.
+
+   **The label is presentation, the token is identity — never swap them.** A label is never parsed back into a mode, so name the OPTION by its label (`round1` reads as a version number to a reader, `layout-first` as a flag). But what you pass as `mode`, and what you record as `{ "kind": "run", "item": "control-mode", "answer": "…" }`, is the TOKEN: `buildMode` accepts only those five strings and throws on anything else, which is the point of validating the choice rather than guessing at it. Quoting the token beside the label, as above, is what keeps a friendly menu machine-safe.
 
    **Do NOT offer `auto` or `checkpoints`.** Both remain legal and both are honoured when a caller passes them deliberately; they are simply not on the menu. `auto` answers a different question — "nobody is watching this run" — and putting it in a list about operator control invites the one answer this step exists to stop being taken by default; its one place is the unattended paragraph below. `checkpoints` is an inherited mode ENG-96204 does not specify, so it is not offered either — if the user asks for it by name, pass it together with `checkpointAfter`.
 

@@ -137,6 +137,27 @@ class ControlModeDocTests(unittest.TestCase):
         missing = [mode for mode in MODES if f"`{mode}`" not in content]
         self.assertFalse(missing, f"a mode the run accepts but the launcher never offers is unreachable; missing {missing}")
 
+    def test_launcher_pairs_each_offered_mode_with_a_human_label(self):
+        """The user picks by NAME; the agent passes the TOKEN.
+
+        A bare `round1` in front of a reader looks like a version number, so the launcher shows a
+        label. But a label is never parsed back into a mode -- ``buildMode`` accepts only the tokens
+        -- so the doc has to carry BOTH, next to each other, or an agent reading it will eventually
+        pass "Round by round" as ``mode`` and the run will throw. Pinned as the pairing rather than
+        as two independent greps for that reason.
+        """
+        content = flat(read_text(MIGRATION_SKILL))
+        for token, label in (("guided", "Guided"), ("round1", "Round by round"),
+                             ("layout-first", "Layout first")):
+            self.assertIn(
+                f"**{label}** (`{token}`)", content,
+                f"the launcher must offer `{token}` under its label {label!r}, with the token beside it",
+            )
+        self.assertIn(
+            "The label is presentation, the token is identity", content,
+            "the launcher must say which of the two is passed to the run, or the pairing is decorative",
+        )
+
     def test_launcher_names_the_non_interactive_escape(self):
         content = read_text(MIGRATION_SKILL)
         missing = missing_markers(

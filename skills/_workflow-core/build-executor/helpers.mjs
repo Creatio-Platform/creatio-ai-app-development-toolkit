@@ -531,17 +531,34 @@ export function buildMode(raw) {
   }
   return m
 }
+// THE NAME A HUMAN READS for a mode. The VALUE stays the machine token (`round1`): that is what `buildMode`
+// validates, what `mode` carries, and what the `control-mode` answer records. A label is never parsed back into a
+// mode, so presentation and identity are free to differ — and they should, because `round1` reads as a version
+// number and `layout-first` as a flag. Labelled for EVERY valid mode, not only the offered three, so a log line
+// or a refusal that names `auto` still has a human word for it.
+export function modeLabel(mode) {
+  const LABEL = {
+    auto: 'Unattended',
+    checkpoints: 'Checkpoints',
+    guided: 'Guided',
+    round1: 'Round by round',
+    'layout-first': 'Layout first',
+  }
+  return LABEL[mode] || mode
+}
 // WHAT EACH OFFERED MODE DOES, one line each in a non-engineer's words — the text the refuse-to-start stop puts in
 // front of the operator, so "which of these do I want" is answered WITH the question. The user-facing word is
 // STEP; `unit` stays the internal key everywhere and is not always a page (DR-6). Driven off `offeredModes()`, so
 // a mode added there and left undescribed here renders as exactly that, loudly, instead of vanishing.
+// LABEL FIRST, token in backticks after it: the reader picks by name, and the caller still sees the exact string
+// to pass as `mode` without hunting for it — the pairing is what keeps a friendly menu machine-safe.
 export function buildModeMenu() {
   const WHAT = {
     guided: 'pause after every step, so you can check each page on the stand as it lands',
     round1: 'build everything once, then pause and show what was built and what is still open, before any repair round',
     'layout-first': 'build the page layouts first and pause; the business logic is ported on the next run',
   }
-  return offeredModes().map((m) => `\`${m}\` — ${WHAT[m] || '(NO DESCRIPTION — this mode was added to `offeredModes` and not described in `buildModeMenu`)'}`)
+  return offeredModes().map((m) => `${modeLabel(m)} (\`${m}\`) — ${WHAT[m] || '(NO DESCRIPTION — this mode was added to `offeredModes` and not described in `buildModeMenu`)'}`)
 }
 // THE RUN-LEVEL QUESTION ITEMS in `resolutions.json` (engine kind `run`). Two of them, and they are the ONLY
 // channel the operator's run-level answers travel through — the ticket forbids a second one, and `findings` keeps

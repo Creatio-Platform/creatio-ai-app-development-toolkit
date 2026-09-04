@@ -121,13 +121,13 @@ specifies go in front of an operator, and `auto` in particular is the unattended
 `defaultMode` rather than picked from a menu about how closely to watch (DR-6). "Step" is the word for the
 operator; `unit` stays the key in every argument, key and return field below.
 
-| `mode` | Offered to an operator? | What it does | Stops at |
-| --- | --- | --- | --- |
-| `guided` | **yes** | Pauses after every step, so the operator checks each page on the stand as it lands and the run carries their findings into the next round. | a unit boundary |
-| `round1` | **yes** | Builds everything once, then pauses and reports what was built and what is still open, before any repair round. | a round boundary |
-| `layout-first` | **yes** | Builds the page layouts first and pauses; the business logic is ported on the next run. | a round boundary |
-| `checkpoints` | no — accepted when asked for by name | Pauses only after the steps named in `checkpointAfter`, so a human opens THAT page on the stand and exercises it, then re-runs to continue. An inherited mode ENG-96204 does not specify, so it is not on the menu; it is otherwise unchanged. | a unit boundary |
-| `auto` | no — **`defaultMode` / unattended runs only** | Builds every step without stopping. The whole section is written, then reported. Legal and accepted, never offered as a choice: it means nobody is watching this run. | nothing |
+| `mode` | Shown to an operator as | Offered? | What it does | Stops at |
+|---|---|---|---|---|
+| `guided` | **Guided** | **yes** | Pauses after every step, so the operator checks each page on the stand as it lands and the run carries their findings into the next round. | a unit boundary |
+| `round1` | **Round by round** | **yes** | Builds everything once, then pauses and reports what was built and what is still open, before any repair round. | a round boundary |
+| `layout-first` | **Layout first** | **yes** | Builds the page layouts first and pauses; the business logic is ported on the next run. | a round boundary |
+| `checkpoints` | Checkpoints | no — accepted when asked for by name | Pauses only after the steps named in `checkpointAfter`, so a human opens THAT page on the stand and exercises it, then re-runs to continue. An inherited mode ENG-96204 does not specify, so it is not on the menu; it is otherwise unchanged. | a unit boundary |
+| `auto` | Unattended | no — **`defaultMode` / unattended runs only** | Builds every step without stopping. The whole section is written, then reported. Legal and accepted, never offered as a choice: it means nobody is watching this run. | nothing |
 
 **What a round boundary costs, next to the choice that buys it.** A round-boundary mode pays the
 run's fixed read-only startup — the baseline Reconcile (`--units` plus the stand reads), the Refs

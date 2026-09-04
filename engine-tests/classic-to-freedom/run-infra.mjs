@@ -175,7 +175,7 @@ const H_SCHEDULING = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByPa
 // its text. `rankOpenItems` / `openItemsFor` are GONE (see `openCountsOf`): the open ROWS do not cross the
 // Reconcile boundary, so a stop that ranked them ranked nothing — it reports counts and points at the
 // engine's own verify artifacts.
-const H_CONTROL_MODE = ["buildModes", "offeredModes", "buildModeMenu", "resolveControlMode", "runResolutionAnswer", "roundDecisionItem",
+const H_CONTROL_MODE = ["buildModes", "offeredModes", "modeLabel", "buildModeMenu", "resolveControlMode", "runResolutionAnswer", "roundDecisionItem",
   "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "openCountsOf",
   "runStatusDoc", "passScopeText",
   // ENG-96204 (ENG-96474) — the spent-answer union the queue-file record and the resume gate are built on.
@@ -746,8 +746,27 @@ check("ENG-96204: the refusal message LISTS every mode, including the two new on
 check("ENG-96204 (DR-6): `offeredModes` is the list the MENU renders, and `buildModeMenu` describes every entry of it — a mode added to the offered list and left undescribed renders as exactly that, loudly, instead of vanishing from the operator's menu",
   () => { const menu = wf.buildModeMenu();
     return menu.length === wf.offeredModes().length
-      && wf.offeredModes().every((m, i) => menu[i].startsWith("`" + m + "`"))
+      && wf.offeredModes().every((m, i) => menu[i].startsWith(wf.modeLabel(m) + " (`" + m + "`)"))
       && menu.every((l) => !/NO DESCRIPTION/.test(l)); },
+  () => wf.buildModeMenu());
+// A LABEL IS PRESENTATION; A TOKEN IS IDENTITY. `modeLabel` exists so an operator reads "Round by round" instead
+// of `round1`, while everything that DECIDES anything still moves the token: `buildMode` validates it, `mode`
+// carries it and the `control-mode` answer records it. Pinned three ways, because the failure mode is a label
+// leaking into a place that validates: every VALID mode (not just the offered three) has a label, so a log line
+// naming `auto` has a human word for it; no label collides with a DIFFERENT mode's token, which is what would
+// make a label look like a legal `mode`; and the menu quotes the token beside the label, so a caller reading the
+// refusal can still see the exact string to pass.
+check("ENG-96204: every VALID mode has a human label — `modeLabel` covers the unoffered ones too, so a refusal or a log line that names `auto` or `checkpoints` still has a word for it rather than echoing the token",
+  () => wf.buildModes().every((m) => { const l = wf.modeLabel(m); return typeof l === "string" && l.length > 0 && l !== m; }),
+  () => Object.fromEntries(wf.buildModes().map((m) => [m, wf.modeLabel(m)])));
+check("ENG-96204: no mode's LABEL is a DIFFERENT mode's token — `Checkpoints` matching its own `checkpoints` is fine; a label resolving to ANOTHER mode would be mistakable for a legal `mode`, because `buildMode` is the only thing that decides and it takes tokens",
+  () => { const toks = wf.buildModes();
+    return toks.every((m) => { const l = wf.modeLabel(m).trim().toLowerCase();
+      return !toks.some((other) => other !== m && other === l); }); },
+  () => Object.fromEntries(wf.buildModes().map((m) => [m, wf.modeLabel(m)])));
+check("ENG-96204: each menu line QUOTES its token beside the label — the reader picks by name, and the caller still sees the exact string to pass as `mode` without hunting for it",
+  () => { const menu = wf.buildModeMenu();
+    return wf.offeredModes().every((m, i) => menu[i].includes("`" + m + "`") && menu[i].includes(wf.modeLabel(m))); },
   () => wf.buildModeMenu());
 // DR-6 — TWO SETS, ONE OF THEM A SUBSET, AND THE DIFFERENCE IS THE WHOLE DECISION. `buildModes()` is what the run
 // ACCEPTS and `offeredModes()` is what an operator is SHOWN; the gap is exactly `auto` (the unattended path,
@@ -5156,20 +5175,20 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // `buildModeMenu()`: what reaches `next` is what a human is actually shown. Both halves are pinned — the three
   // that ARE offered (each with its plain-language description) and the two that are NOT rendered as a menu line.
   const noModeAtAll = await scriptRun({ mode: undefined }, [RECONCILE_R()]);
-  const noModeMenuLines = (noModeAtAll.res.next || "").split("\n").filter((l) => /^ {2}- `/.test(l));
+  const noModeMenuLines = (noModeAtAll.res.next || "").split("\n").filter((l) => /^ {2}- \S/.test(l));
   check("ENG-96204 (DR-6): with no mode from any source the run refuses to start and its menu offers EXACTLY the three modes ENG-96204 specifies, each described without jargon — `unit` never appears in the text a non-engineer reads",
     !noModeAtAll.res.threw && noModeAtAll.res.stopped === "mode-not-chosen"
       && noModeMenuLines.length === 3
-      && wf.offeredModes().every((m, i) => noModeMenuLines[i].startsWith("  - `" + m + "`"))
+      && wf.offeredModes().every((m, i) => noModeMenuLines[i].startsWith("  - " + wf.modeLabel(m) + " (`" + m + "`)"))
       && /pause after every step/.test(noModeAtAll.res.next || "")
       && /before any repair round/.test(noModeAtAll.res.next || "")
       && /build the page layouts first and pause/.test(noModeAtAll.res.next || "")
       && !/\bunit\b/.test(noModeAtAll.res.next || ""),
     () => (noModeAtAll.res.threw ? `threw: ${noModeAtAll.res.threw}` : { stopped: noModeAtAll.res.stopped, menu: noModeMenuLines, next: noModeAtAll.res.next }));
   check("ENG-96204 (DR-6): and NEITHER `auto` NOR `checkpoints` is rendered as a choice on that menu — offering \"run unattended\" in a menu about how closely to watch is the one answer this gate exists to stop being taken by default, and `checkpoints` is an inherited mode this ticket does not specify",
-    noModeMenuLines.every((l) => !l.startsWith("  - `auto`") && !l.startsWith("  - `checkpoints`"))
-      && !/^ {2}- `auto`/m.test(noModeAtAll.res.next || "")
-      && !/^ {2}- `checkpoints`/m.test(noModeAtAll.res.next || ""),
+    noModeMenuLines.every((l) => !/\(`auto`\)/.test(l) && !/\(`checkpoints`\)/.test(l))
+      && !/^ {2}- .*\(`auto`\)/m.test(noModeAtAll.res.next || "")
+      && !/^ {2}- .*\(`checkpoints`\)/m.test(noModeAtAll.res.next || ""),
     () => noModeMenuLines);
   check("ENG-96204 (DR-6): the refusal still tells the operator that both unoffered values are ACCEPTED when passed deliberately, and names `defaultMode` as the channel for the unattended one — a value left off a menu must not read as a value that was removed",
     /`auto` and `checkpoints` are both still accepted when a caller passes them deliberately/.test(noModeAtAll.res.next || "")
