@@ -1378,8 +1378,18 @@ function attributeDecisions(a, hasColumn) {
 // ---- the per-method decision text, assembled from the body evidence ----
 // A trivial passthrough and an externally-assigned method each get a decision that SAYS SO, rather than asking
 // for a port that has nothing to port here. Suppressing either would re-create the silent drop this removes.
-const triggerPhrase = (t) =>
-  t.kind === "attribute-dependency" ? `${t.attribute} changes (${t.columns.join(", ")})` : `${t.element}.${t.property}`;
+// Every kind gets an arm. This used to be a two-way branch ending in `${t.element}.${t.property}`, which any
+// non-control kind reached — an `internal` trigger (filled by the inverse call graph BEFORE `methodReason` runs,
+// so this was already live) printed the literal "triggered by undefined.undefined" in a method's reason text.
+// A kind with no arm now names itself rather than inventing two fields it does not carry.
+function triggerPhrase(t) {
+  if (t.kind === "attribute-dependency") return `${t.attribute} changes (${(t.columns || []).join(", ")})`;
+  // the DECLARATION-backed kinds carry the declaration path itself — that path IS the answer, and it is the same
+  // string a behaviour-analysis run would have to report for the row, so the two are directly comparable
+  if (t.from) return `${t.kind} ${t.from}`;
+  if (t.element || t.property) return `${t.element}.${t.property}`;
+  return t.kind || "unresolved";
+}
 
 // the evidence clauses appended to a real method's reason: what it does, what it reads/writes, what it publishes
 function evidenceClauses(ev) {
@@ -1522,6 +1532,25 @@ function buildCallerIndex(methods) {
 // answer, "called from X", which still beats `⚠ unresolved`.
 //
 // `seen` breaks cycles (mutual recursion is common in classic helpers) and the
+// An UPSTREAM answer, re-based onto the immediate caller. Own fn (behaviour unchanged) so
+// `resolveInternalTrigger` keeps Sonar CC 15 headroom — the branch plus the chain construction sat two levels deep
+// inside its loop.
+//
+// ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the hook is what
+// `from` carries on a `lifecycle` trigger. Overwriting `from` with the immediate caller (which is what the generic
+// composition below does, and what the old shape could afford because the hook sat in its own `lifecycle` field)
+// would make the cell name the wrong method — "cHelper (platform lifecycle)" for a hook called `onSaved`. So the
+// lifecycle answer is passed through unchanged; the immediate caller was never rendered for this shape anyway.
+function composeUpstream(up, caller, all) {
+  if (up.kind === "lifecycle") return { ...up, ...all };
+  // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat `from`
+  // (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the trigger
+  // already names. Build the chain from this caller upward, drop duplicates, then peel off the head.
+  const chain = [caller, ...(up.from && up.from !== caller ? [up.from] : []), ...(up.via || [])]
+    .filter((v, i, a) => v && a.indexOf(v) === i && v !== up.root);
+  return { ...up, from: caller, via: chain.slice(1), ...all };
+}
+
 // caller sets are sorted so the result never depends on iteration order.
 function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
   if (seen.has(name)) return null;
@@ -1535,17 +1564,14 @@ function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
     const m = byName.get(caller);
     const declared = m?.triggers || [];
     if (declared.length) return { kind: "internal", from: caller, root: caller, rootTrigger: declared[0], ...all };
-    if (STANDARD_CLASSIC_METHODS.has(caller)) return { kind: "internal", from: caller, lifecycle: caller, ...all };
+    // ENG-96571 B1 — a platform LIFECYCLE caller is its own `kind`, not an `internal` trigger carrying a
+    // `lifecycle` field: the platform starting the chain IS the answer, and every predicate that asks "do we still
+    // not know what starts this?" then reads one field instead of a kind plus an exception to it. `kind` stays
+    // inside `REPORTED_TRIGGERS`, so a described answer and a traced one remain the same vocabulary.
+    if (STANDARD_CLASSIC_METHODS.has(caller)) return { kind: "lifecycle", from: caller, ...all };
     partial ||= { kind: "internal", from: caller, ...all };
     const up = resolveInternalTrigger(caller, callerIdx, byName, seen);
-    if (up) {
-      // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat
-      // `from` (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the
-      // trigger already names. Build the chain from this caller upward, drop duplicates, then peel off the head.
-      const chain = [caller, ...(up.from && up.from !== caller ? [up.from] : []), ...(up.via || [])]
-        .filter((v, i, a) => v && a.indexOf(v) === i && v !== up.root);
-      return { ...up, from: caller, via: chain.slice(1), ...all };
-    }
+    if (up) return composeUpstream(up, caller, all);
   }
   return partial;
 }
@@ -1782,26 +1808,88 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
 
 // Map ONE classic rule into its Freedom page/entity business rule, or a needsDecision when it can't be mapped.
 // Mutates the three sinks — keeps the ruleType dispatch (and its nesting) out of mapRules's loop.
+// ENG-96571 A3 — a rule whose CONDITION could not be read statically. Two shapes reach here, and both must be
+// told apart from a genuinely unconditional rule:
+//   (a) the source DECLARED conditions and the sanitized set came back EMPTY — they were dropped (a non-array
+//       `conditions`, holes, an unresolved spread);
+//   (b) the sanitized set is non-empty but EVERY entry is degenerate — no comparison, or no left-hand attribute
+//       and no attribute path. This is the real `Job.JobRequired` shape: a symbolic `Terrasoft.ComparisonType.EQUAL`
+//       plus a CONSTANT left expression sanitizes to `{comparison:null, left:{attribute:null,path:null}}`, which
+//       says nothing about WHEN the rule fires.
+// Either way the honest answer is "the condition is unread", never "it always applies": rendering `always` for
+// (b) told the builder to make the field unconditionally required, which the classic page did not do.
+// A rule that declared NOTHING is not a gap — it is unconditional, and stays `always`.
+function conditionGap(r) {
+  const declared = typeof r.conditionsDeclared === "number" ? r.conditionsDeclared : 0;
+  const sane = r.conditions || [];
+  if (declared <= 0) return false;
+  if (!sane.length) return true;
+  // ENG-96571 (review 1, G) — and a condition whose RIGHT side says nothing is degenerate too. `right` now
+  // carries an attribute reference as well as a constant (Classic's `{type:1, attribute:"OtherStage"}`), so a
+  // right side with neither a value nor an attribute names nothing to compare against: the rule renders as
+  // "when Stage" and reads as "Stage is set", which is not what the classic page evaluated.
+  const rightSaysNothing = (c) => (c?.right?.value === null || c?.right?.value === undefined)
+    && !c?.right?.attribute && !c?.right?.attributePath;
+  const degenerate = (c) => c?.comparison === null || c?.comparison === undefined
+    || (!c?.left?.attribute && !c?.left?.path)
+    || rightSaysNothing(c);
+  // `every` missed every PARTIAL gap: two declared conditions of which one sanitized away, or three declared and
+  // two readable, left `sane` non-empty with at least one readable entry and reported the rule as fully read. The
+  // rendered cell then stated a condition that is only half of what the classic page evaluated — the same class of
+  // wrong answer as rendering `always` for case (b), and wrong in the same direction. A gap in ANY entry, or a
+  // count that does not reach what the source declared, is a gap in the rule.
+  return sane.length < declared || sane.some(degenerate);
+}
+
+// The worklist line a condition gap raises. Its own const so the wording is written once and the test can pin it.
+const CONDITION_GAP_REASON = (attr) => `the business rule on '${attr}' DECLARES a condition, but the rule's condition could not be read statically — a parse gap, not an unconditional rule. The action itself is mapped and in this ChangeSet; what is missing is WHEN it fires. Read the condition in the classic body (or on-stand) and complete the emitted rule with it — do NOT build it as an unconditional rule.`;
+
+// The FILTRATION arm of `mapOneRule`, extracted for CC (Sonar S3776) — one rule type per function, so the
+// dispatcher stays a flat three-way choice.
+function mapFiltrationRule(r, entityBusinessRules, needsDecision) {
+  const filter = r.filterColumn
+    ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
+    : null;
+  // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
+  // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
+  const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
+  // ENG-96571 (review 1, S-i) — THE SAME CONDITION GAP APPLIES HERE. A FILTRATION rule carries `conditions`
+  // exactly like a BINDPARAMETER one (it is the WHEN of the filter, separate from the filter's own column and
+  // value), and only the BINDPARAMETER branch read them: a FILTRATION that DECLARED a condition the parser
+  // could not read was emitted with `conditions: []` and nothing said so, so a conditional filter shipped as an
+  // unconditional one. Nothing new is RENDERED — the flag and the ⚠ Confirm row are what the reader needs, and
+  // the entity-filter row's own "⚠ dynamic — resolve value" wording is about the filter VALUE, a different gap.
+  const condGap = conditionGap(r);
+  entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
+    conditions: r.conditions,
+    ...(condGap ? { conditionsIncomplete: true } : {}),
+    note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+    provenance: r.provenance });
+  if (condGap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
+  // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
+  // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
+}
+
+// The BINDPARAMETER arm of `mapOneRule`, extracted for CC (Sonar S3776) alongside `mapFiltrationRule`.
+function mapBindParameterRule(r, pageBusinessRules, needsDecision) {
+  const acts = PROP_ACTION[r.property];
+  if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); return; }
+  // ENG-96571 A3 — mirror of the incomplete-FILTRATION fold below: the rule IS emitted (its action is known),
+  // and the unread condition is published on the entry AND raised as its own worklist row.
+  const gap = conditionGap(r);
+  pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
+    conditions: r.conditions,
+    ...(gap ? { conditionsIncomplete: true } : {}),
+    note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
+    provenance: r.provenance });
+  if (gap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
+}
+
 function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   if (r.ruleType === "FILTRATION") {
-    const filter = r.filterColumn
-      ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
-      : null;
-    // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
-    // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
-    const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
-    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-      conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
-      provenance: r.provenance });
-    // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
-    // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
+    mapFiltrationRule(r, entityBusinessRules, needsDecision);
   } else if (r.ruleType === "BINDPARAMETER") {
-    const acts = PROP_ACTION[r.property];
-    if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); return; }
-    pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
-      conditions: r.conditions,
-      note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
-      provenance: r.provenance });
+    mapBindParameterRule(r, pageBusinessRules, needsDecision);
   } else {
     // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
     needsDecision.push({ kind: "rule", item: r.attr,

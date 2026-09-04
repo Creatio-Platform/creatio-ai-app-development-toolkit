@@ -12,8 +12,9 @@ import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { LIST_EXPECT_KINDS, LIST_MEASURED_KINDS, verifySummary, encodedAsciiBytes as engineEncodedAsciiBytes } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS, GATE_KIND } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { MAPPING_ROWS, GATE_KIND, MATCH, resolveFeatureRow, APPROVALS_SIGNAL } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import * as mg from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -6768,7 +6769,11 @@ check("workflow: the app unit closes only on its FULL deliverable — the planne
     && /const needsSectionPage = unit\.sectionHost !== 'pages-only-no-menu'/.test(wfSrc)
     && /the app unit did not finish/.test(wfSrc));
 check("engine: `memberDispositions` accepts only the four dispositions the gate's own remediation text names — any string counted as resolved, so a typo cleared a member",
-  /const MEMBER_DISPOSITIONS = new Set\(\["ported", "dropped", "blocked", "n\/a"\]\)/.test(mgSrc)
+  // The literal `"n/a"` is now the shared `DISPOSITION_NA` const (Sonar S1192 — the word recurred across all four
+  // validated-enum sets). The pin follows the constant, and ALSO pins the const's own value, so replacing the
+  // literal with a name cannot quietly change which word the gate accepts.
+  /const DISPOSITION_NA = "n\/a"/.test(mgSrc)
+    && /const MEMBER_DISPOSITIONS = new Set\(\["ported", "dropped", "blocked", DISPOSITION_NA\]\)/.test(mgSrc)
     && /MEMBER_DISPOSITIONS\.has\(dec\.disposition\)/.test(mgSrc));
 
 // --- round 4 of the branch review. All three are things a run does WRONG while reporting fine.
@@ -6884,12 +6889,16 @@ check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of th
   // ENG-95884 renamed the branched-on value from the raw `packageState` to `effectiveState` (the own-record-
   // resolved fact) — the guarantee this test pins moved with it, onto the SAME two published states.
   /if \(effectiveState !== 'exists' && effectiveState !== 'absent'\)/.test(wfSrc));
+// ENG-96571 A6 moved both mechanisms into their own helpers (`memberEntries` builds the key, `describedInForMember`
+// does the lookup) so an AGGREGATED row can also publish one key per member name. The GUARANTEE is unchanged and is
+// what these two pin: the key still carries `scopeSchema`, and the lookup still tries scoped-then-bare.
 check("engine: a MEMBER key carries its scope — two child pages declaring the same member produced one key, so the coverage Set counted two rows as one and ONE card closed both",
   /function memberDigestOf\(changeSet, scopeSchema\)/.test(mgSrc)
-    && /key: scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
+    && /const keyOf = \(item\) => \(scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{item\}`/.test(mgSrc)
     && /memberDigestOf\(changeSet, schema\)/.test(mgSrc));
 check("engine: the member lookup accepts the scoped form FIRST and the bare one after, so a `behaviour-index.json` written before scoping still resolves",
-  /map\[`\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`\] : undefined\) \?\? map\[`\$\{n\.kind\}:\$\{n\.item\}`\]/.test(mgSrc));
+  /function describedInForMember\(map, scopeSchema, n\)/.test(mgSrc)
+    && /const entry = \(scopeSchema \? map\[`\$\{scopeSchema\}::\$\{k\}`\] : undefined\) \?\? map\[k\];/.test(mgSrc));
 check("engine: the ADVISORY wiring-only leg resolves member keys the same way — reading the scoped key alone made its banner go quiet on an index using bare keys",
   /const memberKey = \(m\) => \(map\[m\.key\] \? m\.key : `\$\{m\.kind\}:\$\{m\.item\}`\)/.test(mgSrc));
 
@@ -7694,6 +7703,553 @@ check("ENG-96147 review (executed, negative control): a run with no route on fil
   !noRouteRun.threw && (noRouteRun.res?.sectionRouteByRun ?? null) === null
     && routePersists(noRouteRun.persists) === 0 && routeWritePersists(noRouteRun.persists) === 0,
   () => (noRouteRun.threw ? `threw: ${noRouteRun.threw}` : JSON.stringify(noRouteRun.res?.sectionRouteByRun)));
+
+// ---- ENG-96571: the "VisaDetail" Approvals row (no `V2` suffix) and the APPROVALS_SIGNAL constant ----------
+{
+  const visaSuffixRows = MAPPING_ROWS.filter((r) => r.match.by === MATCH.SCHEMA_SUFFIX
+    && (r.match.schemaNameSuffix === "VisaDetail" || r.match.schemaNameSuffix === "VisaDetailV2"));
+  check("ENG-96571: mapping-table carries a plain `VisaDetail` row alongside `VisaDetailV2`, both mapped to the Approvals feature",
+    visaSuffixRows.length === 2 && visaSuffixRows.every((r) => r.meta?.feature === "Approvals"),
+    () => visaSuffixRows.map((r) => ({ suffix: r.match.schemaNameSuffix, feature: r.meta?.feature })));
+
+  const v2Row = resolveFeatureRow("ApplicantVisaDetailV2");
+  check("ENG-96571: resolveFeatureRow(\"ApplicantVisaDetailV2\") still resolves to the `VisaDetailV2` row, not the shorter `VisaDetail` row",
+    v2Row?.match.schemaNameSuffix === "VisaDetailV2",
+    () => v2Row?.match);
+
+  const plainRow = resolveFeatureRow("UsrVisaDetail");
+  check("ENG-96571: resolveFeatureRow(\"UsrVisaDetail\") (no V2 suffix) resolves to the new `VisaDetail` row and the Approvals feature — this is the QA-reported gap: a plain VisaDetail used to fall through unrecognised",
+    plainRow?.match.schemaNameSuffix === "VisaDetail" && plainRow?.meta?.feature === "Approvals",
+    () => plainRow?.match);
+
+  // Prove the longest-suffix rule really is what keeps V2 winning, by breaking it and restoring it: build a
+  // fixture table with two suffixes that GENUINELY overlap on one schema name ("V2" and "DetailV2" both match
+  // "XDetailV2" — unlike the real `VisaDetail`/`VisaDetailV2` pair, which never overlap on any real name, as the
+  // check above already confirms), with the SHORTER one declared first (so declaration order alone would pick it
+  // if the longest-suffix sort were removed), and confirm resolveFeatureRow still returns the longer match.
+  const fixtureRows = [
+    { match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "V2" }, meta: { feature: "ShortFixture" } },
+    { match: { by: MATCH.SCHEMA_SUFFIX, schemaNameSuffix: "DetailV2" }, meta: { feature: "LongFixture" } },
+  ];
+  const fixtureHit = resolveFeatureRow("XDetailV2", null, { rows: fixtureRows });
+  check("ENG-96571 guard self-test: resolveFeatureRow's longest-suffix rule picks the longer `DetailV2` fixture row over the shorter `V2` one even though the shorter row is declared first",
+    fixtureHit?.meta?.feature === "LongFixture",
+    () => fixtureHit?.meta);
+  // Break the guard on purpose (drop the sort a real regression would drop) and confirm the break is actually
+  // detectable — otherwise the check above would be passing for a reason unrelated to the sort.
+  const brokenPick = fixtureRows.find((r) => "XDetailV2".endsWith(r.match.schemaNameSuffix));
+  check("ENG-96571 guard self-test: without the longest-suffix sort, declaration order alone would have picked the SHORT fixture row — proving the sort is load-bearing, not a no-op",
+    brokenPick?.meta?.feature === "ShortFixture",
+    () => brokenPick?.meta);
+
+  check("ENG-96571: APPROVALS_SIGNAL is exported with the expected shape (attribute half of the Approvals signal for the wave-2 mapper/gate)",
+    Array.isArray(APPROVALS_SIGNAL.attributeNames) && APPROVALS_SIGNAL.attributeNames.includes("RecordVisaId")
+      // `detailPattern` is GONE (ENG-96571 A7 review): it was a SUBSTRING test where the mapper matches through
+      // `resolveFeatureRow`'s SUFFIX rule, so the signal fired on names the mapper never maps to Approvals and the
+      // plan blocked on a feature the page does not carry. Its ABSENCE is pinned, not just unasserted — a
+      // re-added regex would silently restore the divergence.
+      && APPROVALS_SIGNAL.detailPattern === undefined
+      && APPROVALS_SIGNAL.feature === "Approvals"
+      && APPROVALS_SIGNAL.target === "crt.ApprovalList"
+      && APPROVALS_SIGNAL.moduleComponentType === "crt.Approval",
+    () => APPROVALS_SIGNAL);
+
+  const mappingDoc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md", import.meta.url)), "utf8");
+  check("ENG-96571: the mapping doc documents the RecordVisaId attribute as part of the Approvals signal",
+    mappingDoc.includes("RecordVisaId"),
+    () => "no `RecordVisaId` mention found in classic-to-freedom-mapping.md");
+}
+
+
+// ===== ENG-96571 wave 2 (w2b) — bundle warnings · per-module digest rows · the Approvals signal · plan notes =====
+// Driven through the REAL CLI (`spawnSync`, the pattern the slice/retention checks above use), because three of the
+// four items are only observable end-to-end: the exit code, the rendered banner, and the file written beside `--out`.
+console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Approvals signal · plan notes =====");
+{
+  const ENGINE = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/classic-to-freedom-migration/engine/migrate.mjs");
+  // A GATE-CLEAN, planMeta-complete, placement-settled, signals-resolved manifest — so every exit code and every
+  // banner below is attributable to the ONE thing the case adds. Without that, "exit 2" proves nothing.
+  const baseManifest = (extra = {}) => ({
+    entity: "Applicant",
+    targetPackage: "UsrTasks",
+    noParentTemplate: true,
+    planMeta: { scope: "single-section", environment: "test", package: "UsrTasks", approach: "Parallel rebuild",
+      whatItDoes: "Applicant register.", sectionSchema: "Applicant1Section", listTemplate: "ListPageV3",
+      formTemplate: "PageWithTabsFreedomTemplate" },
+    placement: {
+      targetPackageEditable: { resolved: true, value: true, evidence: "InstallType 0" },
+      application: { resolved: true, code: "UsrTasksApp" },
+      primaryPackage: { resolved: true, name: "UsrTasks", editable: true },
+      targetPackageInApplication: { resolved: true, value: true },
+      sectionHost: { resolved: true, mode: "existing-app" },
+    },
+    signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
+      printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false },
+      // ENG-96457 added a FIFTH on-stand signal; without it this fixture's `--plan` is INCOMPLETE and every
+      // exit-2 assertion below would be attributable to the fixture rather than to the case it adds.
+      schemaNamePrefix: { resolved: true, value: "Usr" } },
+    schemas: [{ pkg: "HRApplicant", body: `define("ApplicantPageV2", [], function() {
+  return {
+    entitySchemaName: "Applicant",
+    details: /**SCHEMA_DETAILS*/{}/**SCHEMA_DETAILS*/,
+    diff: /**SCHEMA_DIFF*/[{ "operation": "insert", "name": "Name", "values": { "layout": { "column": 0, "row": 0, "colSpan": 12, "rowSpan": 1 }, "bindTo": "Name" } }]/**SCHEMA_DIFF*/
+  };
+});` }],
+    ...extra,
+  });
+  const runEngine = (m, args) => spawnSync(process.execPath, [ENGINE, "-", ...args],
+    { input: JSON.stringify(m), encoding: "utf8" });
+  const runJson = (m, args = []) => {
+    const r = runEngine(m, args);
+    let json = null;
+    try { json = JSON.parse(r.stdout); } catch { /* a non-JSON mode, or a hard exit-1 input error */ }
+    return { r, json };
+  };
+  // The PREMISE, observed: the base fixture is clean, or every "exit 2" below is attributable to the fixture.
+  {
+    const { r, json } = runJson(baseManifest());
+    check("ENG-96571 (w2b) preconditions: the shared fixture is gate-clean, structure-complete and coverage-complete, and its `--plan` exits 0 — otherwise every exit-2 assertion below proves nothing",
+      () => r.status === 0 && json?.gate?.blocked === false && json.structure.complete === true
+        && json.coverage.complete === true && runEngine(baseManifest(), ["--plan"]).status === 0,
+      () => ({ status: r.status, gate: json?.gate?.reasons, structure: json?.structure?.issues, coverage: json?.coverage?.issues?.slice(0, 2) }));
+  }
+
+  /* ---- A5: the BUNDLE's own warnings reach a gate ---- */
+  // The two real strings `get-classic-page-sources` emits, verbatim.
+  const BW_ENTITY = "Could not determine the bound entity for details StageInRecruitmentDetailV2, ContactCommunicationDetail, VisaDetailV2, so their child pages were not looked up in SysModuleEdit. That is NOT the same as 'they have no child page'.";
+  const BW_CAP = "Child-page lookup reached the rowCount cap (80); the child-page list may be truncated.";
+  {
+    const m = baseManifest({ bundleWarnings: [{ code: "unresolved-detail-entity", message: BW_ENTITY }, BW_CAP] });
+    const { r, json } = runJson(m);
+    check("ENG-96571 A5: an OPEN `manifest.bundleWarnings` entry BLOCKS structure — one issue per warning (both the {code,message} form and the bare-string form), and the CLI exits 2 with the ⛔ STRUCTURE line instead of a clean plan",
+      () => json?.structure?.complete === false && r.status === 2
+        && json.structure.issues.filter((i) => i.startsWith("bundle warning")).length === 2
+        && /⛔ STRUCTURE INCOMPLETE/.test(r.stderr || ""),
+      () => ({ status: r.status, issues: json?.structure?.issues }));
+    check("ENG-96571 A5: each issue QUOTES the warning VERBATIM and names both remedies — a summary sentence standing in for the tool's own text is the 12-hour ⛔ this engine already learned to stop shipping (`warningsReason`)",
+      () => (json?.structure?.issues || []).some((i) => i.includes(BW_ENTITY) && /Re-run the bundle with the bound entity resolved, or fall back to step 4\.1 manual lookup/.test(i))
+        && (json?.structure?.issues || []).some((i) => i.includes(BW_CAP)),
+      () => (json?.structure?.issues || [])[0]);
+    // The rendered artifact, not just the JSON: the STRUCTURE banner is what an operator actually reads.
+    const plan = runEngine(m, ["--plan"]);
+    check("ENG-96571 A5: the `--plan` STRUCTURE banner carries the warning text verbatim — the gate and the document the operator approves say the same words",
+      () => plan.status === 2 && plan.stdout.includes(BW_ENTITY) && plan.stdout.includes(BW_CAP),
+      () => ({ status: plan.status, hasEntity: plan.stdout.includes(BW_ENTITY), hasCap: plan.stdout.includes(BW_CAP) }));
+  }
+  {
+    // A recorded disposition CLOSES it: exit 0, no structure issue, and an `ℹ … CLOSED` line so the answer stays
+    // auditable rather than the warning silently disappearing.
+    const closed = baseManifest({
+      bundleWarnings: [{ code: "unresolved-detail-entity", message: BW_ENTITY }],
+      bundleWarningDispositions: { "unresolved-detail-entity": { resolved: true, disposition: "resolved-manually", note: "looked the three details up by hand" } },
+    });
+    const { r, json } = runJson(closed);
+    const plan = runEngine(closed, ["--plan"]);
+    check("ENG-96571 A5: a recorded `manifest.bundleWarningDispositions` answer CLOSES the warning — structure is complete again, exit 0, and the closed entry rides on `structure.bundleWarningsClosed` (NOT in `issues`, where it would block the very thing the answer settles)",
+      () => json?.structure?.complete === true && r.status === 0
+        && (json.structure.issues || []).every((i) => !i.startsWith("bundle warning"))
+        && json.structure.bundleWarningsClosed?.length === 1
+        && json.structure.bundleWarningsClosed[0].disposition === "resolved-manually",
+      () => ({ status: r.status, issues: json?.structure?.issues, closed: json?.structure?.bundleWarningsClosed }));
+    check("ENG-96571 A5: a CLOSED warning is rendered `ℹ … CLOSED by a recorded disposition` with its own text and note — cleared, never deleted (the rule `renderFidelityWarnings` already follows)",
+      () => plan.status === 0 && /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(plan.stdout)
+        && plan.stdout.includes("looked the three details up by hand"),
+      () => ({ status: plan.status, line: (plan.stdout.match(/> ℹ.*bundle warning[^\n]*/) || ["(none)"])[0].slice(0, 200) }));
+    // GUARD-CAN-FAIL: the disposition is load-bearing. Drop the disposition MAP alone and the same manifest blocks
+    // again — so the check above passes because the answer was read, not because the fixture cannot block.
+    const noDisp = { ...closed }; delete noDisp.bundleWarningDispositions;
+    const broken = runJson(noDisp);
+    check("ENG-96571 A5 guard-can-fail: removing ONLY the disposition map puts the SAME manifest back to blocked (exit 2, one bundle-warning issue) — the close above is the recorded answer doing work, not a fixture that never blocks",
+      () => broken.json?.structure?.complete === false && broken.r.status === 2
+        && (broken.json.structure.issues || []).filter((i) => i.startsWith("bundle warning")).length === 1,
+      () => ({ status: broken.r.status, issues: broken.json?.structure?.issues }));
+    // …and an INVALID disposition word does not close it either (the validated-enum rule).
+    const typo = baseManifest({
+      bundleWarnings: [{ code: "unresolved-detail-entity", message: BW_ENTITY }],
+      bundleWarningDispositions: { "unresolved-detail-entity": { resolved: true, disposition: "resolvd-manually" } },
+    });
+    const typoRun = runJson(typo);
+    check("ENG-96571 A5: a TYPO'd disposition word does NOT close the warning — `resolved: true` with a word outside the enum would otherwise clear a gap nobody answered (the same rule `WARNING_DISPOSITIONS`/`MEMBER_DISPOSITIONS` enforce)",
+      () => typoRun.json?.structure?.complete === false
+        && (typoRun.json.structure.bundleWarningsClosed || []).length === 0,
+      () => ({ complete: typoRun.json?.structure?.complete, closed: typoRun.json?.structure?.bundleWarningsClosed }));
+  }
+  {
+    // The VERIFIED ZERO: an empty array is an answer ("the bundle reported no warnings"), and it must read as one.
+    const { r, json } = runJson(baseManifest({ bundleWarnings: [] }));
+    check("ENG-96571 A5: `bundleWarnings: []` is a VERIFIED ZERO — no issue, no closed entry, exit 0; an empty array must not be treated as a missing input",
+      () => r.status === 0 && json?.structure?.complete === true
+        && (json.structure.issues || []).every((i) => !i.startsWith("bundle warning"))
+        && (json.structure.bundleWarningsClosed || []).length === 0,
+      () => ({ status: r.status, issues: json?.structure?.issues, closed: json?.structure?.bundleWarningsClosed }));
+    check("ENG-96571 A5: `bundleWarningState` splits the two forms directly — a `{code,message}` entry keys on its CODE, a bare string keys on ITSELF, and a disposition written against the message text is accepted as the bare fallback",
+      () => {
+        const st = mg.bundleWarningState({ bundleWarnings: [{ code: "c1", message: "m1" }, "raw"],
+          bundleWarningDispositions: { m1: { resolved: true, disposition: "accepted" } } });
+        return st.open.length === 1 && st.open[0].key === "raw"
+          && st.closed.length === 1 && st.closed[0].key === "c1" && st.closed[0].text === "m1";
+      },
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: [{ code: "c1", message: "m1" }, "raw"],
+        bundleWarningDispositions: { m1: { resolved: true, disposition: "accepted" } } })));
+  }
+
+  /* ---- ENG-96571 (review 1, D + S-ii): a typo'd disposition word, and an unrecognised warning shape ---- */
+  {
+    // D — `resolved: true` with a word outside the vocabulary landed in `open` INDISTINGUISHABLY from a warning
+    // nobody had answered: the operator had written an answer, the engine kept blocking, and nothing said which
+    // word was wrong.
+    const typo = mg.bundleWarningState({ bundleWarnings: ["lookup truncated"],
+      bundleWarningDispositions: { "lookup truncated": { resolved: true, disposition: "resolved-manualy", note: "did the lookup by hand" } } });
+    check("ENG-96571 (review 1, D): a disposition with `resolved: true` and a TYPO'D word stays OPEN but carries `dispositionInvalid` — it used to be indistinguishable from a warning nobody had answered",
+      () => typo.open.length === 1 && typo.closed.length === 0 && typo.open[0].dispositionInvalid === "resolved-manualy",
+      () => JSON.stringify(typo));
+    const typoIssue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
+      schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+      bundleWarnings: ["lookup truncated"],
+      bundleWarningDispositions: { "lookup truncated": { resolved: true, disposition: "resolved-manualy" } },
+    }).structure.issues || []).find((i) => /lookup truncated/.test(i));
+    check("ENG-96571 (review 1, D): the blocking issue NAMES the invalid word FIRST and recites the three accepted ones from the SET — the answer exists and the word is what stopped it, so re-doing the lookup would be wasted work",
+      () => !!typoIssue && typoIssue.startsWith('a disposition was recorded with the word "resolved-manualy"')
+        && typoIssue.includes('"resolved-manually" | "accepted" | "n/a"'),
+      () => String(typoIssue));
+    const cleanIssue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
+      schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+      bundleWarnings: ["lookup truncated"],
+    }).structure.issues || []).find((i) => /lookup truncated/.test(i));
+    check("ENG-96571 (review 1, D) ANTI-VACUITY: a warning with NO recorded disposition carries NO such prefix — the sentence fires on the recorded-but-invalid case alone",
+      () => !!cleanIssue && cleanIssue.startsWith("bundle warning from"),
+      () => String(cleanIssue));
+
+    // S-ii — an entry carrying neither `code` nor `message` used to be DROPPED with no trace at all: the bundle
+    // said one of its lookups did not complete and the plan reported `structure.complete: true` anyway.
+    const odd = mg.bundleWarningState({ bundleWarnings: [{ warning: "the child-page lookup hit the rowCount cap" }] });
+    check("ENG-96571 (review 1, S-ii): a bundle-warning object with neither `code` nor `message` falls back to its JSON and BLOCKS — it used to be dropped silently, so the plan reported a complete structure the bundle itself denied",
+      () => odd.open.length === 1 && odd.open[0].text === JSON.stringify({ warning: "the child-page lookup hit the rowCount cap" })
+        && odd.open[0].key === odd.open[0].text,
+      () => JSON.stringify(odd));
+    check("ENG-96571 (review 1, S-ii): a genuinely EMPTY entry still names no fact and is still skipped — `\"\"`, `null` and `{}` are neither a gap nor an answer",
+      () => mg.bundleWarningState({ bundleWarnings: ["", null, {}, "   "] }).open.length === 0,
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: ["", null, {}, "   "] })));
+    check("ENG-96571 (review 1, S-ii): the JSON fallback is ANSWERABLE — a disposition written against that exact JSON string closes it, so the fallback is not a warning nobody can clear",
+      () => {
+        const key = JSON.stringify({ warning: "capped" });
+        const st = mg.bundleWarningState({ bundleWarnings: [{ warning: "capped" }],
+          bundleWarningDispositions: { [key]: { resolved: true, disposition: "accepted", note: "re-fetched" } } });
+        return st.open.length === 0 && st.closed.length === 1 && st.closed[0].disposition === "accepted";
+      },
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: [{ warning: "capped" }],
+        bundleWarningDispositions: { [JSON.stringify({ warning: "capped" })]: { resolved: true, disposition: "accepted" } } })));
+  }
+
+  /* ---- A5 (review): the key is WHITESPACE-NORMALIZED on both sides ---- */
+  // A bundle warning's key is, in its string form, the warning's own MESSAGE — text that travels through a tool
+  // response, a manifest and a hand copy-paste, any of which can double a space or leave a trailing one. An answer
+  // that differed from the warning by ONE space closed nothing, and the plan kept blocking on a warning the
+  // operator had provably answered, with no line anywhere saying the two strings differ.
+  {
+    const RAW = "Could not determine  the bound entity   for 3 details.";
+    const SPACED = "  Could not determine the bound   entity for 3 details.  ";
+    const stNorm = mg.bundleWarningState({ bundleWarnings: [RAW],
+      bundleWarningDispositions: { [SPACED]: { resolved: true, disposition: "resolved-manually", note: "looked all three up by hand" } } });
+    check("ENG-96571 A5 (review): a disposition key whose WHITESPACE differs from the warning still CLOSES it — both sides are collapsed to single spaces, so a doubled or trailing space in a copy-pasted message is not a warning nobody can answer",
+      () => stNorm.open.length === 0 && stNorm.closed.length === 1
+        && stNorm.closed[0].disposition === "resolved-manually"
+        && stNorm.closed[0].key === "Could not determine the bound entity for 3 details.",
+      () => JSON.stringify(stNorm));
+    check("ENG-96571 A5 (review) guard-can-fail: a disposition key differing by an actual WORD still leaves the warning OPEN — the normalization collapses whitespace only, it does not fuzzy-match the message",
+      () => {
+        const st = mg.bundleWarningState({ bundleWarnings: [RAW],
+          bundleWarningDispositions: { "Could not determine the bound entity for 4 details.": { resolved: true, disposition: "accepted" } } });
+        return st.open.length === 1 && st.closed.length === 0;
+      },
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: [RAW],
+        bundleWarningDispositions: { "Could not determine the bound entity for 4 details.": { resolved: true, disposition: "accepted" } } })));
+    // The remedy hint has to stay PASTEABLE. A message containing a double quote used to be interpolated straight
+    // into `bundleWarningDispositions["<text>"]`, producing a line whose own quoting was broken at the quote.
+    check("ENG-96571 A5 (review): the remedy hint's key is JSON-ENCODED, so a warning message containing a double quote still yields a PASTEABLE `bundleWarningDispositions[...]` line instead of one broken at the quote",
+      () => {
+        const quoted = 'the detail "Visa" has no bound entity';
+        const issue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
+          schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+          bundleWarnings: [quoted] }).structure.issues || []).find((i) => i.startsWith("bundle warning"));
+        return !!issue && issue.includes(`bundleWarningDispositions[${JSON.stringify(quoted)}]`)
+          && !issue.includes(`bundleWarningDispositions["${quoted}"]`);
+      },
+      () => (mg.runMigration({ entity: "PE", noParentTemplate: true,
+        schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+        bundleWarnings: ['the detail "Visa" has no bound entity'] }).structure.issues || []).filter((i) => i.startsWith("bundle warning")));
+  }
+
+  /* ---- A6: one digest row per module, one ⚠ Confirm row for the set ---- */
+  {
+    const depsManifest = (behaviourIndex) => {
+      const m = baseManifest(behaviourIndex ? { behaviourIndex } : {});
+      m.schemas[0].body = m.schemas[0].body.replace('define("ApplicantPageV2", []',
+        'define("ApplicantPageV2", ["UsrConstA", "UsrUtilB", "UsrHelperC"]');
+      return m;
+    };
+    const stubs = runJson(depsManifest(), ["--stubs"]);
+    const scopes = stubs.json?.scopes || stubs.json;
+    const mainScope = (Array.isArray(scopes) ? scopes : []).find((s) => s.role === "main page");
+    const depMembers = (mainScope?.members || []).filter((x) => x.kind === "module-dep");
+    check("ENG-96571 A6 preconditions: the fixture really declares THREE `define()` dependencies that the mapper joins into ONE aggregated `module-dep` decision — else the granularity check below is vacuous",
+      () => {
+        const rows = (runJson(depsManifest()).json?.changeSet?.needsDecision || []).filter((n) => n.kind === "module-dep");
+        return rows.length === 1 && rows[0].item === "UsrConstA, UsrUtilB, UsrHelperC";
+      },
+      () => (runJson(depsManifest()).json?.changeSet?.needsDecision || []).filter((n) => n.kind === "module-dep"));
+    check("ENG-96571 A6: the step-5.1 DIGEST expands that one row into THREE member entries, one per module, each keyed `module-dep:<name>` — a behaviour card describes one module, so one key per module is the granularity the handoff needs",
+      () => depMembers.length === 3
+        && depMembers.map((x) => x.item).join(",") === "UsrConstA,UsrUtilB,UsrHelperC"
+        && depMembers.map((x) => x.key).join(",") === "module-dep:UsrConstA,module-dep:UsrUtilB,module-dep:UsrHelperC",
+      () => depMembers);
+    check("ENG-96571 A6: the ⚠ Confirm list keeps its ONE aggregated row — the digest and the worklist differ in granularity ON PURPOSE, and the digest does not rewrite `needsDecision`",
+      () => {
+        const nd = (runJson(depsManifest()).json?.changeSet?.needsDecision || []).filter((n) => n.kind === "module-dep");
+        return nd.length === 1 && depMembers.length === 3;
+      },
+      () => ({ needsDecision: (runJson(depsManifest()).json?.changeSet?.needsDecision || []).filter((n) => n.kind === "module-dep").length, digest: depMembers.length }));
+    const carded = runJson(depsManifest({ "module-dep:UsrUtilB": { card: "main/C02", ac: ["AC1"] } }));
+    check("ENG-96571 A6: a PER-MODULE index key lands its card on the AGGREGATED row's `describedIn` — without the second lookup a `module-dep:UsrUtilB` answer described nothing, because no row is keyed by one module's name",
+      () => {
+        const row = (carded.json?.changeSet?.needsDecision || []).find((n) => n.kind === "module-dep");
+        return row?.describedIn?.card === "main/C02" && (row.describedIn.ac || []).join(",") === "AC1";
+      },
+      () => (carded.json?.changeSet?.needsDecision || []).find((n) => n.kind === "module-dep")?.describedIn);
+    check("ENG-96571 A6: and that key is NOT reported as `behaviourIndex.unmatched` — the digest published it, so the ⚠ 'matched no imperative row' banner must stay quiet (the regression this expansion could have introduced)",
+      () => (carded.json?.behaviourIndex?.unmatched || []).length === 0,
+      () => carded.json?.behaviourIndex?.unmatched);
+    // TWO cards, ONE row: the described count must not double.
+    const twoCards = runJson(depsManifest({ "module-dep:UsrUtilB": { card: "main/C02", ac: ["AC1"] },
+      "module-dep:UsrConstA": { card: "main/C01", ac: ["AC2"] } }));
+    check("ENG-96571 A6: TWO per-module cards answering the SAME aggregated row are MERGED and the row counts as described ONCE — one `described` push per matching key would inflate the plan's 'N of M described' header past the number of rows",
+      () => {
+        const row = (twoCards.json?.changeSet?.needsDecision || []).find((n) => n.kind === "module-dep");
+        const acs = (row?.describedIn?.ac || []).slice().sort().join(",");
+        return !!row?.describedIn?.card && acs === "AC1,AC2"
+          && (twoCards.json.behaviourIndex.described || []).filter((d) => d.startsWith("module-dep:")).length === 1;
+      },
+      () => ({ describedIn: (twoCards.json?.changeSet?.needsDecision || []).find((n) => n.kind === "module-dep")?.describedIn,
+        described: twoCards.json?.behaviourIndex?.described }));
+    // THE THIRD KEY FORM — the AGGREGATED one, i.e. every `behaviour-index.json` written before this expansion.
+    // `describedInForMember` still accepts it, so the digest must still COUNT it as a known key: it did not, and the
+    // plan rendered "⚠ 1 key matched no imperative row" about a key whose card it had just folded in.
+    const rowKeyed = runJson(depsManifest({ "module-dep:UsrConstA, UsrUtilB, UsrHelperC": { card: "main/C01" } }));
+    check("ENG-96571 A6: an index keyed the OLD aggregated way (`module-dep:A, B, C`) still lands its card AND is still counted matched — the expansion must not turn every pre-existing behaviour index into a spurious ⚠ unmatched banner",
+      () => (rowKeyed.json?.changeSet?.needsDecision || []).find((n) => n.kind === "module-dep")?.describedIn?.card === "main/C01"
+        && (rowKeyed.json?.behaviourIndex?.unmatched || []).length === 0,
+      () => ({ describedIn: (rowKeyed.json?.changeSet?.needsDecision || []).find((n) => n.kind === "module-dep")?.describedIn,
+        unmatched: rowKeyed.json?.behaviourIndex?.unmatched }));
+    // GUARD-CAN-FAIL: an index key naming a module the page does NOT declare is still unmatched, so the quiet
+    // banner above is the expansion doing work rather than the banner being unreachable on this fixture.
+    const stray = runJson(depsManifest({ "module-dep:UsrNotDeclared": { card: "main/C09" } }));
+    check("ENG-96571 A6 guard-can-fail: a per-module key for a module the page does NOT declare IS reported unmatched — the empty `unmatched` above is a real match, not a banner that can never fire",
+      () => (stray.json?.behaviourIndex?.unmatched || []).join(",") === "module-dep:UsrNotDeclared",
+      () => stray.json?.behaviourIndex?.unmatched);
+  }
+
+  /* ---- A6 (review): the BARE member key form, on a real CHILD scope ---- */
+  // `scopeDigestKeys` counted `m.key` and `m.rowKey` — both SCOPED once a scope has a schema — while BOTH readers
+  // of an answer (`describedInForMember`, and `wiringOnlyKeys`' `memberKey`) accept the bare `<kind>:<item>` form
+  // as a fallback. So a bare member key written for a CHILD scope had its card FOLDED INTO the row and was ALSO
+  // reported in `behaviourIndex.unmatched`: the plan printed "⚠ 1 behaviourIndex key matched no imperative row"
+  // about the key whose card it had just rendered — the exact inverse of what that banner is for.
+  //
+  // The A6 block above only exercises the ROOT scope (`schema: null`), where `m.key` IS the bare form, so the
+  // defect was invisible there. This one needs a real child fold.
+  {
+    const C4_CHILD = { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body:
+      `define("C4Child",["UsrChildDep"],function(){return{entitySchemaName:"Shared",methods:{},diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});` }] };
+    const c4Manifest = (behaviourIndex) => ({ entity: "PE", noParentTemplate: true,
+      schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+      detailSchemas: { D1: { entity: "Shared", editPage: "C4Child" } },
+      childPageSchemas: { C4Child: C4_CHILD },
+      ...(behaviourIndex ? { behaviourIndex } : {}) });
+    const c4Scope = (mg.runMigration(c4Manifest(null)).stubIndex || []).find((x) => x.role === "child page");
+    check("ENG-96571 A6 (review) preconditions: the CHILD scope's member keys really are SCHEMA-SCOPED — `m.key` and `m.rowKey` both carry `C4Child::`, which is why the bare form the readers accept was not in the digest",
+      () => c4Scope?.schema === "C4Child"
+        && (c4Scope.members || []).length === 1
+        && c4Scope.members[0].key === "C4Child::module-dep:UsrChildDep"
+        && c4Scope.members[0].rowKey === "C4Child::module-dep:UsrChildDep",
+      () => c4Scope);
+    const c4Bare = mg.runMigration(c4Manifest({ "module-dep:UsrChildDep": { card: "child/C01", ac: ["AC1"] } }));
+    const c4Spec = (c4Bare.childPages || []).find((c) => c.spec)?.spec || "";
+    check("ENG-96571 A6 (review): a BARE member key answering a CHILD scope lands its card AND is counted MATCHED — it used to do both at once, landing the card and reporting the same key as `unmatched`, so the plan denied the answer it had just rendered",
+      () => (c4Bare.behaviourIndex?.unmatched || []).length === 0 && /child\/C01/.test(c4Spec),
+      () => ({ unmatched: c4Bare.behaviourIndex?.unmatched, cardLanded: /child\/C01/.test(c4Spec) }));
+    // GUARD-CAN-FAIL: a bare key naming a member NO scope declares is still reported unmatched, so the quiet
+    // `unmatched` above is the bare form being counted rather than the banner being unreachable on this fixture.
+    const c4Stray = mg.runMigration(c4Manifest({ "module-dep:UsrNotDeclaredAnywhere": { card: "child/C09" } }));
+    check("ENG-96571 A6 (review) guard-can-fail: a bare key naming a member NO scope declares IS still reported unmatched — adding the bare form to the digest did not blanket-silence the banner",
+      () => (c4Stray.behaviourIndex?.unmatched || []).join(",") === "module-dep:UsrNotDeclaredAnywhere",
+      () => c4Stray.behaviourIndex?.unmatched);
+  }
+
+  /* ---- A7: Approvals, forgotten ---- */
+  {
+    const withAttribute = () => {
+      const m = baseManifest();
+      m.schemas[0].body = m.schemas[0].body.replace('entitySchemaName: "Applicant",',
+        'entitySchemaName: "Applicant",\n    attributes: { "RecordVisaId": { "dataValueType": 0 } },');
+      return m;
+    };
+    const withDetail = () => {
+      const m = baseManifest();
+      m.schemas[0].body = m.schemas[0].body.replace('{}/**SCHEMA_DETAILS*/',
+        '{"Visa":{"schemaName":"VisaDetailV2","entitySchemaName":"ApplicantVisa","filter":{"detailColumn":"Applicant","masterColumn":"Id"}}}/**SCHEMA_DETAILS*/');
+      return m;
+    };
+    const attrRun = runJson(withAttribute());
+    check("ENG-96571 A7: a page whose only approvals trace is the `RecordVisaId` ATTRIBUTE publishes the signal with its evidence — approvals live in a Classic page as infrastructure, not as a control, so nothing else in the ChangeSet would ever mention them",
+      () => (attrRun.json?.changeSet?.featureSignals || []).length === 1
+        && attrRun.json.changeSet.featureSignals[0].feature === "Approvals"
+        && attrRun.json.changeSet.featureSignals[0].evidence.join(",") === "attribute `RecordVisaId`",
+      () => attrRun.json?.changeSet?.featureSignals);
+    check("ENG-96571 A7: with the signal present and NO mapped `Approvals` feature, coverage is INCOMPLETE at PLAN time (exit 2) and the issue names the evidence plus both Freedom targets — an executor cannot build its way out of a mapping that never mentioned approvals",
+      () => attrRun.json?.coverage?.complete === false && attrRun.r.status === 2
+        && (attrRun.json.coverage.issues || []).some((i) => /declares approvals infrastructure \(attribute `RecordVisaId`\)/.test(i)
+          && i.includes("crt.ApprovalList") && i.includes("crt.Approval")),
+      () => ({ status: attrRun.r.status, issues: (attrRun.json?.coverage?.issues || []).slice(0, 2) }));
+    const detailRun = runJson(withDetail());
+    check("ENG-96571 A7: a `*VisaDetail*` detail raises the SAME signal — and because the mapping table maps it to the Approvals standard feature, there is NO issue: the gate fires on a signal that was NOT mapped, never on approvals as such",
+      () => (detailRun.json?.changeSet?.featureSignals || []).length === 1
+        && (detailRun.json.changeSet.standardFeatures || []).some((f) => f.feature === "Approvals")
+        && (detailRun.json.coverage.issues || []).every((i) => !/declares approvals infrastructure/.test(i)),
+      () => ({ signals: detailRun.json?.changeSet?.featureSignals,
+        features: (detailRun.json?.changeSet?.standardFeatures || []).map((f) => f.feature),
+        issues: (detailRun.json?.coverage?.issues || []).slice(0, 2) }));
+    const noSignal = runJson(baseManifest());
+    check("ENG-96571 A7: no signal ⇒ `featureSignals: []` (a COUNTED ZERO, not an absent key — 'the plan says nothing about approvals' must never be indistinguishable from 'nobody looked') and no coverage issue",
+      () => Array.isArray(noSignal.json?.changeSet?.featureSignals)
+        && noSignal.json.changeSet.featureSignals.length === 0
+        && noSignal.json.coverage.complete === true,
+      () => ({ featureSignals: noSignal.json?.changeSet?.featureSignals, issues: noSignal.json?.coverage?.issues }));
+    const dispositioned = withAttribute();
+    dispositioned.memberDispositions = { "feature:Approvals": { resolved: true, disposition: "dropped", note: "the client stopped using approvals" } };
+    const dispRun = runJson(dispositioned);
+    check("ENG-96571 A7: a recorded `memberDispositions[\"feature:Approvals\"]` answer CLOSES the issue — closable like every other coverage row, through the ledger's own disposition map rather than a second one",
+      () => dispRun.json?.coverage?.complete === true
+        && (dispRun.json.coverage.issues || []).every((i) => !/declares approvals infrastructure/.test(i)),
+      () => ({ complete: dispRun.json?.coverage?.complete, issues: (dispRun.json?.coverage?.issues || []).slice(0, 2) }));
+    // ---- A7 (review): the DETAIL half now resolves through the MAPPING TABLE, not a regex of its own ----
+    // `detailPattern: /Visa ?Detail/i` was a SUBSTRING test where the mapper matches these details through
+    // `resolveFeatureRow`'s SUFFIX rule. So a schema name that CONTAINS `VisaDetail` without ending in it raised
+    // the signal, the mapper mapped no Approvals feature, and the coverage gate blocked the plan on a feature the
+    // page does not carry — with a remedy ("map it to crt.ApprovalList") nobody could act on.
+    check("ENG-96571 A7 (review) preconditions: `VisaDetailArchive` really is the divergence — the removed SUBSTRING regex matched it while the mapping table's SUFFIX rule does not, so the check below is about a real disagreement",
+      () => /Visa ?Detail/i.test("VisaDetailArchive") && resolveFeatureRow("VisaDetailArchive", null) === null,
+      () => ({ regex: /Visa ?Detail/i.test("VisaDetailArchive"), row: resolveFeatureRow("VisaDetailArchive", null) }));
+    check("ENG-96571 A7 (review): a detail the MAPPING TABLE does not resolve to Approvals raises NO signal — the signal half and the table now agree by construction, so the gate can no longer block on a feature the mapper never mapped",
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "VisaDetailArchive" }] }, {}).length === 0
+        && mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "UsrVisaDetailSettings" }] }, {}).length === 0
+        && mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "Visa Detail" }] }, {}).length === 0,
+      () => ["VisaDetailArchive", "UsrVisaDetailSettings", "Visa Detail"]
+        .map((n) => [n, mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: n }] }, {})]));
+    check("ENG-96571 A7 (review) ANTI-VACUITY: a name the table DOES resolve to Approvals still signals — `ApplicantVisaDetailV2` and a plain `*VisaDetail` suffix both do, so the check above narrowed the matcher rather than switching it off",
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "ApplicantVisaDetailV2" }] }, {}).length === 1
+        && mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "UsrWorkVisaDetail" }] }, {}).length === 1,
+      () => [mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "ApplicantVisaDetailV2" }] }, {}),
+        mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "UsrWorkVisaDetail" }] }, {})]);
+    // The ENTITY fallback is kept: an auto-named detail whose schema name hides the feature still resolves by its
+    // entity, exactly as `matchDetailFeature` does in the mapper.
+    check("ENG-96571 A7 (review): an entity that resolves to a NON-Approvals feature raises no Approvals signal — `resolveFeatureRow` can match a row without it being this feature, and only `meta.feature === 'Approvals'` counts",
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "SomeFileDetailV2" }] }, {}).length === 0,
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "SomeFileDetailV2" }] }, {}));
+    // The ATTRIBUTE half, made SYMMETRIC with `buildCoverage`: that ledger classifies a `fromTemplate` attribute as
+    // `context` because no client schema touched it. A `RecordVisaId` inherited from the base template is exactly
+    // that, so reading it as evidence raised a BLOCKING signal off a member the same run had already excluded.
+    check("ENG-96571 A7 (review): a TEMPLATE-OWNED `RecordVisaId` raises NO signal — `buildCoverage` already classifies an untouched `fromTemplate` attribute as `context`, and the signal half must not block on the member the ledger excludes",
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: true }], details: [] }, {}).length === 0,
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: true }], details: [] }, {}));
+    check("ENG-96571 A7 (review) ANTI-VACUITY: the SAME attribute on the page's OWN schema still signals — the template exclusion is scoped to `fromTemplate`, not a blanket mute of the attribute half",
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: false }], details: [] }, {}).length === 1
+        && mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [] }, {}).length === 1,
+      () => [mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: false }], details: [] }, {}),
+        mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [] }, {})]);
+
+    check("ENG-96571 A7: `approvalsSignalOf` reads BOTH halves off the effective page directly, and a page with neither yields `[]` — driven in-process so the matcher is pinned independently of the CLI",
+      () => {
+        const hit = mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [{ schemaName: "VisaDetailV2" }] }, {});
+        const miss = mg.approvalsSignalOf({ attributes: [{ name: "Name" }], details: [{ schemaName: "EduDetailV2" }] }, {});
+        return hit.length === 1 && hit[0].evidence.length === 2 && miss.length === 0;
+      },
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [{ schemaName: "VisaDetailV2" }] }, {}));
+  }
+
+  /* ---- C3: the agent's notes out of the document the user approves ---- */
+  {
+    // A child with a recorded `editPage: false` — the one plan line whose halves split by AUDIENCE.
+    const childManifest = () => {
+      const m = baseManifest();
+      m.schemas[0].body = m.schemas[0].body.replace('{}/**SCHEMA_DETAILS*/',
+        '{"Edu":{"schemaName":"EduA","entitySchemaName":"Education","filter":{"detailColumn":"Applicant","masterColumn":"Id"}}}/**SCHEMA_DETAILS*/');
+      m.detailSchemas = { EduA: { title: "Education", entity: "Education", editPage: false } };
+      return m;
+    };
+    let dir;
+    try {
+      dir = mkdtempSync(path.join(os.tmpdir(), "w2b-notes-"));
+      const planFile = path.join(dir, "plan.md");
+      const notesFile = path.join(dir, "plan.notes.md");
+      const r = runEngine(childManifest(), ["--plan", "--out", planFile]);
+      const plan = existsSync(planFile) ? readFileSync(planFile, "utf8") : "";
+      const notes = existsSync(notesFile) ? readFileSync(notesFile, "utf8") : "";
+      check("ENG-96571 C3: `--plan --out plan.md` ALSO writes `plan.notes.md` beside it (basename + `.notes.md`, same directory) and says so on stdout — one artifact pair, so a run cannot write the plan and silently skip its notes",
+        () => r.status === 0 && existsSync(notesFile) && notes.startsWith("## Plan notes — for the AGENT")
+          && /plan\.notes\.md — read those; they are NOT part of the plan you present/.test(r.stdout || ""),
+        () => ({ status: r.status, wrote: existsSync(notesFile), stdout: (r.stdout || "").slice(0, 220) }));
+      // The NEGATIVE and its POSITIVE, together: a bare "the plan no longer says X" passes on an empty file.
+      check("ENG-96571 C3: the agent instructions are GONE from `plan.md` — no `manifest.planMeta` hand-off sentence, no `--checklist`, no `SysModuleEdit` — while the plan itself is a real, non-empty document (the negative is paired with a size + content check, or it passes vacuously)",
+        () => plan.length > 1000 && /## Main scope/.test(plan)
+          && !plan.includes("manifest.planMeta") && !plan.includes("--checklist") && !plan.includes("SysModuleEdit"),
+        () => ({ bytes: plan.length, planMeta: plan.includes("manifest.planMeta"), checklist: plan.includes("--checklist"), sysModuleEdit: plan.includes("SysModuleEdit") }));
+      check("ENG-96571 C3: …and they are all THERE in `plan.notes.md` — moved by audience, never deleted: the `manifest.planMeta` re-run instruction, the `--checklist`/`--verify` sequencing, and the `SysModuleEdit` typed-entity check for the child that recorded `editPage: false`",
+        () => notes.includes("manifest.planMeta") && notes.includes("--checklist") && notes.includes("--verify")
+          && notes.includes("SysModuleEdit") && notes.includes("`Education`")
+          && notes.includes("list-entity-client-schemas"),
+        () => ({ planMeta: notes.includes("manifest.planMeta"), checklist: notes.includes("--checklist"), sysModuleEdit: notes.includes("SysModuleEdit"), child: notes.includes("`Education`") }));
+      check("ENG-96571 C3: `plan.md` KEEPS the user-facing fact — 'Recorded: no separate child page' still states what was resolved, so the split removed the instruction, not the finding",
+        () => /\*\*Recorded: no separate child page\.\*\*/.test(plan) && plan.includes("found no Classic `*Page`"),
+        () => (plan.match(/> \*\*Recorded: no separate child page[^\n]*/) || ["(none)"])[0].slice(0, 200));
+      // GUARD-CAN-FAIL: the same run WITHOUT the split would leave the sentence in the plan. Simulated over the
+      // renderer's own output — `renderPlanNotes` is where the sentence lives now, so re-injecting it into the plan
+      // text is exactly what a revert would do, and the assertion above then fails.
+      const reverted = plan + "\n> **Supply the plan values via `manifest.planMeta` and re-run** — …\n";
+      check("ENG-96571 C3 guard-can-fail: re-injecting the moved sentence into the plan text makes the 'gone from plan.md' assertion FAIL — it is the split doing work, not a check that cannot fail",
+        () => reverted.includes("manifest.planMeta") && !plan.includes("manifest.planMeta"),
+        () => ({ revertedHasIt: reverted.includes("manifest.planMeta"), planHasIt: plan.includes("manifest.planMeta") }));
+      // No `--out`: stdout stays the plan, the notes go to stderr. stdout is what the agent presents verbatim.
+      const noOut = runEngine(childManifest(), ["--plan"]);
+      check("ENG-96571 C3: with NO `--out` the notes are echoed to STDERR and stdout stays the plan alone — stdout IS the document presented verbatim, so notes there would land inside the very file this split keeps clean",
+        () => noOut.status === 0 && /ℹ plan notes \(agent-facing/.test(noOut.stderr || "")
+          && (noOut.stderr || "").includes("manifest.planMeta") && !noOut.stdout.includes("manifest.planMeta"),
+        () => ({ status: noOut.status, stderrHas: (noOut.stderr || "").includes("manifest.planMeta"), stdoutHas: noOut.stdout.includes("manifest.planMeta") }));
+      // The notes travel on the RESULT too, so a programmatic caller gets them without the CLI.
+      check("ENG-96571 C3: the notes are published as `result.planNotes` as well — a caller that never uses `--out` reads the same string the file carries, so the CLI cannot drift from the engine",
+        () => {
+          const { json } = runJson(childManifest());
+          return typeof json?.planNotes === "string" && json.planNotes === notes;
+        },
+        () => ({ planNotes: (runJson(childManifest()).json?.planNotes || "").slice(0, 80) }));
+      // `--spec`/`--units` are NOT plan modes: they get no notes file.
+      const specRun = runEngine(childManifest(), ["--spec", "--out", path.join(dir, "spec.md")]);
+      check("ENG-96571 C3: a non-plan mode writes NO notes file — `--spec --out spec.md` leaves `spec.notes.md` absent, because the notes are about presenting the PLAN",
+        () => specRun.status === 0 && !existsSync(path.join(dir, "spec.notes.md")),
+        () => ({ status: specRun.status, exists: existsSync(path.join(dir, "spec.notes.md")) }));
+      // A BLOCKED plan still gets its notes: the plan is still printed on exit 2, so the agent still needs them.
+      const blocked = childManifest();
+      blocked.bundleWarnings = [BW_CAP];
+      const blockedFile = path.join(dir, "blocked.md");
+      const blockedRun = runEngine(blocked, ["--plan", "--out", blockedFile]);
+      check("ENG-96571 C3: a BLOCKED `--plan` (exit 2) still gets `blocked.notes.md` — the plan is printed on a blocked run too, so withholding its notes would strip the agent's instructions exactly when it is about to re-run",
+        () => blockedRun.status === 2 && existsSync(path.join(dir, "blocked.notes.md")),
+        () => ({ status: blockedRun.status, exists: existsSync(path.join(dir, "blocked.notes.md")) }));
+    } finally {
+      if (dir) rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

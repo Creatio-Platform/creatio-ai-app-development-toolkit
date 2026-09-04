@@ -67,6 +67,16 @@ Six phases, in order. Each phase's detail lives in the reference file above.
 2. **Fetch the chains.** Every layer of every page in apply order, plus each layer's owning
    package from the schema registry (not from a payload field). Extension layers are the
    subjects; base layers are context you must still read to know what the extensions change.
+   **SCRATCH FILES GO OUTSIDE THE REPOSITORY.** Every Classic body, schema dump or working
+   file you fetch is written under the directory `echo $TMPDIR` reports — run that command
+   in THIS process first, then use `$TMPDIR/<this run's id>/…`; never a value inherited,
+   guessed or hard-coded from another agent's turn, never `/private/tmp` even though it
+   looks equivalent on macOS, and never anywhere inside a repository working tree or the
+   caller's migration folder (only the report DELIVERABLES go there). Measured: a run that
+   let this slip wrote 12 Classic bodies into a `.scope-main-page/` folder in the user's
+   project tree, one of them `BasePageV2_base.js` at 121 KB — stand-sourced customer text
+   with nothing to `.gitignore` it, one `git add .` away from being committed. Delete the
+   scratch directory once the deliverables are written.
 3. **Build the member ledger.** Per extension layer, list every member. Verified-empty
    layers become counted zeros here.
 4. **Group members into units.** One behaviour a person would name. A unit may span several
