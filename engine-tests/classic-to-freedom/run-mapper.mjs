@@ -1133,9 +1133,9 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
-// resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
-// (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
-const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+// resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable/dashboard
+// checks (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
+const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false } };
 const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
@@ -2632,8 +2632,8 @@ const sigBase = {
   planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "L", formTemplate: "F" },
 };
 const sigUnresolved = runMigration({ ...sigBase });
-check("signals gate: absent manifest.signals → all three unresolved",
-  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,printables,processes",
+check("signals gate: absent manifest.signals → all four unresolved",
+  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dashboards,dcm,printables,processes",
   () => sigUnresolved.signalsMissing);
 check("signals gate: --plan carries the ⛔ signals-incomplete banner when unresolved",
   /PLAN INCOMPLETE — on-stand signals not resolved/.test(sigUnresolved.plan));
@@ -2641,19 +2641,195 @@ const sigResolved = runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: true, cases: ["CaseA"] },
   processes: { resolved: true, present: false },
   printables: { resolved: true, present: true, items: ["Template"] },
+  dashboards: { resolved: true, present: false },
 } });
 check("signals gate: all resolved → signalsMissing empty + resolved summary (present/none) rendered",
   (sigResolved.signalsMissing || []).length === 0
   && /\*\*DCM case:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("CaseA")
   && /\*\*Connected processes:\*\* none/.test(sigResolved.plan)
-  && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template"),
-  () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables/i.test(l)));
+  && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template")
+  && /\*\*Section dashboards:\*\* none/.test(sigResolved.plan),
+  () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables|Section dashboards/i.test(l)));
 check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
-  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
+  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
 const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
+
+/* ---- section DASHBOARDS — the FOURTH on-stand signal (ENG-95793). A classic section's 7x dashboards are stand
+   DATA (SysDashboard rows filtered by the section's SysModule), not schema code, so they can only reach the pure
+   engine through manifest.signals. Each item also carries its DELIVERY MODE — the package that ships it, or
+   stand-only — because the migrated dashboard must ship the same way (the migrator writes it as a client unit
+   schema, so its package is the delivery). ---- */
+const THREE_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+// `undefined` = the dashboards answer was never recorded (blocks); an object = the recorded answer.
+const dashMani = (dashboards) => ({
+  entity: "X", seed: CLEAN_SEED, planMeta: docPlanMeta,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  signals: dashboards === undefined ? THREE_SIGNALS : { ...THREE_SIGNALS, dashboards },
+});
+const dashCliRun = (mani, args = ["--plan"]) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", ...args], { input: JSON.stringify(mani), encoding: "utf8" });
+const dashRow = (md, needle) => md.split("\n").find((l) => l.includes(needle)) || "";
+
+// T1 (BR1) — "never checked" is not an answer: the plan is unpresentable while the dashboards check is missing.
+const dashUnresolved = runMigration(dashMani());
+check("T1 dashboards gate: an unrecorded dashboards answer → signalsMissing names it + the ⛔ PLAN INCOMPLETE banner",
+  (dashUnresolved.signalsMissing || []).join(",") === "dashboards"
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dashUnresolved.plan)
+  && /`dashboards`/.test(dashUnresolved.plan),
+  () => dashUnresolved.signalsMissing);
+const dashCli = dashCliRun(dashMani());
+check("T1 dashboards gate CLI: an unresolved dashboards answer keeps --plan NON-ZERO (exit 2)",
+  dashCli.status === 2 && /dashboards/.test(dashCli.stderr || ""),
+  () => ({ status: dashCli.status, stderr: (dashCli.stderr || "").slice(0, 160) }));
+
+// T2 (BR1) — "checked on-stand, none found" IS a valid answer: it unblocks the plan and adds no dashboard rows.
+const dashNone = runMigration(dashMani({ resolved: true, present: false }));
+check("T2 dashboards gate: 'checked, none found' unblocks the plan and adds NO dashboard rows",
+  (dashNone.signalsMissing || []).length === 0
+  && /\*\*Section dashboards:\*\* none \(checked on-stand/.test(dashNone.plan)
+  && !/MigrateDashboardsProcess/.test(dashNone.plan)
+  && !/\*\*Dashboards\*\*/.test(dashNone.checklist),
+  () => dashNone.plan.split("\n").filter((l) => /dashboard/i.test(l)));
+const dashNoneCli = dashCliRun(dashMani({ resolved: true, present: false }));
+check("T2 dashboards gate CLI: a resolved 'none' answer exits 0 (no lingering incompleteness)",
+  dashNoneCli.status === 0 && !/PLAN INCOMPLETE/.test(dashNoneCli.stdout || ""),
+  () => ({ status: dashNoneCli.status, stderr: (dashNoneCli.stderr || "").slice(0, 160) }));
+
+// T3 (BR2 + BR9) — the human approving the plan sees each dashboard BY CAPTION with how it is delivered.
+const DASH_TWO = { resolved: true, present: true, items: [
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", caption: "test dashboard 1" },
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", caption: "ML model analytics", package: "ML" },
+] };
+const dashTwo = runMigration(dashMani(DASH_TWO));
+check("T3 dashboards plan: every dashboard is listed by caption WITH its delivery mode (package vs stand-only)",
+  /\*\*Section dashboards:\*\* 2 present/.test(dashTwo.plan)
+  && /test dashboard 1 \(stand-only\)/.test(dashTwo.plan)
+  && /ML model analytics \(package `ML`\)/.test(dashTwo.plan),
+  () => dashTwo.plan.split("\n").filter((l) => /dashboard/i.test(l)));
+check("T3 dashboards plan: the List page block carries the migrate-last hand-off note (BR4 ordering)",
+  /- \*\*Dashboards:\*\*/.test(dashTwo.plan) && /MigrateDashboardsProcess/.test(dashTwo.plan),
+  () => dashTwo.plan.split("\n").filter((l) => /\*\*Dashboards:\*\*/.test(l)));
+check("T3 dashboards checklist: the list-page element row and the migrated row are both emitted",
+  /\*\*Dashboards\*\*/.test(dashTwo.checklist)
+  && /crt\.Dashboards/.test(dashTwo.checklist)
+  && /Dashboards migrated/.test(dashTwo.checklist),
+  () => dashTwo.checklist.split("\n").filter((l) => /Dashboard/.test(l)));
+
+// BR3 — dashboards are migrated by the platform migrator, never rebuilt as page components by the agent, so a
+// resolved signal must NOT leak a dashboard into the widgets/Layout the design spec tells the agent to build.
+check("BR3 dashboards: a resolved signal never becomes a page component to hand-build (the migrator owns it)",
+  !(dashTwo.changeSet.widgets || []).some((w) => /dashboard/i.test(w.widget || ""))
+  && !(dashTwo.changeSet.viewConfigDiff || []).some((o) => /Dashboard/i.test(o.name || "")),
+  () => ({ widgets: (dashTwo.changeSet.widgets || []).map((w) => w.widget), ops: (dashTwo.changeSet.viewConfigDiff || []).map((o) => o.name) }));
+
+// T4 (BR6) — "done" is machine-side: a list page built WITHOUT the crt.Dashboards element has nowhere for the
+// migrator to write, so the row is ❌ MISSING and the verify gate stays non-zero. The template must be one that
+// does NOT ship the element, or "absent" is indistinguishable from "the list page was never passed" (see F2).
+const nonV3PlanMeta = { ...docPlanMeta, listTemplate: "ListFreedomTemplate" };
+const dashVerifyEmpty = renderVerify(dashTwo, { planMeta: nonV3PlanMeta }, { ops: [], parentSchemaName: "XPage", miniPageBuilt: null });
+check("T4 dashboards verify: a non-V3 list template with NO crt.Dashboards → ❌ MISSING + non-zero verify gate",
+  /❌ MISSING/.test(dashRow(dashVerifyEmpty.markdown, "Dashboards element on the Freedom list page"))
+  && dashVerifyEmpty.missing > 0 && dashVerifyEmpty.complete === false,
+  () => dashRow(dashVerifyEmpty.markdown, "Dashboards element on the Freedom list page"));
+check("T4 dashboards verify: an unconfirmed migration keeps the gate non-zero (⚠ until built.dashboardsMigrated)",
+  /⚠ verify/.test(dashRow(dashVerifyEmpty.markdown, "Dashboards migrated")) && dashVerifyEmpty.unverified > 0,
+  () => dashRow(dashVerifyEmpty.markdown, "Dashboards migrated"));
+
+// T5 (BR9) — the delivery-preserved row exists only when a SOURCE dashboard is packaged (nothing to preserve
+// otherwise), and it stays unverified until the agent supplies the on-stand evidence.
+const dashStandOnly = runMigration(dashMani({ resolved: true, present: true, items: [{ id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", caption: "test dashboard 1" }] }));
+check("T5 dashboards checklist: no packaged source dashboard → NO delivery-preserved row (nothing to preserve)",
+  !/Delivery preserved/.test(dashStandOnly.checklist) && /Dashboards migrated/.test(dashStandOnly.checklist),
+  () => dashStandOnly.checklist.split("\n").filter((l) => /Dashboard|Delivery/.test(l)));
+const dashBuiltOps = [{ name: "Dashboards", type: "crt.Dashboards", parentName: "DashboardsContainer" }];
+const dashVerifyPartial = renderVerify(dashTwo, { planMeta: docPlanMeta }, { ops: dashBuiltOps, parentSchemaName: "XPage", dashboardsMigrated: true });
+check("T5 dashboards verify: a packaged item emits the delivery row and it stays ⚠ until built.dashboardsDeliveryPreserved",
+  /⚠ verify/.test(dashRow(dashVerifyPartial.markdown, "Delivery preserved")) && dashVerifyPartial.unverified > 0,
+  () => dashRow(dashVerifyPartial.markdown, "Delivery preserved"));
+const dashVerifyDone = renderVerify(dashTwo, { planMeta: docPlanMeta }, { ops: dashBuiltOps, parentSchemaName: "XPage", dashboardsMigrated: true, dashboardsDeliveryPreserved: true });
+check("T5 dashboards verify: element built + both evidence booleans true → all three dashboards rows ✅ Done",
+  /✅ Done/.test(dashRow(dashVerifyDone.markdown, "Dashboards element on the Freedom list page"))
+  && /✅ Done/.test(dashRow(dashVerifyDone.markdown, "Dashboards migrated"))
+  && /✅ Done/.test(dashRow(dashVerifyDone.markdown, "Delivery preserved")),
+  () => dashVerifyDone.markdown.split("\n").filter((l) => /Dashboard|Delivery/.test(l)));
+check("T5 dashboards verify: a FALSE evidence boolean is ❌ MISSING, not a pass (a packaged source went stand-only)",
+  /❌ MISSING/.test(dashRow(renderVerify(dashTwo, { planMeta: docPlanMeta }, { ops: dashBuiltOps, dashboardsMigrated: true, dashboardsDeliveryPreserved: false }).markdown, "Delivery preserved")));
+
+/* ---- F2 (BR6) — the crt.Dashboards row must be SATISFIABLE by a correctly built V3 list page. On
+   `ListPageV3Template` the element is INHERITED, so the page never re-declares it: clio `get-page` reports it in
+   `ownBodySummary.viewConfigDiffOps` as a type-LESS `merge` keyed by its NAME (verified on Cases_ListPage,
+   AIPlatformEntityEvents_ListPage and DashboardsMigrationLog_ListPage — all three), while `crt.Dashboards`
+   itself shows up only in the MERGED bundle. A type-only check therefore reported ❌ MISSING for a page built
+   exactly as the docs prescribe and pinned `--verify` at exit 2 with no way out. ---- */
+const V3_LIST_OPS = [
+  { operation: "remove", name: "MenuItem_ImportFromExcel" },
+  { operation: "merge", name: "FolderTree" },
+  { operation: "merge", name: "DataTable" },
+  { operation: "merge", name: "Dashboards" },
+];
+const dashV3 = renderVerify(dashTwo, { planMeta: docPlanMeta }, { ops: V3_LIST_OPS, parentSchemaName: "XPage", dashboardsMigrated: true, dashboardsDeliveryPreserved: true });
+check("F2 dashboards verify: the REAL ListPageV3Template shape (type-less `merge` named Dashboards) → ✅ Done",
+  /✅ Done/.test(dashRow(dashV3.markdown, "Dashboards element on the Freedom list page")),
+  () => dashRow(dashV3.markdown, "Dashboards element on the Freedom list page"));
+// isolate the row's own contribution to the gate: same planMeta both sides, the Dashboards op the only delta.
+const dashV3Without = renderVerify(dashTwo, { planMeta: nonV3PlanMeta }, { ops: V3_LIST_OPS.filter((o) => o.name !== "Dashboards"), parentSchemaName: "XPage", dashboardsMigrated: true, dashboardsDeliveryPreserved: true });
+const dashV3With = renderVerify(dashTwo, { planMeta: nonV3PlanMeta }, { ops: V3_LIST_OPS, parentSchemaName: "XPage", dashboardsMigrated: true, dashboardsDeliveryPreserved: true });
+check("F2 dashboards verify: the inherited element clears exactly ONE ❌ MISSING from the gate",
+  dashV3Without.missing === dashV3With.missing + 1,
+  () => ({ withoutDashboards: dashV3Without.missing, withDashboards: dashV3With.missing }));
+// the hand-added case (non-V3 template): the designer names it `Dashboards_<slug>` and it DOES carry its type.
+const dashHandAdded = renderVerify(dashTwo, { planMeta: nonV3PlanMeta }, { ops: [{ operation: "insert", name: "Dashboards_mlmodels", type: "crt.Dashboards", parentName: "DashboardsContainer" }], dashboardsMigrated: true, dashboardsDeliveryPreserved: true });
+check("F2 dashboards verify: a hand-added `Dashboards_<slug>` element on a non-V3 template → ✅ Done",
+  /✅ Done/.test(dashRow(dashHandAdded.markdown, "Dashboards element on the Freedom list page")),
+  () => dashRow(dashHandAdded.markdown, "Dashboards element on the Freedom list page"));
+// a V3-planned page with NO list-page ops must not FALSELY assert the element is absent: that is a missing INPUT.
+const dashOpsOmitted = renderVerify(dashTwo, { planMeta: docPlanMeta }, { ops: [], parentSchemaName: "XPage" });
+check("F2 dashboards verify: planned on V3 but no list-page ops → ⚠ verify with an actionable message, gate still non-zero",
+  /⚠ verify/.test(dashRow(dashOpsOmitted.markdown, "Dashboards element on the Freedom list page"))
+  && /add the LIST page's/.test(dashRow(dashOpsOmitted.markdown, "Dashboards element on the Freedom list page"))
+  && dashOpsOmitted.complete === false,
+  () => dashRow(dashOpsOmitted.markdown, "Dashboards element on the Freedom list page"));
+
+/* ---- F1 / OBS1 — two DOCUMENTED facts the engine cannot enforce but which decide whether the migration hits
+   anything at all. Locked as source assertions, the same way the vendored-parser provenance is locked above.
+   · `SysSchemasSelectedId` takes a SysSchema PRIMARY KEY. The process filters SysSchema by primary column, and
+     `get-page` only ever returns UIds (schemaUId / rootSchemaUId / packageUId / designPackageUId) — verified on
+     the stand, where the Accounts_ListPage layer is Id 1425e99e… / UId 1c26396f… and NO SysSchema row has that
+     UId as its Id. Documenting "the schema UId from get-page" resolves to Guid.Empty and migrates nothing.
+   · the delivery-mode scan is PACKAGE-AGNOSTIC. Probing the section's own schema-layer packages first returns a
+     WRONG answer rather than no answer (stand: the section's layers live in `ML`, whose SysDashboard binding
+     holds an unrelated empty-`Section` dashboard, while the section's genuinely packaged dashboard is bound in
+     the unrelated `TestPkg`) — so the agent reports it stand-only and silently drops delivery. ---- */
+const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration");
+const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
+const skillFlat = flatten(path.join(SKILL_DIR, "SKILL.md"));
+const mappingFlat = flatten(path.join(SKILL_DIR, "references", "classic-to-freedom-mapping.md"));
+check("F1 docs: SysSchemasSelectedId is documented as the SysSchema PRIMARY KEY, never as the get-page UId",
+  skillFlat.includes("**`SysSchema.Id`** — its PRIMARY KEY")
+  && !skillFlat.includes("the built list page's schema UId")
+  && mappingFlat.includes("`SysSchema.Id` (its **primary key**")
+  && !mappingFlat.includes("the built list page's schema UId"),
+  () => "SKILL.md/mapping still describe SysSchemasSelectedId as a UId");
+check("F1 docs: both documents say how to RESOLVE that Id and which replacing layer row to take",
+  skillFlat.includes("`execute-esq` on `SysSchema` filtered `Name")
+  && skillFlat.includes("whose `UId` equals the `schemaUId`")
+  && mappingFlat.includes("`SysSchema` by `Name` and pick the layer whose `UId` is the `schemaUId`"),
+  () => "the Id-resolution recipe or the layer-selection rule is missing");
+check("OBS1 docs: the delivery-mode scan covers EVERY SysDashboard binding, with no section-package shortcut",
+  skillFlat.includes("Scan EVERY `SysDashboard` binding")
+  && skillFlat.includes("Do NOT narrow the scan to the packages that own the section's schema layers")
+  && !skillFlat.includes("Probe the packages that own the section-schema layers first")
+  && mappingFlat.includes("package-agnostically"),
+  () => "the section-package probe shortcut is still offered");
+
+// T6 (BR7) — the three pre-existing signal lines must read EXACTLY as before; the dashboards line is additive.
+check("T6 dashboards regression (BR7): the dcm / processes / printables lines are byte-for-byte untouched",
+  /- \*\*DCM case:\*\* none \(checked on-stand → not migrated\)/.test(dashTwo.plan)
+  && /- \*\*Connected processes:\*\* none \(checked on-stand → not migrated\)/.test(dashTwo.plan)
+  && /- \*\*Printables:\*\* none \(checked on-stand → not migrated\)/.test(dashTwo.plan),
+  () => dashTwo.plan.split("\n").filter((l) => /On-stand|DCM case|Connected processes|Printables|Section dashboards/.test(l)));
 
 /* ---- review batch: colSpan clamp · rowSpan auto-row occupancy · multi-span collision · grandchild embedding ---- */
 // #2 colSpan clamp — a full-width classic field landing in Freedom column 2 must NOT span a phantom column 3.

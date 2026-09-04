@@ -331,8 +331,20 @@ function addRecordDescription(result) {
   if (!result.miniPageVerified) return "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
   return "full edit page (no add-record mini page)";
 }
-// The `### List page` block (section concerns: add-record, columns, quick filters, section actions, process).
-// Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
+// The dashboards line of the `### List page` block. The section's 7x dashboards land on THIS page (its
+// `crt.Dashboards` element) and are MOVED by the platform migrator, not rebuilt here — so the list page is where
+// the ORDERING constraint belongs: the migration is the LAST build step, because the migrator needs the built
+// page to write the 8x dashboard into. Captions + delivery mode live in `### On-stand signals`; this is the
+// build-surface hand-off. Own fn so renderListPageBlock stays under Sonar CC 15.
+// One accessor for the signal's items, so a malformed `items` renders as "none recorded" everywhere instead of
+// throwing in one code path and silently counting a string's characters in another.
+const dashboardItems = (s) => (Array.isArray(s?.items) ? s.items : []);
+function dashboardsListNote(sd) {
+  if (sd?.resolved !== true || !sd.present) return [];
+  return [`- **Dashboards:** ${dashboardItems(sd).length} classic dashboard(s) → hand off to \`MigrateDashboardsProcess\` targeting THIS page's \`crt.Dashboards\` element. **LAST build step** — run it only after the list page exists and is confirmed; the migrator writes the 8x dashboard as a client unit schema and cannot run earlier. Do NOT rebuild the widgets by hand. Captions + delivery mode: see **On-stand signals**.`];
+}
+// The `### List page` block (section concerns: add-record, columns, quick filters, section actions, process,
+// dashboards). Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderListPageBlock(result, section) {
   const L = ["### List page"];
   if (!section) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **list columns / quick filters / section actions were NOT analyzed**. `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
@@ -351,6 +363,7 @@ function renderListPageBlock(result, section) {
     if ((section.sectionActions || []).length) { const acts = section.sectionActions.map((a) => "`" + esc(a) + "`").join(" · "); L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`); }
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
+  L.push(...dashboardsListNote(result.signals?.dashboards));
   L.push("");
   return L;
 }
@@ -606,12 +619,37 @@ function renderPlanBanners(result, opts) {
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const signalsMissing = opts.signalsMissing || [];
-  if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
+  if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **dashboards** = \`execute-esq\` (NOT \`odata-read\` — it drops the plain-Guid \`SysModule.SectionSchemaUId\`) on \`SysDashboard\` filtered \`Section\` = the section's \`SysModule.Id\`, select \`["Id","Caption"]\`, then read each dashboard's DELIVERY MODE from the \`SysDashboard\` data bindings and record it as \`items:[{ id, caption, package? }]\` (\`package\` = the package that ships it, omitted = stand-only) — the full two-step chain is in the skill's \`signals\` step. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
   // real chain has 150+). Surface it so a partial fetch isn't silently folded onto — the agent confirms the full chain.
   const sq = result.effective?.seedQuality || result.seedQuality;
   if (sq?.possiblyPartial) P.push(`> ⚠ **Seed may be a PARTIAL fetch — confirm before relying on the base layout.** The parent-template \`seed\` defines only ${sq.seedMethods} method(s); a FULL base-template chain has 150+ (mini 152, record ≈347, section 428). Re-check that \`get-classic-page-sources\` captured the WHOLE parent-template chain (not a truncated grab) — building on a partial base silently produces a hollow fold. (Advisory only: it does not block the gate.)`, "");
   return P;
+}
+// A discovered dashboard's DELIVERY MODE, as the plan states it. `package` on the signal item = that dashboard
+// ships inside a package (a SysDashboard data binding owns it), so the MIGRATED dashboard must ship there too;
+// no `package` = it exists only as stand data (user-level) and stays that way. Read from actual bindings — the
+// section's own package does NOT predict a dashboard's delivery (a section can own both kinds at once).
+// A bare item (a plain caption string) is NOT the recorded shape: "no package key" would then read as a
+// stand-only ANSWER the agent never gave, which is the one thing BR9 forbids — say it is unrecorded instead.
+const dashboardDelivery = (d) => {
+  if (!d || typeof d !== "object") return "⚠ delivery mode not recorded";
+  return d.package ? `package \`${esc(d.package)}\`` : "stand-only";
+};
+// The `Section dashboards` line of `### On-stand signals` — same three states as the other signals, plus the
+// per-item captions AND delivery mode, because both are what the human approves (they decide whether to migrate
+// each dashboard, and the delivery mode is not recoverable after the fact).
+function dashboardsSigLine(s) {
+  const label = "- **Section dashboards:**";
+  if (s?.resolved !== true) return `${label} ⚠ not resolved — run the on-stand check`;
+  if (!s.present) return `${label} none (checked on-stand → not migrated)`;
+  const items = dashboardItems(s);
+  const list = items.map((d) => {
+    const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
+    return name ? `${name} (${dashboardDelivery(d)})` : "";
+  }).filter(Boolean).join(" · ");
+  const listPart = list ? ` — ${list}` : "";
+  return `${label} ${items.length} present${listPart} → migrate with \`MigrateDashboardsProcess\` **after** the Freedom list page is built and confirmed; each keeps its delivery mode`;
 }
 // Child page mappings — one design spec per related-list child, recursively embedding grandchildren. Own fn for
 // Sonar CC 15. Returns the lines to push (empty when there are no child pages).
@@ -823,7 +861,7 @@ export function renderPlan(result, opts = {}) {
     const multiDcm = k === "dcm" && items.length > 1 ? " (multiple case versions — use the ACTIVE/published one; the progress bar + Next steps auto-populate from it, do not hand-author stages)" : "";
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), dashboardsSigLine(signals.dashboards), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -973,6 +1011,29 @@ function buildListItems(pm, section, result) {
   if ((section?.sectionActions || []).length) items.push({ label: `Section actions (${section.sectionActions.length})` });
   return items;
 }
+// Dashboards checklist rows — emitted only when the on-stand signal says the section HAS 7x dashboards.
+// Three deliverables, none of them derivable from the form page alone:
+//  1. the `crt.Dashboards` element on the built Freedom LIST page — the migrator's write target, machine-checked
+//     against the built ops (so the `--built` ops must include the list page's components);
+//  2. the migration itself — a business-process run, invisible to `get-page`, so it reads an on-stand evidence
+//     boolean exactly like the section-registration / mini-page-wiring rows;
+//  3. delivery preservation — ONLY when a source dashboard is packaged; there is nothing to preserve for a
+//     stand-only one, and emitting the row anyway would make every plain migration permanently unverifiable.
+function buildDashboardRows(result) {
+  const sd = result.signals?.dashboards;
+  if (sd?.resolved !== true || !sd.present) return [];
+  const items = dashboardItems(sd);
+  const rows = [
+    { label: "Dashboards element on the Freedom list page (`crt.Dashboards`) — the migration TARGET; without it `MigrateDashboardsProcess` has nowhere to write. `ListPageV3Template` ships it as `Dashboards` under `DashboardsContainer` (INHERITED — it shows up in the list page's own ops as a type-less `merge` on that name, not as a `crt.Dashboards` insert); on any other list template ADD the Dashboards tab + element to that same page.", vk: { type: "feature", ftype: "crt.Dashboards", byName: "Dashboards", viaTpl: "ListPageV3Template" } },
+    { label: `Dashboards migrated — ${items.length} classic dashboard(s) moved by \`MigrateDashboardsProcess\` (the agent does NOT rebuild the widgets by hand). Re-running is safe: already-migrated dashboards come back as skipped and the count does not grow.`, vk: { type: "onstand", evidence: "dashboardsMigrated", what: "DashboardsMigrationLog / migrated-dashboard read", miss: "the dashboards were never migrated — the Freedom section has no analytics" } },
+  ];
+  const packaged = items.filter((d) => d && typeof d === "object" && d.package);
+  if (packaged.length) {
+    const names = [...new Set(packaged.map((d) => "`" + esc(d.package) + "`"))].join(", ");
+    rows.push({ label: `Delivery preserved — ${packaged.length} source dashboard(s) ship in ${names}, so the migrated dashboard's client unit schema must land in the SAME package (pass it as \`TargetPackageName\`). A packaged source that becomes stand-only data is a regression, not a migration.`, vk: { type: "onstand", evidence: "dashboardsDeliveryPreserved", what: "migrated-schema package check", miss: "a packaged source dashboard did not stay packaged" } });
+  }
+  return rows;
+}
 function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
@@ -984,6 +1045,7 @@ function checklistGroups(result, opts = {}) {
   G("Pages", buildPageRows(result, opts, pm, typed, fill));
   const section = result.section || null;
   G("List page", buildListItems(pm, section, result));
+  G("Dashboards", buildDashboardRows(result));
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
@@ -1086,8 +1148,25 @@ function resolveCountVk(vk, ctx) {
   if (b > 0) return ["⚠ verify", `${b}/${vk.n} ${noun} built`, "unverified"];
   return ["❌ MISSING", `no ${noun} built`, "missing"];
 }
+// A feature the LIST TEMPLATE ships rather than the page's own body — `crt.Dashboards` on `ListPageV3Template`.
+// `hasType` alone can NEVER see it: an inherited element is not re-declared, so it surfaces in `viewConfigDiffOps`
+// as a type-LESS `merge` keyed by its NAME (verified on three ListPageV3Template list pages: Cases_ListPage,
+// AIPlatformEntityEvents_ListPage, DashboardsMigrationLog_ListPage — `{operation:"merge",name:"Dashboards"}`, and
+// `crt.Dashboards` itself only in the MERGED bundle). So read the name too, and keep the type check for the
+// hand-added case (a non-V3 template needs the element inserted, which DOES carry its type). Same fallback shape
+// as `dcm-bar` below. Distinguishing "not built" from "list page not passed" matters: claiming ❌ MISSING for a
+// page that legitimately inherits the element is what made this row unsatisfiable.
+const LIST_TPL_SHIPPING_DASHBOARDS = /ListPageV3/i;
+function resolveInheritableFeature(vk, ctx) {
+  if (ctx.hasType(vk.ftype)) return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  const named = ctx.ops.find((o) => o.name === vk.byName || String(o.name || "").startsWith(vk.byName + "_"));
+  if (named) return ["✅ Done", `\`${esc(named.name)}\` present on the built page — shipped by \`${esc(vk.viaTpl)}\`, so it carries no \`type\` of its own`, "ok"];
+  if (LIST_TPL_SHIPPING_DASHBOARDS.test(ctx.listTpl)) return ["⚠ verify", `no \`${esc(vk.byName)}\` component in the built ops, but the list page is planned on \`${esc(ctx.listTpl)}\` which ships one — add the LIST page's \`get-page\` components to \`--built\` \`ops\``, "unverified"];
+  return ["❌ MISSING", `NO ${vk.ftype} on the built page, and \`${esc(ctx.listTpl || "the planned list template")}\` does not ship one — add the Dashboards tab + container + element to the list page`, "missing"];
+}
 function resolveComponentVk(vk, ctx) {
   const { hasType, parentTpl } = ctx;
+  if (vk.type === "feature" && vk.byName) return resolveInheritableFeature(vk, ctx);
   if (vk.type === "feature") return hasType(vk.ftype) ? ["✅ Done", `found ${vk.ftype}`, "ok"] : ["❌ MISSING", `NO ${vk.ftype} on the built page`, "missing"];
   if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`, "ok"] : ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``, "missing"]; }
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
@@ -1125,7 +1204,10 @@ export function renderVerify(result, opts = {}, built = {}) {
   const hasType = (t) => typeCount(t) > 0;
   const FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
   let missing = 0, unverified = 0;
-  const ctx = { ops, built, typeCount, hasType, FIELD_RE, parentTpl };
+  // The LIST page's template, needed separately from `parentTpl` (which is the FORM page's): an inherited
+  // list-page component is only attributable to the template that ships it.
+  const listTpl = opts.planMeta?.listTemplate || "";
+  const ctx = { ops, built, typeCount, hasType, FIELD_RE, parentTpl, listTpl };
   // Resolve a row's machine Status from the built page (via the split resolvers above); tally the counts here.
   // vk-less rows → agent-confirmed (outcome "skip", not part of the gate).
   const resolve = (vk) => {
