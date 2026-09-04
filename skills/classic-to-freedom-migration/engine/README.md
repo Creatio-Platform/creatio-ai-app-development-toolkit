@@ -167,6 +167,12 @@ different things. Three reports keep a discarded answer from being silent, none 
 by BOTH an `id` entry and a `kind`+`item` entry — the pair is applied and the `id` one is discarded), and a stderr
 warning for two entries under the SAME key form (the last wins). All three are named on stderr as well.
 
+A fourth field reports the case that is NOT a discard (ENG-96571 review 3): `resolutionsClosed` — answers whose
+question a `manifest.confirmDispositions` entry had already CLOSED. That is the path the documentation prescribes
+(fill both channels for one question), so it must not be reported as an answer nobody asked for; those entries are
+exempt from `resolutionsUnmatched`, are NOT counted in `resolutionsMatched` (which means "an OPEN question got an
+answer"), and are stated on stderr as an ℹ line naming the recorded disposition as what closed the row.
+
 ```jsonc
 { "resolutions": [ { "kind": "list-columns", "item": "no list columns resolved",
                      "answer": "Name, Status, Owner, DueDate", "decidedBy": "…", "date": "2026-08-19" } ] }

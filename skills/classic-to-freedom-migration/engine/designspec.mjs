@@ -982,7 +982,12 @@ function renderConfirmWorklist(cs, opts = {}) {
   }
   if (unmatched.length) {
     const list = unmatched.map((k) => "`" + esc(k) + "`").join(", ");
-    L.push("", `> ⚠ ${unmatched.length} recorded \`confirmDispositions\` key(s) matched NO ⚠ Confirm row in this scope: ${list}. Nothing was closed by them — check the \`<kind>:<item>\` spelling against the rows above (and against \`preflight[]\` in \`--units\`), then re-run.`);
+    // ENG-96571 review 3 — SAY WHICH KEYS THIS REPORT CAN EVEN SEE. `unmatchedConfirmKeys` (migrate.mjs) reports
+    // "only the scope the key names": a SCOPED key on its own page, and a BARE key at the root only when the run
+    // has no nested scope to inherit into. So on a multi-page run a bare typo is NOT reported anywhere — the
+    // inherited map still has child/typed/mini folds ahead of it, and ⚠-ing a key that is about to work would be
+    // worse than the silence. Without this sentence the operator reads the absence of a ⚠ as "my key matched".
+    L.push("", `> ⚠ ${unmatched.length} recorded \`confirmDispositions\` key(s) matched NO ⚠ Confirm row in this scope: ${list}. Nothing was closed by them — check the \`<kind>:<item>\` spelling against the rows above (and against \`preflight[]\` in \`--units\`), then re-run. **What this line can see:** a \`<schema>::<kind>:<item>\` key is checked on ITS OWN page only, and a BARE key is checked here only when this run folds no child/typed/mini page — on a multi-page run a bare key is left unreported, because the same map is still to be inherited by those folds and a key that closes a row there has matched nothing yet. So on a multi-page run, the absence of this line does NOT prove a bare key landed: confirm the row itself is gone from the worklist.`);
   }
   return [...L, ""];
 }
@@ -1137,9 +1142,18 @@ function triggerText(t) {
   // deliberately UNCHANGED by the rename — the plan reads the same, only the shape it is computed from is honest.
   // ENG-96571 review 2 (finding 2) — `hook` is the platform method that ANSWERS the chain and `from` the IMMEDIATE
   // caller, and on a chain longer than one hop they are different methods. The hook is what this cell names (it is
-  // the answer); `via` names the hops between the caller and the hook, so a three-level chain reads
-  // `onSaved (platform lifecycle) → internal call via mid` instead of losing `mid` entirely. `hook ?? from` because
-  // a one-hop answer carries no `hook`: there the immediate caller IS the hook.
+  // the answer); `via` names the hops BETWEEN the immediate caller and the hook — it never repeats `from` and never
+  // ends on the hook (`composeUpstream` peels both off), so `via` is what keeps a chain longer than TWO hops
+  // whole. `hook ?? from` because a one-hop answer carries no `hook`: there the immediate caller IS the hook.
+  //
+  // WHAT EACH DEPTH ACTUALLY RENDERS (ENG-96571 review 3 — this comment used to claim the middle one printed
+  // `via mid`, which it does not; `mid` reaches the reader through the FOLD, not through this cell):
+  //   · `onSaved → leaf`        → `onSaved (platform lifecycle) → internal call`   (`from` IS the hook, no `via`)
+  //   · `onSaved → mid → leaf`  → `onSaved (platform lifecycle) → internal call`   (`from: mid`, and `via` is EMPTY
+  //     because `mid` is the immediate caller — the reader learns `mid` from `leaf` folding under it, whose Freedom
+  //     target reads ``port with `mid` ``)
+  //   · `onSaved → top → mid → leaf` → `onSaved (platform lifecycle) → internal call via top`   (`from: mid`,
+  //     `via: ["top"]` — the first hop this cell has anything left to name)
   if (t.kind === "lifecycle") {
     const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
     return `${esc(t.hook ?? t.from)} (platform lifecycle) → internal call${via}${callersSuffix(t)}`;
@@ -3330,6 +3344,87 @@ function resolutionConflicts(index, published) {
   }
   return out;
 }
+// ⚠ A QUESTION CLOSED BY A DISPOSITION IS STILL A QUESTION THIS RUN ASKED (ENG-96571 review 3).
+// `confirmWorklistRows` stops publishing a row `manifest.confirmDispositions` closed — correctly: a closed row is
+// not open work, and republishing it put an unclosable evidence id into `--units.preflight` and the `--verify`
+// gate (review 2, finding 1). But `unmatchedResolutions` judges `resolutions.json` against `preflight[]`, so the
+// same removal made an ANSWER to that question "an answer nobody asked for": with the disposition recorded,
+// `resolutionsUnmatched` reported the entry and `resolutionsMatched` fell to 0. And that is the DOCUMENTED path —
+// `references/migration-documentation.md` tells the operator to fill BOTH channels for one question, so following
+// the documentation produced a ⚠ line accusing the operator of answering a question nobody asked.
+//
+// So the closed rows stay KNOWN to the reconciliation while staying out of the open work: they are not in
+// `preflight[]`, they close no `--verify` row, and they are not counted in `resolutionsMatched` (that count means
+// "an OPEN question got an answer"). They are reported in their own field, `resolutionsClosed`. Same shape of
+// exemption as the `isRunScoped` one above and for the same reason — the report exists to mean "this answer
+// reaches no builder", which is false of both.
+//
+// BOTH KEY FORMS, deliberately: the descriptor carries `id` as well as `kind`+`item`, so `askedKeys` indexes it
+// under both and an operator who answered the closed question by its published id is exempt too. Guarding only
+// the pair form left the id form reporting the answer, which is the very asymmetry `unmatchedResolutions`'
+// own comment warns about.
+//
+// `closed[]` on `result.confirmDispositions` is NOT the input here even though it looks like the obvious one:
+// (a) `applyConfirmDispositions` pushes the BARE `confirmKeyOf(n)` (never a `<schema>::` form — the scoped spelling
+// is only how the answer is LOOKED UP), so that array's keys would have to be split back on a colon into
+// `kind`/`item`, and `item` carries colons (`field-control:(1 fields)`) — the exact ambiguity `resolutionKey`
+// exists to avoid; and (b) it is THIS scope's report only, so it says nothing about a row closed inside a
+// child/typed/mini fold, whose confirm rows `checklistGroups` splices in here. Walking the `needsDecision` rows
+// the fold already annotated in place gives the unsplit pair and covers the whole tree.
+// The `pageKey` for the list page's rows is read off the keys `checklistGroups` ACTUALLY emitted rather than
+// re-deciding the withhold rule — that rule (`listConfirmOnMain = []` once the `list` key is published) lives in
+// one place, and a second copy of it here is how the two would come to disagree.
+// The CLOSED ⚠ Confirm rows of one ChangeSet. Own name so the root/list scopes and a hand-built nested result
+// (goldens, direct API callers may nest a whole result under `childPages`) read the same predicate.
+const closedOf = (cs) => (cs?.needsDecision || []).filter((n) => n.closed === true);
+function closedConfirmQuestions(result, byKey) {
+  const out = [];
+  const seen = new Set();
+  const takePairs = (pairs, pageKey) => {
+    for (const n of pairs || []) {
+      // `SHOWN_ELSEWHERE` mirrors `confirmWorklistRows`' filter so the two read the same rows. Such a kind can
+      // never carry `closed` anyway (`applyConfirmDispositions` reports it as `notApplicable` and closes nothing),
+      // so this guard is symmetry, not load-bearing logic.
+      if (SHOWN_ELSEWHERE.has(n.kind)) continue;
+      const k = resolutionKey(n.kind, n.item);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ id: `${pageKey}#confirm:${confirmKeyOf(n)}`, kind: n.kind, item: n.item });
+    }
+  };
+  const takeChangeSet = (cs, pageKey) => takePairs(closedOf(cs), pageKey);
+  takeChangeSet(result.changeSet, "main");
+  // MAIN SCOPE ONLY for `listChangeSet`, exactly as `checklistGroups` splices it: a sub-bundle carrying its own
+  // `section` gets a `listChangeSet` whose rows are never published, so a "closed" row there is not a question
+  // this run asked and must not exempt an answer.
+  takeChangeSet(result.listChangeSet, byKey.has(LIST_PAGE_KEY) ? LIST_PAGE_KEY : "main");
+  // A FOLDED sub-page node exposes `pageRows`, not its `changeSet` — the ChangeSet stays inside the fold — so the
+  // pairs come from `confirmClosed`, which `migrate.mjs` publishes on the node for exactly this reader. A node
+  // built by hand (goldens, direct API callers) carries neither and contributes nothing, which is correct.
+  for (const nd of subPageNodes(result)) takePairs(nd.confirmClosed || closedOf(nd.changeSet), nd.pageKey);
+  return out;
+}
+// The answers that landed on a question a disposition had already CLOSED — the operator answered it through both
+// channels, which the documentation tells them to do. Reported (never silent) because the entry reached no
+// builder: it is not a miss, but it is not work either.
+// ⚠ ONLY WHEN THE PAIR IS CLOSED EVERYWHERE. Pair matching is page-agnostic, and one `kind`+`item` can be closed on
+// one page while the identical row is still OPEN on another — a scoped `C1Child::field-labels:(all fields)`
+// disposition closes the child's row and leaves `main`'s standing. There the answer DID reach an open question and
+// IS counted in `resolutionsMatched`, so listing it here would make this field's own stderr line ("target
+// questions already CLOSED … NOT counted in `resolutionsMatched`") state two things that are both false of that
+// run. So a pair still present in `preflight[]` is excluded: `resolutionsClosed` means "this answer reaches no
+// OPEN question because a disposition already closed it", which is exactly what the line claims.
+function closedResolutions(index, closedQuestions, published) {
+  if (!index) return [];
+  const open = new Set(published.map((p) => resolutionKey(p.kind, p.item)));
+  const out = [];
+  for (const q of closedQuestions) {
+    if (open.has(resolutionKey(q.kind, q.item))) continue;
+    const hit = matchResolution(index, q);
+    if (hit) out.push({ kind: q.kind, item: q.item, answer: hit.answer });
+  }
+  return out;
+}
 // An already-built index passes through; a parsed file is indexed here.
 const asResolutionIndex = (r) => (r?.byKindItem instanceof Map ? r : buildResolutionIndex(r ?? null));
 // `resolution: null` for an open question — an omitted field cannot be told apart from an engine that publishes none.
@@ -3350,6 +3445,9 @@ export function pageUnits(result, opts = {}) {
   // with the unmatched report below, so the two cannot disagree about what matched.
   const resIndex = asResolutionIndex(opts.resolutions);
   const preflight = preflightUnits(evidence.filter((r) => r.confirm), resIndex);
+  // The questions a recorded disposition CLOSED — asked by this run, answerable through `resolutions.json` too,
+  // and deliberately NOT in `preflight[]`. See `closedConfirmQuestions`.
+  const closedQuestions = closedConfirmQuestions(result, byKey);
   // Built BEFORE the return object rather than inline in it, because `templateNames` below is derived FROM these
   // units — the template each page expects is already decided here, and re-deriving it from the rows a second time
   // is how one source of truth becomes two that agree only until someone edits one of them.
@@ -3398,10 +3496,22 @@ export function pageUnits(result, opts = {}) {
     // was recorded (see the resolutions block above).
     preflight,
     // One question answered twice through the two key forms — the pair wins and the id-keyed answer is dropped, so
-    // the discard is named rather than left silent.
-    resolutionsConflicts: resolutionConflicts(resIndex, preflight),
+    // the discard is named rather than left silent. The CLOSED questions are in this set for the same reason they
+    // are in the unmatched one (ENG-96571 review 3): `closedResolutions` resolves through `matchResolution`, which
+    // prefers the pair and discards the `id`-keyed answer — so a closed question answered twice discards one of
+    // them exactly like an open one, and judging conflicts against `preflight` alone left that discard silent.
+    resolutionsConflicts: resolutionConflicts(resIndex, [...preflight, ...closedQuestions]),
     // Answers matching no question this plan asks — published so the CLI reports them rather than dropping them.
-    resolutionsUnmatched: unmatchedResolutions(resIndex, preflight),
+    // The published set is `preflight` PLUS the questions a disposition closed: a closed question was still asked,
+    // so an answer to it is not "an answer nobody asked for" (ENG-96571 review 3). Passed as one list rather than
+    // as a second parameter so the exemption applies to BOTH key forms for free — `askedKeys` already indexes each
+    // descriptor under its `id` and its `kind`+`item`, and the two loops inside stay symmetric by construction.
+    resolutionsUnmatched: unmatchedResolutions(resIndex, [...preflight, ...closedQuestions]),
+    // ENG-96571 review 3 — the answers that target a question a disposition ALREADY CLOSED. Its own field, not
+    // folded into `resolutionsMatched`: that count means "an OPEN question got an answer" and is what tells an
+    // answers-file-arrived-late run from a run with no answers, so an entry that closes nothing must not inflate
+    // it. `[]` when the operator used one channel per question — the ordinary case.
+    resolutionsClosed: closedResolutions(resIndex, closedQuestions, preflight),
     // ENG-95503 — WAS THERE AN ANSWERS FILE AT ALL, and how much of it landed. `resolutionsUnmatched` reports answers
     // that missed a question; these two report the case it cannot see — a run where NO answers were read, which is
     // indistinguishable in every other field from a run where the operator answered nothing. A real run wrote its

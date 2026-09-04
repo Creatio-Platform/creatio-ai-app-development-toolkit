@@ -1346,6 +1346,17 @@ function publishPage(node, baseKey, alt, dedupeId, rowsFor) {
   node.pageKey = baseKey;
   node.pageRows = rowsFor(baseKey);
 }
+// ENG-96571 review 3 — THE ⚠ Confirm QUESTIONS THIS FOLDED SCOPE CLOSED, published on the node.
+// A folded sub-page node exposes `pageRows` (rendered under its own key) but NOT its `changeSet`: the rows were
+// built inside the fold and the ChangeSet stays there. `confirmWorklistRows` therefore already dropped the closed
+// rows before the parent ever saw them, so `pageUnits` — which reconciles `resolutions.json` against the whole
+// tree — had no way to know a sub-page question had been asked and answered by a disposition. Without this an
+// operator who used BOTH channels on a CHILD page's row got the same "an answer nobody asked for" ⚠ the root-level
+// defect produced. The RAW `kind`/`item` pair, never the joined key: `item` carries colons.
+// Per node and NOT aggregated upward — `subPageNodes` recurses through `childPages`, so every grandchild is
+// visited on its own and an aggregate here would double-count.
+const closedConfirmPairs = (cs) => (cs?.needsDecision || [])
+  .filter((n) => n.closed === true).map((n) => ({ kind: n.kind, item: n.item }));
 // Fold each child page (recursive sub-migration) via foldSubPage, writing the mapping onto each childPages entry.
 // isChildPage → child-scoped rendering (few-fields modal nudge, no section-level Print/Process). Extracted for CC.
 function foldChildPages(childPages, childSchemas, foldCtx) {
@@ -1417,6 +1428,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // satisfy names the very schema the recommendation banner told it to build on. Dedupe on the RESOLVED schema
   // key: the memo hands the same `res` to every parent referencing this page.
   const childTpl = CHILD_TEMPLATE_SCHEMA[childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails)] || null;
+  c.confirmClosed = closedConfirmPairs(res.changeSet);
   publishPage(c, pageKey, key, `child::${key}`,
     (k) => checklistGroups(res, subPageOpts(foldCtx, k, childTpl, { isChildPage: true })));
 }
@@ -1446,6 +1458,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     // …and its own page-scoped checklist rows. The expected template is whatever the manifest declared for THIS
     // typed page (there is no per-type template rule to derive one from); with none declared the page emits no
     // template row rather than one pinned to the parent's template, which a per-type form need not share.
+    t.confirmClosed = closedConfirmPairs(res.changeSet);
     publishPage(t, `typed:${t.schema}`, tkey, `typed::${tkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, t.template || null)));
   }
@@ -1478,6 +1491,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     miniPage.stubScope = stubScope("mini page", mkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
     // The mini page's own rows. Its template is not a choice — a quick-add shell IS the mini-page template — so it
     // comes from the same shared mapping the child rule uses, and its layout stops being a single boolean row.
+    miniPage.confirmClosed = closedConfirmPairs(res.changeSet);
     publishPage(miniPage, `mini:${miniPage.schema}`, mkey, `mini::${mkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, CHILD_TEMPLATE_SCHEMA.mini, { isMiniPage: true })));
   }
@@ -3184,6 +3198,16 @@ function unmatchedResolutionsNote(unmatched) {
   const more = unmatched.length > 5 ? ` | …and ${unmatched.length - 5} more` : "";
   return `migrate.mjs: ⚠ ${unmatched.length} --resolutions entr${unmatched.length === 1 ? "y" : "ies"} matched NO ⚠ Confirm question this plan asks: ${named}${more}. Check kind/item against \`preflight[]\` in this output — an answer nobody asked for reaches no builder.\n`;
 }
+// ENG-96571 review 3 — an answer whose question a `manifest.confirmDispositions` entry had ALREADY CLOSED. NOT a
+// miss (the note above must not claim it is: the question was asked, and the documentation tells the operator to
+// fill both channels) and NOT work either — the row is closed, so nothing in `preflight[]` carries the answer to a
+// builder. Stated ℹ rather than ⚠ for exactly that reason: this is the documented double-channel answer, and the
+// only thing worth saying about it is which channel the run acted on.
+function closedResolutionsNote(closed) {
+  const named = closed.map((c) => `${c.kind}:${c.item}`).slice(0, 5).join(" | ");
+  const more = closed.length > 5 ? ` | …and ${closed.length - 5} more` : "";
+  return `migrate.mjs: ℹ ${closed.length} --resolutions answer(s) target questions already CLOSED by a disposition: ${named}${more}. The recorded disposition is what closed the row; the answer is kept in \`resolutionsClosed\` and is NOT counted in \`resolutionsMatched\`.\n`;
+}
 
 // An unknown `--page` key FAILS: a caller that asked for one page must never be handed the whole artifact as
 // though it were that page's slice. One message for both slicers below.
@@ -3387,6 +3411,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const planUnits = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionIndex });
       if (planUnits.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(planUnits.resolutionsUnmatched));
       if (planUnits.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(planUnits.resolutionsConflicts));
+      if (planUnits.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(planUnits.resolutionsClosed));
     }
   }
   else if (specMode) output = pageScopedSpec(result, pageArg, fail) + "\n";
@@ -3454,6 +3479,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
+    if (units.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(units.resolutionsClosed));
   }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }

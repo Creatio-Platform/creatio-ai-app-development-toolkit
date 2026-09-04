@@ -12716,5 +12716,126 @@ check("ENG-96571 review 2 (finding 6) ANTI-VACUITY: with NOTHING to say the work
   && /#### ⚠ Confirm before I build \(1\)/.test(r26Spec({ needsDecision: [{ kind: "rule-condition", item: "Job", reason: "unread" }] })),
   () => [r26Spec({}), r26Spec({ needsDecision: [{ kind: "rule-condition", item: "Job", reason: "unread" }] })]);
 
+/* ================================================================================================
+   ENG-96571 review 3 — a question CLOSED by a disposition is still a question this run ASKED
+   ================================================================================================
+   Review 2's finding 1 stopped publishing a closed ⚠ Confirm row as an open evidence id — correct, and pinned
+   above. But `unmatchedResolutions` judges `resolutions.json` against `preflight[]`, so the removal turned an
+   ANSWER to that same question into "an answer nobody asked for": with the disposition recorded, the entry
+   landed in `resolutionsUnmatched` and `resolutionsMatched` fell to 0. That is the DOCUMENTED path —
+   `references/migration-documentation.md` tells the operator to fill BOTH channels for one question — so
+   following the documentation produced a ⚠ accusing the operator of answering nothing.
+
+   Same repro as finding 1 (`r21Run`), with an answers file added. Reproduced verbatim before the fix:
+     without a disposition → resolutionsUnmatched [] / resolutionsMatched 1
+     with    a disposition → resolutionsUnmatched [{kind:"enum-drift-advisory",item:"enumVocabulary",…}] / matched 0
+   ---- */
+const R3_RES = { resolutions: [{ kind: R2_1_KEY.split(":")[0], item: "enumVocabulary", answer: "checked on stand" }] };
+const r31Units = (r, resolutions) => pageUnits(r, resolutions ? { resolutions } : {});
+check("ENG-96571 review 3 SETUP: with NO disposition the answer matches the open question — `resolutionsUnmatched` is empty and `resolutionsMatched` counts it, which is the baseline the closed case must not fall below",
+  (() => { const u = r31Units(r21Open, R3_RES);
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsMatched === 1
+      && (u.resolutionsClosed || []).length === 0; })(),
+  () => { const u = r31Units(r21Open, R3_RES);
+    return { unmatched: u.resolutionsUnmatched, matched: u.resolutionsMatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3 MAJOR: once a disposition CLOSES the row, an answer to that same question is NOT reported as an answer nobody asked for — the row left `preflight[]` and took the reconciliation's memory of the question with it, on the one path the documentation tells the operator to take",
+  (() => { const u = r31Units(r21Closed, R3_RES);
+    return u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = r31Units(r21Closed, R3_RES);
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed, preflight: u.preflight.map((p) => p.id) }; });
+check("ENG-96571 review 3 MAJOR: the answer is REPORTED, not merely exempted — `resolutionsClosed` names the question it targets and its answer, so the operator's second-channel entry is auditable instead of silently dropped",
+  (() => { const c = r31Units(r21Closed, R3_RES).resolutionsClosed || [];
+    return c.length === 1 && c[0].kind === "enum-drift-advisory" && c[0].item === "enumVocabulary"
+      && c[0].answer === "checked on stand"; })(),
+  () => r31Units(r21Closed, R3_RES).resolutionsClosed);
+check("ENG-96571 review 3: and it is NOT counted in `resolutionsMatched` — that count means 'an OPEN question got an answer' and is the diagnostic that tells an answers-file-arrived-late run from a run with no answers, so an entry that closes nothing must not inflate it",
+  r31Units(r21Closed, R3_RES).resolutionsMatched === 0,
+  () => ({ matched: r31Units(r21Closed, R3_RES).resolutionsMatched, closed: r31Units(r21Closed, R3_RES).resolutionsClosed }));
+check("ENG-96571 review 3: the closed question is still NOT an open unit — the exemption is in the reconciliation only, so review 2's finding 1 is untouched: no `preflight[]` row, no `--verify` evidence id",
+  !r31Units(r21Closed, R3_RES).preflight.map((p) => p.id).includes(`main#confirm:${R2_1_KEY}`)
+  && !r31Units(r21Closed, R3_RES).evidenceRows.map((e) => e.id).includes(`main#confirm:${R2_1_KEY}`),
+  () => r31Units(r21Closed, R3_RES).preflight.map((p) => p.id));
+check("ENG-96571 review 3 ANTI-VACUITY: an answer to a genuinely UNASKED key is STILL unmatched — the exemption is scoped to questions this run asked and closed, and did not turn the report off",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nobodyAskedThis"
+      && (u.resolutionsClosed || []).length === 0; })(),
+  () => pageUnits(r21Closed, { resolutions: { resolutions: [{ kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } }).resolutionsUnmatched);
+check("ENG-96571 review 3 ANTI-VACUITY: an orphan answer alongside a closed-question answer is reported on its own — one entry exempt, the other named, in the same run",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "checked on stand" },
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nobodyAskedThis"
+      && (u.resolutionsClosed || []).length === 1 && u.resolutionsClosed[0].item === "enumVocabulary"; })(),
+  () => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "checked on stand" },
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3: the exemption covers BOTH key forms — an operator who answered the closed question by its PUBLISHED id is exempt too, which a pair-only guard left reporting through the `byId` loop (the asymmetry `unmatchedResolutions` warns about in its own comment)",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { id: `main#confirm:${R2_1_KEY}`, answer: "by id" }] } });
+    return u.resolutionsUnmatched.length === 0; })(),
+  () => pageUnits(r21Closed, { resolutions: { resolutions: [{ id: `main#confirm:${R2_1_KEY}`, answer: "by id" }] } }).resolutionsUnmatched);
+check("ENG-96571 review 3: a row closed inside a CHILD fold is covered too — `pageUnits` splices every sub-page's confirm rows, so reading only the root scope's own report would have left the same defect one level down",
+  (() => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted", note: "child" } }));
+    const u = pageUnits(r, { resolutions: { resolutions: [{ kind: "rule-condition", item: "Job", answer: "child answer" }] } });
+    return u.resolutionsUnmatched.length === 0 && (u.resolutionsClosed || []).length === 1
+      && u.resolutionsClosed[0].item === "Job"; })(),
+  () => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted" } }));
+    const u = pageUnits(r, { resolutions: { resolutions: [{ kind: "rule-condition", item: "Job", answer: "child answer" }] } });
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3: with no answers file at all `resolutionsClosed` is an EMPTY ARRAY, not absent — the same 'a consumer must not tell no-answers from an engine that publishes none' rule `runResolutions` and `resolution: null` already follow",
+  Array.isArray(pageUnits(r21Closed, {}).resolutionsClosed) && pageUnits(r21Closed, {}).resolutionsClosed.length === 0,
+  () => pageUnits(r21Closed, {}).resolutionsClosed);
+
+check("ENG-96571 review 3: a CLOSED question answered TWICE through the two key forms is reported in `resolutionsConflicts` too — `matchResolution` prefers the pair and discards the `id`-keyed answer there exactly as it does on an open question, so judging conflicts against `preflight` alone left that discard silent",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "pair wins" },
+      { id: `main#confirm:${R2_1_KEY}`, answer: "id discarded" }] } });
+    return u.resolutionsConflicts.length === 1 && u.resolutionsConflicts[0].used === "pair wins"
+      && u.resolutionsConflicts[0].discarded === "id discarded" && u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "pair wins" },
+      { id: `main#confirm:${R2_1_KEY}`, answer: "id discarded" }] } });
+    return { conflicts: u.resolutionsConflicts, unmatched: u.resolutionsUnmatched }; });
+/* A pair closed on ONE page while the identical row stays OPEN on another. Pair matching is page-agnostic, so the
+   same `kind`+`item` can be both — a SCOPED disposition closes the child's row and leaves `main`'s standing. The
+   answer then DID reach an open question, so `resolutionsClosed` must stay empty: its stderr line says the answer
+   targets a question already CLOSED and is NOT counted in `resolutionsMatched`, and both are false in this run. */
+const R3_CROSS_CHILD = `define("C1Child",[],function(){return{entitySchemaName:"Shared",
+  diff:[{operation:"insert",name:"Job",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Job"}}]};});`;
+const r3Cross = runMigration({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  childPageSchemas: { C1Child: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body: R3_CROSS_CHILD }] } },
+  confirmDispositions: { "C1Child::field-labels:(all fields)": { resolved: true, disposition: "accepted" } } });
+const r3CrossRes = { resolutions: [{ kind: "field-labels", item: "(all fields)", answer: "A" }] };
+check("ENG-96571 review 3 SETUP: the cross-page fixture really has the SAME `kind`+`item` closed on the child and still OPEN on `main` — without this the claim below is about a case no fixture reaches",
+  (() => { const p = pageUnits(r3Cross, {}).preflight;
+    return p.some((x) => x.pageKey === "main" && x.kind === "field-labels" && x.item === "(all fields)")
+      && (r3Cross.childPages[0].confirmClosed || []).some((n) => n.kind === "field-labels"); })(),
+  () => ({ preflight: pageUnits(r3Cross, {}).preflight.map((p) => `${p.pageKey} ${p.kind}:${p.item}`),
+    childClosed: r3Cross.childPages[0].confirmClosed }));
+check("ENG-96571 review 3: a pair closed on ONE page but still OPEN on another is NOT in `resolutionsClosed` — the answer reached an open question and IS counted in `resolutionsMatched`, so listing it would make this field's own ℹ line state two things that are false of that run",
+  (() => { const u = pageUnits(r3Cross, { resolutions: r3CrossRes });
+    return u.resolutionsMatched === 1 && (u.resolutionsClosed || []).length === 0
+      && u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = pageUnits(r3Cross, { resolutions: r3CrossRes });
+    return { matched: u.resolutionsMatched, closed: u.resolutionsClosed, unmatched: u.resolutionsUnmatched }; });
+check("ENG-96571 review 3 ANTI-VACUITY: ONE answer to a closed question raises NO conflict — the report flags two entries fighting over one question, not every closed-question answer",
+  r31Units(r21Closed, R3_RES).resolutionsConflicts.length === 0,
+  () => r31Units(r21Closed, R3_RES).resolutionsConflicts);
+
+/* ---- the MINOR: the three-hop render comment now describes what actually renders ---- */
+// The comment above the `lifecycle` branch of `triggerText` claimed `onSaved → mid → leaf` reads
+// `onSaved (platform lifecycle) → internal call via mid`. It does not: `composeUpstream` peels the immediate
+// caller off the chain, so `via` is EMPTY at that depth and `mid` reaches the reader through the FOLD. Pinned as
+// behaviour so the corrected comment cannot drift back.
+check("ENG-96571 review 3 (MINOR): on `onSaved → mid → leaf` the trigger cell carries NO `via` — `mid` is the immediate caller, so it reaches the reader through the fold (``port with `mid` ``), not through this cell",
+  (r22Trig("leaf")?.via || []).length === 0
+  && /onSaved \(platform lifecycle\) → internal call(?! via)/.test(r22Row("leaf"))
+  && /port with `mid`/.test(r22Row("leaf")),
+  () => ({ trigger: r22Trig("leaf"), row: r22Row("leaf") }));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
