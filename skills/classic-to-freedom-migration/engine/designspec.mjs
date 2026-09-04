@@ -904,6 +904,22 @@ function answeredText(r) {
   const attribution = who ? ` _(${who})_` : "";
   return `**✅ answered:** ${esc(r.answer)}${attribution}`;
 }
+// The worklist's header. The count is EVERY half, and it says which is which: "(3)" on a run where two of the
+// three were answered reads as three open questions. Each qualifier is only mentioned when there IS one, so an
+// unanswered run's header is unchanged and the answered-only wording stays the ENG-96457 one.
+// ENG-96571 review 2 (finding 6) — `advisories` is the count of things this worklist has to say that are NOT rows
+// (a not-applicable key, a key that matched no row). With no open row the header used to read a bare `(0)`, which
+// summarizes such a section as "zero questions, nothing to see" — the opposite of what its body says. `(0 open)`
+// says the count is the OPEN half and that something else follows. Own fn so `renderConfirmWorklist` gains no
+// branch of its own (Sonar CC 15).
+function confirmHeader(open, closed, answered, advisories) {
+  const H = (tail) => `#### ⚠ Confirm before I build (${tail})`;
+  if (closed && answered) return H(`${open} open, ${closed} closed, ${answered} answered`);
+  if (closed) return H(`${open} open, ${closed} closed`);
+  if (answered) return H(`${open}, ${answered} answered`);
+  if (advisories) return H(`${open} open`);
+  return H(String(open));
+}
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -940,14 +956,14 @@ function renderConfirmWorklist(cs, opts = {}) {
   // this line, would read a plan that neither shows the answer nor says it was not applied.
   // (ENG-96457: it also means every kind that reaches this worklist can carry an answer — including this one.)
   const notApplicable = cs.confirmNotApplicable || [];
-  if (!confirm.length && !closedRows.length && !invalid.length && !notApplicable.length) return [];
-  // The header counts EVERY half, and says which is which: "(3)" on a run where two of the three were answered
-  // reads as three open questions. Each qualifier is only mentioned when there IS one, so an unanswered run's
-  // header is unchanged, and the answered-only wording stays the ENG-96457 one.
-  let head = `#### ⚠ Confirm before I build (${confirm.length})`;
-  if (closedRows.length && answered) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed, ${answered} answered)`;
-  else if (closedRows.length) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed)`;
-  else if (answered) head = `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`;
+  // ENG-96571 review 2 (finding 3) — a recorded key that matched NO row in this scope: a typo in the kind or the
+  // item (`rule-condtion:Job`, `rule-condition:Jobb`). It closed nothing, is in none of `closed`/`invalid`/
+  // `notApplicable` (those need a row to attach to), and without this line the operator reads a plan where the
+  // question is still open and their answer appears nowhere at all. Same channel and same voice as
+  // `behaviourIndex.unmatched`.
+  const unmatched = cs.confirmUnmatched || [];
+  if (!confirm.length && !closedRows.length && !invalid.length && !notApplicable.length && !unmatched.length) return [];
+  const head = confirmHeader(confirm.length, closedRows.length, answered, notApplicable.length + unmatched.length);
   const L = [head, ...confirm];
   if (closedRows.length) {
     const closedList = closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${noteSuffix(d.note)}`).join(" · ");
@@ -963,6 +979,10 @@ function renderConfirmWorklist(cs, opts = {}) {
     // ONE LINE PER CHANNEL. A single shared sentence sent every kind to `memberDispositions`, which is the wrong
     // channel for `detail-editpage` — see `NA_ADVICE`.
     L.push("", ...notApplicableLines(notApplicable));
+  }
+  if (unmatched.length) {
+    const list = unmatched.map((k) => "`" + esc(k) + "`").join(", ");
+    L.push("", `> ⚠ ${unmatched.length} recorded \`confirmDispositions\` key(s) matched NO ⚠ Confirm row in this scope: ${list}. Nothing was closed by them — check the \`<kind>:<item>\` spelling against the rows above (and against \`preflight[]\` in \`--units\`), then re-run.`);
   }
   return [...L, ""];
 }
@@ -1115,7 +1135,15 @@ function triggerText(t) {
   // trigger carrying a `lifecycle` field), because it is a different ANSWER: the platform starts this chain, which
   // is what the reader needs, whereas a bare `internal` trigger leaves the origin open. The rendered text is
   // deliberately UNCHANGED by the rename — the plan reads the same, only the shape it is computed from is honest.
-  if (t.kind === "lifecycle") return `${esc(t.from)} (platform lifecycle) → internal call${callersSuffix(t)}`;
+  // ENG-96571 review 2 (finding 2) — `hook` is the platform method that ANSWERS the chain and `from` the IMMEDIATE
+  // caller, and on a chain longer than one hop they are different methods. The hook is what this cell names (it is
+  // the answer); `via` names the hops between the caller and the hook, so a three-level chain reads
+  // `onSaved (platform lifecycle) → internal call via mid` instead of losing `mid` entirely. `hook ?? from` because
+  // a one-hop answer carries no `hook`: there the immediate caller IS the hook.
+  if (t.kind === "lifecycle") {
+    const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
+    return `${esc(t.hook ?? t.from)} (platform lifecycle) → internal call${via}${callersSuffix(t)}`;
+  }
   if (t.kind === "internal") {
     const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
     if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${callersSuffix(t)}`;
@@ -1846,8 +1874,9 @@ export function renderPlanNotes(result) {
     "",
     "### Presenting the plan",
     "",
-    "- Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` slots in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
-    "- Corrections/enrichments go in an *Adjustments* list at the very end of `plan.md` — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).",
+    // ENG-96571 review 2 (finding 5) — from `PLAN_AUTHORING_SENTENCES`, not hand-written here: this document and
+    // the CLI's stderr line carried two copies of the same rule in two wordings. See the constant.
+    ...PLAN_AUTHORING_SENTENCES.map((s) => `- ${s}`),
     "- The Plan-vs-Done control table is NOT part of `plan.md`: produce it with `--checklist` AFTER implementation, and close the build with `--verify --built <file>`.",
   ];
   const unverified = noChildPageNodes(result.childPages || []);
@@ -2088,7 +2117,19 @@ function renderIdentifiers(opts) {
 // `manifest.planMeta` and "present this VERBATIM". A plan is the artifact a human approves; instructions to the
 // generator are not part of it. `migrate.mjs --plan` writes this to STDERR (and the worklog) instead, so the agent
 // still gets the rule and the file stays free of it. Exported so there is exactly ONE copy of the text.
-export const PLAN_AUTHORING_NOTE = "Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present the plan VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).";
+//
+// ENG-96571 review 2 (finding 5) — ONE copy, in ONE shape, for BOTH channels. `renderPlanNotes` used to hand-write
+// these two sentences again, in its own slightly different wording ("`<FILL: …>` slots in `plan.md`" vs "`<FILL: …>`
+// above"), so the rule the agent must follow existed twice and an edit to either left the other stating the old
+// version of it. The sentences are the unit both channels need — the notes document renders them as its two
+// bullets, the CLI's stderr line as one paragraph — so they are exported as an ARRAY and the paragraph is derived
+// from it. The wording is the notes' one (it names `plan.md` instead of saying "above", which was only ever true
+// while the text was appended to the plan itself).
+export const PLAN_AUTHORING_SENTENCES = [
+  "Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` slots in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
+  "Corrections/enrichments go in an *Adjustments* list at the very end of `plan.md` — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).",
+];
+export const PLAN_AUTHORING_NOTE = PLAN_AUTHORING_SENTENCES.join(" ");
 
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -2580,9 +2621,16 @@ function evidenceRow(id, label, extra = {}, vkExtra = {}) {
 // The RAW `kind`/`item` ride on the ROW (not on the `vk`, which is the resolvers' input): `--units.preflight`
 // republishes them next to the id so the executor reads the decision it must resolve without re-parsing an id —
 // and without `esc`, which is a rendering transform and would not round-trip.
+// ENG-96571 review 2 (finding 1) — a row CLOSED by `manifest.confirmDispositions` is NOT an evidence row. The
+// disposition is the answer, and `renderConfirmWorklist` already prints it as `ℹ … CLOSED by a recorded
+// disposition`; publishing it here anyway put the same answered question back into `--units.preflight` and into the
+// `--verify` gate as an OPEN evidence id (`main#confirm:<kind>:<item>`), so a plan that said "(2 open, 1 closed)"
+// shipped three questions to the executor and the third could never be closed by anything but a second answer in
+// another channel. Deliberately NOT re-added as a plain row either: a `vk`-less row still renders as
+// `☐ confirm on-stand` in the control table, which is the same open-looking item under a different marker.
 function confirmWorklistRows(pageKey, cs) {
   return (cs.needsDecision || [])
-    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind))
+    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind) && !nn.closed)
     .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,
       { confirm: { kind: d.kind, item: d.item } }));
 }

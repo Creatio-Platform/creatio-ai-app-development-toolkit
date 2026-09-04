@@ -399,11 +399,15 @@ function confirmDispositionsInput(manifest, opts) {
 // in their own advisory line, so the operator learns the answer belongs in the worklist that DOES carry the row
 // (`⚠ Imperative logic` / `⚠ Imperative members`, closed via `memberDispositions`) instead of believing it landed.
 // Returns `{ closed, invalid, notApplicable }` (arrays of keys) so a caller/test can see what the manifest did.
+// `seen` (ENG-96571 review 2, finding 3) is every BARE key this scope actually has a row for — the input the
+// unmatched report needs. It is collected here rather than re-derived by the caller so "what a key could have
+// matched" is read off the same loop that matches them, and the two cannot disagree.
 function applyConfirmDispositions(changeSet, declared, scopeSchema) {
-  const closed = [], invalid = [], notApplicable = [];
-  if (!Object.keys(declared).length) return { closed, invalid, notApplicable };
+  const closed = [], invalid = [], notApplicable = [], seen = [];
+  if (!Object.keys(declared).length) return { closed, invalid, notApplicable, seen };
   for (const n of changeSet?.needsDecision || []) {
     const key = confirmKeyOf(n);
+    seen.push(key);
     const dec = plainObject((scopeSchema ? declared[`${scopeSchema}::${key}`] : undefined) ?? declared[key]);
     if (dec.resolved !== true) continue;
     if (SHOWN_ELSEWHERE.has(n.kind)) { notApplicable.push(key); continue; }
@@ -417,7 +421,48 @@ function applyConfirmDispositions(changeSet, declared, scopeSchema) {
     n.note = typeof dec.note === "string" ? dec.note : null;
     closed.push(key);
   }
-  return { closed, invalid, notApplicable };
+  return { closed, invalid, notApplicable, seen };
+}
+
+// ENG-96571 review 2 (finding 4) — the FORM page's ChangeSet and the LIST page's are two scopes with ONE answer
+// map, and the renderers treat them alike (`renderListPage` calls `renderConfirmWorklist(result.listChangeSet)`).
+// The disposition pass ran over the form's rows only, so a `list-columns:…` / `list-add-routing:…` answer closed
+// nothing and was reported in none of `closed`/`invalid`/`notApplicable` — the operator's answer landed nowhere and
+// nothing said so. Merged into ONE result rather than published as a second field: `result.confirmDispositions` is
+// the run's report of what the manifest did, and a caller asking "was my key applied?" must not have to know which
+// of the two pages raised the row. `listChangeSet` is null in mini/child scope, which `applyConfirmDispositions`
+// already tolerates.
+function mergeConfirmResults(a, b) {
+  return {
+    closed: [...a.closed, ...b.closed], invalid: [...a.invalid, ...b.invalid],
+    notApplicable: [...a.notApplicable, ...b.notApplicable], seen: [...a.seen, ...b.seen],
+  };
+}
+
+// ENG-96571 review 2 (finding 3) — recorded keys that matched NO row in this scope: a typo in the kind or the item.
+// They closed nothing and appear in none of the three reported arrays (each of those needs a row to attach to), so
+// without this the answer is simply absent from the plan while the question still reads as open.
+//
+// WHICH scope reports which key is the whole difficulty, and the rule is "only the scope the key names":
+//   · a SCOPED key (`<schema>::<kind>:<item>`) is reported by the run whose `scopeSchema` IS that schema — at the
+//     root a `C1Child::…` key is not unmatched, it is simply not addressed to the root;
+//   · a BARE key is reported at the ROOT only, and only when the run has NO nested scope to inherit into. The
+//     inherited map reaches every child/typed/mini fold, and those folds run AFTER this pass — so a bare key that
+//     legitimately closes a row on a child page has, at this moment, matched nothing the root can see. Reporting it
+//     here would print a ⚠ about a key that worked, which is worse than the silence it replaces. A single-page run
+//     (the case where a typo is most likely and nothing else can explain the miss) still gets the report.
+function unmatchedConfirmKeys(declared, seen, scopeSchema, hasNested) {
+  const matched = new Set(seen);
+  const out = [];
+  for (const [k, v] of Object.entries(plainObject(declared))) {
+    if (plainObject(v).resolved !== true) continue;
+    const sep = k.indexOf("::");
+    const scope = sep === -1 ? null : k.slice(0, sep);
+    const bare = sep === -1 ? k : k.slice(sep + 2);
+    const mine = scope === null ? !scopeSchema && !hasNested : scope === scopeSchema;
+    if (mine && !matched.has(bare)) out.push(k);
+  }
+  return out;
 }
 
 // The `enum-drift-advisory` row's reason, or null when there is nothing advisory to say. Own fn (Sonar CC 15 in
@@ -2740,10 +2785,22 @@ export function runMigration(manifest, opts = {}) {
   // `closed` / `invalid` / `notApplicable` — so an operator who answered one saw the row come back unchanged on
   // every regenerate with nothing saying why. Still applied after `applyBehaviourIndex` for the reason it always
   // was: both annotate the SAME rows, and a row that is described AND answered must carry both facts.
-  const confirmDispositions = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  const formConfirm = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  // …and the LIST page's own rows, from the SAME map (finding 4 — see `mergeConfirmResults`).
+  const listConfirm = applyConfirmDispositions(listChangeSet, confirmDispositionsIn, opts.scopeSchema);
+  const confirmDispositions = mergeConfirmResults(formConfirm, listConfirm);
   // Published on the ChangeSet so `renderConfirmWorklist` can name the not-applicable keys without a second
   // argument — the same channel `featureSignals` uses, and the only place the renderer sees this run's answers.
-  changeSet.confirmNotApplicable = confirmDispositions.notApplicable;
+  // Per PAGE, not merged: each worklist names the keys aimed at rows IT prints.
+  changeSet.confirmNotApplicable = formConfirm.notApplicable;
+  if (listChangeSet) listChangeSet.confirmNotApplicable = listConfirm.notApplicable;
+  // The unmatched report is computed ONCE, over the union of both pages' rows: computed per page, each call would
+  // report the OTHER page's keys as unmatched. Published on the form page's ChangeSet — the ⚠ line is about the
+  // manifest, not about one of the two grids, and the form worklist is the one every scope renders.
+  const confirmUnmatched = unmatchedConfirmKeys(confirmDispositionsIn, confirmDispositions.seen, opts.scopeSchema,
+    childPages.length > 0 || typedPages.length > 0 || !!manifest.addRecordMiniPage);
+  changeSet.confirmUnmatched = confirmUnmatched;
+  confirmDispositions.unmatched = confirmUnmatched;
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
   // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
@@ -3586,7 +3643,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `plan.md`. It is generator guidance, not plan content: a delivered plan must not end by telling its reader to
   // fill `manifest.planMeta`. Printed on every `--plan` run (complete or not) because the "do not hand-edit the
   // generated tables" half applies to a COMPLETE plan too — that is the rule agents break.
-  if (planMode) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
+  // ENG-96571 review 2 (finding 5) — NOT on the `--out` path. There the same two sentences are already in the
+  // `plan.notes.md` this run wrote (`renderPlanNotes` renders them from `PLAN_AUTHORING_SENTENCES`, the one copy of
+  // the text), and stdout already points the agent at that file. Writing them again on stderr made the run state
+  // the rule twice, in two places, which is how an agent learns to read neither.
+  if (planMode && !outFile) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
