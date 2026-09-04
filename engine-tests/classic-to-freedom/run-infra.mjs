@@ -180,7 +180,10 @@ const H_CONTROL_MODE = ["buildModes", "offeredModes", "modeLabel", "buildModeMen
   "stopsAtRoundBoundary", "isLayoutPassMode", "roundsOnFile", "openCountsOf",
   "runStatusDoc", "passScopeText",
   // ENG-96204 (ENG-96474) — the spent-answer union the queue-file record and the resume gate are built on.
-  "mergeConsumed", "roundStateOf", "roundsSpentOnFile"];
+  "mergeConsumed", "roundStateOf", "roundsSpentOnFile",
+  // ENG-96458 D4 (PR #157 follow-up review) — the ☐-count contradiction's memory, filed with the other
+  // queue-file round record because that is where it lives and what it is compared across.
+  "pendingContradictionSignature", "pendingContradictionRecord", "pendingContradictionHalts"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction"];
@@ -244,7 +247,10 @@ check("PR #128 review (round 16): the grouped helper surface has no name in two 
 const BLOCK_CONSTS = ["GUIDELINES_RETURN", "DEFAULT_MAX_ROUNDS", "RESOLUTIONS_RETURN",
   "CARRY_TEXT_CAP", "CARRY_TEXT_TRUNCATED", "UNCONSUMED_CARRY_WARN",
   "SHOWS_YES", "SHOWS_NO", "SHOWS_UNKNOWN", "UNCONSUMED_FROM_VERIFIER", "UNCONSUMED_FROM_DISPATCH",
-  "RESOLUTION_NOT_APPLIED", "CONTROL_MODE_ITEM"];
+  "RESOLUTION_NOT_APPLIED", "CONTROL_MODE_ITEM",
+  // ENG-96458 D4 — the sighting threshold, read from the shipped block for the same reason `DEFAULT_MAX_ROUNDS`
+  // is: a copy of the number here would let the assertion pass against a block whose threshold had drifted.
+  "PENDING_CONTRADICTION_STOP_AT"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. The block closes over NOTHING now: the round budget it used to
@@ -318,7 +324,7 @@ check("isOpenPage: `complete: false` is open", () => (wf.isOpenPage({ pages: { m
 check("isOpenPage: a key ABSENT from the verdict is OPEN, not closed (the baseline hole: no verdict yet ⇒ everything is left to build)",
   () => (wf.isOpenPage({ pages: {} }, "main") === true));
 check("isOpenPage: an EMPTY verdict object (the `--verify` that could not run) leaves every unit open",
-  () => (wf.isOpenPage({ complete: false, missing: 0, unverified: 0, pages: {} }, "child:X") === true));
+  () => (wf.isOpenPage({ complete: false, missing: 0, unverified: 0, pending: 0, pages: {} }, "child:X") === true));
 check("isOpenPage: no verdict at all (undefined) is open, never silently done",
   () => (wf.isOpenPage(undefined, "main") === true && wf.isOpenPage(null, "main") === true));
 check("isOpenPage: an entry WITHOUT a `complete` field is open (absent ≠ true)",
@@ -908,12 +914,12 @@ check("ENG-96204 (AC 2): the status document's per-unit line carries the split O
 check("ENG-96204 (AC 2): `RECONCILE_SHAPE.verify` TYPES the two per-page counts as integers and does NOT require them — a string there is a fault the retry names, an absent pair (a summary older than the field) is a legal answer",
   // `buildMissing` on both levels is REQUIRED (ENG-95901), so these probes carry it: without it every probe
   // returns the two `buildMissing: required` faults and the counts below stop measuring what they are about.
-  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openCorrectness: "1", openFidelity: 0 } } } }).length === 1
-    && wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1 } } } }).length === 0
+  () => wf.reconcileShapeErrors?.({ verify: { complete: false, pending: 0, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openCorrectness: "1", openFidelity: 0 } } } }).length === 1
+    && wf.reconcileShapeErrors({ verify: { complete: false, pending: 0, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1 } } } }).length === 0
     && wf.RECONCILE_SHAPE?.verify?.map?.pages?.types?.openCorrectness === "integer"
     && wf.RECONCILE_SHAPE?.verify?.map?.pages?.types?.openFidelity === "integer"
     && !(wf.RECONCILE_SHAPE?.verify?.map?.pages?.required || []).includes("openCorrectness"),
-  () => wf.reconcileShapeErrors?.({ verify: { complete: false, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openCorrectness: "1" } } } }));
+  () => wf.reconcileShapeErrors?.({ verify: { complete: false, pending: 0, missing: 1, buildMissing: 1, unverified: 0, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openCorrectness: "1" } } } }));
 /* ENG-96204 (AC 5) — THE STATUS DOCUMENT. Composed here rather than by an agent: a status an agent writes in its
    own words is a paraphrase of the verdict, and the reason this run computes rather than asserts is that
    paraphrases of verdicts drift. Every fact AC 5 names must be in it — and the open section is COUNTS plus a
@@ -1783,9 +1789,22 @@ check("findings: a reopened unit gets ONE repair attempt — the constant key se
     // channels is still pinned (a rename dropping `findingsPending` would leave a reported defect unscheduled),
     // and so is the bound and the per-invocation consumption.
     && /const \{ keys, exhausted \} = reopenKeySet\(findingsPending, resolutionsPending,/.test(wfSrc)
-    && /\(k\) => roundsRun\(state\.roundOf, localRounds, k\) >= MAX_ROUNDS\)/.test(wfSrc)
+    // ENG-96458 added a THIRD channel (`judgeDefectsPending`) as a further BUDGETED argument, so the budget
+    // predicate is no longer the last thing in the call. Matched without its closing paren, which is what the pin
+    // was ever about: the bound is `roundsRun(...) >= MAX_ROUNDS`, whoever else is passed alongside it.
+    && /\(k\) => roundsRun\(state\.roundOf, localRounds, k\) >= MAX_ROUNDS/.test(wfSrc)
     && !/for \(const k of \[\.\.\.findingsPending, \.\.\.resolutionsPending\]\)/.test(wfSrc)
     && /findingsPending\.delete\(unit\.key\)/.test(wfSrc));
+// ENG-96458 D5 — the judge's page defects are the THIRD re-open channel and stay their OWN set, per the precedent
+// ENG-95503 set for the answers channel: `findings` is the operator's, and overloading it was the workaround that
+// ticket ended. Budget-bounded like the answers channel and unlike the operator's — a judge that repeats a finding
+// must not buy a unit unbounded repair rounds — and consumed per invocation like both of them.
+check("ENG-96458 D5: the judge's page defects are their OWN re-open set, budget-bounded and consumed after one repair round — not a second use of the operator's `findings` channel",
+  /const judgeDefectsPending = new Set\(\)/.test(wfSrc)
+    && /reopenKeySet\(findingsPending, resolutionsPending,[\s\S]{0,120}?judgeDefectsPending\)/.test(wfSrc)
+    && /judgeDefectsPending\.add\(idKey\(unit\)\)/.test(wfSrc)
+    && /judgeDefectsPending\.delete\(idKey\(unit\.key\)\)/.test(wfSrc)
+    && !/findingsPending\.add\(/.test(wfSrc));
 check("findings: a key naming no published unit REFUSES the run — nothing schedules it, so the run would close green with the reported defect untouched",
   /stopped: 'unknown-finding-key'/.test(wfSrc) && /unknownCheckpointKeys\(\[\.\.\.FINDING_KEYS\]/.test(wfSrc));
 check("--stubs totals carry `members`, and the shortcut needs BOTH counts explicitly zero — `!totals.members` was true for a digest that never had the field, so a surface with message/mixin members skipped its analysis",
@@ -2235,7 +2254,7 @@ check("ENG-96204 (ENG-96455): `roundStateOf` reads `roundState` first and falls 
 // third leg, the PROMPT. The schema stopped describing the insides of this object, so the prompt is the only thing
 // that tells the copying agent these keys exist — and a fact an agent is not told about is a fact it drops.
 check("ENG-96204 (ENG-96474 / ENG-96455): the Reconcile prompt asks for `roundState` as ONE object, NAMES all three keys with the value to use when the file records none, states the ROOT-key fallback for a folder written before the fold, and forbids inferring, adding or dropping an entry",
-  wfSrc.includes(String.raw`\`roundState\` — THE FOLDER'S ROUND RECORD, as ONE object with three keys`)
+  wfSrc.includes(String.raw`\`roundState\` — THE FOLDER'S ROUND RECORD, as ONE object, copied off the file: three keys always`)
     && wfSrc.includes(String.raw`\`consumedRoundAnswers\` — the array, verbatim (\`[]\` when the file records none)`)
     && wfSrc.includes(String.raw`\`roundsSpent\` — the number, verbatim (\`0\` when the file records none`)
     && wfSrc.includes(String.raw`\`layoutPassDone\` — the flag, verbatim (\`false\` when the file records none)`)
@@ -2243,6 +2262,46 @@ check("ENG-96204 (ENG-96474 / ENG-96455): the Reconcile prompt asks for `roundSt
     && /Copy the strings exactly and never infer, add or drop one/.test(wfSrc)
     && /REQUIRED: return the object even on a fresh folder/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("`roundState` — THE FOLDER'S ROUND RECORD"), wfSrc.indexOf("`roundState` — THE FOLDER'S ROUND RECORD") + 400));
+// ENG-96458 D4 (PR #157 follow-up review) — the FOURTH key of `roundState`, and the only optional one: the
+// folder's memory of a ☐-count contradiction it has already been told about. It is what turns a hold no operator
+// action can release into a stop with a repair in it, and the case it exists for (the zero-work close) performs
+// exactly one Reconcile per invocation — so the record HAS to travel through the queue file.
+check("ENG-96458 D4 (follow-up review): the Reconcile prompt asks for `roundState.pendingContradiction` VERBATIM, says to OMIT it when the file has none, and forbids recomputing the signature or lowering the count — a recomputed signature would reset the counter on every read and the run would hold for ever",
+  wfSrc.includes(String.raw`\`pendingContradiction\` — the object \`{ signature, rounds }\`, verbatim`)
+    && /OMIT the key entirely when it does not/.test(wfSrc)
+    && /do NOT recompute the signature from the numbers you are reporting now, and do NOT lower \\`rounds\\`/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("`pendingContradiction` — the object"), wfSrc.indexOf("`pendingContradiction` — the object") + 400));
+check("ENG-96458 D4 (follow-up review): `RECONCILE_SHAPE.roundState` checks the record's INSIDES when it is present — both fields required, typed — and still accepts a `roundState` without the key, which is every healthy folder",
+  () => wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: "0|main#x", rounds: 1 } } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [] } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: "0|main#x" } } })
+      .some((e) => /pendingContradiction\.rounds: required/.test(e))
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: 7, rounds: 1 } } })
+      .some((e) => /pendingContradiction\.signature: expected string/.test(e)),
+  () => JSON.stringify(wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], pendingContradiction: { signature: "0|main#x" } } })));
+check("ENG-96458 D4 (follow-up review): the SIGNATURE is `null` unless there really is a contradiction (no rows, a non-integer count, or a count that already covers the rows), keys on the engine's injective `rowKey` and is order-independent — so a re-publication that reorders or renumbers the rows is not read as a NEW fault with a free sighting",
+  () => wf.pendingContradictionSignature([], 0) === null
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 1) === null
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], "0") === null
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }, { unit: "main", rowKey: "b" }], 0)
+      === wf.pendingContradictionSignature([{ unit: "main", rowKey: "b", n: 9 }, { unit: "main", rowKey: "a", n: 4 }], 0)
+    && wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 0) !== wf.pendingContradictionSignature([{ unit: "list", rowKey: "a" }], 0),
+  () => JSON.stringify([wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 0),
+    wf.pendingContradictionSignature([{ unit: "main", rowKey: "a" }], 1)]));
+check("ENG-96458 D4 (follow-up review): the RECORD counts consecutive sightings of the SAME signature, restarts at 1 for a different one, and treats garbage on file as a first sighting — which HOLDS the run rather than stopping it, the safe direction",
+  () => wf.pendingContradictionRecord(null, "s1").rounds === 1
+    && wf.pendingContradictionRecord({ signature: "s1", rounds: 1 }, "s1").rounds === 2
+    && wf.pendingContradictionRecord({ signature: "s0", rounds: 1 }, "s1").rounds === 1
+    && wf.pendingContradictionRecord("nonsense", "s1").rounds === 1
+    && wf.pendingContradictionRecord({ signature: "s1", rounds: "2" }, "s1").rounds === 1
+    && wf.pendingContradictionRecord({ signature: "s1", rounds: 1 }, null) === null,
+  () => JSON.stringify(wf.pendingContradictionRecord({ signature: "s1", rounds: 1 }, "s1")));
+check("ENG-96458 D4 (follow-up review): and only the SECOND sighting halts — one transcription slip can self-heal on the next Reconcile, and stopping on the first would spend the operator's session on a fault that was about to disappear",
+  () => wf.PENDING_CONTRADICTION_STOP_AT === 2
+    && !wf.pendingContradictionHalts({ signature: "s1", rounds: 1 })
+    && wf.pendingContradictionHalts({ signature: "s1", rounds: 2 })
+    && !wf.pendingContradictionHalts(null),
+  () => wf.PENDING_CONTRADICTION_STOP_AT);
 check("ENG-96204 (ENG-96474): `mergeConsumed` is a UNION — deduplicated, order kept, non-strings and blanks dropped, and NOTHING is ever removed — so a spent answer stays spent whichever of the file and the process learned of it first",
   () => JSON.stringify(wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "])) === JSON.stringify(["round-2", "round-3", "round-4"])
     && JSON.stringify(wf.mergeConsumed(undefined, undefined)) === "[]"
@@ -2340,7 +2399,7 @@ check("ENG-95930: `RECONCILE_SHAPE` covers the properties whose inner shape the 
 // Asserted through the shipped CHECKER, not by reading the table: what matters is that a page entry without the
 // field is actually refused, whatever the table looks like.
 const missingBuildComplete = wf.reconcileShapeErrors
-  ? wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false } } } })
+  ? wf.reconcileShapeErrors({ verify: { complete: false, missing: 1, unverified: 0, pending: 0, pages: { main: { complete: false } } } })
   : [];
 check("ENG-95901 + ENG-95930: the shipped shape check REFUSES a verify page entry with no `buildComplete` — the field the loosened schema no longer forces, and the one `derivedBuildComplete` silently replaces with the combined `complete` (which folds in evidence a builder cannot clear) when it goes missing",
   missingBuildComplete.some((m) => m.includes("buildComplete")),
@@ -2356,6 +2415,23 @@ const missingBuildMissing = wf.reconcileShapeErrors
 check("ENG-95901 (reopened): the shipped shape check REFUSES a verify page entry with no `buildMissing` — without it the answer degrades to the conflated `missing` and a judge-rejected row is reported as a build gap again",
   missingBuildMissing.some((m) => m.includes("buildMissing")),
   () => missingBuildMissing);
+// PR #157 review (Major on `schemas.mjs:379`) — THE SAME DRIFT GATE FOR `pending`. `RECONCILE_SHAPE.verify.required`
+// gained it in ENG-96458, and its own code comment states the stake: an answer that omits the count leaves the ☐
+// hold INERT — the gate silently off on exactly the run that needs it. Every `run-infra.mjs` change for that ticket
+// went the other way (12 fixtures gained `pending: 0` so they kept passing), so nothing pinned the loud failure.
+// The MESSAGE is asserted, not just the refusal, so an in-flight branch that merges this is told WHICH key it
+// dropped: the shape checker's own wording is `verify.pending: required, and it is absent` (the CLI's
+// "missing required key(s)" text is a different layer — it checks the answer's TOP-LEVEL keys against
+// `RECONCILE_SCHEMA.required`, where the required entry is `verify`, not `verify.pending`).
+const missingPending = wf.reconcileShapeErrors
+  ? wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pages: {} } })
+  : [];
+check("PR #157 review: the shipped shape check REFUSES a verify object with no `pending`, and the fault NAMES the key — an omitted count would leave the D4 confirmations hold inert, the gate silently off on the run that needs it",
+  () => missingPending.some((m) => m.startsWith("verify.pending: required")),
+  () => missingPending);
+check("PR #157 review: and `pending: 0` is a legal answer — the hold is opt-in on a COUNT, so a run with nothing pending must pass the same check unchanged",
+  () => (wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pending: 0, pages: {} } }) || []).length === 0,
+  () => wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pending: 0, pages: {} } }));
 // PR REVIEW — the WORKFLOW-side helper, exercised with `rejected > 0`. Finding 7: every page fixture in
 // `run-workflow-parity.mjs` sets `buildMissing === missing`, and the one executed park-reason golden carries neither
 // field, so the old `${st.missing ?? 0} MISSING` and the new `shortfallText(st)` rendered byte-identically —
@@ -2394,7 +2470,7 @@ check("ENG-95901 (reopened): the Reconcile PROMPT names `buildMissing` in the fi
   () => "the prompt's field list does not name `buildMissing`");
 const goodDigest = {
   approval: { found: true, version: "v1" },
-  verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, builderOpen: 1, planGaps: [],
+  verify: { complete: false, missing: 1, unverified: 0, pending: 0, buildMissing: 1, builderOpen: 1, planGaps: [],
     pages: { main: { complete: false, buildComplete: false, buildMissing: 1, builderOpen: 1, missing: 1, unverified: 0,
       openRows: [{ n: 1, deliverable: "d", status: "s", evidence: "e", outcome: "missing", owner: "builder" }] } } },
   preflightItems: [{ id: "p1", pageKey: "main", resolution: null },
@@ -2417,7 +2493,7 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
 // projection runs here: a digest-shaped verdict (openRows and all) goes through the shipped `verifySummary`, the
 // counts-only output must carry `buildComplete` per page and NO rows, and the shipped checker must accept it whole.
 {
-  const richVerdict = { complete: false, missing: 2, unverified: 1, buildMissing: 2, builderOpen: 1,
+  const richVerdict = { complete: false, missing: 2, unverified: 1, pending: 0, buildMissing: 2, builderOpen: 1,
     pages: { main: { complete: false, buildComplete: false, buildMissing: 2, missing: 2, unverified: 1, builderOpen: 1,
       openRows: [{ n: 1, deliverable: "Field Amount", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } };
   const summary = verifySummary({}, richVerdict);
@@ -2611,7 +2687,7 @@ check("ENG-95930: every `kind` / `types` token in the shipped shape table is ins
   () => wf.shapeVocabularyErrors?.(wf.RECONCILE_SHAPE));
 check("ENG-95930: an unknown token FAULTS instead of accepting everything — both axes, so a table typo cannot fail open",
   wf.shapeVocabularyErrors?.({ x: { kind: "arr", types: { a: "bool" } } }).length === 2
-    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pages: {} } },
+    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pending: 0, pages: {} } },
       { verify: { kind: "object", required: [], types: { complete: "boolean-ish" } } }).length === 1,
   () => wf.shapeVocabularyErrors?.({ x: { kind: "arr", types: { a: "bool" } } }));
 // One violating value per token in the vocabulary. The change advertises this enforcement in shipped text ("carrying
@@ -2620,7 +2696,7 @@ check("ENG-95930: an unknown token FAULTS instead of accepting everything — bo
 const TYPE_PROBES = [
   ["string", { discrepancies: [{ unit: 1, claim: "c", found: "f" }] }, "unit"],
   ["boolean", { reachability: [{ key: "k", appliesWhen: "yes" }] }, "appliesWhen"],
-  ["integer", { verify: { complete: false, missing: "2", unverified: 0, buildMissing: 0, pages: {} } }, "missing"],
+  ["integer", { verify: { complete: false, missing: "2", unverified: 0, pending: 0, buildMissing: 0, pages: {} } }, "missing"],
   ["string-or-null", { orphanedPagesOnFile: [{ schema: "S", orphanedBy: 7 }] }, "orphanedBy"],
   ["string[]", { reachability: [{ key: "k", appliesWhen: true, pages: ["a", 2] }] }, "pages"],
 ];
@@ -2635,12 +2711,12 @@ check("ENG-95930: the shape check REJECTS a wrong-typed value for every token in
 check("ENG-95930: the shape check fails fast on a value of the wrong SHAPE — `null` for a plain object, a non-array for an array, a scalar for the page map, and a non-object answer",
   wf.reconcileShapeErrors?.({ approval: null }).length === 1
     && wf.reconcileShapeErrors({ reachability: { key: "k" } }).length === 1
-    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pages: 7 } }).length === 1
+    && wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pending: 0, buildMissing: 0, pages: 7 } }).length === 1
     && wf.reconcileShapeErrors(null).length === 1
     && wf.reconcileShapeErrors([]).length === 1,
   () => JSON.stringify({ nullObject: wf.reconcileShapeErrors({ approval: null }),
     nonArray: wf.reconcileShapeErrors({ reachability: { key: "k" } }),
-    scalarMap: wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pages: 7 } }) }));
+    scalarMap: wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, unverified: 0, pending: 0, buildMissing: 0, pages: 7 } }) }));
 // For the classifier's size refusal, "re-run and it may pass" is wrong by construction, so the triage line carries
 // the measured cause instead.
 check("ENG-95930: the repeated-rejection triage names the MEASURED cause of the classifier block (a serialized schema over 4096 bytes in an `auto`-permission session) instead of calling it transient",
@@ -3106,7 +3182,14 @@ check("PR #128 review (Major): `completionLine` is the ONE verdict line — its 
     const open = wf.completionLine(false, { round: 3, missing: 1, unverified: 2, parkedCount: 1, unconsumedCount: 4 });
     return done.startsWith("COMPLETE after 2 round(s)") && !/unconsumed/.test(done)
       && open.startsWith("NOT COMPLETE after 3 round(s)") && /· 4 unconsumed answer\(s\)/.test(open) && /· 1 parked unit\(s\)/.test(open)
-      && (wfSrc.match(/log\(completionLine\(complete\b/g) || []).length === 1
+      // STILL 1, DELIBERATELY (PR #157 review, Tetiana Minor 1). The zero-work early return also emits a pending
+    // verdict sentence, and it used to hand-spell its own drifted copy of it. It now shares the SENTENCE through
+    // `pendingConfirmationLine`, which `completionLine` composes from — not the whole verdict line, because
+    // routing the zero-work not-complete case through `completionLine` would add a SECOND verdict log to that
+    // path, which is exactly what this guard exists to prevent. So one `log(completionLine(complete` site remains
+    // the right count, and the shared-sentence half is pinned in `run-workflow-core.mjs`.
+    && (wfSrc.match(/log\(completionLine\(complete\b/g) || []).length === 1
+    && (wfSrc.match(/log\(pendingConfirmationLine\(/g) || []).length === 1
       && !/log\(\s*complete\s*\?[\s\S]{0,40}COMPLETE after/.test(wfSrc); },
   () => ({ done: wf.completionLine(true, { round: 2 }), open: wf.completionLine(false, { round: 3, missing: 1, unverified: 2, parkedCount: 1, unconsumedCount: 4 }),
     verdictLogSites: (wfSrc.match(/log\(completionLine\(complete\b/g) || []).length }));
@@ -3146,8 +3229,21 @@ check("ENG-95503 wiring: the ANSWERS ROUTED TO A UNIT are computed at dispatch f
 check("ENG-95503 wiring: a builder that returned NOTHING still has its answers accounted for — that path used to record an absent claim and move on, and an unanswered dispatch loses answers exactly like a silent one does",
   /log\(`build agent returned nothing for \$\{unit\.key\} — it stays open`\)[\s\S]{0,400}?reportResolutionAccounting\(unit, routed, null, false\)/.test(wfSrc));
 check("ENG-95503 wiring (RC-3): an unconsumed answer keeps the run from reporting COMPLETE, decided through the SHARED `runComplete` at BOTH sites — the gate can be green and the page genuinely built while an answer the operator gave went nowhere, and two inline spellings could silently drift on the ticket's own gate",
-  /const complete = runComplete\(state\.verify\?\.complete, parked, unconsumed\)/.test(wfSrc)
-    && /complete: runComplete\(state\.verify\?\.complete, parked, unconsumed\),/.test(wfSrc));
+  // ENG-96458 D4 layered a SECOND term on top at both sites — a run may not call itself done while a ☐ row is
+  // unanswered — so neither site spells the result as a bare `runComplete(...)` any more. The invariant this pin
+  // exists for is unchanged and is what is asserted: BOTH sites still decide the build half through the shared
+  // predicate, with its three terms passed exactly, and neither re-spells those terms inline.
+  (wfSrc.match(/runComplete\(state\.verify\?\.complete, parked, unconsumed\)/g) || []).length === 2
+    && /const buildGreen = runComplete\(state\.verify\?\.complete, parked, unconsumed\)/.test(wfSrc)
+    && !/state\.verify\?\.complete === true && !parked\.length/.test(wfSrc)
+    // …and the confirmations term is the ONLY thing added on top, at both sites.
+    // PR #157 review (Major on core.mjs:1403) — the term is now `!pendingHold`, one shared predicate over BOTH
+    // sources of truth (`verify.pending` and the named rows), rather than a bare `pendingCount === 0`: a reconcile
+    // answer carrying rows beside a transcribed `pending: 0` used to close green next to a worklist the run still
+    // printed. Same shape of pin — the build half through `runComplete`, the confirmations half added on top, both
+    // sites spelled identically.
+    && (wfSrc.match(/buildGreen && !pendingHold/g) || []).length === 2
+    && (wfSrc.match(/const pendingHoldNow = /g) || []).length === 1);
 /* PR #128 review (round 19) — NO ROOT KEY IS DOCUMENTED TWICE IN THE QUEUE-READ STEP.
    A duplicate `proposals`/`blocked`/`discrepancies` bullet shipped in the Reconcile prompt on this branch: the
    detailed bullet that lists each row shape, immediately followed by a terse "whatever the file holds, verbatim."
@@ -4713,7 +4809,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // this block dies `reconcile-failed` before it reaches the behaviour it is about. The value is `1` because the
   // one MISSING row here is BUILDER-owned (`ROW_CORRECTNESS`, `owner: "builder"`), so the whole shortfall is a
   // build gap and `rejected` is `missing - buildMissing === 0` — which is what these scenarios mean.
-  const SHORT_VERIFY = { complete: false, missing: 1, buildMissing: 1, unverified: 1, planGaps: [],
+  const SHORT_VERIFY = { complete: false, pending: 0, missing: 1, buildMissing: 1, unverified: 1, planGaps: [],
     pages: { main: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 1, builderOpen: 1, openRows: [ROW_FIDELITY, ROW_CORRECTNESS] } } };
   const RECONCILE_R = (over = {}) => ({
     approval: APPROVED_R, planVersion: "plan-r1",
@@ -4942,7 +5038,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   /* --- the stop is never `complete`, and a round that closes everything is never a stop ------------------- */
   // `buildMissing: 0` on both levels — REQUIRED of a Reconcile answer (ENG-95901), and on a fully green verdict
   // the honest value: nothing is missing, so no part of the shortfall is a build gap.
-  const GREEN_R = RECONCILE_R({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } }, roundOf: { main: 1 } });
+  const GREEN_R = RECONCILE_R({ verify: { complete: true, pending: 0, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } }, roundOf: { main: 1 } });
   const closed = await scriptRun({ mode: "round1" }, [RECONCILE_R(), GREEN_R]);
   check("ENG-96204: a `round1` round that CLOSES everything is not stopped at the boundary — there is nothing left for a human to gate, so the run falls through to the normal close, exactly as a reached checkpoint does",
     !closed.res.threw && closed.res.stopped === null && closed.res.complete === true && closed.res.rounds === 1,
@@ -5055,7 +5151,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // outside the carry fingerprint, the closing `persistPending` saw "nothing new to write", skipped its agent,
   // and the folder recorded a completed layout pass as never having happened.
   const layoutClosedAll = await scriptRun({ mode: "layout-first" },
-    [RECONCILE_R(), RECONCILE_R({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } } })]);
+    [RECONCILE_R(), RECONCILE_R({ verify: { complete: true, pending: 0, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } } })]);
   check("PR review F10: a `layout-first` round that CLOSES everything still persists `layoutPassDone` — it takes no boundary stop, so the closing write is the marker's only remaining carrier, and the marker was not part of the 'is anything unwritten?' question at all",
     !layoutClosedAll.res.threw && layoutClosedAll.res.complete === true
       && layoutClosedAll.res.layoutPassDone === true
@@ -5111,7 +5207,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     // `buildMissing` on both levels (ENG-95901): REQUIRED of a Reconcile answer, so a golden without it is refused
     // on arrival and this scenario would measure the wire size of an answer the run never accepts. All 40 rows here
     // are builder-owned MISSING deliverables, so the build gap IS the shortfall.
-    verify: { complete: false, missing: 40, buildMissing: 40, unverified: 0, planGaps: [],
+    verify: { complete: false, pending: 0, missing: 40, buildMissing: 40, unverified: 0, planGaps: [],
       pages: { main: { complete: false, buildComplete: false, missing: 40, buildMissing: 40, unverified: 0, builderOpen: 40 } } } });
   // The ceiling is READ OFF THE SHIPPED SOURCE, the same way the ENG-95930 check that pins it does: it is a
   // `const` inside the pure block, not one of the exported helpers, so there is no `wf.` handle for it.
@@ -5154,7 +5250,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     () => wf.runStatusDoc({ mode: "round1", parked: [{ key: "child:X", rounds: 3, parkedWhy: "x".repeat(2000) }], next: "y" })
       .split("\n").map((l) => l.length).join(","));
   /* --- F6: a stop never reports "nothing is open" while it stopped BECAUSE something is ----------------------- */
-  const GREEN_PAGE = { complete: false, missing: 0, buildMissing: 0, unverified: 0, planGaps: [],
+  const GREEN_PAGE = { complete: false, pending: 0, missing: 0, buildMissing: 0, unverified: 0, planGaps: [],
     pages: { main: { complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [] } } };
   // The APP unit is the case: `packageState: 'absent'` with a package NAME is not a stop (this unit creates it),
   // its openness comes from that recorded state and never from the gate's page map, and `main` is green — so the
@@ -5211,7 +5307,10 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   check("ENG-96204 (AC 2): the Reconcile prompt NAMES both per-page counts beside the fields it already lists — a field the prose does not name is a field the copying agent drops, and the shape table types it so a string there is a fault",
     // `buildMissing` sits between `missing` and `unverified` (ENG-95901 added it to the same copy list). Both
     // tickets' fields are named in ONE sentence, which is the only place the copying agent learns they exist.
-    /pages\["<key>"\] = \{ complete, buildComplete, builderOpen, missing, buildMissing, unverified, openCorrectness, openFidelity \}/.test(wfSrc),
+    // MERGE (ENG-96458): the same sentence now also names `pending`/`accepted`/`pendingRows`/`pendingMore`, so the
+    // match stops at `openFidelity` instead of the closing brace — the fact pinned is that BOTH per-page severity
+    // counts are named in the copy list, not that they are the last two fields in it.
+    /pages\["<key>"\] = \{ complete, buildComplete, builderOpen, missing, buildMissing, unverified, openCorrectness, openFidelity[,}]/.test(wfSrc),
     () => wfSrc.slice(wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY"), wfSrc.indexOf("COPY EVERY FIELD OF THE SUMMARY") + 400));
 
   /* --- ENG-96474 (folded into ENG-96204): ONE ANSWER AUTHORISES ONE ROUND — BY RECORD, not only by arithmetic.
@@ -5272,7 +5371,7 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
   // closing `persistPending`. The spent answer must be on the queue file by then — it travels in the round's own
   // write and is part of the carry fingerprint (pinned at source above), so the close cannot drop it.
   const spentAndClosed = await scriptRun({ mode: "round1" },
-    [ROUND_ANSWERED("go"), RECONCILE_R({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } }, roundOf: { main: 2 }, roundsSpent: 1, consumedRoundAnswers: [], runResolutions: [{ item: "round-2", answer: "go" }] })]);
+    [ROUND_ANSWERED("go"), RECONCILE_R({ verify: { complete: true, pending: 0, missing: 0, buildMissing: 0, unverified: 0, planGaps: [], pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } }, roundOf: { main: 2 }, roundsSpent: 1, consumedRoundAnswers: [], runResolutions: [{ item: "round-2", answer: "go" }] })]);
   check("ENG-96474: an authorised round that closes the run still records the spent answer — the LAST queue-file write of the run carries `consumedRoundAnswers: [\"round-2\"]` beside `roundsSpent`, and the closing return reports it",
     !spentAndClosed.res.threw && spentAndClosed.res.complete === true && buildCalls(spentAndClosed.calls).length === 1
       && /`roundState\.consumedRoundAnswers` to the UNION[^\n]*\["round-2"\]/.test(lastPersistPrompt(spentAndClosed.calls))
@@ -5573,9 +5672,9 @@ check("workflow EXECUTES the retry BUDGET: a Reconcile that never answers is att
 // `shapeShort` is schema-VALID (every required top-level property present) and short of exactly one shape-required
 // field, which is the failure the host can no longer catch.
 const shapeShort = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
-  verify: { complete: false, missing: 1, unverified: 0, pages: { main: { complete: false } } } };
+  verify: { complete: false, missing: 1, unverified: 0, pending: 0, pages: { main: { complete: false } } } };
 const shapeOk = { ...newAppBaseline({ package: "UsrApplicantFreedom", appUnitComplete: true, planVersion: "v1", sectionPage: "UsrApplicants_FormPage" }),
-  verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1 } } } };
+  verify: { complete: false, missing: 1, unverified: 0, pending: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1 } } } };
 let faultThenOkCalls = 0;
 const faultPrompts = [];
 const faultThenOk = await runWith({}, async (prompt) => {
@@ -5729,7 +5828,7 @@ check("workflow EXECUTES past the mid-run gate: an all-resolved post-preflight R
 // pointer, and NO per-unit row prose. This shape replaced an array of up to 8 deliverable strings, and nothing else
 // in the suite drives `dryRunReport`, so a regression — a wrong count, a dropped field, the old row-string shape
 // creeping back — would ship silently without this.
-const dryVerify = { complete: false, missing: 2, unverified: 1, buildMissing: 2, builderOpen: 0, planGaps: [],
+const dryVerify = { complete: false, missing: 2, unverified: 1, pending: 0, buildMissing: 2, builderOpen: 0, planGaps: [],
   pages: { main: { complete: false, buildComplete: false, buildMissing: 2, missing: 2, unverified: 1 } } };
 const dryRunPreview = await runToPostPreflight({ ...midRunBaseline, verify: dryVerify }, { ...midRunBaseline, verify: dryVerify }, { dryRun: true })
   .catch((e) => ({ threw: e.message }));
@@ -5909,7 +6008,7 @@ const runToRound = (builderContinues, extra = {}, units = ["main"]) => {
   const openVerdict = {
     // PR review — `buildMissing` at the TOP LEVEL too: `RECONCILE_SHAPE.verify.required` carries it now, because that
     // is the level `shortfallText`/`verdictOf` read for the run's close line. Same reasoning as the per-page field.
-    complete: false, missing: units.length, unverified: 0, buildMissing: units.length,
+    complete: false, pending: 0, missing: units.length, unverified: 0, buildMissing: units.length,
     // ENG-95930 — a page entry carries `complete`/`buildComplete` and a full open row because that is what the
     // response contract requires and what `reconcileShapeErrors` now checks on arrival. The old schema required the
     // same fields; this harness bypassed the host and so never had to produce them.
@@ -5976,9 +6075,9 @@ const runChain = (verifierSays, seed = {}, keepOpen = false) => {
   // — a green gate plus a refuted answer is the state that used to report `complete: true`.
   // ENG-95901 — `buildMissing` is REQUIRED on every page entry (schemas.mjs `pages.required`), so the fixture carries
   // the builder-owned half of `missing` explicitly rather than relying on the pre-split fallback.
-  const openVerdict = { complete: false, missing: 1, buildMissing: 1, unverified: 0,
+  const openVerdict = { complete: false, pending: 0, missing: 1, buildMissing: 1, unverified: 0,
     pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected" }] } } };
-  const greenVerdict = { complete: true, missing: 0, buildMissing: 0, unverified: 0,
+  const greenVerdict = { complete: true, pending: 0, missing: 0, buildMissing: 0, unverified: 0,
     pages: { main: { complete: true, buildComplete: true, buildMissing: 0, openRows: [] } } };
   const baseline = { ...roundBaseline, preflightItems: [chainItem], verify: openVerdict, ...seed };
   const agentStub = async (prompt, opts = {}) => {
@@ -6119,9 +6218,9 @@ const runCheckpointPause = (verifierSays, seed = {}) => {
   const persisted = [];
   // ENG-95901 — `buildMissing` is REQUIRED on every page entry, so the fixture states it rather than leaning on the
   // pre-split fallback.
-  const openVerdict = { complete: false, missing: 1, buildMissing: 1, unverified: 0,
+  const openVerdict = { complete: false, pending: 0, missing: 1, buildMissing: 1, unverified: 0,
     pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields" }] } } };
-  const greenVerdict = { complete: true, missing: 0, buildMissing: 0, unverified: 0,
+  const greenVerdict = { complete: true, pending: 0, missing: 0, buildMissing: 0, unverified: 0,
     pages: { main: { complete: true, buildComplete: true, buildMissing: 0, openRows: [] } } };
   const baseline = { ...roundBaseline, preflightItems: [chainItem], verify: openVerdict, ...seed };
   const agentStub = async (prompt, opts = {}) => {
@@ -6291,7 +6390,7 @@ const runPreflight = (judgeReports, verifyReports) => {
       evidence.push({ verify: /PREFLIGHT EVIDENCE —/.test(prompt) });
       return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: verifyReports };
     }
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pages: {} } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: true, pending: 0, missing: 0, unverified: 0, buildMissing: 0, pages: {} } };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -6408,7 +6507,7 @@ const runVerifyBranch = (queueWritten, extra = {}) => {
       persistWhys.push(m ? m[1] : "(no why)");
       return { written: true, parkKeys: [] };
     }
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, verify: { complete: false, pending: 0, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith(extra, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -6443,7 +6542,7 @@ const runFailedJudge = () => {
     if (label.startsWith("build:")) return buildAnswer(false);
     if (label.startsWith("verify:")) return { queueWritten: true, discrepancies: [], schemasConfirmed: {}, evidenceWritten: [] };
     if (label === "persist:carry") return { written: true, parkKeys: [] };
-    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
+    if (label.startsWith("reconcile:")) return { ...roundBaseline, preflightItems: [{ id: "pf1", pageKey: "main" }], verify: { complete: false, pending: 0, missing: 1, unverified: 0, buildMissing: 1, pages: { main: { complete: false, buildComplete: false, buildMissing: 1, openRows: [{ deliverable: "Fields — 7 expected", status: "❌ MISSING", evidence: "0/7 fields", outcome: "missing", owner: "builder" }] } } } };
     return null;
   };
   return runWith({}, agentStub, async (thunks) => Promise.all((thunks || []).map((t) => t())))
@@ -6652,6 +6751,12 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
   // remedy that raise pointed at landed on the base branch: `engine-tests/build-workflows/strip-comments.mjs`
   // strips comments from the generated artifact, which brought it to ~280 KB. The original, tighter guard
   // stands. Figures are approximate on purpose — run this check for the current number.
+  /* ENG-96458 briefly raised this to 510000 and then put it back. Worth recording why, because the number moved
+     twice: the stage-2 line alone measured 478177 B against the old 480000 line, merging the park-once branch made
+     487925, and this ticket's own prompt text took it past 503 KB — so the budget was raised with the margin stated.
+     Merging ENG-95503 then brought the comment-stripping generator (`engine-tests/build-workflows/strip-comments.mjs`),
+     which cut the shipped artifact to well under 300 KB and made the raise unnecessary. Reverted rather than left
+     standing: a budget kept loose after the pressure is gone is a guard that no longer guards. */
   const WORKFLOW_SCRIPT_BUDGET = 480000;
   const WORKFLOW_SCRIPT_WARN_AT = Math.floor(WORKFLOW_SCRIPT_BUDGET * 0.97);
   for (const file of wfFiles) {
@@ -7389,6 +7494,12 @@ const BEHAVIOUR_BLOCK = "<behaviour>"
 const input = { planFile: "/m/plan.md", outDir: "/m", manifest: "/m/manifest.json", environment: "env" }
 const VERIFICATION_SURFACE = "automatic:2"
 const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automatic:2"
+// ENG-96458 D7 — the settle-and-retry rule the reachability arm appends. A module-scope constant in the shipped
+// script, so it is a free variable here and gets a stub, exactly as this check demands of every new one.
+// PR #157 review (Major on core.mjs:1701) — the constant SPLIT in two, because the record-the-outcome half
+// belongs to the verifier and not to a build agent. This is the build-agent half, and it is now appended to the
+// PAGE arm as well as the reachability one: the measured hard block happened in the main page unit.
+const SETTLE_RETRY_RULE = " <settle-and-retry>"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -7514,6 +7625,18 @@ export { buildPrompt };
         app: /<IN-CONTEXT GATE>/.test(rendered.app || ""), reach: /<IN-CONTEXT GATE>/.test(rendered.reach || "") }));
     check("ENG-95469: buildPrompt hands `gate: inContextGateBlock(unit)` to the composer",
       /gate: inContextGateBlock\(unit\)/.test(wfSrc));
+    // PR #157 review (Major on `core.mjs:1701`) — D7's settle-and-retry rule reaches the PAGE unit, which is where
+    // the measured hard block actually happened: `main` re-pointed the object's `RelatedPage` add-on, did three
+    // cache-busted loads plus a hard reload, and blocked the run on a route that read correctly two hours later.
+    // `main`'s deliverable includes routing (the RelatedPage re-point), and `main` is a page unit — so it went
+    // through `pageKindBlock`, which received no settle window at all while the reachability arm did.
+    check("PR #157 review (D7): the settle-and-retry rule is in BOTH build prompts that can hit the contradiction — the PAGE unit (where the hard block was measured, its deliverable including the RelatedPage re-point) and the reachability unit",
+      () => /<settle-and-retry>/.test(rendered.main || "") && /<settle-and-retry>/.test(rendered.reach || ""),
+      () => ({ main: /<settle-and-retry>/.test(rendered.main || ""), reach: /<settle-and-retry>/.test(rendered.reach || ""),
+        list: /<settle-and-retry>/.test(rendered.list || "") }));
+    check("PR #157 review (D7): and the RECORD half is NOT in a build prompt — `false`-vs-OMIT instructs whoever writes `reachability` into the built file, which is the read-only verifier, so a build agent handed it would be told to write a file it may not touch",
+      () => !/AN UNSETTLED READ IS NOT A/.test(rendered.main || "") && !/AN UNSETTLED READ IS NOT A/.test(rendered.reach || ""),
+      () => ({ main: /AN UNSETTLED READ IS NOT A/.test(rendered.main || "") }));
   }
 }
 
@@ -7649,7 +7772,7 @@ const runReachRoute = (seed = {}, routeFromUnit = "sectionRegistered") => {
     { key: "sectionRegistered", kind: "reach", what: "the section is registered in the app menu", pages: [], appliesWhen: true, miss: "the section is unreachable" },
     { key: "typedRouting", kind: "reach", what: "the typed routing is wired", pages: [], appliesWhen: true, miss: "typed navigation does not resolve" },
   ];
-  const green = { complete: true, missing: 0, buildMissing: 0, unverified: 0,
+  const green = { complete: true, pending: 0, missing: 0, buildMissing: 0, unverified: 0,
     pages: { main: { complete: true, buildComplete: true, buildMissing: 0, openRows: [] } } };
   const baseline = { ...roundBaseline, unitKeys: ["main"], buildOrder: ["main"],
     reachability: reach, reachabilityState: { sectionRegistered: "unset", typedRouting: "unset" }, verify: green, ...seed };

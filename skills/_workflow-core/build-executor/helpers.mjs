@@ -747,8 +747,60 @@ export function roundStateOf(state) {
     layoutPassDone: pick('layoutPassDone') === true,
     roundsSpent: pick('roundsSpent'),
     consumedRoundAnswers: pick('consumedRoundAnswers'),
+    // ENG-96458 D4 (PR #157 follow-up review) — the folder's memory of a ☐-count contradiction it has already
+    // seen once. Returned RAW for `pendingContradictionRecord` to shape-check, the same division of labour
+    // `roundsSpent` and `consumedRoundAnswers` already make: garbage on file can only ever reset the counter to 1,
+    // which HOLDS the run (the safe direction) rather than stopping it.
+    pendingContradiction: pick('pendingContradiction'),
   }
 }
+
+// ---------------------------------------------------------------------------
+// THE ☐-COUNT CONTRADICTION, AND WHY IT MUST NOT HOLD FOR EVER
+// ---------------------------------------------------------------------------
+// `verify.pending` is a top-level scalar while the ☐ rows are nested per page, so a Reconcile answer that
+// transcribes `pending: 0` beside a non-empty `pendingRows` is entirely plausible — a copy from an older
+// `verify.md`, or one dropped scalar. The run fails CLOSED on it (`pendingHoldNow`: a named row is a hold in its
+// own right), which is right, and it used to be the WHOLE response: a WARNING in the log and `complete: false`.
+//
+// That is a run that can never finish. The documented way to close a ☐ row is to confirm it on the stand or record
+// an `{ kind: "accepted", row, … }` entry — and BOTH release the row through the ENGINE's count, which this answer
+// already reports as 0. So no operator action can clear the hold: every re-run reads the same file, holds again,
+// and warns again. The honest response after the SECOND time is to stop and say what to repair.
+//
+// SECOND time, not first: one transcription slip can self-heal on the next Reconcile (the engine re-publishes the
+// summary, the agent copies the scalar correctly), and stopping on the first sighting would spend the operator's
+// session on a fault that was about to disappear. So the observation is REMEMBERED — in this process for the
+// rounds it runs, and in the queue file's `roundState` for the next invocation, because the case that motivated
+// this is the zero-work close, where one invocation performs exactly one Reconcile.
+export const PENDING_CONTRADICTION_STOP_AT = 2
+
+// WHICH contradiction this is, as one comparable string. `null` when there is no contradiction: no rows, a count
+// that is not an integer (nothing to contradict), or a count that already covers the rows.
+// Keyed on `rowKey` — the engine's own injective row identity (ENG-96458) — and only then on `n`/`deliverable`,
+// so the signature survives a re-publication that renumbers the rows. Sorted, so row ORDER is not a difference.
+// The comparator is `localeCompare` PINNED TO `'en'` (Sonar S2871 asks for one; the fixed locale is this file's
+// own requirement): the signature is PERSISTED into the queue file and compared against the next invocation's, so
+// an ordering that varied with the host's locale would read as a different contradiction on the same rows.
+export function pendingContradictionSignature(rows, count) {
+  if (!Array.isArray(rows) || !rows.length) return null
+  if (!Number.isInteger(count) || count >= rows.length) return null
+  const ids = rows.map((r) => `${r?.unit ?? ''}#${r?.rowKey ?? r?.n ?? r?.deliverable ?? ''}`).sort((a, b) => a.localeCompare(b, 'en'))
+  return `${count}|${ids.join(',')}`
+}
+
+// THE RECORD TO CARRY, given what the folder already held. `null` when there is nothing to record. A DIFFERENT
+// signature restarts the count at 1: a contradiction about other rows is a new fault and gets its own free sighting.
+export function pendingContradictionRecord(onFile, signature) {
+  if (!signature) return null
+  const prev = onFile && typeof onFile === 'object' && !Array.isArray(onFile) ? onFile : null
+  const same = prev?.signature === signature && Number.isInteger(prev?.rounds) && prev.rounds > 0
+  return { signature, rounds: same ? prev.rounds + 1 : 1 }
+}
+
+// Whether this record has been seen often enough to stop the run instead of holding it again.
+export const pendingContradictionHalts = (rec) =>
+  Number.isInteger(rec?.rounds) && rec.rounds >= PENDING_CONTRADICTION_STOP_AT
 // THE SPENT ROUND ANSWERS AS A UNION (ENG-96204 / ENG-96474). Strings only, deduplicated, insertion order kept,
 // anything that is not a non-blank string dropped: the list is copied by an agent out of the queue file and back,
 // so it is defended the way `roundsSpentOnFile` defends its integer. A union and never a replacement — an entry is
@@ -1495,13 +1547,21 @@ export function isUnitOpenWithFindings(unit, verify, reachState, findingKeys, pa
 // A key in BOTH sets is held by its finding half and is never released here, so no exhaustion is reported for it.
 // `exhausted` is RETURNED rather than logged from in here, so this stays pure and the caller keeps its
 // once-per-key log guard.
-export function reopenKeySet(findingsPending, resolutionsPending, isExhausted) {
+// ENG-96458 D5 adds a THIRD channel — a judge that found a defect in the built page — and it is kept separate from
+// the other two for the same reason they are separate from each other: they are different claims, from different
+// authors, with different standing. An operator's finding is unconditional (a human looked at the page); an answer
+// that reached no builder, and a judge's reading of the payload, are both budget-bounded so a repeating claim
+// cannot buy a unit unbounded rounds. `budgeted` therefore takes both of those and `findingsPending` keeps its
+// exemption. Variadic in the budgeted argument so a fourth channel does not mean a fourth parameter.
+export function reopenKeySet(findingsPending, resolutionsPending, isExhausted, ...moreBudgeted) {
   const keys = new Set(findingsPending || [])
   const exhausted = []
-  for (const k of resolutionsPending || []) {
-    if (keys.has(k)) continue
-    if (isExhausted(k)) { exhausted.push(k); continue }
-    keys.add(k)
+  for (const source of [resolutionsPending, ...moreBudgeted]) {
+    for (const k of source || []) {
+      if (keys.has(k)) continue
+      if (isExhausted(k)) { exhausted.push(k); continue }
+      keys.add(k)
+    }
   }
   return { keys, exhausted }
 }
@@ -2523,13 +2583,38 @@ export function unconsumedNextClause(entries) {
 // lives here rather than in a second, near-duplicate `log(...)` call beside it — two verdict lines let a log-scraper
 // read the one without the count and miss it. `complete` implies zero unconsumed (`runComplete` gates on it), so the
 // count is stated only on the NOT COMPLETE branch, where it can be non-zero.
-export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount } = {}) {
+// ENG-96458 D4 — a THIRD state between the two, and it needs its own sentence because it sends the operator
+// somewhere else entirely. The build IS finished, nothing is parked and no answer went unconsumed; what remains is
+// a set of `☐ confirm on-stand` rows that no agent can close, because they are not derivable from get-page. Telling
+// that state "NOT COMPLETE — 0 MISSING + 0 unconfirmed" reads as a broken gate; telling it "COMPLETE" is the bug
+// this ticket exists for (a run shipped a page that had lost its Feed tab, and every machine row was green).
+// ENG-96458 D4, PR #157 review — ONE SPELLING OF THE PENDING SENTENCE, for both places that emit it. The
+// zero-work early return in `core.mjs` reaches this state too (a finished build IS a run with nothing open), and it
+// used to hand-spell its own copy of this sentence, which had already drifted: it dropped the remediation tail.
+// `completionLine`'s own PENDING branch composes from this, so the two cannot diverge again.
+export function pendingConfirmationLine(pendingCount) {
+  return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — answer each on-stand, or record \`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }\` in resolutions.json and re-run`
+}
+
+// PR #157 review (Major on `helpers.mjs:2053`) — BUILD-GREEN IS THE CALLER'S DECISION, NOT A SECOND DERIVATION HERE.
+// This branch used to re-derive it (`missing === 0 && buildMissing === 0 && !unverified && !parked && !unconsumed`)
+// while `core.mjs` had already decided the same thing as `runComplete(verify.complete, parked, unconsumed)`. Two
+// derivations of one predicate can disagree, and when they did the operator got exactly the "NOT COMPLETE …
+// 0 MISSING + 0 unconfirmed · 0 parked · 0 unconsumed" line this branch exists to prevent. So `buildComplete` is
+// now passed IN: the PENDING branch fires on the caller's verdict and on nothing this function computes.
+// A caller that does not pass it gets the NOT COMPLETE branch — an unmeasured run has not proven its build is
+// done, and reporting "COMPLETE PENDING" on a round that measured nothing is the failure the old `measured` guard
+// was there for.
+export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount, pendingCount = 0, buildComplete = false } = {}) {
+  if (complete) return `COMPLETE after ${round} round(s): the engine gate is green`
   // ENG-95901 — the shortfall half of the line goes through `shortfallText`, so a judge-rejected record is named as
   // such instead of being folded into one "N MISSING" count. A caller that knows only `missing` still reads the same.
-  const shortfall = missing == null && buildMissing == null ? '?' : shortfallText({ missing, buildMissing })
-  return complete
-    ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
+  const measured = missing != null || buildMissing != null
+  const shortfall = measured ? shortfallText({ missing, buildMissing }) : '?'
+  if (buildComplete === true && pendingCount) {
+    return `${pendingConfirmationLine(pendingCount)} (after ${round} round(s))`
+  }
+  return `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }
 
 // ENG-95503 — THE ACCOUNTABILITY OBLIGATION IS CONDITIONAL, so it is ADDED to the schema rather than baked into it.

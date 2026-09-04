@@ -16,6 +16,7 @@ node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis hand
 node migrate.mjs <manifest.json> --units  # the per-page BUILD QUEUE + the exact keys --built must use (JSON)
 node migrate.mjs <manifest.json> --units --resolutions r.json # …with the operator's ⚠ Confirm ANSWERS attached
 node migrate.mjs <manifest.json> --plan --resolutions r.json  # re-render the PLAN with those answers shown in it
+node migrate.mjs <manifest.json> --verify --built b.json --resolutions r.json # …applying `kind: "accepted"` decisions to verify rows
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --verify-json v.json # …plus the MACHINE-READABLE verdict (JSON)
@@ -108,9 +109,10 @@ string the `decisions.md` approval entry names, and the string the delegated bui
 `plan.md` is engine-WRITTEN, so nothing else can put a version in it and survive the next `--plan --out`.
 
 `--verify-json <file>` (only with `--verify`) writes the verdict a CALLER computes on:
-`{ complete, missing, buildMissing, rejected, unfiled, unverified, planGaps, pages: { "<key>": { missing,
-buildMissing, unverified, complete, buildComplete,
-openRows: [ { n, deliverable, status, evidence, outcome, id? } ] } } }`. It is ADDITIVE — stdout and `--out` still
+`{ complete, missing, buildMissing, rejected, unfiled, unverified, pending, accepted, planGaps, pages: { "<key>": {
+missing, buildMissing, unverified, pending, accepted, complete, buildComplete,
+openRows: [ { n, deliverable, status, evidence, outcome, severity, rowKey, id? } ],
+pendingRows: [ { n, deliverable, rowKey } ] } } }`. It is ADDITIVE — stdout and `--out` still
 carry the Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at
 all, and the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open
 rows). `planGaps` is the other half of exit 2 (D12): non-empty means the PLAN is short — not buildable-out-of —
@@ -119,7 +121,58 @@ BUILD verdict's narrower set** (gate / structure / coverage): a `--verify` run l
 that carries no `planMeta`, so plan completeness is not reported on this channel. The full four-kind set is
 `--units.planGaps`, above — that is what a caller stops on. ENG-95901 —
 `complete` here is the COMBINED axis (`missing === 0 && unverified === 0`), unchanged: the whole-tree `--verify`
-still treats an unconfirmed evidence row as a reason not to call the run done. `buildComplete` (no open row the
+still treats an unconfirmed evidence row as a reason not to call the run done.
+
+ENG-96458 adds two axes NEXT TO `complete`, neither of them build state, and deliberately not folded into it:
+
+- **`pending` / `pendingRows`** — the `☐ confirm on-stand` rows. They used to tally in nothing, so five Layout rows
+  handed to a human printed once and then vanished from the verdict, while the ONE item that actually failed a
+  human check (a lost Feed tab) was one of them and every machine row read green. They are now counted, each with a
+  stable `rowKey`, and the Markdown verdict says `COMPLETE PENDING N CONFIRMATION(S)`. `pending` is **opt-in per
+  row**: only the rows the engine deliberately hands to a human (the `Form — Layout (by tab/region)` rows, whose
+  placement `get-page` cannot confirm) count. Every other `☐ confirm on-stand` row is a NOTE — a per-handler row, a
+  native card-action row, a child identity row — and tallies in nothing, so `pending` measures human work rather
+  than handler count. `pendingRows` names at most five rows per page, each `deliverable` clipped to 40 characters,
+  and only while a run-level wire budget lasts (6000 wire bytes for the whole run — past it a page names NOTHING,
+  because the budget is the outer bound and no per-page floor outranks it). A page's own `pending` count is always
+  exact and `pendingMore` is always `pending - pendingRows.length`, so a page that named no row reads
+  `pending: 5, pendingRows: [], pendingMore: 5`. The names are a convenience; the counts are the contract. They are NOT build state:
+  `missing`, `unverified`, `builderOpen` and `buildComplete` are untouched, `complete` still means "nothing left to
+  build", and the CLI exit code is unchanged. The hold belongs to the RUN — the build executor refuses to close
+  green while any confirmation is open and returns the worklist as `pendingConfirmations`.
+- **`accepted`** — rows an operator closed BY DECISION rather than by building. Recorded in `resolutions.json` as
+  `{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }` (`item` is the same key; `row` is an alias), it
+  renders `☑ accepted` with the decider and date and leaves `missing`. `decidedBy` and `date` are **required** for
+  this kind — an unattributed acceptance is exit 1, not a green row. It only ever overrides an OPEN row, so a
+  stale entry cannot mask a later regression. Without it a fully-built migration could not reach green on a
+  deviation the operator had already approved — the measured case being a section deliberately kept in two
+  workplaces because `create-app` always registers into `My applications`.
+
+A row's `rowKey` is what an acceptance addresses, and it is INJECTIVE per rendered table — one key names exactly
+one row, because an acceptance matches on the key alone: the evidence id where the row publishes one,
+`<pageKey>#onstand:<evidence>` for an on-stand row (`main#onstand:sectionRegistered`, plus a `:<subject>` tail when
+several rows on one page read the same boolean — `main#onstand:typedFormsBuilt:usrtypeda-a`, the form's schema AND
+its Type, because a bind-only plan may route two Types to one form schema), otherwise
+`<pageKey>#<vk type>:<slug of the label>`. The label's slug keeps backticked identifiers, so sibling rows
+(`Handler — \`<method>\``) do not collapse.
+
+**Row-key stability — what changes a key, and what a `~N` means.** A key is stable for an UNCHANGED deliverable and
+is meant to be re-usable across runs: an acceptance recorded today still matches tomorrow. Two things follow from
+that, and both are deliberate:
+
+- The Layout-row slug is the slug of the row's LABEL, and that label carries the region's field count
+  (`Header — 16 fields · Feed (ESN)` → `main#confirm:header-16-fields-feed-esn`). So **rewriting the deliverable
+  changes the key** — add a field to that region and the acceptance recorded against the old row stops matching.
+  That is the intent, not a defect: the row an operator confirmed on the stand is not the row the plan now
+  describes, and an acceptance must not be inherited by a deliverable nobody looked at. Re-read the key from
+  `--verify-json` after re-planning.
+- `~2` / `~3` is the LAST-RESORT dedupe suffix (`dedupeRowKey`), appended in table order when two rows still derive
+  the same key. It keeps the keys injective — an acceptance can never close N rows at once — but it is **NOT a
+  stable address**: it is positional, so inserting a deliverable above renumbers it. Every row shape that has its
+  own identity carries one (an evidence id, a `part`, an `about`), so **an operator should never see a `~N`. Seeing
+  one is an engine bug to report** — `--verify` publishes them in `rowKeyCollisions` and prints a `⚠ ROW-KEY
+  COLLISION` note in `verify.md` for exactly that reason. Never write a `~N` key into `resolutions.json`.
+**Read the key from `--verify-json`'s `openRows[].rowKey` / `pendingRows[].rowKey`; never construct one.** `buildComplete` (no open row the
 BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate above reads for ITS exit code — the
 two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
 each row's `owner` (`"builder"` / `"verifier"`), NOT on its `missing`/`unverified` label: `unverified` is also what a
@@ -142,14 +195,19 @@ creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each
 package and `expect` counts (including
 `expect.fieldNames`, the element names the fields check matches on, and `expect.fieldLayout`, each field's CELL as
 `{ name, row, column, colSpan?, rowSpan? }` — ENG-96457, so a unit that owns one page can place the fields the way
-the plan does), plus the five reachability keys with
-`appliesWhen` already decided by the engine, the evidence-record ids, the ⚠ Confirm preflight items and a
+the plan does), plus the reachability keys with
+`appliesWhen` already decided by the engine — five WIRING keys (`typedFormsBuilt`, `typedRouting`, `miniPageWired`,
+`reuseBindings`, `sectionRegistered`), each of which the executor schedules a build unit for when it applies, and
+`noOrphanScaffold`, which is published with `verifierOnly: true` and `appliesWhen: false`: it is a CLEANUP fact the
+gate row REPORTS, its removal is owned end to end by the app unit that minted the debris, and a wiring unit told to
+"do the wiring" for it would hold a delete-capable CLI with no removal scope on a customer package. `emitted` says
+whether this run gated the row — the evidence-record ids, the ⚠ Confirm preflight items and a
 leaf-first `buildOrder`. A key identifies exactly ONE physical page: when two distinct pages would land on the
 same key (two related lists opening the same entity, or two same-entity child pages on different branches) the
 engine appends a disambiguator — `@<Via>`, `@<Schema>`, `#2` — while one page reached along two paths keeps a
 single key. The suffix is derived by the engine, so **read every key from `--units`; never construct one.**
 
-`--resolutions <file>` (**`--units` and `--plan`**) attaches the operator's ANSWERS to that run's ⚠ Confirm questions,
+`--resolutions <file>` (**`--units`, `--plan` and `--verify`**) attaches the operator's ANSWERS to that run's ⚠ Confirm questions,
 publishing each on its own queue item as `preflight[].resolution = { answer, decidedBy?, date? }` — `null` when the
 question is unanswered. **An answer is an INPUT to the build and closes no `--verify` row:** the row still needs a
 filed evidence record and a judge verdict. Key each entry on `kind` + `item` (the published `id` also works, but its
@@ -157,6 +215,20 @@ filed evidence record and a judge verdict. Key each entry on `kind` + `item` (th
 withheld, so `kind`+`item` is what survives). An absent file means "nobody has answered yet" and is not an error;
 an unparseable file, or an entry without a non-blank `answer` and without either an `id` or both `kind` and `item`,
 is exit 1. Matching trims both sides, and an entry carrying both key forms counts as matched if EITHER form matched.
+
+**ENG-96458 — one kind is read by `--verify` as well: `accepted`.** `{ "kind": "accepted", "row": "<rowKey>",
+"answer": "<why>", "decidedBy": "<who>", "date": "<when>" }` marks a verify row as a deviation the operator approved:
+it renders `☑ accepted` with the decider and date, and leaves `missing`. **`decidedBy` (a non-blank name) and
+`date` (a parseable ISO `YYYY-MM-DD`) are REQUIRED for this kind and only for this kind** — every other resolution
+is an input to the build, while this one overrides a completeness gate, so an entry that names nobody is exit 1
+with the entry named. That check is the same boundary that already rejects a blank `answer`. `row` is an alias for `item` — the two are
+the same key, indexed once. It only ever overrides an OPEN row, never an ✅ or an N/A, so a stale entry cannot mask a
+later regression. The rule above is untouched for every other kind: an ordinary answer is still an INPUT to the
+build and still closes no row. The row key to address is in `--verify-json`'s `openRows[].rowKey`.
+
+```bash
+node migrate.mjs manifest.json --verify --built built.json --resolutions r.json
+```
 Under `--plan` (ENG-96457, item 5) the same file is rendered INTO the document: each answered ⚠ row shows
 `**✅ answered:** <answer>` after its question (the question is kept, so a recorded decision is auditable and
 distinguishable from a guessed default), the worklist heading reads `(<n>, <k> answered)`, and an answered
@@ -177,7 +249,8 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 ```jsonc
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
-  "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
+  "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false,     // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
+                    "noOrphanScaffold": true },                                                                      // ENG-96458 D6 — `create-app`'s own starter page / stub entity / stub section are gone once the real page is bound
   "evidence": { "<id from --units>": { "referencePage": "…", "components": ["…"] } },
   "judge":    { "<id from --units>": { "convincing": true, "why": "…" } } }
 ```

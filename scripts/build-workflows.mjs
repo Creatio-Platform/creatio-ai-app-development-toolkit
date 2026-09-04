@@ -75,6 +75,7 @@ export const TARGETS = [
       'build-executor/schemas.mjs',
       'build-executor/helpers.mjs',
       'build-executor/context.mjs',
+      'build-executor/gate.mjs',
       'build-executor/core.mjs',
       'adapters/claude-workflow.mjs',
     ],

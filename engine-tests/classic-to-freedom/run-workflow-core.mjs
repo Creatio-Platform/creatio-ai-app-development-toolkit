@@ -42,6 +42,7 @@ import { makeContext, makePaths } from "../../skills/_workflow-core/build-execut
 import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
   packagePreconditionStop, selfCheckStillShort, inContextParkableKeys, selfCheckMismatches,
   planInvalidNext, componentReplanClause, componentTypeMismatches, planGapKinds, planGapNext,
+  completionLine, pendingConfirmationLine, runComplete, reopenKeySet,
 } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
 import * as prompts from "../../skills/_workflow-core/behaviour-analysis/prompts.mjs";
@@ -1670,7 +1671,7 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       // No `verify.planGaps`: the Reconcile prompt names the fields to copy from the counts-only summary and
       // that is not among them (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`). Keeping it
       // here would make the suite's model answer describe a shape the contract no longer asks for.
-      verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, builderOpen: 0, pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } },
+      verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pending: 0, builderOpen: 0, pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } },
       exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     };
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));
@@ -2095,6 +2096,99 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       first?.value?.kind === "work" && escaped instanceof TypeError && escaped.message === "local bug in the dispatch path",
       () => ({ firstKind: first?.value?.kind, escaped: escaped && `${escaped.name}: ${escaped.message}` }));
   }
+}
+
+/* ---- PR #157 review (Major on helpers.mjs:2053) — `completionLine`'s THREE branches, executed ------------------
+ * `helpers.mjs`'s pure functions are unit-tested here, and the ENG-96458 COMPLETE PENDING branch shipped with no
+ * direct test at all: the only change this suite took for that ticket was one fixture gaining `pending: 0`. The
+ * branch was not trivial either — it re-derived build-green from the raw counts, a SECOND derivation of what
+ * `core.mjs` had already decided as `runComplete(verify.complete, parked, unconsumed)`, and when the two disagreed
+ * the operator got exactly the "NOT COMPLETE … 0 MISSING + 0 unconfirmed · 0 parked · 0 unconsumed" line the
+ * branch exists to prevent. Build-green is now PASSED IN, so there is one derivation; these checks execute all
+ * three branches plus the contradiction that must be unreachable.
+ */
+{
+  const base = { round: 2, missing: 0, buildMissing: 0, unverified: 0, parkedCount: 0, unconsumedCount: 0 };
+  check("PR #157 review: `completionLine(true, …)` is the plain COMPLETE line — nothing about confirmations, because a complete run has none open",
+    () => { const l = completionLine(true, { ...base, pendingCount: 0, buildComplete: true });
+      return l.startsWith("COMPLETE after 2 round(s)") && !/PENDING/.test(l) && !/☐/.test(l); },
+    () => completionLine(true, { ...base, pendingCount: 0, buildComplete: true }));
+  check("PR #157 review: not-complete + build-green + N pending is the COMPLETE PENDING branch — it names N, says the build is done, and carries the remediation route (an `accepted` resolution) the zero-work copy had dropped",
+    () => { const l = completionLine(false, { ...base, pendingCount: 5, buildComplete: true });
+      return l.startsWith("COMPLETE PENDING 5 CONFIRMATION(S)") && /the build is done/.test(l)
+        && /kind: "accepted"/.test(l) && /after 2 round\(s\)/.test(l); },
+    () => completionLine(false, { ...base, pendingCount: 5, buildComplete: true }));
+  check("PR #157 review: the same counts with `buildComplete: false` fall through to NOT COMPLETE — the branch fires on the CALLER'S verdict, so a run whose build is not green cannot read as merely awaiting a human",
+    () => { const parked = completionLine(false, { ...base, parkedCount: 1, pendingCount: 5, buildComplete: false });
+      const short = completionLine(false, { ...base, missing: 1, buildMissing: 1, pendingCount: 5, buildComplete: false });
+      const held = completionLine(false, { ...base, unconsumedCount: 1, pendingCount: 5, buildComplete: false });
+      return [parked, short, held].every((l) => l.startsWith("NOT COMPLETE") && !/PENDING/.test(l)); },
+    () => [completionLine(false, { ...base, parkedCount: 1, pendingCount: 5, buildComplete: false }),
+      completionLine(false, { ...base, missing: 1, buildMissing: 1, pendingCount: 5, buildComplete: false })]);
+  check("PR #157 review: build-green with NOTHING pending is unchanged — `pendingCount: 0` never produces the pending sentence, so a plain green close reads exactly as it did before D4",
+    () => completionLine(false, { ...base, pendingCount: 0, buildComplete: true }).startsWith("NOT COMPLETE"),
+    () => completionLine(false, { ...base, pendingCount: 0, buildComplete: true }));
+  check("PR #157 review: an UNMEASURED run never reads COMPLETE PENDING — no counts and no `buildComplete` means the build was not proven done, and the old branch called exactly that round complete-pending",
+    () => { const l = completionLine(false, { round: 1, pendingCount: 3 });
+      return l.startsWith("NOT COMPLETE") && /\? \+ \? unconfirmed/.test(l); },
+    () => completionLine(false, { round: 1, pendingCount: 3 }));
+  // THE CONTRADICTION, ENUMERATED. `complete` is derived exactly as both closes in `core.mjs` derive it
+  // (`buildGreen && !pendingHold`), so this walks every combination the run can actually present and asserts the
+  // "0 MISSING but not complete" output is unreachable — the shape the review named.
+  // THE TUPLES THE RUN CAN REACH, enumerated FLAT (one level per axis, no nested statement blocks) so the check
+  // below is a single pass over them. `core.mjs` computes build-green as
+  // `runComplete(verify.complete, parked, unconsumed)`, and a green gate means no shortfall. So `buildComplete` is
+  // not a free axis — it is a function of the other three, and enumerating it freely would test a state no close
+  // can be in (build-green `false` beside 0 missing / 0 parked / 0 unconsumed), which is not a defect in the line
+  // but an impossible input.
+  const reachableCloses = [0, 1, 5].flatMap((pendingCount) => [0, 1].flatMap((parkedCount) =>
+    [0, 1].flatMap((unconsumedCount) => [0, 1].map((missing) => {
+      const buildComplete = missing === 0 && parkedCount === 0 && unconsumedCount === 0;
+      return { complete: buildComplete && pendingCount === 0,
+        counts: { round: 2, missing, buildMissing: missing, unverified: 0, parkedCount, unconsumedCount, pendingCount, buildComplete } };
+    }))));
+  // THE SELF-CONTRADICTORY SHAPE, named once: NOT COMPLETE over an all-zero tally. Returns the offending line so
+  // the failure detail shows WHICH close produced it instead of only that one did.
+  const contradictoryClose = (c) => {
+    const line = completionLine(c.complete, c.counts);
+    return line.startsWith("NOT COMPLETE")
+      && /0 MISSING \+ 0 unconfirmed · 0 parked unit\(s\) · 0 unconsumed/.test(line) ? line : null;
+  };
+  check("PR #157 review: over every state the run can actually PRESENT (build-green consistent with its own counts), no input renders `NOT COMPLETE … 0 MISSING + 0 unconfirmed · 0 parked · 0 unconsumed` — the self-contradictory line the two derivations could produce",
+    () => reachableCloses.every((c) => !contradictoryClose(c)),
+    () => reachableCloses.filter((c) => contradictoryClose(c)).map((c) => ({ ...c.counts, line: contradictoryClose(c) })));
+  // PR #157 review (Tetiana, Minor 1) — the zero-work early return in `core.mjs` used to hand-spell this sentence
+  // and had already dropped the remediation tail. One renderer, composed into `completionLine`, so the two spellings
+  // cannot drift again. The `run-infra.mjs` guard that counts `log(completionLine(complete` call sites therefore
+  // still reads 1 — deliberately: the zero-work site shares the SENTENCE, not the whole verdict line, because
+  // routing its not-complete case through `completionLine` would add a second verdict log to that path.
+  check("PR #157 review: `pendingConfirmationLine` is the ONE spelling of the pending sentence and `completionLine` composes from it — the zero-work close and the terminal close cannot drift apart again",
+    () => { const shared = pendingConfirmationLine(5);
+      return completionLine(false, { ...base, pendingCount: 5, buildComplete: true }).startsWith(shared)
+        && /COMPLETE PENDING 5 CONFIRMATION\(S\)/.test(shared) && /kind: "accepted"/.test(shared); },
+    () => ({ shared: pendingConfirmationLine(5), composed: completionLine(false, { ...base, pendingCount: 5, buildComplete: true }) }));
+  // PR #157 review (Major on helpers.mjs:2053, second half) — `reopenKeySet`'s new THIRD array, called rather than
+  // regex-matched in `wfSrc`. Its keys must be added, must be budget-checked like the answers channel's, and must
+  // not take the `findingsPending` exemption with them.
+  check("PR #157 review: `reopenKeySet`'s judge-defect array adds its keys, is BUDGET-CHECKED like the answers channel, and does not extend the operator-findings exemption to itself",
+    () => {
+      const never = () => false, always = () => true;
+      const withJudge = reopenKeySet(new Set(), new Set(), never, new Set(["main"]));
+      const exhausted = reopenKeySet(new Set(), new Set(), always, new Set(["main"]));
+      const findingsExempt = reopenKeySet(new Set(["main"]), new Set(), always, new Set());
+      return [...withJudge.keys].includes("main")
+        && ![...exhausted.keys].includes("main") && [...exhausted.exhausted].includes("main")
+        && [...findingsExempt.keys].includes("main");
+    },
+    () => ({ withJudge: [...reopenKeySet(new Set(), new Set(), () => false, new Set(["main"])).keys],
+      exhausted: reopenKeySet(new Set(), new Set(), () => true, new Set(["main"])),
+      findingsExempt: [...reopenKeySet(new Set(["main"]), new Set(), () => true, new Set()).keys] }));
+  // `runComplete` is the predicate `completionLine` no longer re-derives. Pinned beside it so the hand-off has both
+  // ends: the caller's decision and the line that now reports it.
+  check("PR #157 review: `runComplete` remains the single build-side predicate the caller passes in — green gate, nothing parked, no unconsumed answer, and any one of the three false is not build-green",
+    () => runComplete(true, [], []) === true && runComplete(false, [], []) === false
+      && runComplete(true, [{ key: "main" }], []) === false && runComplete(true, [], [{ unit: "main" }]) === false,
+    () => [runComplete(true, [], []), runComplete(false, [], []), runComplete(true, [{ key: "main" }], []), runComplete(true, [], [{ unit: "main" }])]);
 }
 
 console.log(`\nWORKFLOW-CORE GOLDEN: ${pass} passed, ${fail} failed`);

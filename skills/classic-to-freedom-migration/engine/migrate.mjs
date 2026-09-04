@@ -3086,6 +3086,8 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 // The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
 const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
   " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`" +
+  '; a `kind: "accepted"` entry (the `--verify` row override) ALSO needs a non-blank `decidedBy` and a parseable ISO `date` —' +
+  " an acceptance turns a red completeness row green, so the decision must name the human who took it and when" +
   '; the reserved kind `run` carries the RUN-level answers — `{"kind":"run","item":"control-mode","answer":"round1"}`' +
   " and `item: \"round-<N>\"` to authorise round N";
 // THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
@@ -3258,11 +3260,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
   // to, and accepting the flag silently would leave a caller believing answers had been applied.
   const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
+  // ENG-96458 D3 — `--verify` reads this file too, for `kind: "accepted"` entries only: a deviation the operator
+  // approved (`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }`) renders `☑ accepted` and leaves
+  // `missing`. Without this the acceptance mechanism was reachable from the API and NOT from the command line,
+  // which is the only way anyone actually runs the gate — caught by running the CLI, not by the unit tests.
+  // Every other kind stays what it was: an INPUT to the build that closes no verify row.
   // ENG-96457 (item 5) — `--plan` accepts it too. It used to be `--units`-only, which is precisely how the approved
   // `plan.md` and the payload the builder acted on came to disagree: every ⚠ question was answered, and the document
   // a human had signed off still showed the unanswered worklist and the 1-column fallback table.
-  if (resolutionsFile && !(unitsMode || planMode))
-    fail("`--resolutions <file>` applies to `--units` and `--plan` — it attaches the operator's answers to that run's ⚠ Confirm items. Add `--units` or `--plan`, or drop `--resolutions`.");
+  if (resolutionsFile && !(unitsMode || planMode || verifyMode))
+    fail("`--resolutions <file>` applies to `--units`, `--plan` (it attaches the operator's answers to that run's ⚠ Confirm items) and to `--verify` (it applies `kind: \"accepted\"` decisions to verify rows). Add one of them, or drop `--resolutions`.");
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
@@ -3397,6 +3404,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
   }
   else if (verifyMode) {
+    // ENG-96458 D3 — the SAME opts `--checklist` renders with (so the two produce the same row set), plus the
+    // operator's resolutions. Read ONCE and reused by all three call sites below: reading the file per site would
+    // print its duplicate/parse warnings three times and let the scoped and unscoped verdicts drift apart.
+    const verifyResolutions = readResolutions(resolutionsFile, fail);
+    const verifyOpts = () => ({ ...checklistOpts(manifest), resolutions: verifyResolutions });
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
     // `--verify --built <file> --page <key>` — ONE page's row of the built file, printed. A READ, not the gate:
@@ -3427,7 +3439,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // shortfall `missing` or `unverified`; the post-hoc full-sweep `--verify` below still
       // reads the combined `complete` (AC7/AC8) — an unconfirmed row still blocks the human-facing "done" verdict.
       // Without `--verify-json` the `--page` path stays the pure built-slice read (below).
-      const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
+      const unitVerdict = verifyUnit(result, verifyOpts(), built, pageArg);
       // `--page` is already guarded by `requirePublishedKey` above, so this normally cannot fire — but a `verifyUnit`
       // that returns an explicit `error` (an unknown/mismatched page key, PR review T4) must fail LOUDLY and
       // distinctly here rather than be written to the verdict file as a false green, in case the two key notions ever
@@ -3435,7 +3447,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (unitVerdict.error) fail(`--verify --page '${pageArg}': ${unitVerdict.error} — this key is not a page this plan reconciles. Run \`--units\` on this manifest for the exact page keys.`);
       try { fs.writeFileSync(verifyJsonFile, JSON.stringify(unitVerdict, null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
-      verifyRes = renderVerify(result, { ...checklistOpts(manifest), scopePageKey: pageArg }, built);
+      verifyRes = renderVerify(result, { ...verifyOpts(), scopePageKey: pageArg }, built);
       output = verifyRes.markdown + "\n";
       verifyIncomplete = !unitVerdict.buildComplete;
     }
@@ -3445,7 +3457,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else {
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
-    verifyRes = renderVerify(result, checklistOpts(manifest), built);
+    verifyRes = renderVerify(result, verifyOpts(), built);
     output = verifyRes.markdown + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
     // The machine-readable verdict, written from the SAME object the table was rendered from — so the numbers a
