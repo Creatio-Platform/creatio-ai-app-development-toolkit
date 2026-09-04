@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from runtime.scripts import mcp_client
 from runtime.scripts.mcp_client import (
     TOOL_TREE_ROOT,
     PathOutsideStore,
@@ -144,6 +146,78 @@ class McpClientTests(unittest.TestCase):
         cache_patcher = patch("runtime.scripts.mcp_client._TOOL_CONTRACT_CACHE", {"key": None, "contracts": None})
         self.addCleanup(cache_patcher.stop)
         cache_patcher.start()
+
+    def test_resolve_clio_cmd_keeps_a_path_with_spaces_whole(self):
+        # Windows' default install location contains a space, and CLIO_CMD is commonly a bare path.
+        # Splitting the value first turned `C:\Program Files\...\clio.exe` into `C:\Program` plus a
+        # stray argument, and clio was then reported as not installed on a machine where it was.
+        #
+        # The path is BUILT with a space rather than borrowed from `sys.executable`: on the Linux and
+        # macOS runners that name has no space (`/usr/bin/python3`), so the assertion held whether or
+        # not the fix worked — the test passed everywhere it mattered least.
+        with tempfile.TemporaryDirectory() as tmp:
+            spaced = Path(tmp) / "Program Files" / "clio.exe"
+            spaced.parent.mkdir(parents=True)
+            spaced.write_text("", encoding="utf-8")
+            self.assertIn(" ", str(spaced))
+            with patch.dict(os.environ, {"CLIO_CMD": str(spaced)}):
+                self.assertEqual(mcp_client._resolve_clio_cmd(), [str(spaced)])
+            with patch.dict(os.environ, {"CLIO_CMD": f'"{spaced}"'}):
+                self.assertEqual(mcp_client._resolve_clio_cmd(), [str(spaced)])
+
+    def test_resolve_clio_cmd_keeps_windows_quoting_when_the_path_is_absent(self):
+        # The win32-only `posix=False` branch: on a POSIX runner the platform check skipped it, so
+        # nothing exercised the quote handling that branch exists for. A path that does not exist
+        # falls through to the split, which is where the two spellings have to agree.
+        with patch.object(mcp_client.sys, "platform", "win32"):
+            with patch.dict(os.environ, {"CLIO_CMD": r'"C:\Program Files\clio\clio.exe"'}):
+                self.assertEqual(
+                    mcp_client._resolve_clio_cmd(), [r"C:\Program Files\clio\clio.exe"]
+                )
+
+    def test_resolve_clio_cmd_keeps_a_single_path_whole_even_when_it_does_not_exist(self):
+        # A spaced path that resolves to nothing — a stale config after a reinstall, a typo, an
+        # install still in progress — must still be reported WHOLE. Splitting it reproduces the
+        # original bug for exactly that case: the caller then names `C:\Program` in its "not found"
+        # message, a path the developer never configured, which is the least helpful moment to lose
+        # the real one. The discriminator is whether the FIRST token is itself runnable.
+        with tempfile.TemporaryDirectory() as tmp:
+            for missing in (Path(tmp) / "Program Files" / "clio.exe",
+                            Path(tmp) / "Program Files" / "clio"):
+                with self.subTest(path=missing.name):
+                    with patch.dict(os.environ, {"CLIO_CMD": str(missing)}):
+                        self.assertEqual(mcp_client._resolve_clio_cmd(), [str(missing)])
+
+    def test_resolve_clio_cmd_still_splits_a_runnable_first_token(self):
+        # The counter-case that keeps the rule above honest: `dotnet` resolves on PATH, so this is a
+        # command plus an argument and must stay two tokens even though the whole value has a space.
+        if shutil.which("dotnet") is None:
+            self.skipTest("needs dotnet on PATH to distinguish a command from a path")
+        # The argument is quoted, which is how a spaced argument has to be written for any splitter:
+        # unquoted, `dotnet C:/no where/clio.dll` is three tokens by every shell's rules too.
+        with patch.dict(os.environ, {"CLIO_CMD": 'dotnet "C:/no where/clio.dll"'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/no where/clio.dll"])
+
+    def test_resolve_clio_cmd_still_splits_the_documented_two_token_form(self):
+        # `dotnet /path/to/clio.dll` must keep splitting: that string is not itself a file, so the
+        # whole-path shortcut above must not swallow it.
+        with patch.dict(os.environ, {"CLIO_CMD": "dotnet C:/nowhere/clio.dll"}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/nowhere/clio.dll"])
+
+    def test_resolve_clio_cmd_survives_unbalanced_quotes(self):
+        # `shlex.split()` raises ValueError ("No closing quotation") on a stray unmatched quote -- a
+        # plausible typo in a manually edited env var. This used to abort MCP client startup with an
+        # unhandled exception instead of the normal "clio not found" diagnostic.
+        with patch.dict(os.environ, {"CLIO_CMD": '"clio'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ['"clio'])
+
+    def test_resolve_clio_cmd_reports_the_failing_token_for_a_malformed_multi_word_value(self):
+        # A genuinely malformed value (a typo, a stale two-word leftover) is not a spaced path in
+        # disguise: it has no separator and no executable extension, so the whole-value fallback must
+        # not swallow it. The caller's "not found" diagnostic should name the actual failing token
+        # (`clioo`) rather than the confusing whole string.
+        with patch.dict(os.environ, {"CLIO_CMD": "clioo something"}):
+            self.assertEqual(mcp_client._parse_clio_cmd("clioo something"), ["clioo", "something"])
 
     def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
         client = PersistentMcpClient()

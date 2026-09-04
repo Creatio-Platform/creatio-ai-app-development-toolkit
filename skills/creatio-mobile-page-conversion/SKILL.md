@@ -86,6 +86,29 @@ Before the Load order below, verify the converter is available: list the server 
    created mobile schema empty — the Mobile app then loads the empty schema and crashes. Details in the
    playbook's Flow step 7.
 
+## Product telemetry — emit the shared stages with `workflow: "mobile-page-conversion"`
+
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow, and
+`../../context/product-telemetry.md` for this flow's emission points. Emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+identified by the `workflow` field, so do not invent `mobile_*` event names — clio rejects them.
+
+| Send | With | At the point where you |
+| --- | --- | --- |
+| `workflow_started` | — | take the first conversion request |
+| `clarification_requested` / `user_input_received` | — | ask the developer something the flow waits on / receive their answer |
+| `plan_blocked` | `variant=feature-disabled` | find the `mobile-page-converter` flag off in the preflight above — emit before telling the user how to enable it, then STOP as that section requires |
+| `plan_presented` | — | present the plain-language plan |
+| `plan_approved` | — | get approval at **Gate M** — before the first write |
+| `build_started` | — | begin writing the mobile page |
+| `work_item_completed` | `variant=page` | finish and validate a mobile page body, once per page |
+| `work_item_completed` | `variant=section` | complete section/workplace registration after **Gate S** |
+| `workflow_completed` / `workflow_failed` | — | reach the end of the run |
+| `changes_requested` | — | the developer asks for further changes AFTER the conversion completed. Emit before starting that follow-up work |
+| `changes_applied` | — | the follow-up changes are applied and verified |
+
+Telemetry is non-blocking and must never interfere with Gate M or Gate S. If clio rejects an event name
+(older clio), stop emitting for the rest of the run and carry on.
+
 ## Gates are MANDATORY — this is the point of this skill
 
 Conversion is **analysis-first**: the guide tool writes nothing, and persistence and registration each

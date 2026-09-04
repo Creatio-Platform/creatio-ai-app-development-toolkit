@@ -11,6 +11,7 @@ import difflib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -64,15 +65,63 @@ class _HelpRequested(Exception):
     """Raised by parse_cli_request when the user passes -h or --help."""
 
 
+def _unquote(value):
+    """Strip one matching pair of surrounding quotes, if present."""
+    if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _parse_clio_cmd(env_cmd):
+    """Turn a CLIO_CMD value into argv.
+
+    The same rule is implemented once more in ``hooks/telemetry-routing.mjs``, which cannot share
+    this code (different language, different transport shape). Both sides and the reason are recorded
+    in ``docs/telemetry-transport-decision.md``; a change here changes there too.
+
+    A bare path to the executable, spaces and all, is ONE token — checked before any splitting.
+    Windows' default install location contains a space, so splitting first turned
+    `C:\\Program Files\\...\\clio.exe` into `C:\\Program` plus a stray argument and reported clio as
+    not installed. The multi-token form (`dotnet /path/to/clio.dll`) is unaffected: that string is
+    not itself a file, so it falls through to the split.
+    """
+    bare = _unquote(env_cmd)
+    # is_file, not exists: a stray directory at the expected install path would otherwise be
+    # returned as the executable, and the spawn would fail with "Is a directory" instead of the
+    # clear "clio not installed" diagnostic this shortcut exists to preserve.
+    if bare and Path(bare).is_file():
+        return [bare]
+    try:
+        if sys.platform != "win32":
+            parts = shlex.split(env_cmd)
+        else:
+            parts = [_unquote(part) for part in shlex.split(env_cmd, posix=False)]
+    except ValueError:
+        # Unbalanced quotes (e.g. a stray `"` from a typo) are not a shape shlex can tokenize at all.
+        # Falling back to the bare joined value here is the same fallback the not-runnable-first-token
+        # branch below already uses for an unsplittable-looking value, and it turns what would
+        # otherwise be an unhandled exception aborting client startup into the normal, clear
+        # "clio not found" diagnostic against `bare`.
+        return [bare]
+    # A value that splits into several tokens whose FIRST token is not runnable might be one path that
+    # happens to contain spaces (`C:\Program Files\clio\clio.exe` -> `C:\Program`, `Files\clio\clio.exe`),
+    # in which case splitting reproduces the very bug this function exists to fix — OR it might be a
+    # genuinely malformed value (a typo, a stale two-word leftover from an old config) that only looks
+    # like the spaced-path case by accident. Only collapse back to the single joined string when `bare`
+    # itself looks path-shaped (contains a path separator, or ends in a recognizable executable
+    # extension); otherwise return the split tokens so the caller's "not found" diagnostic names the
+    # actual token that failed to resolve, instead of a confusing mismatch against the whole value.
+    if len(parts) > 1 and not (shutil.which(parts[0]) or Path(parts[0]).is_file()):
+        looks_path_shaped = bool(re.search(r"[\\/]", bare)) or Path(bare).suffix.lower() in (".exe", ".dll")
+        if looks_path_shaped:
+            return [bare]
+    return parts
+
+
 def _resolve_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
     if env_cmd:
-        if sys.platform == "win32":
-            parts = shlex.split(env_cmd, posix=False)
-            parts = [p[1:-1] if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")) else p for p in parts]
-        else:
-            parts = shlex.split(env_cmd)
-        return parts
+        return _parse_clio_cmd(env_cmd)
     if shutil.which("clio"):
         return ["clio"]
     if not shutil.which("dotnet"):

@@ -43,6 +43,7 @@ WORKFLOW_META_NAME_PATTERN = re.compile(r"^\s*name:\s*['\"]([^'\"]+)['\"]", re.M
 # the pattern because every shipped script already carries it and it keeps the mirror out of the way
 # of unrelated user-scope workflows.
 WORKFLOW_META_NAME_ALLOWED = re.compile(r"creatio-[A-Za-z0-9._-]+")
+TELEMETRY_RULE_NAME = "creatio-telemetry"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
 SETUP_WIZARD_MANIFEST_DIR = ".caadt"
@@ -913,6 +914,48 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
+def render_cursor_telemetry_rule(repo_root: Path) -> str:
+    """Build the always-applied Cursor rule that routes product telemetry.
+
+    Cursor does have an MCP hook, and the installer registers it — but
+    ``afterMCPExecution`` is documented as informational: it reaches neither the user
+    nor the agent, so it can record the telemetry floor and nothing else. Without an
+    always-applied rule, a Cursor session that never loads a CAADT skill would have
+    nothing but clio's server instructions telling it telemetry exists - which is the
+    original defect (an agent deprioritising a line of instruction it judges
+    unimportant). This rule stays deliberately small so it can be always-on without
+    the cost of loading the whole orchestrator rule.
+    """
+    contract = repo_file(repo_root, "context/product-telemetry.md")
+    return f"""---
+description: Creatio product telemetry routing - which telemetry stages to emit for any Creatio workflow run through clio MCP.
+alwaysApply: true
+---
+
+# Creatio product telemetry
+
+When a Creatio workflow runs through clio MCP, emit product telemetry with `send-telemetry`.
+This applies to EVERY workflow, not just app creation.
+
+Event names are flow-agnostic stages, and WHICH flow it was goes in the `workflow` field:
+`app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or
+`app-maintenance`.
+
+Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.
+Do not spell a stage from memory, and do not invent a per-flow name such as
+`migration_plan_approved`: clio validates `event_name` against a closed allow-list and rejects
+anything else.
+
+The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT
+exempt them from telemetry: their emission points are their own gates instead, listed in
+`{contract}`.
+
+Check `get-telemetry-consent` first; if it reports `telemetry_consent=unknown`, ask the developer
+once as a single-purpose question, and if there is nobody to ask, leave it unknown and emit
+nothing. Telemetry must never gate or delay the task.
+"""
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
     """Install Codex via the remote marketplace (parity with install_claude).
 
@@ -993,6 +1036,82 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
     rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
+    # Always-applied companion rule: Cursor's MCP hook cannot talk back to the agent, so
+    # this rule is what reaches a session that never loads a CAADT skill.
+    telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
+    telemetry_rule_path.write_text(render_cursor_telemetry_rule(local_plugin_dir), encoding="utf-8")
+    merge_cursor_telemetry_hook(cursor_home, local_plugin_dir)
+
+
+def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> None:
+    """Register the telemetry floor hook in Cursor's ``hooks.json``.
+
+    Cursor's ``afterMCPExecution`` is documented as informational: it cannot reach the user
+    or the agent, so it carries no routing text. What it can still do is the part that
+    matters most — deterministically record that a session touched Creatio, which is the
+    denominator that makes the agent-reported funnel's own reliability measurable. The
+    routing itself arrives through the always-applied rule written above.
+
+    Merged rather than overwritten: a developer's other hooks must survive a reinstall.
+    """
+    hooks_path = cursor_home / "hooks.json"
+    command = f'node "{(local_plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+    entry = {"command": command, "env": {"CAADT_TELEMETRY_HOOK_HOST": "cursor"}}
+
+    config: dict = {}
+    if hooks_path.exists():
+        try:
+            config = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            # A hand-broken hooks.json is the developer's file, not ours to silently
+            # rewrite — leave it alone rather than replacing it with our single entry.
+            # Still worth a line on stderr: silently skipping the telemetry hook looks
+            # identical to it having registered, until someone notices the floor never fires.
+            print(f"Skipped Cursor telemetry hook registration — could not read {hooks_path}: "
+                  f"{error}", file=sys.stderr)
+            return
+        # Valid JSON of an unexpected SHAPE deserves the same answer. `[]`, `null` or a string all
+        # parse, and then `config.setdefault` raises AttributeError — an unhandled exception in the
+        # middle of an install that has already written two rule files, rather than the "leave it
+        # alone" this function promises.
+        if not isinstance(config, dict) or not isinstance(config.get("hooks", {}), dict):
+            print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+                  f"unexpected shape", file=sys.stderr)
+            return
+    config.setdefault("version", 1)
+    hooks = config.setdefault("hooks", {})
+    # isinstance on the container itself, not only on each entry: `afterMCPExecution` set to
+    # `null`, a number, a string, or a dict would make the comprehension below raise (or, for
+    # a string/dict, silently iterate characters/keys and replace the value with a corrupted
+    # list) — the same half-finished/corrupted install the shape check above prevents.
+    existing_hooks = hooks.get("afterMCPExecution", [])
+    if not isinstance(existing_hooks, list):
+        print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+              f"unexpected shape", file=sys.stderr)
+        return
+    # isinstance on each ENTRY, not only on the container: an array holding strings would make
+    # `item.get` raise, which is the same half-finished install the shape check above prevents.
+    # An entry this function cannot read is carried through untouched rather than dropped.
+    #
+    # Matched on the exact rendered command, not a "telemetry-routing.mjs" substring: a developer's
+    # own hook at a different path that happens to contain that filename (a wrapper, a copy kept for
+    # comparison) would otherwise be silently dropped and replaced on every reinstall — exactly the
+    # data loss the shape guard above exists to prevent.
+    existing = [
+        item
+        for item in existing_hooks
+        if not isinstance(item, dict) or item.get("command") != command
+    ]
+    hooks["afterMCPExecution"] = [*existing, entry]
+    try:
+        hooks_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        # Read failures already return quietly; a write failure has to as well, or a read-only
+        # or locked hooks.json aborts a Cursor install that has already written two rule files.
+        # A stderr line still goes out, matching the read-failure branch above.
+        print(f"Skipped Cursor telemetry hook registration — could not write {hooks_path}: "
+              f"{error}", file=sys.stderr)
+        return
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:
