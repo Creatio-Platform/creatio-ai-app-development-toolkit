@@ -162,6 +162,41 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       why: "the repair round gets its own part file and card id namespace, so it cannot overwrite or collide with the first pass (PR #147 review)",
     },
     {
+      // The BATCH INDEX, the second collision axis on the same path. `packBatches` partitions SCOPES, not labels,
+      // and `label` is `schema || role`, so two scopes returned under one `schema` are separate batch members
+      // carrying one label — measured by the reviewer as `describe.1.UsrPage` and `describe.2.UsrPage` both being
+      // handed `customizations-part-UsrPage.md`, with `acceptParts` blind to it (both items are ASKED for that
+      // path and both return it). Only batches after the first move, which is why this fires on the fan-out
+      // scenario alone: the single-batch case every other scenario exercises keeps the historical filename.
+      baseline: "written to `out/customizations-part-DealMini.md`",
+      shipped: "written to `out/customizations-part-DealMini-2.md`",
+      why: "the batch index is in the part path, so two scopes sharing a `schema` cannot be handed one file (PR #147 review)",
+    },
+    {
+      // The repair round's part path, seen from MERGE's list of files to fold in. Now that the Describe fixture
+      // answers with the path it was told to write to, the repair round's answer carries the round suffix and
+      // Merge is asked to read two distinct files where the baseline read one file twice — which is the defect
+      // itself, from the consumer's end.
+      baseline: "- out/customizations-part-main-page.md",
+      shipped: "- out/customizations-part-main-page-round2.md",
+      why: "Merge folds in the repair round's OWN part file; the baseline listed round 1's file twice (PR #147 review)",
+    },
+    {
+      // The batch index once more, from MERGE's list of files to fold in — the third and last place a part path
+      // is spelled out to an agent. Listed separately rather than as a looser pattern: the three prompts are
+      // different contracts, and a change to one must not be waved through by a rule written for another.
+      baseline: "- out/customizations-part-DealMini.md",
+      shipped: "- out/customizations-part-DealMini-2.md",
+      why: "Merge folds in the batch-indexed part file the second describe agent actually wrote (PR #147 review)",
+    },
+    {
+      // And the batch index, seen from CRITIQUE's JSON of what the Describe agents returned. Same single change
+      // as the Describe-prompt entry above, echoed by the phase that is handed the returns.
+      baseline: '"reportPart":"out/customizations-part-DealMini.md"',
+      shipped: '"reportPart":"out/customizations-part-DealMini-2.md"',
+      why: "the critique is handed the batch-indexed part path the second describe agent actually wrote (PR #147 review)",
+    },
+    {
       // The other half of the same fix: nothing in the repair prompt mentioned the part file at all, so an agent
       // handed round 1's path had no reason to suspect it was overwriting a first pass. Saying the first pass is
       // KEPT is also what stops this round paying to restate cards already in the deliverable.
@@ -283,6 +318,17 @@ function behaviourScenarios() {
     censusNote: "census proven via ExtendParent query",
     refusals: ["could not read DealTyped layer"],
   };
+  // PR #147 review — A DESCRIBE ANSWER WRITES WHERE THE PROMPT TOLD IT TO. `reportPart` was the literal
+  // `out/part.md`, which no agent following the prompt would ever return, so the scenarios did not exercise the
+  // part-path contract at all — and once `partFile` gained its round and batch suffixes, the core's new
+  // returned-versus-asked check fired on every scenario as a log-only warning (4 → 8) that nothing could act on.
+  //
+  // Derived from the PROMPT, not by importing `partFile`: the fixture then behaves like a compliant agent on
+  // whichever side is running, instead of being computed by the code under test. The path CONTRACT stays pinned
+  // by hard-coded literals in `run-workflow-core.mjs` (round 1 vs `-round2`, batch 1 vs `-2`), which is where an
+  // assertion about it belongs — a fixture that asked `partFile` what to answer could never disagree with it.
+  const partOfPrompt = (prompt) => /written to `([^`]+)`/.exec(String(prompt ?? ""))?.[1] || "out/part.md";
+  const describing = (base) => (item) => ({ ...base, reportPart: partOfPrompt(item.prompt) });
   const FULL = {
     reportPart: "out/part.md",
     indexEntries: [
@@ -294,21 +340,27 @@ function behaviourScenarios() {
   const PARTIAL = { ...FULL, indexEntries: FULL.indexEntries.slice(0, 2), gaps: [{ key: "initMini", why: "no source", settlingQuery: "get-schema" }] };
   const CRIT = { uncovered: [], conflicts: [], settledElsewhere: [], notes: "" };
   const MERGED = { reportPath: "out/customizations.md", indexPath: "out/behaviour-index.json", cardCount: 4, acCount: 6, droppedDuplicates: [] };
-  const byPhase = (map) => () => ({ phase }) => (phase in map ? map[phase] : null);
+  // A value may be a FUNCTION of the item, so an answer can depend on the prompt it was handed — which is what a
+  // real agent's answer does, and what `describing` above needs.
+  const byPhase = (map) => () => (item) => {
+    if (!(item.phase in map)) return null;
+    const answer = map[item.phase];
+    return typeof answer === "function" ? answer(item) : answer;
+  };
   // A Critique that answers with something that is NOT a critique: schema-valid to the host, unusable to the core.
   // A lookup rather than a ternary chain, so the shape of the answer is data.
-  const UNUSABLE_CRITIQUE = { Context: CTX, Describe: FULL, Critique: 7 };
+  const UNUSABLE_CRITIQUE = { Context: CTX, Describe: describing(FULL), Critique: 7 };
   return [
-    { name: "happy path — one describe agent, complete", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: CRIT, Merge: MERGED }) },
+    { name: "happy path — one describe agent, complete", args: ARGS, answer: byPhase({ Context: CTX, Describe: describing(FULL), Critique: CRIT, Merge: MERGED }) },
     { name: "declared zero rows — exits before any agent", args: { ...ARGS, totals: { stubs: 0, members: 0 } }, answer: byPhase({}) },
     { name: "dead Context — a failed run, not an empty surface", args: ARGS, answer: byPhase({ Context: null }) },
     { name: "empty scope inventory — nothing to describe", args: ARGS, answer: byPhase({ Context: { ...CTX, scopes: [{ role: "main page", schema: null, methodKeys: [], memberKeys: [] }] } }) },
     {
       name: "uncovered rows — repair round runs and the verdict reads the repaired counts",
       args: ARGS,
-      answer: () => { let d = 0; return ({ phase }) => {
+      answer: () => { let d = 0; return (item) => { const { phase } = item;
         if (phase === "Context") return CTX;
-        if (phase === "Describe") { d++; return d === 1 ? PARTIAL : FULL }
+        if (phase === "Describe") { d++; return describing(d === 1 ? PARTIAL : FULL)(item) }
         if (phase === "Critique") return CRIT;
         if (phase === "Merge") return MERGED;
         return null;
@@ -332,13 +384,16 @@ function behaviourScenarios() {
         return null;
       },
     },
-    { name: "dead Critique, retried once — critiqueRan false", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: null, Merge: MERGED }) },
-    { name: "unusable Critique return — treated as dead", args: ARGS, answer: () => ({ phase }) => UNUSABLE_CRITIQUE[phase] ?? MERGED },
-    { name: "dead Merge — coverage stands, run not complete", args: ARGS, answer: byPhase({ Context: CTX, Describe: FULL, Critique: CRIT, Merge: null }) },
+    { name: "dead Critique, retried once — critiqueRan false", args: ARGS, answer: byPhase({ Context: CTX, Describe: describing(FULL), Critique: null, Merge: MERGED }) },
+    { name: "unusable Critique return — treated as dead", args: ARGS, answer: () => (item) => {
+      const answer = UNUSABLE_CRITIQUE[item.phase] ?? MERGED;
+      return typeof answer === "function" ? answer(item) : answer;
+    } },
+    { name: "dead Merge — coverage stands, run not complete", args: ARGS, answer: byPhase({ Context: CTX, Describe: describing(FULL), Critique: CRIT, Merge: null }) },
     {
       name: "fan-out — a wide surface packs into several describe agents",
       args: { ...ARGS, rowsPerAgent: 2, maxDescribeAgents: 3 },
-      answer: byPhase({ Context: CTX, Describe: FULL, Critique: CRIT, Merge: MERGED }),
+      answer: byPhase({ Context: CTX, Describe: describing(FULL), Critique: CRIT, Merge: MERGED }),
     },
     { name: "missing required args — fails loudly before any agent", args: { manifest: "m.json" }, expectError: true, answer: byPhase({}) },
   ];

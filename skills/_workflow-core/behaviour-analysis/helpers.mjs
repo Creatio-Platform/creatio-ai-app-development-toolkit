@@ -43,10 +43,20 @@ export function packBatches(list, target, cap) {
 // given — resolves to nothing, because an answer that cannot be attributed to
 // one row is not coverage of either.
 export function digestKeyOf(entryKey, keys) {
-  if (keys.has(entryKey)) return entryKey
+  return resolveKey(entryKey, keys).key
+}
+
+// The same resolution, WITH the reason it failed. `digestKeyOf` collapses two different failures into one `null`:
+// several inventory rows end in `::<key>` (AMBIGUOUS — a real row the answer could not be pinned to) and none does
+// (UNKNOWN — a key naming no row on this surface, so invented, stale or copied from another run). The remedies are
+// opposite — re-key the answer versus discard it — so a caller that has to report the failure needs to tell them
+// apart. One implementation, because two would be a second source of truth for the same lookup (PR #147 review).
+export function resolveKey(entryKey, keys) {
+  if (keys.has(entryKey)) return { key: entryKey, reason: 'exact' }
   const suffix = `::${entryKey}`
   const hits = [...keys].filter((k) => k.endsWith(suffix))
-  return hits.length === 1 ? hits[0] : null
+  if (hits.length === 1) return { key: hits[0], reason: 'suffix' }
+  return { key: null, reason: hits.length ? 'ambiguous' : 'unknown' }
 }
 
 // The computed floor under the two-card rule, MIXIN ONLY — and deliberately so. A `mixin:` row's body is another
@@ -207,6 +217,18 @@ export function mergeDeathLine(attempt, error, willRetry) {
 // PARTIAL object is dead by this test, because the only thing lost is a claim
 // that the missing field was verified — which is the claim there is no evidence
 // for.
+// PR #147 review — "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
+// `isCritiqueShape` below exists for, applied to the phase whose failure is the most expensive. A truthy value
+// that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — used to pass the core's bare
+// truthiness guard and reach `normalizeScopes`, which coerces it to an EMPTY scope list via `(rawScopes || [])`.
+// The run then took the "empty worklist is DONE" exit and reported `skipped: true` with `complete: true` over a
+// digest that may be full — the one outcome this workflow exists to make impossible, reached through a malformed
+// result instead of an absent one. `cli.mjs`'s `missingRequired` cannot close it: it is a deliberately shallow
+// top-level `!== undefined` check, so a `scopes` of the wrong TYPE is accepted at `submit` and handed to the core.
+export function isCensusShape(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.scopes)
+}
+
 export function isCritiqueShape(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
     && ['uncovered', 'conflicts', 'settledElsewhere'].every((k) => Array.isArray(value[k]))
@@ -321,15 +343,25 @@ export function itemId(phase, ...parts) {
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
 //
-// PR #147 review — the ROUND is part of the path. Both rounds order scopes by rows descending
-// (`planBatches`/`packBatches`), so the largest scope leads a batch in each and the repair round was handed round
-// 1's file: a repair agent writing it fresh dropped round 1's cards from the deliverable while `coveredKeys` still
-// counted those rows — the coverage-says-covered / report-does-not-contain-it divergence this workflow exists to
-// prevent, reached with no agent misbehaviour. The batch index is deliberately NOT in the path: `packBatches`
-// partitions the scope list, so within one round the lead scope's label is already unique, and the round is the
-// only axis that collided. Round 1 keeps the historical name so a caller's existing part files still resolve.
-export const partFile = (outDir, label, round = 1) => {
+// PR #147 review — the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
+//
+// The round: both rounds order scopes by rows descending (`planBatches`/`packBatches`), so the largest scope leads
+// a batch in each and the repair round was handed round 1's file. A repair agent writing it fresh dropped round
+// 1's cards from the deliverable while `coveredKeys` still counted those rows — the coverage-says-covered /
+// report-does-not-contain-it divergence this workflow exists to prevent, reached with no agent misbehaviour.
+//
+// The index: `packBatches` partitions SCOPES, not labels, and `label` is `schema || role`, so two scopes the
+// Context agent returns under one `schema` are separate batch members carrying one label. With disjoint key sets
+// `keyCollapse` sees no duplicate and passes, and `acceptParts` cannot see it either — both items are ASKED for
+// that path and both return it, so returned-equals-asked holds and no warning fires. Measured by the reviewer at
+// `rowsPerAgent: 1` with two `UsrPage` scopes: `describe.1.UsrPage` and `describe.2.UsrPage` both got
+// `customizations-part-UsrPage.md`.
+//
+// Both suffixes are omitted for the FIRST batch of round 1 — the single-batch case every existing caller has — so
+// an existing part file still resolves and the generated prompt text does not move for it.
+export const partFile = (outDir, label, round = 1, index = 0) => {
   const slug = String(label).replace(/[^A-Za-z0-9_-]/g, '-')
-  const roundSuffix = round > 1 ? `-round${round}` : ''
-  return `${outDir}/customizations-part-${slug}${roundSuffix}.md`
+  const batchSuffix = index > 0 ? '-' + String(index + 1) : ''
+  const roundSuffix = round > 1 ? '-round' + String(round) : ''
+  return `${outDir}/customizations-part-${slug}${batchSuffix}${roundSuffix}.md`
 }

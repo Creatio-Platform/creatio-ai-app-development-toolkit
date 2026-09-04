@@ -696,10 +696,20 @@ function packBatches(list, target, cap) {
 // given — resolves to nothing, because an answer that cannot be attributed to
 // one row is not coverage of either.
 function digestKeyOf(entryKey, keys) {
-  if (keys.has(entryKey)) return entryKey
+  return resolveKey(entryKey, keys).key
+}
+
+// The same resolution, WITH the reason it failed. `digestKeyOf` collapses two different failures into one `null`:
+// several inventory rows end in `::<key>` (AMBIGUOUS — a real row the answer could not be pinned to) and none does
+// (UNKNOWN — a key naming no row on this surface, so invented, stale or copied from another run). The remedies are
+// opposite — re-key the answer versus discard it — so a caller that has to report the failure needs to tell them
+// apart. One implementation, because two would be a second source of truth for the same lookup (PR #147 review).
+function resolveKey(entryKey, keys) {
+  if (keys.has(entryKey)) return { key: entryKey, reason: 'exact' }
   const suffix = `::${entryKey}`
   const hits = [...keys].filter((k) => k.endsWith(suffix))
-  return hits.length === 1 ? hits[0] : null
+  if (hits.length === 1) return { key: hits[0], reason: 'suffix' }
+  return { key: null, reason: hits.length ? 'ambiguous' : 'unknown' }
 }
 
 // The computed floor under the two-card rule, MIXIN ONLY — and deliberately so. A `mixin:` row's body is another
@@ -860,6 +870,18 @@ function mergeDeathLine(attempt, error, willRetry) {
 // PARTIAL object is dead by this test, because the only thing lost is a claim
 // that the missing field was verified — which is the claim there is no evidence
 // for.
+// PR #147 review — "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
+// `isCritiqueShape` below exists for, applied to the phase whose failure is the most expensive. A truthy value
+// that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — used to pass the core's bare
+// truthiness guard and reach `normalizeScopes`, which coerces it to an EMPTY scope list via `(rawScopes || [])`.
+// The run then took the "empty worklist is DONE" exit and reported `skipped: true` with `complete: true` over a
+// digest that may be full — the one outcome this workflow exists to make impossible, reached through a malformed
+// result instead of an absent one. `cli.mjs`'s `missingRequired` cannot close it: it is a deliberately shallow
+// top-level `!== undefined` check, so a `scopes` of the wrong TYPE is accepted at `submit` and handed to the core.
+function isCensusShape(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.scopes)
+}
+
 function isCritiqueShape(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
     && ['uncovered', 'conflicts', 'settledElsewhere'].every((k) => Array.isArray(value[k]))
@@ -974,17 +996,27 @@ function itemId(phase, ...parts) {
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
 //
-// PR #147 review — the ROUND is part of the path. Both rounds order scopes by rows descending
-// (`planBatches`/`packBatches`), so the largest scope leads a batch in each and the repair round was handed round
-// 1's file: a repair agent writing it fresh dropped round 1's cards from the deliverable while `coveredKeys` still
-// counted those rows — the coverage-says-covered / report-does-not-contain-it divergence this workflow exists to
-// prevent, reached with no agent misbehaviour. The batch index is deliberately NOT in the path: `packBatches`
-// partitions the scope list, so within one round the lead scope's label is already unique, and the round is the
-// only axis that collided. Round 1 keeps the historical name so a caller's existing part files still resolve.
-const partFile = (outDir, label, round = 1) => {
+// PR #147 review — the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
+//
+// The round: both rounds order scopes by rows descending (`planBatches`/`packBatches`), so the largest scope leads
+// a batch in each and the repair round was handed round 1's file. A repair agent writing it fresh dropped round
+// 1's cards from the deliverable while `coveredKeys` still counted those rows — the coverage-says-covered /
+// report-does-not-contain-it divergence this workflow exists to prevent, reached with no agent misbehaviour.
+//
+// The index: `packBatches` partitions SCOPES, not labels, and `label` is `schema || role`, so two scopes the
+// Context agent returns under one `schema` are separate batch members carrying one label. With disjoint key sets
+// `keyCollapse` sees no duplicate and passes, and `acceptParts` cannot see it either — both items are ASKED for
+// that path and both return it, so returned-equals-asked holds and no warning fires. Measured by the reviewer at
+// `rowsPerAgent: 1` with two `UsrPage` scopes: `describe.1.UsrPage` and `describe.2.UsrPage` both got
+// `customizations-part-UsrPage.md`.
+//
+// Both suffixes are omitted for the FIRST batch of round 1 — the single-batch case every existing caller has — so
+// an existing part file still resolves and the generated prompt text does not move for it.
+const partFile = (outDir, label, round = 1, index = 0) => {
   const slug = String(label).replace(/[^A-Za-z0-9_-]/g, '-')
-  const roundSuffix = round > 1 ? `-round${round}` : ''
-  return `${outDir}/customizations-part-${slug}${roundSuffix}.md`
+  const batchSuffix = index > 0 ? '-' + String(index + 1) : ''
+  const roundSuffix = round > 1 ? '-round' + String(round) : ''
+  return `${outDir}/customizations-part-${slug}${batchSuffix}${roundSuffix}.md`
 }
 
 // ===== inlined from _workflow-core/behaviour-analysis/schemas.mjs =====
@@ -1377,18 +1409,32 @@ function reportCritique(critique, critiqueReturned, log) {
 // log line and `reason` — `run-workflow-parity` compares the return value against the pre-migration script byte
 // for byte, and a rewording would read as a behaviour change where there is none. A rejection is the case that
 // had no verdict at all, so that is the one that gains the cause.
-function contextFailedReturn(contextOutcome, surface, log) {
+// The three causes as the caller reads them. Split out so `contextFailedReturn` keeps one statement per concern
+// and Sonar's cognitive-complexity budget for the function is not spent on string assembly.
+function contextFailureReason(cause, unusable, shape) {
+  if (cause) return `the Context phase rejected (${cause}), so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.`
+  if (unusable) return `the Context phase returned ${shape} carrying no \`scopes\` array, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.`
+  return 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.'
+}
+
+function contextFailedReturn(contextOutcome, surface, log, returned = null) {
   const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
-  log(cause
-    ? `the Context agent rejected — ${cause} — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe`
-    : 'the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
+  // THREE causes, three lines. A rejection, a silent death and a truthy-but-unusable return need different
+  // repairs, and the third one used to be indistinguishable from a surface with nothing on it (PR #147 review).
+  const unusable = !cause && returned !== null && returned !== undefined
+  const shape = Array.isArray(returned) ? 'an array' : `a ${typeof returned}`
+  if (cause) {
+    log(`the Context agent rejected — ${cause} — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe`)
+  } else if (unusable) {
+    log(`⚠ the Context agent returned ${shape} with no \`scopes\` array — the scope census is unusable, so this run cannot say what there was to describe. This is a FAILED run, not a surface with no imperative rows.`)
+  } else {
+    log('the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
+  }
   return {
     surface,
     skipped: false,
     stopped: 'context-failed',
-    reason: cause
-      ? `the Context phase rejected (${cause}), so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.`
-      : 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
+    reason: contextFailureReason(cause, unusable, shape),
     coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
     conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
   }
@@ -1515,7 +1561,12 @@ function* run(rawInput, io = {}) {
   // A Context item that returned NOTHING is an orchestration failure, not a surface with nothing on it. Both used
   // to reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete
   // zero-row analysis for a digest that may be full — the one outcome this workflow exists to make impossible.
-  if (!ctx) return contextFailedReturn(contextOutcome, SURFACE, log)
+  //
+  // PR #147 review — narrowed through `isCensusShape`, not a bare truthiness test. A truthy value that is not a
+  // census (`{}`, `[]`, a `scopes` of the wrong type) reached `normalizeScopes`, was coerced to an empty scope
+  // list and took that same forbidden exit; `submit`'s shallow required-key check does not stop it. The same
+  // narrowing `isCritiqueShape` applies one phase later, on the phase whose failure costs the most.
+  if (!isCensusShape(ctx)) return contextFailedReturn(contextOutcome, SURFACE, log, ctx)
 
   const scopes = normalizeScopes(ctx.scopes)
 
@@ -1577,14 +1628,15 @@ function* run(rawInput, io = {}) {
     return r
   }).filter(Boolean)
 
-  // The ROUND is threaded into both the part path and the card id namespace: a repair round handed round 1's file
-  // and round 1's `C01…` numbering overwrote the first pass's cards and collided with its ids, while `coveredKeys`
-  // still counted round 1's rows as described. See `partFile` for why the round, and not the batch index, is the
-  // axis that collided.
+  // The ROUND and the BATCH INDEX are threaded into the part path, and the round into the card id namespace.
+  // A repair round handed round 1's file and round 1's `C01…` numbering overwrote the first pass's cards and
+  // collided with its ids, while `coveredKeys` still counted round 1's rows as described; two scopes returned
+  // under ONE `schema` land in separate batches with one label and collided the same way inside a round. See
+  // `partFile` for both measurements.
   const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => {
     const round = repair ? 2 : 1
     const id = itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+'))
-    const partPath = partFile(input.outDir, batch.scopes[0].label, round)
+    const partPath = partFile(input.outDir, batch.scopes[0].label, round, i)
     askedPart.set(id, partPath)
     return {
       id,
@@ -1693,15 +1745,24 @@ function* run(rawInput, io = {}) {
   // the adversarial pass judged undescribed. They never reached `repairKeys`, no repair item was dispatched, and
   // the run still reported `complete: true` — the same silent coverage hole ENG-96529 exists to close.
   const critiqueUncoveredRaw = (critique?.uncovered || []).map((u) => u?.key).filter((k) => typeof k === 'string')
-  const critiqueUncovered = critiqueUncoveredRaw.map((k) => digestKeyOf(k, allKeys)).filter(Boolean)
+  const critiqueResolved = critiqueUncoveredRaw.map((k) => ({ k, ...resolveKey(k, allKeys) }))
+  const critiqueUncovered = critiqueResolved.map((r) => r.key).filter(Boolean)
   // Named, not dropped — the way `ambiguousEntryKeys` already reports a Describe answer that cannot be
-  // attributed to one row. A critique key that resolves to nothing is either ambiguous across schemas or names no
-  // inventory row at all; either way it is an adversarial finding this run is about to lose, so it is said out
-  // loud rather than swallowed by the filter.
-  const critiqueUnattributable = [...new Set(critiqueUncoveredRaw
-    .filter((k) => digestKeyOf(k, allKeys) === null))]
-  if (critiqueUnattributable.length) {
-    log(`⚠ ${critiqueUnattributable.length} critique key(s) cannot be attributed to one inventory row, so they cannot route into the repair round: ${critiqueUnattributable.join(', ')} — re-key them \`<schema>::<method>\` as the inventory lists them`)
+  // attributed to one row. A critique key that resolves to nothing is an adversarial finding this run is about to
+  // lose, so it is said out loud rather than swallowed by the filter.
+  //
+  // PR #147 review — SPLIT BY REASON, and carried on the result. AMBIGUOUS (several inventory rows end in
+  // `::<key>`) is a real row the critique could not be pinned to; UNKNOWN (none does) names no row on this
+  // surface, so it is a stale, copied or invented key. The remedies are opposite — re-key the answer versus
+  // discard it — and merged they were indistinguishable both in the log and to a consumer. `resolveKey` is the
+  // one lookup `digestKeyOf` delegates to, so there is no second source of truth for the resolution.
+  const unattributableOf = (reason) => [...new Set(critiqueResolved.filter((r) => r.reason === reason).map((r) => r.k))]
+  const critiqueUnattributable = { ambiguous: unattributableOf('ambiguous'), unknown: unattributableOf('unknown') }
+  if (critiqueUnattributable.ambiguous.length) {
+    log(`⚠ ${critiqueUnattributable.ambiguous.length} critique key(s) match SEVERAL inventory rows, so they cannot route into the repair round: ${critiqueUnattributable.ambiguous.join(', ')} — re-key them \`<schema>::<method>\` as the inventory lists them. These are findings about REAL rows that this run cannot place.`)
+  }
+  if (critiqueUnattributable.unknown.length) {
+    log(`⚠ ${critiqueUnattributable.unknown.length} critique key(s) match NO inventory row on this surface, so they describe nothing this run owns: ${critiqueUnattributable.unknown.join(', ')} — stale, copied from another surface, or invented`)
   }
   const toRepair = repairKeys(uncoveredKeys, critiqueUncovered, wiringOnly)
   if (toRepair.length) {
@@ -1792,6 +1853,23 @@ function* run(rawInput, io = {}) {
     // unchecked (not verified-empty), and coverage.complete is arithmetic-only — no pass verified that
     // cited cards actually describe their rows.
     critiqueRan,
+    // PR #147 review — the critique keys this run could NOT place, on the result and not only in the log. Same
+    // class of claim as `critiqueRan` above: a machine consumer (the engine re-reads this as `behaviourIndex`,
+    // and `cli.mjs status` serialises it as the state document) has to know the adversarial pass produced a
+    // finding the run could not attribute, and stderr does not reach it.
+    //
+    // Present ONLY when non-empty, deliberately: every other run's return stays byte-identical, which is what
+    // keeps `run-workflow-parity.mjs`'s frozen baseline comparison meaningful instead of costing one declared
+    // divergence per scenario for a field that would always be two empty arrays.
+    //
+    // It does NOT flip `coverage.complete`. `complete` is arithmetic over the coverage denominator — every row
+    // carries a card — and an unplaceable critique key is a statement about the ANSWER, not about a row's card.
+    // Flipping it would hand one malformed agent answer a veto over a run whose coverage is genuinely complete,
+    // with no in-run remedy: those keys cannot route into the repair round by construction. The caller gates on
+    // this field; the run reports what happened.
+    ...(critiqueUnattributable.ambiguous.length || critiqueUnattributable.unknown.length
+      ? { critiqueUnattributable }
+      : {}),
     conflicts: critique?.conflicts || [],
     settledElsewhere: critique?.settledElsewhere || [],
     gaps: described.flatMap((r) => r.gaps || []),

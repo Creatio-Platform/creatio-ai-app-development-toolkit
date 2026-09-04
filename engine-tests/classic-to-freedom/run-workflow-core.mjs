@@ -447,6 +447,27 @@ const happyAnswer = (item) => {
     () => JSON.stringify(result));
 }
 {
+  // PR #147 review — a Context result that is TRUTHY but not a census reached `normalizeScopes`, which coerces
+  // anything to an empty scope list via `(rawScopes || [])`, and the run then took the "empty worklist is DONE"
+  // exit and reported `skipped: true` with `complete: true` over a digest that may be full. `submit`'s
+  // required-key check is a shallow top-level `!== undefined`, so a `scopes` of the wrong TYPE reaches the core.
+  // Same narrowing `isCritiqueShape` applies one phase later, on the phase whose failure costs the most.
+  for (const unusable of [{}, [], { scopes: null }, { scopes: "DealPage" }, { scopes: { 0: "x" } }, 7, "census"]) {
+    const { result, asked } = await runCba(INPUT, (i) => (i.phase === "Context"
+      ? { outcome: OUTCOME.VALUE, value: unusable }
+      : happyAnswer(i)));
+    check(`core: a Context result that is truthy but carries no \`scopes\` ARRAY (${JSON.stringify(unusable)}) is a FAILED run, not a clean zero-row analysis — the forbidden outcome was reachable through a malformed result, not only an absent one`,
+      result.stopped === "context-failed" && result.skipped === false
+        && result.coverage.complete === false && result.coverage.total === null && asked.length === 1,
+      () => JSON.stringify({ stopped: result.stopped, skipped: result.skipped, coverage: result.coverage }));
+  }
+  const { logs } = await runCba(INPUT, (i) => (i.phase === "Context"
+    ? { outcome: OUTCOME.VALUE, value: [] }
+    : happyAnswer(i)));
+  check("core: the unusable-shape failure gets its OWN line naming what came back — 'the agent returned nothing' and 'the agent returned something I cannot read' need different repairs",
+    logs.some((l) => /returned an array with no `scopes` array/.test(l)), () => logs.join("\n"));
+}
+{
   // A describe pass that leaves a row uncovered must trigger the repair round —
   // and the verdict must read the REPAIRED counts, not round 1's.
   const partial = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.slice(0, 2) };
@@ -532,16 +553,48 @@ const happyAnswer = (item) => {
     { key: "DealMain::initMini", card: "DealMain/C01" }, { key: "DealMini::initMini", card: "DealMini/C01" },
   ] };
   const ambiguousCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "initMini" }] };
-  const { asked, logs } = await runCba(INPUT, (i) => {
+  const { result, asked, logs } = await runCba(INPUT, (i) => {
     if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: collidingCtx };
     if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: collidingDescribe };
     if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: ambiguousCritique };
     return { outcome: OUTCOME.VALUE, value: MERGED };
   });
   check("core: a Critique key that two scopes both declare is REPORTED as unattributable, not silently dropped — it describes neither row, and the repair it needs is a re-key, not a describe",
-    logs.some((l) => /critique key\(s\) cannot be attributed/.test(l) && l.includes("initMini"))
+    logs.some((l) => /critique key\(s\) match SEVERAL inventory rows/.test(l) && l.includes("initMini"))
       && !asked.some((i) => i.id.startsWith("repair.")),
     () => JSON.stringify({ logs, ids: asked.map((i) => i.id) }));
+  // PR #147 review — ON THE RETURNED OBJECT, not only in the log. The engine re-reads this return as
+  // `behaviourIndex` and `cli.mjs status` serialises it as the state document, so a signal that lives only on
+  // stderr reaches a human tailing the run and nobody else. Same class of claim as `critiqueRan`.
+  check("core: the unplaceable critique key is carried on the RESULT, split by reason — a machine consumer reads the returned object, and stderr does not reach it",
+    result.critiqueUnattributable?.ambiguous.join(",") === "initMini"
+      && result.critiqueUnattributable?.unknown.length === 0,
+    () => JSON.stringify(result.critiqueUnattributable));
+  check("core: it does NOT flip `coverage.complete` — `complete` is arithmetic over the coverage denominator, and an unplaceable critique key is a statement about the ANSWER, not about whether a row carries a card",
+    result.coverage.complete === true, () => JSON.stringify(result.coverage));
+}
+{
+  // PR #147 review — the OTHER reason a critique key resolves to nothing: it matches NO inventory row, so it is
+  // stale, copied from another surface or invented. Merged with the ambiguous bucket, an operator could not tell
+  // a dropped real finding from agent noise, and the remedies are opposite: re-key it versus discard it.
+  const unknownCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "neverHeardOfIt" }] };
+  const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Critique"
+    ? { outcome: OUTCOME.VALUE, value: unknownCritique }
+    : happyAnswer(i)));
+  check("core: a critique key matching NO inventory row is reported as UNKNOWN, on its own line and its own bucket — 'a real row I cannot place' and 'a key that names nothing here' need opposite repairs",
+    logs.some((l) => /match NO inventory row/.test(l) && l.includes("neverHeardOfIt"))
+      && result.critiqueUnattributable?.unknown.join(",") === "neverHeardOfIt"
+      && result.critiqueUnattributable?.ambiguous.length === 0,
+    () => JSON.stringify({ carried: result.critiqueUnattributable, logs }));
+}
+{
+  // PR #147 review — and the field is ABSENT when there is nothing to report, so every other run's return is
+  // byte-identical to what it was. That is what keeps the frozen-baseline comparison in
+  // `run-workflow-parity.mjs` meaningful instead of costing a declared divergence per scenario for a field that
+  // would always be two empty arrays.
+  const { result } = await runCba(INPUT, happyAnswer);
+  check("core: a run whose critique placed every key carries NO `critiqueUnattributable` field — absent means nothing to report, and the return does not grow a permanently-empty key",
+    !("critiqueUnattributable" in result), () => JSON.stringify(Object.keys(result)));
 }
 {
   // A mixin row citing only its wiring card: covered by the count, incomplete by
