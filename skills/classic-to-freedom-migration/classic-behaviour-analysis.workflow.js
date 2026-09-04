@@ -367,7 +367,7 @@ function isComplete(totalKeys, uncovered, wiringOnly) {
 
 const hasCard = (e) => typeof e.card === 'string' && e.card.trim() !== ''
 
-const behaviourEstablished = (e) => !e || e.behaviourEstablished !== false
+const behaviourEstablished = (e) => e?.behaviourEstablished !== false
 
 const entriesOf = (rs) => (rs || []).flatMap((r) => r?.indexEntries || []).filter(behaviourEstablished)
 
@@ -840,6 +840,11 @@ function withRejectedTriggers(uncovered, rejected, allKeys, results) {
   return [...new Set([...uncovered, ...keys])]
 }
 
+const positiveOr = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
+const roundKind = (repair) => (repair ? 'repair' : 'describe')
+const critiqueIdSuffix = (attempt) => (attempt > 1 ? `retry${attempt}` : '')
+const critiqueLabel = (attempt) => (attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage')
+
 function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -848,8 +853,8 @@ function* run(rawInput, io = {}) {
   assertInput(input)
 
   const SURFACE = input.sectionSchema || '(surface not named)'
-  const ROWS_PER_AGENT = Number(input.rowsPerAgent) > 0 ? Number(input.rowsPerAgent) : DEFAULT_ROWS_PER_AGENT
-  const MAX_DESCRIBE = Number(input.maxDescribeAgents) > 0 ? Number(input.maxDescribeAgents) : DEFAULT_MAX_DESCRIBE
+  const ROWS_PER_AGENT = positiveOr(input.rowsPerAgent, DEFAULT_ROWS_PER_AGENT)
+  const MAX_DESCRIBE = positiveOr(input.maxDescribeAgents, DEFAULT_MAX_DESCRIBE)
 
   if (declaredNothingToDo(input.totals)) {
     log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
@@ -913,7 +918,7 @@ function* run(rawInput, io = {}) {
   const sharedCorePath = ctx.sharedCore?.path || sharedCoreDefault
 
   const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => ({
-    id: itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+')),
+    id: itemId(roundKind(repair), i + 1, batch.scopes.map((s) => s.label).join('+')),
     phase: 'Describe',
     role: 'classic-ui-expert',
     prompt: describePrompt({
@@ -927,7 +932,7 @@ function* run(rawInput, io = {}) {
     inputFiles: [input.digest, sharedCorePath],
     responseSchema: DESCRIBE_SCHEMA,
     access: ACCESS.STAND_READ_ONLY,
-    label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
+    label: `${roundKind(repair)}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
   })
 
   phase('Describe')
@@ -949,7 +954,7 @@ function* run(rawInput, io = {}) {
 
   const critiqueStep = (attempt) => step({
     items: [{
-      id: itemId('critique', 'coverage', attempt > 1 ? `retry${attempt}` : ''),
+      id: itemId('critique', 'coverage', critiqueIdSuffix(attempt)),
       phase: 'Critique',
       role: 'general-purpose',
       prompt: critiquePrompt({
@@ -965,7 +970,7 @@ function* run(rawInput, io = {}) {
       inputFiles: described.map((r) => r.reportPart).filter(Boolean),
       responseSchema: CRITIQUE_SCHEMA,
       access: ACCESS.STAND_READ_ONLY,
-      label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
+      label: critiqueLabel(attempt),
     }],
     requires: ['subAgents', 'structuredOutput', 'independentRoles'],
     note: 'which rows carry no card, which cards conflict, which refusal a sibling settles',

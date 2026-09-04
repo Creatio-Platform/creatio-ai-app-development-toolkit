@@ -280,7 +280,13 @@ const BUNDLE_WARNING_DISPOSITIONS = new Set(["resolved-manually", DISPOSITION_AC
 export function bundleWarningState(manifest) {
   const list = Array.isArray(manifest?.bundleWarnings) ? manifest.bundleWarnings : [];
   const declared = plainObject(manifest?.bundleWarningDispositions);
-  const normalized = Object.fromEntries(Object.entries(declared).map(([k, v]) => [normalizeWarningText(k), v]));
+  // NULL PROTOTYPE (ENG-96571, review 2 minor 3) — the keys are the warnings' own `code`/message text, which comes
+  // from `get-classic-page-sources` output: UNTRUSTED. On a normal object a warning whose key is `constructor` /
+  // `toString` / `valueOf` resolved to a native function instead of missing. It failed safe (`plainObject` of a
+  // function is `{}`, so the warning stayed open and blocking), but the read is now genuinely own-keys-only, which
+  // is the `Object.hasOwn` discipline the drift guard and the tag automaton in this same change already state.
+  const normalized = Object.assign(Object.create(null),
+    Object.fromEntries(Object.entries(declared).map(([k, v]) => [normalizeWarningText(k), v])));
   const open = [], closed = [];
   for (const w of list) {
     // The KEY takes the same fallback as the text below — otherwise an unrecognised shape blocks under an EMPTY
@@ -367,12 +373,6 @@ function applyWarningDispositions(warnings, manifest) {
 // silently closes nothing. There is no import cycle — `designspec.mjs` imports nothing from this module.
 export { confirmKeyOf as confirmKey } from "./designspec.mjs";
 
-// Annotate each `needsDecision` row with the operator's recorded answer, IN PLACE (the rows are already published on
-// the ChangeSet the renderers read, exactly like `applyBehaviourIndex`'s `describedIn`). A disposition whose word is
-// not one of the four does NOT close the row: it is recorded as `dispositionInvalid` and named in an advisory line,
-// because a truthy `resolved` with a typo'd word would clear a question nobody actually answered — the same
-// validated-enum rule `WARNING_DISPOSITIONS` and `MEMBER_DISPOSITIONS` already state.
-// Returns `{ closed, invalid }` (arrays of keys) so a caller/test can see what the manifest actually did.
 // The `confirmDispositions` map THIS scope answers with. A nested child/typed/mini fold receives the CHILD bundle
 // as its `manifest`, and the operator records the answers ONCE on the ROOT manifest — so before this existed the
 // map was read off a bundle that never carries one and every scoped answer (`"<Child>::<kind>:<item>"`, the form

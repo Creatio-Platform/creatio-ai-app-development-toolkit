@@ -163,6 +163,14 @@ function withRejectedTriggers(uncovered, rejected, allKeys, results) {
   return [...new Set([...uncovered, ...keys])]
 }
 
+// Small pure helpers hoisted OUT of `run` (Sonar S3776): each ternary inside `run` — and doubly so inside one of
+// its nested item builders — counted against the generator's cognitive complexity while saying nothing about the
+// orchestration the function is actually about. Named here, `run` reads as the phase sequence it is.
+const positiveOr = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
+const roundKind = (repair) => (repair ? 'repair' : 'describe')
+const critiqueIdSuffix = (attempt) => (attempt > 1 ? `retry${attempt}` : '')
+const critiqueLabel = (attempt) => (attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage')
+
 export function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -171,8 +179,8 @@ export function* run(rawInput, io = {}) {
   assertInput(input)
 
   const SURFACE = input.sectionSchema || '(surface not named)'
-  const ROWS_PER_AGENT = Number(input.rowsPerAgent) > 0 ? Number(input.rowsPerAgent) : DEFAULT_ROWS_PER_AGENT
-  const MAX_DESCRIBE = Number(input.maxDescribeAgents) > 0 ? Number(input.maxDescribeAgents) : DEFAULT_MAX_DESCRIBE
+  const ROWS_PER_AGENT = positiveOr(input.rowsPerAgent, DEFAULT_ROWS_PER_AGENT)
+  const MAX_DESCRIBE = positiveOr(input.maxDescribeAgents, DEFAULT_MAX_DESCRIBE)
 
   // A surface with NO imperative rows is the common case, not an edge case: a section built in the wizard often
   // carries `methods: {}`, no `messages` and no `mixins` at all — measured on a real custom section, where the
@@ -255,7 +263,7 @@ export function* run(rawInput, io = {}) {
   const sharedCorePath = ctx.sharedCore?.path || sharedCoreDefault
 
   const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => ({
-    id: itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+')),
+    id: itemId(roundKind(repair), i + 1, batch.scopes.map((s) => s.label).join('+')),
     phase: 'Describe',
     // The analysis contract itself — the member ledger, counted zeros, refusals
     // and acceptance criteria a card must close with — is the `classic-ui-expert`
@@ -273,7 +281,7 @@ export function* run(rawInput, io = {}) {
     inputFiles: [input.digest, sharedCorePath],
     responseSchema: DESCRIBE_SCHEMA,
     access: ACCESS.STAND_READ_ONLY,
-    label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
+    label: `${roundKind(repair)}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
   })
 
   // FOLLOW-UP, NOT DONE HERE: running Context and Describe in parallel would cut the wall clock further, and it is
@@ -313,7 +321,7 @@ export function* run(rawInput, io = {}) {
   // and buy nothing. Accepted, because the alternative is no retry at all.
   const critiqueStep = (attempt) => step({
     items: [{
-      id: itemId('critique', 'coverage', attempt > 1 ? `retry${attempt}` : ''),
+      id: itemId('critique', 'coverage', critiqueIdSuffix(attempt)),
       phase: 'Critique',
       role: 'general-purpose',
       prompt: critiquePrompt({
@@ -329,7 +337,7 @@ export function* run(rawInput, io = {}) {
       inputFiles: described.map((r) => r.reportPart).filter(Boolean),
       responseSchema: CRITIQUE_SCHEMA,
       access: ACCESS.STAND_READ_ONLY,
-      label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
+      label: critiqueLabel(attempt),
     }],
     // The adversarial pass is only worth anything from a context that did not
     // write the cards it is checking. A host that cannot give it one is STOPPED

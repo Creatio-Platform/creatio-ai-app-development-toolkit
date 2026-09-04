@@ -7737,7 +7737,7 @@ check("ENG-96147 review (executed, negative control): a run with no route on fil
     () => fixtureHit?.meta);
   // Break the guard on purpose (drop the sort a real regression would drop) and confirm the break is actually
   // detectable — otherwise the check above would be passing for a reason unrelated to the sort.
-  const brokenPick = [...fixtureRows].filter((r) => "XDetailV2".endsWith(r.match.schemaNameSuffix))[0];
+  const brokenPick = fixtureRows.find((r) => "XDetailV2".endsWith(r.match.schemaNameSuffix));
   check("ENG-96571 guard self-test: without the longest-suffix sort, declaration order alone would have picked the SHORT fixture row — proving the sort is load-bearing, not a no-op",
     brokenPick?.meta?.feature === "ShortFixture",
     () => brokenPick?.meta);
@@ -7910,7 +7910,7 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
       bundleWarningDispositions: { "lookup truncated": { resolved: true, disposition: "resolved-manualy" } },
     }).structure.issues || []).find((i) => /lookup truncated/.test(i));
     check("ENG-96571 (review 1, D): the blocking issue NAMES the invalid word FIRST and recites the three accepted ones from the SET — the answer exists and the word is what stopped it, so re-doing the lookup would be wasted work",
-      () => !!typoIssue && /^a disposition was recorded with the word "resolved-manualy"/.test(typoIssue)
+      () => !!typoIssue && typoIssue.startsWith('a disposition was recorded with the word "resolved-manualy"')
         && typoIssue.includes('"resolved-manually" | "accepted" | "n/a"'),
       () => String(typoIssue));
     const cleanIssue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
@@ -7918,7 +7918,7 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
       bundleWarnings: ["lookup truncated"],
     }).structure.issues || []).find((i) => /lookup truncated/.test(i));
     check("ENG-96571 (review 1, D) ANTI-VACUITY: a warning with NO recorded disposition carries NO such prefix — the sentence fires on the recorded-but-invalid case alone",
-      () => !!cleanIssue && /^bundle warning from/.test(cleanIssue),
+      () => !!cleanIssue && cleanIssue.startsWith("bundle warning from"),
       () => String(cleanIssue));
 
     // S-ii — an entry carrying neither `code` nor `message` used to be DROPPED with no trace at all: the bundle

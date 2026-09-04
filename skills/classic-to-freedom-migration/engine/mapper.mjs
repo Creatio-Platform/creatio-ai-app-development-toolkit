@@ -1844,41 +1844,52 @@ function conditionGap(r) {
 // The worklist line a condition gap raises. Its own const so the wording is written once and the test can pin it.
 const CONDITION_GAP_REASON = (attr) => `the business rule on '${attr}' DECLARES a condition, but the rule's condition could not be read statically — a parse gap, not an unconditional rule. The action itself is mapped and in this ChangeSet; what is missing is WHEN it fires. Read the condition in the classic body (or on-stand) and complete the emitted rule with it — do NOT build it as an unconditional rule.`;
 
+// The FILTRATION arm of `mapOneRule`, extracted for CC (Sonar S3776) — one rule type per function, so the
+// dispatcher stays a flat three-way choice.
+function mapFiltrationRule(r, entityBusinessRules, needsDecision) {
+  const filter = r.filterColumn
+    ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
+    : null;
+  // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
+  // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
+  const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
+  // ENG-96571 (review 1, S-i) — THE SAME CONDITION GAP APPLIES HERE. A FILTRATION rule carries `conditions`
+  // exactly like a BINDPARAMETER one (it is the WHEN of the filter, separate from the filter's own column and
+  // value), and only the BINDPARAMETER branch read them: a FILTRATION that DECLARED a condition the parser
+  // could not read was emitted with `conditions: []` and nothing said so, so a conditional filter shipped as an
+  // unconditional one. Nothing new is RENDERED — the flag and the ⚠ Confirm row are what the reader needs, and
+  // the entity-filter row's own "⚠ dynamic — resolve value" wording is about the filter VALUE, a different gap.
+  const condGap = conditionGap(r);
+  entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
+    conditions: r.conditions,
+    ...(condGap ? { conditionsIncomplete: true } : {}),
+    note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+    provenance: r.provenance });
+  if (condGap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
+  // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
+  // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
+}
+
+// The BINDPARAMETER arm of `mapOneRule`, extracted for CC (Sonar S3776) alongside `mapFiltrationRule`.
+function mapBindParameterRule(r, pageBusinessRules, needsDecision) {
+  const acts = PROP_ACTION[r.property];
+  if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); return; }
+  // ENG-96571 A3 — mirror of the incomplete-FILTRATION fold below: the rule IS emitted (its action is known),
+  // and the unread condition is published on the entry AND raised as its own worklist row.
+  const gap = conditionGap(r);
+  pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
+    conditions: r.conditions,
+    ...(gap ? { conditionsIncomplete: true } : {}),
+    note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
+    provenance: r.provenance });
+  if (gap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
+}
+
 function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   if (r.ruleType === "FILTRATION") {
-    const filter = r.filterColumn
-      ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
-      : null;
-    // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
-    // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
-    const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
-    // ENG-96571 (review 1, S-i) — THE SAME CONDITION GAP APPLIES HERE. A FILTRATION rule carries `conditions`
-    // exactly like a BINDPARAMETER one (it is the WHEN of the filter, separate from the filter's own column and
-    // value), and only the BINDPARAMETER branch read them: a FILTRATION that DECLARED a condition the parser
-    // could not read was emitted with `conditions: []` and nothing said so, so a conditional filter shipped as an
-    // unconditional one. Nothing new is RENDERED — the flag and the ⚠ Confirm row are what the reader needs, and
-    // the entity-filter row's own "⚠ dynamic — resolve value" wording is about the filter VALUE, a different gap.
-    const condGap = conditionGap(r);
-    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-      conditions: r.conditions,
-      ...(condGap ? { conditionsIncomplete: true } : {}),
-      note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
-      provenance: r.provenance });
-    if (condGap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
-    // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
-    // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
+    mapFiltrationRule(r, entityBusinessRules, needsDecision);
   } else if (r.ruleType === "BINDPARAMETER") {
-    const acts = PROP_ACTION[r.property];
-    if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); return; }
-    // ENG-96571 A3 — mirror of the incomplete-FILTRATION fold below: the rule IS emitted (its action is known),
-    // and the unread condition is published on the entry AND raised as its own worklist row.
-    const gap = conditionGap(r);
-    pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
-      conditions: r.conditions,
-      ...(gap ? { conditionsIncomplete: true } : {}),
-      note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
-      provenance: r.provenance });
-    if (gap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
+    mapBindParameterRule(r, pageBusinessRules, needsDecision);
   } else {
     // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
     needsDecision.push({ kind: "rule", item: r.attr,

@@ -101,7 +101,7 @@ export const hasCard = (e) => typeof e.card === 'string' && e.card.trim() !== ''
 // admission is now a FIELD, and an entry carrying it is not coverage on either leg — this is the one place the
 // exclusion is applied, so `coveredKeys` and `wiringOnlyMixinKeys` cannot disagree about the same entry. Absent
 // or `true` means established, so an index written before the field existed is unaffected.
-export const behaviourEstablished = (e) => !e || e.behaviourEstablished !== false
+export const behaviourEstablished = (e) => e?.behaviourEstablished !== false
 
 export const entriesOf = (rs) => (rs || []).flatMap((r) => r?.indexEntries || []).filter(behaviourEstablished)
 

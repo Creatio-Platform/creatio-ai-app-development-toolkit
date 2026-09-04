@@ -263,6 +263,40 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 //    stop every migration on the day a release adds a member.
 //  • A member only the ENGINE carries ⇒ not a finding: an older stand legitimately predates it.
 const DRIFT_TABLES = { ViewItemType: AST_VIEW_ITEM_TYPE, ContentType: CONTENT_TYPE, DataValueType: DATA_VALUE_TYPE };
+// One enum table's members, classified into the three buckets. Extracted for CC (Sonar S3776): the outer
+// function's own work is choosing the tables and sorting the results; every branch below is about ONE member.
+function driftIssuesForEnum(enumName, standTable, pinned, aliases, out) {
+  for (const [member, standValue] of Object.entries(standTable)) {
+    if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
+    // Case-insensitive, alias-aware lookup: `Guid` against pinned `GUID`, or `STRING` against pinned `TEXT`,
+    // is the SAME member, not a vocabulary gap — resolved once via `resolveEnumMember` (see its own comment;
+    // it also protects against `toString`/`constructor`/`valueOf` prototype-chain collisions via Object.hasOwn).
+    const resolved = resolveEnumMember(pinned, member, aliases);
+    if (!resolved.found) { out.newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
+    if (resolved.value === standValue) continue;               // same member, same number — nothing to report
+    // ENG-96571 (review 1, K) — BLOCK ONLY ON ONE SPELLING. The comment above promises blocking for "a member
+    // both sides carry", and it must mean under the SAME NAME: the engine reads a body by exact property name,
+    // so `resolved.key === member` is what makes the engine's number the number this stand will use for the
+    // member the body names. Two defects came from ignoring that:
+    //   • The message named a member the pinned table does not carry — "DataValueType.STRING: engine 1" reads
+    //     as a pinned `STRING` whose value is 1; there is no pinned `STRING`, the 1 is `TEXT`'s, and an
+    //     operator sent to `engine.mjs` to fix `STRING` finds nothing to fix.
+    //   • A stand key that resolved only by ALIAS or by CASE was made BLOCKING. `Guid: 5` blocked the whole
+    //     migration although the engine never reads `Guid` — it reads `GUID` — so there was no page the wrong
+    //     number could be applied to. Blocking on it stops every migration for a fact that cannot bite.
+    // A cross-spelling disagreement is still worth saying out loud, so it joins the ADVISORY arm, and its text
+    // names BOTH spellings: which key the stand sent, which pinned member it resolved to, and both numbers.
+    if (resolved.key === member) out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    // Its OWN list, not `newMembers`. `newMembers` has one remedy sentence — "add the member to the pinned
+    // table" — and every clause of it is false for a cross-spelling row: the engine DOES pin the member (under
+    // the other spelling), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
+    // repair. The real question is whether THIS stand's `GUID` is 5. Since an `enum-drift-advisory` row can now
+    // be CLOSED by a recorded disposition, the operator reads that sentence to decide — so it has to be true,
+    // which means the two categories cannot share one line.
+    else out.spellingDrift.push(`${enumName}: stand ${member} (engine ${resolved.key}): engine ${resolved.value}, stand ${standValue}`);
+  }
+}
+
 export function enumDriftIssues(vocabulary) {
   const live = plainObj(vocabulary);
   const mismatches = [], newMembers = [], spellingDrift = [];
@@ -270,35 +304,7 @@ export function enumDriftIssues(vocabulary) {
     const standTable = plainObj(live[enumName]);
     if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
     const aliases = enumName === "DataValueType" ? DATA_VALUE_TYPE_ALIASES : null;
-    for (const [member, standValue] of Object.entries(standTable)) {
-      if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
-      // Case-insensitive, alias-aware lookup: `Guid` against pinned `GUID`, or `STRING` against pinned `TEXT`,
-      // is the SAME member, not a vocabulary gap — resolved once via `resolveEnumMember` (see its own comment;
-      // it also protects against `toString`/`constructor`/`valueOf` prototype-chain collisions via Object.hasOwn).
-      const resolved = resolveEnumMember(pinned, member, aliases);
-      if (!resolved.found) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
-      if (resolved.value === standValue) continue;               // same member, same number — nothing to report
-      // ENG-96571 (review 1, K) — BLOCK ONLY ON ONE SPELLING. The comment above promises blocking for "a member
-      // both sides carry", and it must mean under the SAME NAME: the engine reads a body by exact property name,
-      // so `resolved.key === member` is what makes the engine's number the number this stand will use for the
-      // member the body names. Two defects came from ignoring that:
-      //   • The message named a member the pinned table does not carry — "DataValueType.STRING: engine 1" reads
-      //     as a pinned `STRING` whose value is 1; there is no pinned `STRING`, the 1 is `TEXT`'s, and an
-      //     operator sent to `engine.mjs` to fix `STRING` finds nothing to fix.
-      //   • A stand key that resolved only by ALIAS or by CASE was made BLOCKING. `Guid: 5` blocked the whole
-      //     migration although the engine never reads `Guid` — it reads `GUID` — so there was no page the wrong
-      //     number could be applied to. Blocking on it stops every migration for a fact that cannot bite.
-      // A cross-spelling disagreement is still worth saying out loud, so it joins the ADVISORY arm, and its text
-      // names BOTH spellings: which key the stand sent, which pinned member it resolved to, and both numbers.
-      if (resolved.key === member) mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
-      // Its OWN list, not `newMembers`. `newMembers` has one remedy sentence — "add the member to the pinned
-      // table" — and every clause of it is false for a cross-spelling row: the engine DOES pin the member (under
-      // the other spelling), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
-      // repair. The real question is whether THIS stand's `GUID` is 5. Since an `enum-drift-advisory` row can now
-      // be CLOSED by a recorded disposition, the operator reads that sentence to decide — so it has to be true,
-      // which means the two categories cannot share one line.
-      else spellingDrift.push(`${enumName}: stand ${member} (engine ${resolved.key}): engine ${resolved.value}, stand ${standValue}`);
-    }
+    driftIssuesForEnum(enumName, standTable, pinned, aliases, { mismatches, newMembers, spellingDrift });
   }
   mismatches.sort(byLocale);
   newMembers.sort(byLocale);
@@ -398,6 +404,16 @@ function spliceAliasChain(path, base, scope) {
 // `unknown: "<Enum>.<MEMBER>"` when the walk REACHED a terminal enum table and the member was not in it: the enum
 // and the member are then both identified and only the number is missing, so it is reported by name. A miss on a
 // non-terminal state stays a plain null — an opaque proxy has nothing to name.
+// The terminal enum read itself, extracted for CC (Sonar S3776) — the exact-case rule and its one alias exception
+// are documented at the call site in `walkTagAutomaton`; this is the read they describe, unchanged.
+function resolveEnumTerminal(tag, enumTable, k) {
+  const aliases = tag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
+  if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
+  const alias = aliases && Object.hasOwn(aliases, k) ? aliases[k] : null;
+  if (alias !== null && Object.hasOwn(enumTable, alias)) return { value: enumTable[alias] };
+  return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
+}
+
 function walkTagAutomaton(tag, path) {
   for (const k of path) {
     if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
@@ -416,11 +432,7 @@ function walkTagAutomaton(tag, path) {
       // real member on a real stand (an alias core defines for `TEXT`), so the runtime read succeeds — the alias
       // map is what the pinned table is missing, not a case difference. `Object.hasOwn` on both lookups, so a
       // member naming `constructor` / `toString` / `valueOf` cannot resolve to a native function.
-      const aliases = tag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
-      if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
-      const alias = aliases && Object.hasOwn(aliases, k) ? aliases[k] : null;
-      if (alias !== null && Object.hasOwn(enumTable, alias)) return { value: enumTable[alias] };
-      return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
+      return resolveEnumTerminal(tag, enumTable, k);
     }
     const next = TAG_TRANSITIONS[tag];
     if (!next) return { value: null };                           // proxy (or already a value) — further access is null
@@ -1253,11 +1265,16 @@ const isFnPlaceholder = (v) => v === AST_FN;
 //
 // A FUNCTION-valued slot is still deliberately NOT read: it has no name to carry, and `04-units.md` forbids
 // deriving a trigger from a method's name. It stays in `fnKeys`.
+// The two spellings a Classic attribute may use for its change handler, IN PRECEDENCE ORDER — `onChange` first,
+// `changeMethod` as the alternative. A LIST rather than a nested ternary (Sonar S3358): a third spelling is one
+// entry, and the slot the run actually read is still recorded, which is what `onChangeSlot` exists for.
+const ONCHANGE_SLOTS = ["onChange", "changeMethod"];
+
 function attributeHandlerMethods(d) {
   const llc = plainObj(d.lookupListConfig);
   const filters = Array.isArray(llc.filters) ? llc.filters : [];
   // `onChange` first, `changeMethod` as the alternative spelling — and the slot records WHICH one was written.
-  const onChangeSlot = isStr(d.onChange) ? "onChange" : (isStr(d.changeMethod) ? "changeMethod" : null);
+  const onChangeSlot = ONCHANGE_SLOTS.find((slot) => isStr(d[slot])) ?? null;
   const onChange = onChangeSlot ? { name: d[onChangeSlot], slot: onChangeSlot } : null;
   const lookupFilters = [];
   if (isStr(llc.filter)) lookupFilters.push({ name: llc.filter, slot: "lookupListConfig.filter" });

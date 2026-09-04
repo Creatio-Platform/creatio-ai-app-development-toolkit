@@ -970,7 +970,7 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
     () => `${JSON.stringify(first)}\n         vs ${JSON.stringify(second)}`);
   check("ENG-96571 (review 1, Q): every attached scope is flagged `overrideOnly` and a WORKED scope still holds position 0 of each batch — `batch.scopes[0].label` names the part file and the work-item id",
     helpers.attachOverrideOnly(mkBatches(), mkEmpty()).every((sc) => sc.overrideOnly === true)
-    && first.landed.every((l) => /^Deal/.test(l)),
+    && first.landed.every((l) => l.startsWith("Deal")),
     () => JSON.stringify(first.landed));
 }
 {
@@ -1004,7 +1004,10 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
   check("ENG-96571 (review 1, E) PARITY: the workflow's `OVERRIDE_KEY_RX` and the ENGINE's mirrored copy are the SAME pattern and give identical verdicts over a key table — the two are hand-kept copies, so 'edit one, look at the other' is checked rather than promised",
     !!wfRx && !!engRx && wfRx.source === engRx.source
     && JSON.stringify(KEY_TABLE.map((k) => wfRx.test(k))) === JSON.stringify(KEY_TABLE.map((k) => engRx.test(k))),
-    () => `wf: ${wfRx?.source} / eng: ${engRx?.source}\n         ${KEY_TABLE.map((k) => `${k} → wf ${wfRx?.test(k)} / eng ${engRx?.test(k)}`).join("\n         ")}`);
+    () => {
+      const verdicts = KEY_TABLE.map((k) => `${k} → wf ${wfRx?.test(k)} / eng ${engRx?.test(k)}`).join("\n         ");
+      return `wf: ${wfRx?.source} / eng: ${engRx?.source}\n         ${verdicts}`;
+    });
   check("ENG-96571 (review 1, E) PARITY ANTI-VACUITY: the table really splits — the qualified form matches and the bare form does not, so the parity above is not two regexes agreeing on nothing",
     !!wfRx && wfRx.test("DealSectionV2::override:rowSelected") && !wfRx.test("override:rowSelected")
     && !wfRx.test("DealPage::onSaved"),
@@ -1046,8 +1049,8 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
     }
     return src.slice(i, end)
       .replace(/\/\/[^\n]*/g, " ")     // line comments — house style, not behaviour
-      .replace(/"/g, "'")             // quote style
-      .replace(/;/g, " ")             // semicolons
+      .replaceAll('"', "'")             // quote style
+      .replaceAll(";", " ")             // semicolons
       .replace(/\s+/g, " ")
       .trim();
   };

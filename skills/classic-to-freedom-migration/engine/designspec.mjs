@@ -878,8 +878,10 @@ function notApplicableLines(notApplicable) {
     if (!byChannel.has(ch)) byChannel.set(ch, []);
     byChannel.get(ch).push(k);
   }
-  return [...byChannel].map(([ch, keys]) =>
-    `> ⚠ ${keys.length} recorded \`confirmDispositions\` key(s) address rows this worklist does not print — ${keys.map((k) => `\`${esc(k)}\``).join(", ")}: ${NA_ADVICE[ch]}`);
+  return [...byChannel].map(([ch, keys]) => {
+    const list = keys.map((k) => `\`${esc(k)}\``).join(", ");
+    return `> ⚠ ${keys.length} recorded \`confirmDispositions\` key(s) address rows this worklist does not print — ${list}: ${NA_ADVICE[ch]}`;
+  });
 }
 
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
@@ -948,12 +950,14 @@ function renderConfirmWorklist(cs, opts = {}) {
   else if (answered) head = `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`;
   const L = [head, ...confirm];
   if (closedRows.length) {
-    L.push("", `> ℹ ${closedRows.length} item(s) CLOSED by a recorded disposition: ${closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${d.note ? ` (${esc(d.note)})` : ""}`).join(" · ")}`);
+    const closedList = closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${d.note ? ` (${esc(d.note)})` : ""}`).join(" · ");
+    L.push("", `> ℹ ${closedRows.length} item(s) CLOSED by a recorded disposition: ${closedList}`);
   }
   // An INVALID disposition word is named, not swallowed: the operator believes the question is answered, the engine
   // does not, and the row above still says it is open. Naming the word is what makes that discrepancy fixable.
   if (invalid.length) {
-    L.push("", `> ⛔ ${invalid.length} recorded disposition(s) were NOT applied — ${invalid.map((d) => `\`${esc(confirmKeyOf(d))}\` → \`${esc(d.dispositionInvalid)}\``).join(", ")}: that word is not one of ${confirmWordList()}, so the row stays OPEN. Fix the word in \`manifest.confirmDispositions\` and re-run.`);
+    const invalidList = invalid.map((d) => `\`${esc(confirmKeyOf(d))}\` → \`${esc(d.dispositionInvalid)}\``).join(", ");
+    L.push("", `> ⛔ ${invalid.length} recorded disposition(s) were NOT applied — ${invalidList}: that word is not one of ${confirmWordList()}, so the row stays OPEN. Fix the word in \`manifest.confirmDispositions\` and re-run.`);
   }
   if (notApplicable.length) {
     // ONE LINE PER CHANNEL. A single shared sentence sent every kind to `memberDispositions`, which is the wrong
@@ -1133,8 +1137,9 @@ function triggerText(t) {
 // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites is
 // not the same port as one with a single caller. Own fn: both the `internal` and the `lifecycle` branch append it.
 function callersSuffix(t) {
-  if (!(t.callers?.length > 1)) return "";
-  return ` (+${t.callers.length - 1} more caller${t.callers.length > 2 ? "s" : ""})`;
+  const n = t.callers?.length ?? 0;
+  if (n <= 1) return "";
+  return ` (+${n - 1} more caller${n > 2 ? "s" : ""})`;
 }
 
 // ENG-96571 B1 — the trigger cell for a declaration-backed kind: WHAT fires the method, followed by the exact
@@ -1340,8 +1345,9 @@ const IMPERATIVE_LOGIC_PREAMBLE = [
 //     converter, so it stays a unit of its own;
 //   · a caller that is NOT in this table (a standard lifecycle method, filtered out of the worklist) — there is no
 //     parent row to fold under, and the trigger cell already names the hook.
-function foldByCaller(stubs) {
-  const byName = new Map(stubs.map((h) => [h.sourceMethod, h]));
+// The child → parent links the fold is built on, extracted for CC (Sonar S3776). The two `continue` guards are
+// the "two deliberate non-folds" documented above `foldByCaller`.
+function foldParentLinks(stubs, byName) {
   const parentOf = new Map();
   for (const h of stubs) {
     const t = (h.triggers || [])[0];
@@ -1352,8 +1358,12 @@ function foldByCaller(stubs) {
     if (!t.from || t.from === h.sourceMethod || !byName.has(t.from)) continue;
     parentOf.set(h.sourceMethod, t.from);
   }
-  // Break any parent chain that loops back on itself: mutual recursion would otherwise make both rows children and
-  // neither would ever be emitted by the walk below.
+  return parentOf;
+}
+
+// Break any parent chain that loops back on itself: mutual recursion would otherwise make both rows children and
+// neither would ever be emitted by the walk in `foldByCaller`. Mutates `parentOf`; extracted for CC (Sonar S3776).
+function breakFoldCycles(parentOf) {
   for (const name of [...parentOf.keys()]) {
     const seen = new Set([name]);
     for (let p = parentOf.get(name); p; p = parentOf.get(p)) {
@@ -1361,11 +1371,23 @@ function foldByCaller(stubs) {
       seen.add(p);
     }
   }
+}
+
+// parent → children, the inverse of `parentOf`. Extracted for CC (Sonar S3776).
+function foldChildrenIndex(parentOf) {
   const childrenOf = new Map();
   for (const [child, parent] of parentOf) {
     if (!childrenOf.has(parent)) childrenOf.set(parent, []);
     childrenOf.get(parent).push(child);
   }
+  return childrenOf;
+}
+
+function foldByCaller(stubs) {
+  const byName = new Map(stubs.map((h) => [h.sourceMethod, h]));
+  const parentOf = foldParentLinks(stubs, byName);
+  breakFoldCycles(parentOf);
+  const childrenOf = foldChildrenIndex(parentOf);
   const ordered = [], emitted = new Set();
   const walk = (h, depth) => {
     if (emitted.has(h.sourceMethod)) return;
@@ -1632,7 +1654,8 @@ function renderFidelityWarnings(result) {
 function renderBundleWarningNotes(result) {
   const closed = result.structure?.bundleWarningsClosed || [];
   if (!closed.length) return [];
-  return [`> ℹ ${closed.length} bundle warning(s) from \`get-classic-page-sources\` CLOSED by a recorded disposition: ${closed.map((w) => `**${esc(w.disposition)}** — "${esc(w.text)}"${w.note ? ` (${esc(w.note)})` : ""}`).join(" · ")}`, ""];
+  const list = closed.map((w) => `**${esc(w.disposition)}** — "${esc(w.text)}"${w.note ? ` (${esc(w.note)})` : ""}`).join(" · ");
+  return [`> ℹ ${closed.length} bundle warning(s) from \`get-classic-page-sources\` CLOSED by a recorded disposition: ${list}`, ""];
 }
 
 function renderPlanBanners(result, opts) {
