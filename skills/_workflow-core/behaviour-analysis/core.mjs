@@ -28,7 +28,7 @@ import { rules, contextPrompt, describePrompt, repairNote, critiquePrompt, merge
 import {
   normalizeScopes, planBatches, packBatches, repairKeys, isComplete, wiringOnlyMixinKeys, coveredKeys, entriesOf,
   declaredNothingToDo, isCritiqueShape, critiqueDeathLine, retryOnDeath, stepOutcome, failureCause, itemId, partFile,
-  censusShortfall, mergeDeathLine, ambiguousEntryKeys,
+  censusShortfall, mergeDeathLine, ambiguousEntryKeys, digestKeyOf,
   DEFAULT_ROWS_PER_AGENT, DEFAULT_MAX_DESCRIBE,
 } from './helpers.mjs'
 
@@ -364,7 +364,24 @@ export function* run(rawInput, io = {}) {
   // --- One repair round, and only when there is something to repair ----------
   // Scoped to the SCOPES that own the uncovered rows — never to a bare row list, which is the per-row split the
   // analysis contract forbids.
-  const critiqueUncovered = (critique?.uncovered || []).map((u) => u.key).filter((k) => allKeys.has(k))
+  // PR #147 review — resolved through `digestKeyOf`, the same normaliser `coveredKeys` and
+  // `wiringOnlyMixinKeys` use, NOT a strict `allKeys.has`. ENG-96529 made `normalizeScopes` requalify every scope
+  // key, so bare method keys no longer exist in `allKeys`; the Critique is an analysis agent and may legitimately
+  // answer with either form. Under the strict test a Critique answering `onSaved` was DROPPED, and the dropped
+  // rows are the dangerous ones: rows the arithmetic already counts as covered because they carry a card, which
+  // the adversarial pass judged undescribed. They never reached `repairKeys`, no repair item was dispatched, and
+  // the run still reported `complete: true` — the same silent coverage hole ENG-96529 exists to close.
+  const critiqueUncoveredRaw = (critique?.uncovered || []).map((u) => u?.key).filter((k) => typeof k === 'string')
+  const critiqueUncovered = critiqueUncoveredRaw.map((k) => digestKeyOf(k, allKeys)).filter(Boolean)
+  // Named, not dropped — the way `ambiguousEntryKeys` already reports a Describe answer that cannot be
+  // attributed to one row. A critique key that resolves to nothing is either ambiguous across schemas or names no
+  // inventory row at all; either way it is an adversarial finding this run is about to lose, so it is said out
+  // loud rather than swallowed by the filter.
+  const critiqueUnattributable = [...new Set(critiqueUncoveredRaw
+    .filter((k) => digestKeyOf(k, allKeys) === null))]
+  if (critiqueUnattributable.length) {
+    log(`⚠ ${critiqueUnattributable.length} critique key(s) cannot be attributed to one inventory row, so they cannot route into the repair round: ${critiqueUnattributable.join(', ')} — re-key them \`<schema>::<method>\` as the inventory lists them`)
+  }
   const toRepair = repairKeys(uncoveredKeys, critiqueUncovered, wiringOnly)
   if (toRepair.length) {
     const owners = worked.filter((s) => [...s.methodKeys, ...s.memberKeys].some((k) => toRepair.includes(k)))

@@ -464,6 +464,47 @@ const happyAnswer = (item) => {
     () => JSON.stringify({ coverage: result.coverage, logs }));
 }
 {
+  // PR #147 review — a Critique answering with a BARE method key must route into the repair round. ENG-96529
+  // requalified every scope key, so `initMini` no longer exists in `allKeys`; under the old strict
+  // `allKeys.has` filter this critique finding was DROPPED and the run still reported `complete: true` over a
+  // row the adversarial pass had judged undescribed. The row carries a card, so nothing else would catch it.
+  const bareCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "initMini" }] };
+  let describeRounds = 0;
+  const { result, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") { describeRounds++; return { outcome: OUTCOME.VALUE, value: FULL_DESCRIBE } }
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: describeRounds === 1 ? bareCritique : CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a Critique naming a row by its BARE method key routes into the REPAIR round — the inventory key is qualified, and dropping the finding would report a fully-carded row as complete over the adversarial pass's objection",
+    asked.some((i) => i.id.startsWith("repair.")) && describeRounds === 2,
+    () => JSON.stringify({ ids: asked.map((i) => i.id), describeRounds, coverage: result.coverage }));
+}
+{
+  // PR #147 review, the other half — a bare critique key that COLLIDES across scopes resolves to no single row,
+  // so it cannot route anywhere. It must be NAMED rather than swallowed by the filter: the two repairs are
+  // opposite (re-key the answer vs describe the row), exactly as `ambiguousEntryKeys` already reports for a
+  // Describe answer.
+  const collidingCtx = { ...CTX, scopes: [
+    { role: "main page", schema: "DealMain", methodKeys: ["initMini"], memberKeys: [], unresolvedCount: 0 },
+    { role: "mini page", schema: "DealMini", methodKeys: ["initMini"], memberKeys: [], unresolvedCount: 0 },
+  ] };
+  const collidingDescribe = { reportPart: "out/part.md", gaps: [], refusals: [], indexEntries: [
+    { key: "DealMain::initMini", card: "DealMain/C01" }, { key: "DealMini::initMini", card: "DealMini/C01" },
+  ] };
+  const ambiguousCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "initMini" }] };
+  const { asked, logs } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: collidingCtx };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: collidingDescribe };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: ambiguousCritique };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a Critique key that two scopes both declare is REPORTED as unattributable, not silently dropped — it describes neither row, and the repair it needs is a re-key, not a describe",
+    logs.some((l) => /critique key\(s\) cannot be attributed/.test(l) && l.includes("initMini"))
+      && !asked.some((i) => i.id.startsWith("repair.")),
+    () => JSON.stringify({ logs, ids: asked.map((i) => i.id) }));
+}
+{
   // A mixin row citing only its wiring card: covered by the count, incomplete by
   // the two-card rule. It must block completeness even when nothing is uncovered.
   const wiringOnly = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) => (e.key === "mixin:LeadMixin" ? { key: e.key, card: e.card } : e)) };

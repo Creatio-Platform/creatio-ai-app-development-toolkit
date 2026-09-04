@@ -178,12 +178,60 @@ const ALLOWED_FINGERPRINT_DIVERGENCES = {
   ],
 }
 
+// PR #147 review — EVERY entry is accounted for, and each rewrites EXACTLY the occurrences it declares.
+// `split(from).join(to)` rewrote every occurrence of `from` in the field, not the one the rule describes, so a
+// genuine regression at a second site carrying the same token was normalised in lockstep and passed the gate — and
+// a key-qualification change is precisely what makes a repeated token likely. An entry may declare `count` when it
+// deliberately covers more than one occurrence; the default is 1, and a mismatch fails with the scenario and field
+// named. Firing is recorded so an entry whose `from` string stopped occurring cannot sit there as a permanent
+// no-op advertising a scenario and field as excused — that is how an allow-list rots into a gate that asserts
+// nothing, and this file holds the gate itself to the opposite standard a few lines below (NON-VACUITY).
+const FINGERPRINT_DIVERGENCE_FIRINGS = new Map();
+const FINGERPRINT_DIVERGENCE_ERRORS = [];
+
+function divergenceId(pairName, d) {
+  return `${pairName} · ${d.scenario} · ${d.field} · ${d.from}`;
+}
+
 // The baseline's fingerprint field, with every divergence declared for THIS scenario and field applied. Unlisted
 // scenarios come back untouched, so the comparison stays byte-for-byte everywhere it is not explicitly relaxed.
 function rewriteBaseline(pairName, scenario, field, value) {
   return (ALLOWED_FINGERPRINT_DIVERGENCES[pairName] || [])
     .filter((d) => d.scenario === scenario && d.field === field)
-    .reduce((acc, d) => acc.split(d.from).join(d.to), value)
+    .reduce((acc, d) => {
+      const id = divergenceId(pairName, d);
+      const occurrences = acc.split(d.from).length - 1;
+      const expected = d.count ?? 1;
+      if (occurrences !== expected) {
+        FINGERPRINT_DIVERGENCE_ERRORS.push(
+          `${id} — declares ${expected} occurrence(s) of \`${d.from}\` but the baseline field carries ${occurrences}. ` +
+          `A rule may only rewrite what it names: re-freeze the baseline, or set an explicit \`count\`.`);
+        return acc;
+      }
+      FINGERPRINT_DIVERGENCE_FIRINGS.set(id, (FINGERPRINT_DIVERGENCE_FIRINGS.get(id) || 0) + occurrences);
+      // Replace only the declared occurrences — never a blanket `split().join()`.
+      let out = acc;
+      for (let n = 0; n < expected; n++) out = out.replace(d.from, d.to);
+      return out;
+    }, value)
+}
+
+// Every declared entry must have rewritten something. An entry that fired nowhere is stale: either the divergence
+// it excused is gone (delete it) or the baseline moved under it (re-freeze), and until one of those happens it
+// advertises a relaxation that is not being applied while hiding whatever else changed at that site.
+function checkDivergenceLedger() {
+  for (const err of FINGERPRINT_DIVERGENCE_ERRORS) {
+    check(`declared fingerprint divergence rewrites exactly what it names — ${err.split(" — ")[0]}`, false, () => err);
+  }
+  for (const [pairName, list] of Object.entries(ALLOWED_FINGERPRINT_DIVERGENCES)) {
+    for (const d of list) {
+      const id = divergenceId(pairName, d);
+      check(`declared fingerprint divergence actually fired — ${id}`,
+        (FINGERPRINT_DIVERGENCE_FIRINGS.get(id) || 0) > 0,
+        () => `no occurrence of \`${d.from}\` was found in the baseline's \`${d.field}\` for scenario "${d.scenario}". ` +
+          `A no-op entry must be deleted or re-frozen — it cannot stay as a standing excuse.`);
+    }
+  }
 }
 
 const PAIRS = [
@@ -306,7 +354,15 @@ function promptDiff(a, b, pairName, scenario) {
   for (let i = 0; i < n; i++) {
     const pa = a.calls[i]?.prompt, pb = b.calls[i]?.prompt;
     if (pa === pb) continue;
-    if (pa === undefined && extraAllowed && repeatsPhase(a.calls, b.calls[i])) continue;
+    // PR #147 review — the extra dispatch is CONSUMED, not skipped in place: `continue` left the two sides
+    // one index apart for the rest of the loop, and that was inert only because today's retry dispatch happens
+    // to be last in its phase. Splicing it out of the shipped side keeps the remaining calls aligned whatever
+    // position the extra one takes.
+    if (pa === undefined && extraAllowed && repeatsPhase(a.calls, b.calls[i])) {
+      b.calls.splice(i, 1);
+      i--;
+      continue;
+    }
     if (pa === undefined || pb === undefined) return { i, why: `call ${i + 1} exists on only one side (${a.calls[i]?.label || "—"} / ${b.calls[i]?.label || "—"})` };
     const la = pa.split("\n"), lb = pb.split("\n");
     if (la.length !== lb.length) return { i, why: `call ${i + 1} (${a.calls[i].label}) has ${la.length} prompt line(s) in the baseline and ${lb.length} in the shipped script` };
@@ -362,6 +418,8 @@ function firstJsonDiff(a, b, at = "result") {
   }
   return `${at}: key sets differ`;
 }
+
+checkDivergenceLedger();
 
 const warnNote = warn ? `, ${warn} log-only warning(s)` : "";
 console.log(`\nPARITY GOLDEN: ${pass} passed, ${fail} failed${warnNote}`);
