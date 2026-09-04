@@ -11735,12 +11735,28 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     childPages: [injChild("Child1", "Detail1", "UsrChild1FormPage"), injChild("Child2", "Detail2", "UsrChild2FormPage")],
   };
   const injKeys = verifyRowKeys(injResult, brOpts());
-  check("PR #157 review (Blocker 1): NO TWO ROWS of one rendered verify table share a `rowKey` — an `accepted` entry matches on the key alone, so a shared key would render ☑ accepted on N rows nobody reviewed",
-    injKeys.length >= 20 && new Set(injKeys).size === injKeys.length,
-    () => { const dupes = injKeys.filter((k, i) => injKeys.indexOf(k) !== i); return { total: injKeys.length, unique: new Set(injKeys).size, dupes }; });
-  check("PR #157 review (Blocker 1): the two typed-form rows read ONE evidence boolean and still get their OWN keys — the discriminator is the form's schema, a stable identity, not the row's ordinal",
-    injKeys.includes("main#onstand:typedFormsBuilt:usrtypeda") && injKeys.includes("main#onstand:typedFormsBuilt:usrtypedb"),
+  // The Set-size half of this alone is VACUOUS and the review said so: `verifyRowKeys` returns the keys AFTER
+  // `dedupeRowKey`, which makes them unique by appending `~2` — so uniqueness cannot fail. The assertion that has
+  // teeth is that NO key needed that suffix: every row shape must carry its own stable identity, and a `~N` here
+  // means one of them derives its key from something a sibling shares.
+  check("PR #157 review (Blocker 1): NO TWO ROWS of one rendered verify table share a `rowKey` — and NOT ONE key needed the `~N` dedupe suffix, which is the assertion with teeth (`verifyRowKeys` runs after `dedupeRowKey`, so uniqueness alone cannot fail)",
+    injKeys.length >= 20 && new Set(injKeys).size === injKeys.length
+    && injKeys.every((k) => !/~\d+$/.test(k)),
+    () => { const dupes = injKeys.filter((k, i) => injKeys.indexOf(k) !== i); return { total: injKeys.length, unique: new Set(injKeys).size, dupes, suffixed: injKeys.filter((k) => /~\d+$/.test(k)) }; });
+  check("PR #157 review (Blocker 1): the two typed-form rows read ONE evidence boolean and still get their OWN keys — the discriminator is the form's schema AND its Type, a stable identity, not the row's ordinal",
+    injKeys.includes("main#onstand:typedFormsBuilt:usrtypeda-a") && injKeys.includes("main#onstand:typedFormsBuilt:usrtypedb-b"),
     () => injKeys.filter((k) => k.includes("typedFormsBuilt")));
+  // PR #157 review — `normalizeTypedPages` does NOT dedupe by schema, and a bind-only plan is exactly where two
+  // Types legitimately share ONE form schema. With `about: t.schema` those two rows derived one key, so accepting
+  // Type A silently accepted Type B: the collision the Blocker is about, on the one input that produces it.
+  const injOneSchema = { ...injResult, typedPages: [{ schema: "UsrOneForm", type: "Incident", bindOnly: true }, { schema: "UsrOneForm", type: "Request", bindOnly: true }] };
+  const oneSchemaKeys = verifyRowKeys(injOneSchema, brOpts()).filter((k) => k.includes("typedFormsBuilt"));
+  check("PR #157 review (Blocker 1): TWO Types bound to ONE form schema get TWO keys — `about` is `<schema>|<type>`, so a bind-only plan's shared schema no longer collapses both rows onto one address (and no `~N` fallback is involved)",
+    oneSchemaKeys.length === 2 && new Set(oneSchemaKeys).size === 2
+    && oneSchemaKeys.includes("main#onstand:typedFormsBuilt:usroneform-incident")
+    && oneSchemaKeys.includes("main#onstand:typedFormsBuilt:usroneform-request")
+    && oneSchemaKeys.every((k) => !/~\d+$/.test(k)),
+    () => oneSchemaKeys);
   check("PR #157 review (Blocker 1): the `reuseBindings` summary row and the per-child rows are separated by the PAGE PREFIX — the same evidence key on three pages is three keys",
     injKeys.filter((k) => k.endsWith("#onstand:reuseBindings")).length === 3
     && new Set(injKeys.filter((k) => k.includes("reuseBindings"))).size === 3,
@@ -11757,7 +11773,7 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   delete injBuilt.reachability.noOrphanScaffold;      // leave a second open row so "one closed" is measurable
   const injOpen = renderVerify(injResult, brOpts(), injBuilt);
   const injOneAccepted = renderVerify(injResult, brOpts({ resolutions: [{ kind: "accepted",
-    row: "main#onstand:typedFormsBuilt:usrtypeda", answer: "the A form is deliberately not built this round",
+    row: "main#onstand:typedFormsBuilt:usrtypeda-a", answer: "the A form is deliberately not built this round",
     decidedBy: "Alex Kravchuk", date: "2026-09-04" }] }), injBuilt);
   check("PR #157 review (Blocker 1): ONE `accepted` entry closes EXACTLY ONE row — the sibling typed form stays open, and the accepted count is 1, not 2",
     injOneAccepted.accepted === 1
@@ -11766,6 +11782,22 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     && /Typed form `UsrTypedB`[^|]*\| ⚠ verify/.test(injOneAccepted.markdown),
     () => ({ accepted: injOneAccepted.accepted, before: injOpen.unverified, after: injOneAccepted.unverified,
       rows: injOneAccepted.markdown.split("\n").filter((l) => /Typed form/.test(l)) }));
+  // PR #157 review — AND WHEN A COLLISION DOES HAPPEN, IT IS VISIBLE. A `~N` key is injective and therefore
+  // invisible to the check above: no test fails, while the operator holds an address that is positional (inserting
+  // a deliverable above renumbers it) and will silently stop matching. The real path: two `handlerStubs` naming the
+  // SAME method — nothing folds duplicate stubs, so both rows render `Handler — \`onLoad\`` and slug identically.
+  const dupResult = { ...injResult, changeSet: { ...injResult.changeSet, handlerStubs: [{ sourceMethod: "onLoad" }, { sourceMethod: "onLoad" }] } };
+  const dupVerify = renderVerify(dupResult, brOpts(), brBuilt(oneTab));
+  check("PR #157 review: a REAL row-key collision (two handler stubs naming one method) is SURFACED — the `~N` key is published in `rowKeyCollisions` and printed as a ⚠ note in verify.md, so a future collision reaches a test and an operator instead of being silently unique",
+    verifyRowKeys(dupResult, brOpts()).includes("main#confirm:handler-onload~2")
+    && dupVerify.rowKeyCollisions.length === 1 && dupVerify.rowKeyCollisions[0] === "main#confirm:handler-onload~2"
+    && /⚠ \*\*ROW-KEY COLLISION \(1\)/.test(dupVerify.markdown)
+    && /NOT a stable address/.test(dupVerify.markdown),
+    () => ({ collisions: dupVerify.rowKeyCollisions, note: dupVerify.markdown.split("\n").filter((l) => /COLLISION/.test(l)).slice(0, 1) }));
+  check("PR #157 review: the note describes the ENGINE, not the build — a collision leaves the verdict and every count exactly as they were, and the clean tree publishes an EMPTY `rowKeyCollisions` (so the field is an assertable invariant, not a decoration)",
+    injOpen.rowKeyCollisions.length === 0 && !/ROW-KEY COLLISION/.test(injOpen.markdown)
+    && dupVerify.missing === injOpen.missing && dupVerify.complete === injOpen.complete,
+    () => ({ clean: injOpen.rowKeyCollisions, dupMissing: dupVerify.missing, cleanMissing: injOpen.missing }));
 
   // ── Blocker 2 — `pending` IS OPT-IN ─────────────────────────────────────────────────────────────────────────
   // A form-heavy page: THREE handler rows, a native card-action row and two child identity rows, against ONE
@@ -11782,6 +11814,22 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     heavy.pending >= 1
     && heavy.pages.main.pendingRows.map((r) => r.deliverable).join("|") === heavyLayout.map((r) => r.label).join("|"),
     () => ({ pending: heavy.pending, rows: heavy.pages.main.pendingRows.map((r) => r.deliverable), layout: heavyLayout.map((r) => r.label) }));
+  // ENG-96458 D3 × D4 — the two mechanisms MEET on the Layout row: it is `pending` (only a human can close it) and
+  // an acceptance is exactly how a human closes one without going to the stand. The row must leave the worklist,
+  // not merely stop being counted, or the close report keeps asking for an answer that was already recorded.
+  const layoutKey = heavy.pages.main.pendingRows[0].rowKey;
+  const layoutAccepted = renderVerify(injResult, brOpts({ resolutions: [{ kind: "accepted", row: layoutKey,
+    answer: "the Header region is confirmed as planned — the Feed tab was checked on the stand on 2026-09-04",
+    decidedBy: "Alex Kravchuk", date: "2026-09-04" }] }), brBuilt(oneTab));
+  check("ENG-96458 D3 × D4: an `accepted` resolution addressing a `human: true` Layout row renders ☑ accepted, drops that page's `pending` by EXACTLY ONE, and removes the row from `pendingRows` — a confirmation the operator already recorded must not stay on the worklist",
+    layoutAccepted.accepted === 1
+    && layoutAccepted.pending === heavy.pending - 1
+    && layoutAccepted.pages.main.pending === heavy.pages.main.pending - 1
+    && layoutAccepted.pages.main.pendingRows.length === heavy.pages.main.pendingRows.length - 1
+    && !layoutAccepted.pages.main.pendingRows.some((r) => r.rowKey === layoutKey)
+    && /☑ accepted \| ACCEPTED BY DECISION \(Alex Kravchuk, 2026-09-04\)/.test(layoutAccepted.markdown),
+    () => ({ key: layoutKey, before: heavy.pages.main.pending, after: layoutAccepted.pages.main.pending,
+      accepted: layoutAccepted.accepted, rows: layoutAccepted.pages.main.pendingRows.map((r) => r.rowKey) }));
   // A correctly executed `pages-only-no-menu` plan: no Layout rows at all (no fields, no details, no widgets), so
   // there is nothing for a human to confirm — and the "deliberately NOT built" row is `na`, not a hold. Before the
   // fix this run could never report complete, on a state that is not a gap.
@@ -11852,6 +11900,48 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   check("PR #157 review (Major): the rendered acceptance ALWAYS names the decider and the date — the table can no longer read `ACCEPTED BY DECISION — <answer>` with nobody on record",
     /☑ accepted \| ACCEPTED BY DECISION \(Alex Kravchuk, 2026-09-02\) — /.test(brAccepted.markdown),
     () => brAccepted.markdown.split("\n").filter((l) => /accepted/.test(l)));
+  // The OTHER door into `renderVerify`, and it is the one `acceptedProblem` does not stand in. That guard runs
+  // inside `buildResolutionIndex`, so BOTH validated paths — the CLI's file and a raw array handed to
+  // `opts.resolutions` — drop an unattributed entry before it can match. What passes through untouched is an
+  // ALREADY-BUILT index (`asResolutionIndex` returns it as-is, by design, so the CLI's one index is not rebuilt),
+  // and there the row rendered `ACCEPTED BY DECISION (NOT RECORDED, NOT RECORDED)`: a completeness gate overridden
+  // by nobody, in the document an audit reads. So the render boundary now applies the same rule itself.
+  const brRawAccept = (over) => renderVerify(brResult(NOT_MIGRATED),
+    brOpts({ resolutions: [{ kind: "accepted", row: BR_SECTION_ROW, answer: "kept by D6", ...over }] }), brTwoWorkplaces);
+  const brNoDecider = brRawAccept({ date: "2026-09-02" });
+  check("PR #157 review (Major): an acceptance handed to `renderVerify` as a RAW ARRAY with no `decidedBy` closes NOTHING — `buildResolutionIndex` never indexes it, so the row keeps its ❌ and its `missing` count, `accepted` stays 0, and no row anywhere reads `NOT RECORDED`",
+    brNoDecider.accepted === 0 && brNoDecider.missing === 1 && brNoDecider.complete === false
+    && /Navigable section registered[^|]*\| ❌ MISSING/.test(brNoDecider.markdown)
+    && !/NOT RECORDED/.test(brNoDecider.markdown) && !/ACCEPTED BY DECISION/.test(brNoDecider.markdown),
+    () => ({ accepted: brNoDecider.accepted, missing: brNoDecider.missing,
+      row: brNoDecider.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  check("PR #157 review (Major): the same holds for a date that does not PARSE — `last week` is not attribution on the raw-array path either",
+    brRawAccept({ decidedBy: "Alex Kravchuk", date: "last week" }).accepted === 0
+    && brRawAccept({ decidedBy: "Alex Kravchuk", date: "last week" }).missing === 1,
+    () => brRawAccept({ decidedBy: "Alex Kravchuk", date: "last week" }).markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+  // The door itself: an index a caller assembled on its own. `asResolutionIndex` passes it through unvalidated —
+  // that is what the CLI relies on — so the LAST place that can refuse an unattributed acceptance is the row.
+  const brHandIx = (over) => { const ix = buildResolutionIndex({ resolutions: [{ kind: "accepted", row: BR_SECTION_ROW,
+      answer: "kept by D6", decidedBy: "Alex Kravchuk", date: "2026-09-02" }] });
+    for (const [k, e] of ix.byKindItem) ix.byKindItem.set(k, { ...e, ...over });
+    return renderVerify(brResult(NOT_MIGRATED), brOpts({ resolutions: ix }), brTwoWorkplaces); };
+  const brHandNoWho = brHandIx({ decidedBy: "" });
+  check("PR #157 review (Major): an unattributed acceptance inside an index a caller BUILT ITSELF is refused at the render boundary — the row keeps its own ❌ verdict and its `missing` count, `accepted` stays 0, and the evidence cell names the missing `decidedBy` instead of printing `ACCEPTED BY DECISION (NOT RECORDED, NOT RECORDED)`",
+    brHandNoWho.accepted === 0 && brHandNoWho.missing === 1 && brHandNoWho.complete === false
+    && /Navigable section registered[^|]*\| ❌ MISSING/.test(brHandNoWho.markdown)
+    && /was IGNORED: no ˋdecidedByˋ/.test(brHandNoWho.markdown)
+    && !/NOT RECORDED/.test(brHandNoWho.markdown),
+    () => ({ accepted: brHandNoWho.accepted, missing: brHandNoWho.missing,
+      row: brHandNoWho.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  const brHandBadDate = brHandIx({ date: "last week" });
+  check("PR #157 review (Major): a date that does not PARSE is refused the same way, and the note names `date` — the render boundary applies the SAME rule as `acceptedProblem`, so neither door lets an unauditable acceptance through",
+    brHandBadDate.accepted === 0 && brHandBadDate.missing === 1
+    && /was IGNORED: no ˋdateˋ/.test(brHandBadDate.markdown),
+    () => brHandBadDate.markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+  check("PR #157 review (Major): a raw-array acceptance that IS attributed still works — the guard rejects the unattributed entry, it does not close the direct API path",
+    brRawAccept({ decidedBy: "Alex Kravchuk", date: "2026-09-02" }).accepted === 1
+    && brRawAccept({ decidedBy: "Alex Kravchuk", date: "2026-09-02" }).missing === 0,
+    () => brRawAccept({ decidedBy: "Alex Kravchuk", date: "2026-09-02" }).markdown.split("\n").filter((l) => /Navigable section/.test(l)));
 
   // ── Major — `resolveFieldsVk` delegates to `countVerdict`, and the SURPLUS branch is pinned ──────────────────
   // The fields row fires on EVERY migrated page, so its surplus branch is the one most likely to turn a
@@ -11875,6 +11965,41 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     (() => { const [mark, ev, outcome] = resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(1)));
       return mark === "⚠ verify" && outcome === "unverified" && /^1\/2 components of a field type present/.test(ev); })(),
     () => resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(1))));
+  // The thread asked for the OTHER two single-type callers too: `image` and `element` route through the same
+  // `countVerdict`, and their surplus branch was equally untested. Both name the surplus from their own one
+  // accepted type, so a component of a DIFFERENT type can never be reported as their surplus.
+  const imgSurplus = resolveVk({ type: "image", n: 1 },
+    fieldsCtx([{ name: "Photo", type: "crt.ImageInput" }, { name: "Logo", type: "crt.ImageInput" }, { name: "PDS_Name", type: "crt.Input" }]));
+  check("PR #157 review (Major): an IMAGE surplus reads `1 expected, 2 built (+1: Logo)` with a ⚠ — the same equality rule as the tabs row, and the surplus is named from `crt.ImageInput` alone, never from a field that happens to sit next to it",
+    imgSurplus[0] === "⚠ verify" && imgSurplus[2] === "unverified"
+    && /^1 expected, 2 built \(\+1: Logo\) — the surplus is NOT in the plan/.test(imgSurplus[1])
+    && !/PDS_Name/.test(imgSurplus[1]),
+    () => imgSurplus);
+  const elemSurplus = resolveVk({ type: "element", ctype: "crt.Feed", n: 1 },
+    fieldsCtx([{ name: "Feed1", type: "crt.Feed" }, { name: "Feed2", type: "crt.Feed" }, { name: "Feed3", type: "crt.Feed" }, { name: "T1", type: "crt.TabContainer" }]));
+  check("PR #157 review (Major): an ELEMENT surplus names EVERY component past the expected count (`+2: Feed2, Feed3`) and only components of the row's own `ctype` — the base-declared element rows ENG-96457 added all resolve through this branch",
+    elemSurplus[0] === "⚠ verify" && elemSurplus[2] === "unverified"
+    && /^1 expected, 3 built \(\+2: Feed2, Feed3\)/.test(elemSurplus[1]) && !/T1/.test(elemSurplus[1]),
+    () => elemSurplus);
+  // The MULTI-type row (tabs / details) is the one where the two halves of `countVerdict` could disagree: the count
+  // `b` sums `ctx.typeCount(t)` over the accepted types, while `surplusNames` re-derives the same set with ONE
+  // `ctx.ops.filter`. If those ever diverge, the `+N` and the names it lists describe different sets — and the
+  // legacy `crt.Tab` spelling is exactly the input that would expose it, since it is accepted but not the noun.
+  const mixedTabs = [{ name: "T1", type: "crt.TabContainer" }, { name: "T2", type: "crt.Tab" },
+    { name: "T3", type: "crt.TabContainer" }, { name: "PDS_Name", type: "crt.Input" }];
+  const mixedCtx = fieldsCtx(mixedTabs);
+  const mixedRow = resolveVk({ type: "tabs", n: 1 }, mixedCtx);
+  check("PR #157 review (Major, `resolveFieldsVk`/`countVerdict` thread): on a MULTI-type count row the summed `ctx.typeCount(t)` and the `ctx.ops.filter` behind `surplusNames` describe the SAME set — three tabs across both accepted spellings read `1 expected, 3 built (+2: T2, T3)`, the surplus is in build order, and the non-accepted `crt.Input` is in neither the count nor the names",
+    mixedCtx.typeCount("crt.TabContainer") + mixedCtx.typeCount("crt.Tab")
+      === mixedCtx.ops.filter((o) => ["crt.TabContainer", "crt.Tab"].includes(o.type)).length
+    && mixedRow[0] === "⚠ verify"
+    && /^1 expected, 3 built \(\+2: T2, T3\)/.test(mixedRow[1]) && !/PDS_Name/.test(mixedRow[1]),
+    () => ({ summed: mixedCtx.typeCount("crt.TabContainer") + mixedCtx.typeCount("crt.Tab"),
+      filtered: mixedCtx.ops.filter((o) => ["crt.TabContainer", "crt.Tab"].includes(o.type)).length, row: mixedRow }));
+  check("PR #157 review (Major): the EQUAL case of the multi-type row counts both spellings too — a page built with the legacy `crt.Tab` is not reported short, and `+N` names nothing when nothing is surplus",
+    (() => { const [mark, ev, outcome] = resolveVk({ type: "tabs", n: 3 }, mixedCtx);
+      return mark === "✅ Done" && outcome === "ok" && ev === "3 crt.TabContainer built"; })(),
+    () => resolveVk({ type: "tabs", n: 3 }, mixedCtx));
 
   // ── Major — the pending worklist is BOUNDED at the summary boundary ──────────────────────────────────────────
   // `verifySummary` is the run's FIRST structured answer and is documented against a ~16000-byte wire ceiling; an
@@ -11890,21 +12015,52 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
       const z = verifySummary({}, { pages: { main: { pending: 1, pendingRows: long } } }).pages.main;
       return z.pendingRows[0].deliverable.length === 40 && encodedAsciiBytes(z.pendingRows[0].deliverable) === 240; })(),
     () => verifySummary({}, { pages: { main: { pending: 1, pendingRows: [{ n: 1, deliverable: "Ж".repeat(300), rowKey: "x" }] } } }).pages.main);
-  check("PR #157 review (Major): a RUN-level byte budget bounds the whole worklist, not just each page — an 80-page plan stops naming rows once the budget is spent, every page keeps its EXACT `pending`, and every un-named row is in that page's `pendingMore`",
-    (() => { const pages = {};
-      for (let i = 0; i < 80; i += 1) pages[`child:Entity${i}`] = { complete: false, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pending: 5, pendingRows: sixRows.slice(0, 5) };
-      const z = verifySummary({}, { pending: 400, pages });
-      const es = Object.values(z.pages);
-      const named = es.reduce((n, p) => n + p.pendingRows.length, 0);
-      return es.every((p) => p.pending === 5 && p.pendingRows.length + (p.pendingMore || 0) === 5)
-        && es.some((p) => p.pendingRows.length < 5)                       // the budget really ran out
-        && es.every((p) => p.pendingRows.length >= 1)                     // …and every pending page still names one
-        && named < 200 && named > 0                                       // 400 rows uncapped, bounded here
-        && z.pending === 400; })(),                                       // the COUNT is never approximated
-    () => { const pages = {}; for (let i = 0; i < 80; i += 1) pages[`child:Entity${i}`] = { pending: 5, pendingRows: sixRows.slice(0, 5) };
-      const z = verifySummary({}, { pending: 400, pages });
-      return { bytes: encodedAsciiBytes(JSON.stringify(z)), namedTotal: Object.values(z.pages).reduce((n, p) => n + p.pendingRows.length, 0),
-        named: Object.values(z.pages).map((p) => p.pendingRows.length) }; });
+  // PR #157 review (round 2) — THE BUDGET NOW BOUNDS SOMETHING. It used to keep "at least one named row per
+  // pending page", and that floor outranked the budget, so the worklist cost was per-PAGE again: measured 46392
+  // bytes on a 160-page ASCII plan (84274 with localized labels) against a 16100-byte counts-only baseline.
+  // The assertion is therefore the one that matters at this boundary: the BYTES the worklist ADDS over the same
+  // plan carrying no named rows, measured with `encodedAsciiBytes` — the summary's own wire unit — must not exceed
+  // `PENDING_WIRE_BUDGET` (6000). The baseline is deliberately the same plan with every `pendingRows` EMPTIED, not
+  // a plan with nothing pending: `pending` and `pendingMore` are the published contract on every pending page and
+  // are not the worklist's cost.
+  const WIRE_BUDGET = 6000;                     // must track `PENDING_WIRE_BUDGET` in designspec.mjs
+  const wlRows = (label) => Array.from({ length: 5 }, (_, i) => ({ n: i + 1,
+    deliverable: `${label} ${i + 1} — 3 fields · Feed (ESN)`, rowKey: `main#confirm:${label.toLowerCase()}-${i + 1}` }));
+  const wlPlan = (n, rowsFor) => { const pages = {};
+    for (let i = 0; i < n; i += 1) pages[`child:Entity${i}`] = { complete: false, buildComplete: true, missing: 0, buildMissing: 0,
+      unverified: 0, builderOpen: 0, openCorrectness: 0, openFidelity: 0, pending: 5, pendingRows: rowsFor() };
+    return { complete: false, missing: 0, unverified: 0, buildMissing: 0, rejected: 0, unfiled: 0, pending: n * 5, accepted: 0, pages }; };
+  const wlBytes = (n, rowsFor) => encodedAsciiBytes(JSON.stringify(verifySummary({}, wlPlan(n, rowsFor))));
+  const wlBase160 = wlBytes(160, () => []);
+  const wlAscii160 = wlBytes(160, () => wlRows("Region"));
+  const wlCyr160 = wlBytes(160, () => wlRows("Регіон"));
+  check("PR #157 review (round 2): on a 160-page plan the worklist adds AT MOST `PENDING_WIRE_BUDGET` (6000) bytes over the same plan naming no rows — measured in `encodedAsciiBytes`, for an ASCII deliverable AND for a localized one, whose every character costs six bytes on the wire",
+    wlAscii160 - wlBase160 <= WIRE_BUDGET && wlAscii160 > wlBase160
+    && wlCyr160 - wlBase160 <= WIRE_BUDGET,
+    () => ({ baseline: wlBase160, ascii: wlAscii160, asciiAdds: wlAscii160 - wlBase160,
+      cyrillic: wlCyr160, cyrillicAdds: wlCyr160 - wlBase160, budget: WIRE_BUDGET }));
+  const wl160 = verifySummary({}, wlPlan(160, () => wlRows("Region")));
+  check("PR #157 review (round 2): the budget is the OUTER bound — past it a page names NOTHING (the old per-page floor is gone), while `pending` stays exact on every page and `pending === pendingRows.length + (pendingMore || 0)` holds on all 160 of them",
+    Object.values(wl160.pages).every((p) => p.pending === 5 && p.pending === p.pendingRows.length + (p.pendingMore || 0))
+    && Object.values(wl160.pages).some((p) => p.pendingRows.length === 0)
+    && Object.values(wl160.pages).some((p) => p.pendingRows.length === 5)
+    && wl160.pending === 800,
+    () => ({ named: Object.values(wl160.pages).map((p) => p.pendingRows.length).slice(0, 20),
+      namedTotal: Object.values(wl160.pages).reduce((n, p) => n + p.pendingRows.length, 0),
+      unnamedPages: Object.values(wl160.pages).filter((p) => p.pendingRows.length === 0).length, pending: wl160.pending }));
+  // THE CEILING CLAUSE, asserted at the size where it is checkable — and it is checkable only below ~50 all-pending
+  // pages. A page whose ☐ rows are counted costs ~200 wire bytes (the counts, plus `pending`/`pendingRows`/
+  // `pendingMore`), so the COUNTS-ONLY baseline of an all-pending 80-page plan is already 16048 bytes and a
+  // 160-page one is 32028: the page count meets the ~16000-byte ceiling before a single row is named, which no
+  // worklist budget can change. That is the documented state of this boundary (`verifySummary`: pages are never
+  // dropped to fit; the close at scale is the answer-slimming follow-up). What the budget guarantees is that the
+  // worklist is not what breaks it — on a 40-page plan the FULL summary, named rows and all, still fits.
+  check("PR #157 review (round 2): with the budget in force the FULL ASCII summary of a 40-page all-pending plan — named worklist included — stays under the documented 16000-byte wire ceiling, and its counts-only baseline plus the budget is what bounds it",
+    wlBytes(40, () => wlRows("Region")) < 16000
+    && wlBytes(40, () => []) + WIRE_BUDGET >= wlBytes(40, () => wlRows("Region"))
+    && wlBase160 > 16000,
+    () => ({ full40: wlBytes(40, () => wlRows("Region")), base40: wlBytes(40, () => []),
+      base160: wlBase160, note: "the 160-page counts-only baseline breaches the ceiling on its own" }));
 
   // ── Minor — the card-action name match is not inert any more ─────────────────────────────────────────────────
   // A stand-reported printable is a human caption ("Business rule report"); a built element name is

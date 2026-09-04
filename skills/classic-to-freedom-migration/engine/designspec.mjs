@@ -1995,7 +1995,7 @@ function buildLayoutGroupRows(cs, regionOf) {
     // A tab/region's placement is not derivable from `get-page` (the coordinate space it reports is not confirmed
     // against the one the plan publishes), so these are deliberately handed to a human — and the measured defect is
     // that one of them, `Header — 16 fields · Feed (ESN)`, was the one row that actually failed that human check
-    // while every machine row read green. `confirm: true` is what makes the row COUNT (see `resolveRow`); every
+    // while every machine row read green. `human: true` is what makes the row COUNT (see `resolveRow`); every
     // other vk-less row in this file is a note and stays a note.
     return { label: `${k} — ${parts.join(" · ")}`, human: true };
   });
@@ -2131,7 +2131,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // `about` is this row's identity WITHIN the shared `typedFormsBuilt` evidence key: N typed forms emit N rows that
   // all read one boolean, and without it every one of them keys to `main#onstand:typedFormsBuilt`, so a single
   // `accepted` entry would close them all (PR #157 review, Blocker 1). The schema name is the row's own subject.
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, about: t.schema, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
+  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, about: [t.schema, t.type].filter(Boolean).join("|"), vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
@@ -2162,7 +2162,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
     // Binding is only HALF of what reuse owes: the shipped Freedom form carries the base layout, so the client's
     // own Classic additions to that child page are absent unless reconciled. A set-level row so the aggregate
     // cannot read as "a bound list is a finished list". NO `vk` — deliberately, and for two reasons. A gated
-    // `onstand` row needs its evidence key in REACHABILITY_KEYS or `--units` never offers it and `--verify` can
+    // `onstand` row needs its evidence key in `ONSTAND_EVIDENCE_KEYS` or `--units` never offers it and `--verify` can
     // never clear it; and the MAIN page's reconcile is ungated prose, so gating the child harder than the page it
     // is modelled on breaks the symmetry that justifies it. A vk-less row still renders "☐ confirm on-stand".
     { label: `Reused child pages reconciled (${reused.length}) — for each, apply the client's Classic customization delta to the reused Freedom form (or record the packages checked as carrying none), per \`${RECONCILE_REFERENCE}\`.` });
@@ -4026,8 +4026,9 @@ export function resolveVk(vk, ctx) {
   // A vk-LESS row is the file's generic "render a NOTE" mechanism — one row per ported handler, `Card actions —
   // native (…)`, the per-deviation rows, the `… — separate page?` child identity rows, `List page → <template>`,
   // the reused-child reconcile row. None of those is an open question a human owes an answer to, so none of them
-  // tallies (`skip`), exactly as before ENG-96458. The rows that DO owe a human look opt in with `confirm: true`
-  // and are resolved by `resolveRow` below; see the comment there for why the default had to flip back.
+  // tallies (`skip`), exactly as before ENG-96458. The rows that DO owe a human look opt in with `human: true`
+  // and are resolved by `resolveRow` ABOVE — it reads `r.human` before it ever reaches this function, which only
+  // ever sees a row's `vk`; see the comment there for why the default had to flip back.
   if (!vk) return noteRow();
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
   if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
@@ -4336,7 +4337,8 @@ function planGapBanner(result) {
 // how specific the row already is:
 //   · an EVIDENCE row publishes its own id (`main#confirm:tab-caption:…`) — use it;
 //   · an ON-STAND row gets `<pageKey>#onstand:<evidence>`, plus `:<slug of `r.about`>` when several rows on ONE
-//     page read the SAME evidence boolean (one row per typed form, all reading `typedFormsBuilt`);
+//     page read the SAME evidence boolean (one row per typed form, all reading `typedFormsBuilt`; the `about`
+//     there is `<schema>|<type>`, because two Types may bind to ONE form schema);
 //   · anything else, including every ☐ row, gets `<pageKey>#<vk type or "confirm">:<slug of the label>`.
 // The slug is deterministic for an unchanged plan, which is the guarantee that matters: an answer recorded today
 // still matches tomorrow unless the deliverable itself was rewritten, and then it SHOULD stop matching.
@@ -4358,8 +4360,10 @@ function verifyRowKey(r, pageKey) {
   // that id, exactly as `about` is within a shared evidence key.
   if (r.id) return r.vk?.part ? `${r.id}:${r.vk.part}` : String(r.id);
   if (r.vk?.type === "onstand" && r.vk.evidence) {
-    // `about` is the row's OWN identity within the shared evidence key (the typed form's schema). Derived from the
-    // deliverable, not from the row's ordinal, so the key survives a deliverable being added above it.
+    // `about` is the row's OWN identity within the shared evidence key. For a typed form that is `<schema>|<type>`,
+    // NOT the schema alone: `normalizeTypedPages` does not dedupe by schema, and a bind-only plan routes two Types
+    // to ONE form schema — two rows, one `about`, and the collision this key exists to prevent (PR #157 review).
+    // Derived from the deliverable, not from the row's ordinal, so the key survives a deliverable added above it.
     const about = blankStr(r.about) ? "" : `:${rowSlug(r.about)}`;
     return `${pageKey}#onstand:${String(r.vk.evidence)}${about}`;
   }
@@ -4369,10 +4373,25 @@ function verifyRowKey(r, pageKey) {
 // already been handed out gets `~2`, `~3`, … . It exists so injectivity is a property of the output rather than a
 // property nobody re-checks after adding a row shape; every row shape that HAS a stable identity carries one
 // above, so a `~N` suffix appearing in a real run is a signal that a new row shape needs an `about`.
-function dedupeRowKey(seen, key) {
+//
+// PR #157 review — AND IT SAYS SO. A silent suffix is the worst of both worlds: injectivity holds, so no test
+// fails, while the operator is handed a key that is NOT a stable address (it is positional — inserting a
+// deliverable above renumbers it) and would silently stop matching the acceptance recorded against it. `hits`
+// collects every suffixed key so `renderVerify` can publish the collision as data AND print it as a ⚠ note; pass
+// nothing where only the keys themselves are wanted.
+function dedupeRowKey(seen, key, hits) {
   const n = (seen.get(key) || 0) + 1;
   seen.set(key, n);
-  return n === 1 ? key : `${key}~${n}`;
+  if (n === 1) return key;
+  const suffixed = `${key}~${n}`;
+  if (hits) hits.push(suffixed);
+  return suffixed;
+}
+// The collision note (PR #157 review). Printed in the SAME two positions as the plan-gap banner, because it has
+// the same character: it describes the ENGINE, not the build, and re-running `--verify` cannot clear it.
+function rowKeyBanner(hits) {
+  if (!hits.length) return [];
+  return ["", `> ⚠ **ROW-KEY COLLISION (${hits.length}) — engine defect, please report:** ${hits.map((k) => "`" + esc(k) + "`").join(" · ")}. Two rows of this table derived the SAME key, so the \`~N\` suffix is POSITIONAL and NOT a stable address: an \`accepted\` resolution recorded against it stops matching as soon as a deliverable is added above it. Nothing about the build is wrong — the row shape needs its own \`about\` in \`verifyRowKey\`.`];
 }
 // An `accepted` resolution for this row, or null. Only `kind: "accepted"` counts — an ordinary ⚠ Confirm answer is
 // an INPUT to the build and closes no row, a rule this must not quietly undo.
@@ -4386,12 +4405,30 @@ function acceptedFor(resIndex, key) {
 // The row as an accepted deviation: the mark says so, the evidence cell carries the operator's own words and who
 // decided, and the outcome takes the row out of every gate count. A decision the reader cannot audit is worse than
 // a red row, so `decidedBy` / `date` are printed whenever they were recorded.
-function acceptedRow(entry, key) {
-  // `decidedBy` and `date` are REQUIRED for this kind (`acceptedProblem`), so the attribution is always here for an
-  // entry that came through `readResolutions`. The `??` fallbacks cover a direct API caller that hands
-  // `renderVerify` a raw array it built itself — they make an unattributed acceptance VISIBLY unattributed in the
-  // table rather than silently anonymous, which is the state the validation exists to prevent.
-  const who = [entry.decidedBy, entry.date].map((x) => (blankStr(x) ? "NOT RECORDED" : esc(String(x)))).join(", ");
+// The missing/unusable half of an acceptance's attribution, as field names, or `[]` when the record is complete.
+// The SAME rule `acceptedProblem` enforces at the resolutions-file boundary, applied again at the render boundary
+// because the two boundaries are not the same door (see `acceptedRow`).
+function acceptedGaps(entry) {
+  const gaps = [];
+  if (blankStr(entry.decidedBy)) gaps.push("decidedBy");
+  const date = blankStr(entry.date) ? "" : String(entry.date).trim();
+  if (!date || !ISO_DATE_RE.test(date) || Number.isNaN(Date.parse(date))) gaps.push("date");
+  return gaps;
+}
+function acceptedRow(entry, key, resolved) {
+  // `decidedBy` and a parseable ISO `date` are REQUIRED for this kind, and `acceptedProblem` rejects an entry
+  // without them — but it lives inside `buildResolutionIndex`, so it guards only what that function INDEXES: the
+  // CLI's resolutions file AND a raw array handed to `opts.resolutions` (both are validated; a bad entry lands in
+  // `ix.bad` and simply never matches). The door it does not stand in is an ALREADY-BUILT index, which
+  // `asResolutionIndex` passes through untouched by design — that is how the CLI avoids re-indexing its own file —
+  // and a caller that assembles one itself used to render `ACCEPTED BY DECISION (NOT RECORDED, NOT RECORDED)`: a
+  // completeness gate overridden by nobody, in the document an audit reads. So this, the LAST boundary before the
+  // table, applies the same rule: an entry without complete attribution closes NOTHING. The row keeps its own
+  // verdict, outcome and owner — the gate stays exactly as open as it was — and the evidence cell names the field
+  // that is missing, because a silently ignored acceptance is its own trap.
+  const gaps = acceptedGaps(entry);
+  if (gaps.length) return [resolved[0], `${resolved[1]} — ⚠ an \`accepted\` entry for row \`${esc(key)}\` was IGNORED: no ${gaps.map((f) => "`" + f + "`").join(" / ")} on record, and an acceptance that carries no complete attribution (who decided, and when) overrides no gate`, resolved[2], resolved[3]];
+  const who = [entry.decidedBy, entry.date].map((x) => esc(String(x))).join(", ");
   return [`☑ accepted`, `ACCEPTED BY DECISION (${who}) — ${esc(String(entry.answer))} [row \`${esc(key)}\`]`, "accepted"];
 }
 // EVERY rendered row's key, in table order, for the table `renderVerify` would render from the same inputs — the
@@ -4426,11 +4463,14 @@ export function renderVerify(result, opts = {}, built = {}) {
   // ONE map for the whole rendered table (PR #157 review, Blocker 1): the keys an operator writes into
   // resolutions.json must be unique across the document they are read from, not merely within a group.
   const seenKeys = new Map();
+  // Every `~N` key this table handed out (PR #157 review). Normally empty; non-empty means a row shape lost its
+  // stable identity, which is an engine defect an operator must be able to SEE and a test able to assert on.
+  const rowKeyCollisions = [];
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
       const key = r.pageKey || g.pageKey || "main";
-      const rowKey = dedupeRowKey(seenKeys, verifyRowKey(r, key));
+      const rowKey = dedupeRowKey(seenKeys, verifyRowKey(r, key), rowKeyCollisions);
       const resolved = resolveRow(r, ctxFor(key));
       // ENG-96458 D3 — a row the operator ACCEPTED by decision is not a build gap. The measured case: `create-app`
       // always registers into `My applications`, so a section deliberately kept in two workplaces held a fully
@@ -4438,7 +4478,7 @@ export function renderVerify(result, opts = {}, built = {}) {
       // OVERRIDES an open row — never an ✅ (nothing to accept) and never an N/A (not a deliverable) — so a stale
       // entry for a row that has since gone green cannot mask a later regression on it.
       const accepted = resolved[2] === "ok" || resolved[2] === "skip" ? null : acceptedFor(accIndex, rowKey);
-      const [mark, ev, outcome, owner] = accepted ? acceptedRow(accepted, rowKey) : resolved;
+      const [mark, ev, outcome, owner] = accepted ? acceptedRow(accepted, rowKey, resolved) : resolved;
       // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
       // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
       // one text, not a paraphrase of it.
@@ -4457,15 +4497,18 @@ export function renderVerify(result, opts = {}, built = {}) {
   const verdict = verifyVerdict(unverified, buildMissing, rejected, builderOpen, pending);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
-    ...planGapBanner(result),
-    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
+    ...planGapBanner(result), ...rowKeyBanner(rowKeyCollisions),
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...rowKeyBanner(rowKeyCollisions)].join("\n");
   // ENG-96458 D4 — `complete` stays the BUILD verdict (`missing` + `unverified`), which is what the CLI exit code
   // and the in-context gate read. The ☐ rows are published as their own axis — `pending` plus the per-page
   // `pendingRows` worklist — and the hold "not complete while a confirmation is open" is applied by the RUN's
   // close, where the ticket puts it: a build that is finished is still finished, and it is the run that may not
   // call itself done while five rows are waiting on a human.
+  // `rowKeyCollisions` is ADDITIVE and deliberately NOT part of `complete`: a collision does not make a build
+  // short, it makes one row's ADDRESS unstable. It rides on the result so a caller (and this engine's own suite)
+  // can assert the set is empty without re-deriving every key.
   return { markdown: md, missing, unverified, pending, accepted: acceptedCount, builderOpen, buildMissing, rejected, unfiled,
-    complete: missing === 0 && unverified === 0, pages };
+    complete: missing === 0 && unverified === 0, rowKeyCollisions, pages };
 }
 
 // THE IN-CONTEXT COMPLETENESS GATE'S OWN CALL SITE (ENG-95469, A3). The post-hoc `--verify` sweep above reconciles
@@ -4593,24 +4636,44 @@ const PENDING_ROW_CAP = 5;
 const PENDING_DELIVERABLE_CAP = 40;
 // THE RUN-LEVEL BUDGET, in the summary's own wire unit. The per-page cap alone bounds nothing across a plan: 80
 // pages × 5 rows is 400 rows no matter how small each one is. So the pages are walked in order and each one's rows
-// are named only while the budget lasts; past it a page keeps its EXACT `pending` count and reports every row it
-// could not name in `pendingMore`. Both invariants the reviewer asked for hold by construction: `pending` is never
-// approximated, and `pendingMore` is always `pending - pendingRows.length` for that page.
-// 6000 is ~37% of the ceiling, leaving the counts-only fields their measured room on a 160-page plan.
+// are named only while the budget lasts; once it is spent the remaining pages name NOTHING and report their whole
+// worklist as a count.
+//
+// PR #157 review — THE BUDGET HAD TO BECOME REAL. It used to keep "at least one named row per pending page", and
+// that floor outranked the budget: 160 pages × one row is a per-page cost again, and the summary measured 46392
+// bytes with an ASCII worklist (84274 with localized labels) against a 16100-byte counts-only baseline on the same
+// plan. So the floor is gone. What is NOT negotiable, and holds for EVERY page whether it named a row or not, is
+// the arithmetic: `pending` is the page's exact ☐ count, `pendingRows` is a convenience, and
+// `pendingMore === pending - pendingRows.length` (computed that way below, from `pending` itself), so a page that
+// named nothing reads `pending: 5, pendingRows: [], pendingMore: 5`. The count is never approximated; only the
+// naming is rationed.
+//
+// WHY 6000. Measured on a 160-page plan (the largest size this boundary has been asked to hold). The counts-only
+// fields cost ~100 wire bytes per page when the page has nothing pending (`pending`/`pendingRows`/`pendingMore` are
+// omitted entirely) and ~200 when it does — so 160 pages cost ~16100 bytes in the first shape and a measured 32028
+// in the second. EITHER WAY the PAGE COUNT alone already meets the answer's ~16000-byte wire ceiling before one row
+// is named — which is the documented state of this boundary (see `verifySummary`: pages are never dropped
+// to fit, and the real close at scale is the answer-slimming follow-up, not a silent cut here). No budget can fix
+// that; what a budget CAN do is make the worklist a fixed small addition on top instead of a multiple of it. 6000
+// bytes is ~37% of the ceiling and ~60-120 named rows depending on how long the capped label and the row key are
+// (a capped row measured ~90 bytes with a 40-character ASCII label and a `main#confirm:…` key): the whole ☐
+// worklist of a ~12-page plan, and the first ~60 rows of any plan larger than that.
 const PENDING_WIRE_BUDGET = 6000;
 // One row's cost on the wire, measured with the SAME function the writer's own ceiling warning uses, so the budget
 // and the warning cannot disagree about what a row costs.
 function pendingRowBytes(r) {
   return encodedAsciiBytes(String(r.deliverable ?? "")) + encodedAsciiBytes(String(r.rowKey ?? "")) + 40; // + the JSON scaffolding of `{ n, deliverable, rowKey }`
 }
-// The rows of ONE page that fit: at most `PENDING_ROW_CAP`, and only while the run-level budget lasts. Returns the
-// named rows plus what the budget consumed, so the caller stays a single loop (Sonar CC 15).
+// The rows of ONE page that fit: at most `PENDING_ROW_CAP`, and only while the run-level budget lasts. A page
+// whose first row no longer fits names NONE — the budget is the outer bound and nothing outranks it, which is the
+// whole difference from the version that always kept one row per page. Returns the named rows plus what the budget
+// consumed, so the caller stays a single loop (Sonar CC 15).
 function pendingRowsFor(all, budget) {
   const rows = []; let spent = 0;
   for (const r of all.slice(0, PENDING_ROW_CAP)) {
     const row = { n: r.n, deliverable: String(r.deliverable).slice(0, PENDING_DELIVERABLE_CAP), rowKey: r.rowKey };
     const cost = pendingRowBytes(row);
-    if (rows.length && spent + cost > budget) break;   // always name at least ONE row per pending page
+    if (spent + cost > budget) break;
     rows.push(row); spent += cost;
   }
   return { rows, spent };
@@ -4623,8 +4686,9 @@ export function verifySummary(result, v) {
     // is unbounded (a fresh stand opens every row of every page — measured ~21 KB, which truncated the run's first
     // answer) and because each build agent reads its own rows from its own scoped gate. ☐ rows are neither: no
     // agent can read them (that is what makes them ☐), and the close report has to NAME them or the worklist is
-    // just a number. They are capped at PENDING_ROW_CAP per page with the remainder counted, so a large plan adds
-    // a fixed few hundred bytes per page instead of growing without limit.
+    // just a number. They are capped at PENDING_ROW_CAP per page AND at PENDING_WIRE_BUDGET across the whole run,
+    // with every un-named row counted in `pendingMore`, so the worklist costs a bounded number of bytes PER RUN
+    // rather than per page — the measurement is in the budget's own comment.
     // OMITTED WHEN ZERO, and that is a size decision with a measured reason: this summary is linear in page count
     // against a 16000-byte wire ceiling, and four always-present fields cost ~35 B on EVERY page to say "nothing
     // pending here" — which pushed an 80-page plan over the ceiling on its own. A page with no ☐ row and no
@@ -4635,8 +4699,11 @@ export function verifySummary(result, v) {
     budget -= spent;
     pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen,
       openCorrectness: p?.openCorrectness, openFidelity: p?.openFidelity,
+      // `pendingMore` is subtracted from the page's own `pending` — the exact, published count — and not from
+      // the pre-cap array's length, so `pending === pendingRows.length + (pendingMore || 0)` holds by
+      // construction on every page, including a page the budget let name nothing.
       ...(p?.pending ? { pending: p.pending, pendingRows } : {}),
-      ...(all.length > pendingRows.length ? { pendingMore: all.length - pendingRows.length } : {}),
+      ...(p?.pending > pendingRows.length ? { pendingMore: p.pending - pendingRows.length } : {}),
       ...(p?.accepted ? { accepted: p.accepted } : {}) };
   }
   return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };

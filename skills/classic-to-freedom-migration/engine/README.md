@@ -133,8 +133,10 @@ ENG-96458 adds two axes NEXT TO `complete`, neither of them build state, and del
   placement `get-page` cannot confirm) count. Every other `☐ confirm on-stand` row is a NOTE — a per-handler row, a
   native card-action row, a child identity row — and tallies in nothing, so `pending` measures human work rather
   than handler count. `pendingRows` names at most five rows per page, each `deliverable` clipped to 40 characters,
-  and only while a run-level wire budget lasts; a page's own `pending` count is always exact and `pendingMore` is
-  always the rows that page could not name. They are NOT build state:
+  and only while a run-level wire budget lasts (6000 wire bytes for the whole run — past it a page names NOTHING,
+  because the budget is the outer bound and no per-page floor outranks it). A page's own `pending` count is always
+  exact and `pendingMore` is always `pending - pendingRows.length`, so a page that named no row reads
+  `pending: 5, pendingRows: [], pendingMore: 5`. The names are a convenience; the counts are the contract. They are NOT build state:
   `missing`, `unverified`, `builderOpen` and `buildComplete` are untouched, `complete` still means "nothing left to
   build", and the CLI exit code is unchanged. The hold belongs to the RUN — the build executor refuses to close
   green while any confirmation is open and returns the worklist as `pendingConfirmations`.
@@ -149,9 +151,27 @@ ENG-96458 adds two axes NEXT TO `complete`, neither of them build state, and del
 A row's `rowKey` is what an acceptance addresses, and it is INJECTIVE per rendered table — one key names exactly
 one row, because an acceptance matches on the key alone: the evidence id where the row publishes one,
 `<pageKey>#onstand:<evidence>` for an on-stand row (`main#onstand:sectionRegistered`, plus a `:<subject>` tail when
-several rows on one page read the same boolean — `main#onstand:typedFormsBuilt:usrtypeda`), otherwise
+several rows on one page read the same boolean — `main#onstand:typedFormsBuilt:usrtypeda-a`, the form's schema AND
+its Type, because a bind-only plan may route two Types to one form schema), otherwise
 `<pageKey>#<vk type>:<slug of the label>`. The label's slug keeps backticked identifiers, so sibling rows
-(`Handler — \`<method>\``) do not collapse; a key that still lands twice gets a `~2` / `~3` suffix in table order.
+(`Handler — \`<method>\``) do not collapse.
+
+**Row-key stability — what changes a key, and what a `~N` means.** A key is stable for an UNCHANGED deliverable and
+is meant to be re-usable across runs: an acceptance recorded today still matches tomorrow. Two things follow from
+that, and both are deliberate:
+
+- The Layout-row slug is the slug of the row's LABEL, and that label carries the region's field count
+  (`Header — 16 fields · Feed (ESN)` → `main#confirm:header-16-fields-feed-esn`). So **rewriting the deliverable
+  changes the key** — add a field to that region and the acceptance recorded against the old row stops matching.
+  That is the intent, not a defect: the row an operator confirmed on the stand is not the row the plan now
+  describes, and an acceptance must not be inherited by a deliverable nobody looked at. Re-read the key from
+  `--verify-json` after re-planning.
+- `~2` / `~3` is the LAST-RESORT dedupe suffix (`dedupeRowKey`), appended in table order when two rows still derive
+  the same key. It keeps the keys injective — an acceptance can never close N rows at once — but it is **NOT a
+  stable address**: it is positional, so inserting a deliverable above renumbers it. Every row shape that has its
+  own identity carries one (an evidence id, a `part`, an `about`), so **an operator should never see a `~N`. Seeing
+  one is an engine bug to report** — `--verify` publishes them in `rowKeyCollisions` and prints a `⚠ ROW-KEY
+  COLLISION` note in `verify.md` for exactly that reason. Never write a `~N` key into `resolutions.json`.
 **Read the key from `--verify-json`'s `openRows[].rowKey` / `pendingRows[].rowKey`; never construct one.** `buildComplete` (no open row the
 BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate above reads for ITS exit code — the
 two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
