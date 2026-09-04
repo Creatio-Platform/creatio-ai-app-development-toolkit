@@ -1631,17 +1631,24 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
   // `#Section/Applicant` errors at runtime" blocker across all six runs, was never parked, and was re-dispatched
   // every time. A `blocked` item is not a `park`; this turns the source-caused ones into terminal parks so they leave
   // `openNow()` and never come back. The DECISION is the pure `sourceBlockerParks` (unit-tested in gate.mjs);
-  // classification reads ONLY the blocker's own text, and it reads for a SUBJECT as well as a failure mode: a
-  // `Script error` or an uninstalled dependency names the source side by itself, while a compile/load/render/runtime
-  // failure or a render check that "could not be performed" has to name the Classic source in the same text —
-  // untreated, those sentences describe the page this run just built (or this run's own check of it) at least as
-  // well. A blocker without that shape stays `unknown` → retryable — a wrongly-parked builder bug is a dropped
+  // classification reads the blocker's own text and ONE fact this run holds about itself, and it reads for a SUBJECT
+  // as well as a failure mode: a `Script error` or an uninstalled dependency names the source side by itself, while a
+  // compile/load/render/runtime failure or a render check that "could not be performed" has to name the Classic
+  // source in the same text — untreated, those sentences describe the page this run just built (or this run's own
+  // check of it) at least as well. THE ONE FACT (ENG-96147) is the route the run recorded for the section IT built:
+  // `#Section/<code>` counts as a Classic-source subject only while the code is not that route, because this script
+  // composes that same prefix for its own section, and a blocker quoting the built section's own URL is a report
+  // about the built page — parking it terminally would diagnose a builder defect as a source one. Both readings of
+  // the record are passed (`standWrites.sectionRoute.route` is the merged view `mergeSectionRoute` maintains;
+  // `state.sectionRouteByRun.route` is the copy the queue file carried into this process), so the exemption does not
+  // depend on which of the two a resumed run happens to have filled in first. A blocker without a source shape stays
+  // `unknown` → retryable — a wrongly-parked builder bug is a dropped
   // deliverable, and a resumed run must be free to re-attempt a builder blocker a fresh builder can fix, so the
   // default is to retry, never to park on doubt. Mirrors `applyInContextParks`: chosen keys → park records through
   // the run's own `parkRecord`, then the SAME `parked`/`parkedSet`/`blockedByParked` machinery so ancestors block
   // identically. `rounds: 0` records the truth — the unit was never given a build round because one could not help.
   function applySourceBlockerParks() {
-    const candidates = sourceBlockerParks(blockedItems)
+    const candidates = sourceBlockerParks(blockedItems, [standWrites.sectionRoute?.route, state?.sectionRouteByRun?.route])
     const fresh = candidates
       .filter((p) => !parkedSet.has(p.key) && schedule.some((u) => u.key === p.key))
       .map((p) => parkRecord(p.key, p.parkedWhy, 0))

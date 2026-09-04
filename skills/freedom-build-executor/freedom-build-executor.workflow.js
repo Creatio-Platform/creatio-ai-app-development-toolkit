@@ -2201,33 +2201,62 @@ const FAILURE_MODE_PATTERNS = [
   /render\s+check\b[^.]*\b(could\s+not|cannot|failed)/i,
 ]
 
-const SOURCE_SUBJECT = /(\bclassic\b|\bsource\b|\boriginal\b|\blegacy\b|#Section\/)/i
+const SOURCE_SUBJECT_WORDS = /(\bclassic\b|\bsource\b|\boriginal\b|\blegacy\b)/i
+const SECTION_REF = /#Section\/([^\s`'"()[\],;:?]+)/gi
+const SECTION_REF_PRESENT = /#Section\/[^\s`'"()[\],;:?]+/i
+
+function routeStringOf(entry) {
+  if (typeof entry === 'string') return entry
+  if (typeof entry?.route === 'string') return entry.route
+  return ''
+}
+
+function ownRouteCodes(ownRoutes) {
+  const codes = new Set()
+  for (const entry of Array.isArray(ownRoutes) ? ownRoutes : [ownRoutes]) {
+    const code = routeStringOf(entry).trim().replace(/^#Section\//i, '').trim().toLowerCase()
+    if (code) codes.add(code)
+  }
+  return codes
+}
+
+function namesSourceSubject(text, ownRoutes) {
+  if (SOURCE_SUBJECT_WORDS.test(text)) return true
+  const own = ownRouteCodes(ownRoutes)
+  for (const m of text.matchAll(SECTION_REF)) {
+    if (!own.has(m[1].toLowerCase())) return true
+  }
+  return false
+}
 
 function blockerKey(b) {
   return (b && (b.unit ?? b.key)) || null
 }
 
-function classifyBlocker(blocker) {
+function classifyBlocker(blocker, ownRoutes = []) {
   const text = `${blocker?.what || ''} ${blocker?.why || ''}`.trim()
   if (!text) return { class: 'unknown', reason: 'blocker carries no `what`/`why` text to classify on' }
   if (SOURCE_PATTERNS.some((re) => re.test(text))) {
     return { class: 'source', reason: 'blocker text names the source side on its own — the Classic runtime\'s own `Script error for "<schema>"`, or a dependency the migration reads from that is not installed; neither changes when the Freedom page is rebuilt' }
   }
   if (FAILURE_MODE_PATTERNS.some((re) => re.test(text))) {
-    if (SOURCE_SUBJECT.test(text)) {
+    if (namesSourceSubject(text, ownRoutes)) {
       return { class: 'source', reason: 'blocker text names the Classic/source side failing to compile, load, render or run — a rebuild of the Freedom page cannot change it' }
+    }
+    if (SECTION_REF_PRESENT.test(text)) {
+      return { class: 'unknown', reason: 'a compile/load/render/runtime failure whose only source-looking subject is a `#Section/` route THIS RUN recorded for the section it built — that is a report about the built page, so it stays retryable (ENG-96147)' }
     }
     return { class: 'unknown', reason: 'a compile/load/render/runtime failure whose SUBJECT is not named as the Classic source — it describes the page this run built, or this run\'s own check of it, just as well, so it stays retryable' }
   }
   return { class: 'unknown', reason: 'no source-failure signal — treated as retryable (the safe default)' }
 }
 
-function sourceBlockerParks(blocked) {
+function sourceBlockerParks(blocked, ownRoutes = []) {
   const out = []
   for (const b of blocked || []) {
     const key = blockerKey(b)
     if (!key) continue
-    const { class: cls, reason } = classifyBlocker(b)
+    const { class: cls, reason } = classifyBlocker(b, ownRoutes)
     if (cls !== 'source') continue
     out.push({
       key,
@@ -3061,7 +3090,7 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
   }
 
   function applySourceBlockerParks() {
-    const candidates = sourceBlockerParks(blockedItems)
+    const candidates = sourceBlockerParks(blockedItems, [standWrites.sectionRoute?.route, state?.sectionRouteByRun?.route])
     const fresh = candidates
       .filter((p) => !parkedSet.has(p.key) && schedule.some((u) => u.key === p.key))
       .map((p) => parkRecord(p.key, p.parkedWhy, 0))

@@ -8,7 +8,9 @@
 // effect before Refs / Preflight / Build: with `main` already complete and `list` source-blocked, the
 // schedule has nothing open, so the run reaches its zero-work close after the first (and only) agent.
 // The negative case proves the classifier does not over-park: a BUILDER-caused blocker leaves `list` open,
-// so the run proceeds past the baseline instead of closing.
+// so the run proceeds past the baseline instead of closing. The third pair does the same for ENG-96147's
+// own-route exemption, and it is the only leg that proves the RECORDED ROUTE is threaded from the Reconcile
+// answer through `mergeSectionRoute` into the classifier — the pure goldens in `gate.mjs` cannot see that wiring.
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -38,7 +40,9 @@ const BEX_INPUT = {
 
 // A baseline Reconcile result where `main` is complete and `list` is the only open unit, carrying `blocker`.
 // Every key the RECONCILE schema names is present (modelled on the green-baseline fixture in run-workflow-core).
-const reconcileWith = (blocker) => ({
+// `extra` overlays root keys the individual leg cares about (ENG-96147 adds `sectionRouteByRun`); the fixture
+// itself is unchanged, so the ENG-94859 legs read exactly the answer they always did.
+const reconcileWith = (blocker, extra = {}) => ({
   approval: { found: true, version: "plan-abc", quote: "approved" }, planVersion: "plan-abc",
   unitKeys: ["main", "list"], buildOrder: ["list", "main"], targetPackage: "P", packageState: "exists", mainEntity: "Applicant",
   sectionHost: "existing-app", applicationCode: "App", componentTypes: [], componentResolution: [],
@@ -69,6 +73,7 @@ const reconcileWith = (blocker) => ({
     },
   },
   exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
+  ...extra,
 });
 
 const SOURCE_BLOCKER = {
@@ -146,6 +151,38 @@ check("with a builder-caused blocker, `list` stays OPEN — the run does NOT zer
   () => JSON.stringify({ done: !!bld.done, dispatched: bld.dispatched }).slice(0, 300));
 check("`list` is NOT parked-and-closed by the source-blocker path (it is the builder's to fix)",
   () => !bld.done, () => JSON.stringify(bld.dispatched).slice(0, 200));
+
+console.log("\n===== the run's OWN recorded route does NOT park (ENG-96147), driven through the core =====");
+
+/* This is the leg that proves the WIRING of the ENG-96147 exemption, not just the classifier: the recorded route
+   has to travel from the queue file, through the baseline Reconcile answer and `mergeSectionRoute`, into the
+   `sourceBlockerParks` call. Same failure mode as the measured blocker, but the surface it names is the section
+   THIS RUN built (`standWrites.sectionRoute` / `sectionRouteByRun`), and the `Script error for "<schema>"` wording
+   is absent — so nothing else in the text names the source side. The unit must stay OPEN and keep its build round;
+   a park here would be a builder defect terminally dropped under the diagnosis "the blocker is in the SOURCE". */
+const OWN_ROUTE = "#Section/UsrApplicants_ListPage";
+const OWN_ROUTE_BLOCKER = {
+  unit: "list",
+  what: "Live render check on surface automatic:3 (real Chrome) could not be performed for this page",
+  why: `\`${OWN_ROUTE}\` errors at runtime`,
+};
+const ROUTE_ON_FILE = {
+  sectionRouteByRun: { route: OWN_ROUTE, schemaName: "UsrApplicants_ListPage", sectionHost: "existing-app", planVersion: "plan-abc" },
+};
+
+const own = driveRun("ownroute", reconcileWith(OWN_ROUTE_BLOCKER, ROUTE_ON_FILE));
+check("ENG-96147: with the run's OWN route on file, a blocker quoting it leaves `list` OPEN — the run does NOT zero-work close, so the unit keeps the build round a re-check could close",
+  () => !own.done && own.dispatched.some((d) => d.phase !== "Reconcile" && d.phase !== "Close"),
+  () => JSON.stringify({ done: !!own.done, dispatched: own.dispatched, parked: own.done?.result?.parked }).slice(0, 400));
+
+/* The CONTROL for that leg: the identical blocker with NO route on file still parks, which is what makes the leg
+   above a test of the recorded route rather than of the blocker's wording. It is also the residual gap stated as
+   behaviour — before a `sectionRegistered` unit reports a route the run cannot tell its own surface from a Classic
+   one, and SOURCE is the reading ENG-94859 needs. */
+const noRoute = driveRun("noroute", reconcileWith(OWN_ROUTE_BLOCKER));
+check("ENG-96147 control: the SAME blocker with no recorded route still parks `list` and closes the run — the exemption is driven by the route the run recorded, not by the blocker's wording",
+  () => !!noRoute.done && (noRoute.done?.result?.parked || []).some((p) => p.key === "list"),
+  () => JSON.stringify({ done: !!noRoute.done, parked: noRoute.done?.result?.parked, dispatched: noRoute.dispatched }).slice(0, 400));
 
 console.log(`\n=================\nSOURCE-BLOCKER-PARK GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

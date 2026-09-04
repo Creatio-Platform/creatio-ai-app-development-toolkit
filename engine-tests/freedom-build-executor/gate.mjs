@@ -148,6 +148,84 @@ check("PR #157 review: a builder-shaped failure mode therefore does NOT become a
   () => sourceBlockerParks([{ unit: "main", what: "the page I built does not load", why: "" }]).length === 0,
   () => sourceBlockerParks([{ unit: "main", what: "the page I built does not load", why: "" }]));
 
+/* ---------------------------------------------------------------------------
+   4. THE RUN'S OWN `#Section/` ROUTE IS NOT A SOURCE SUBJECT (ENG-96147)
+
+   `#Section/` reads as a source subject because it is the render-surface identifier the migration publishes for
+   a CLASSIC surface — but this run composes exactly that prefix for the section IT BUILT and records it in
+   `standWrites.sectionRoute.route`. A blocker quoting that string is a report about the BUILT page, so classifying
+   it `source` would park a builder defect terminally under the diagnosis "the blocker is in the SOURCE" — a
+   silently dropped deliverable, which is the same Major this whole subject split answers. The recorded route
+   reaches the classifier as an argument, so the function stays pure.
+   --------------------------------------------------------------------------- */
+console.log("\n===== classifyBlocker: the run's OWN recorded route is not a source subject =====");
+
+// The route a `sectionRegistered` reach unit reported, in the shape `standWrites.sectionRoute` stores it.
+const OWN_ROUTE = "#Section/UsrApplicants_ListPage";
+const clsOwn = (what, why = "") => classifyBlocker({ unit: "list", what, why }, [OWN_ROUTE]).class;
+
+check("ENG-96147: a failure-mode blocker naming the run's OWN recorded `#Section/<code>` is UNKNOWN → retried, never SOURCE — the run itself composed that URL for the page it built, so a terminal park would call a builder defect a source one",
+  () => clsOwn("the render check could not be performed", "`#Section/UsrApplicants_ListPage` errors at runtime") === "unknown",
+  () => JSON.stringify(classifyBlocker({ unit: "list", what: "the render check could not be performed", why: "`#Section/UsrApplicants_ListPage` errors at runtime" }, [OWN_ROUTE])));
+check("ENG-96147: the own-route verdict carries its OWN reason, distinct from the unnamed-subject one, so the retry line says WHICH ambiguity kept the unit open",
+  () => {
+    const r = classifyBlocker({ what: "`#Section/UsrApplicants_ListPage` fails to load" }, [OWN_ROUTE]).reason;
+    return /THIS RUN recorded/.test(r) && !/SUBJECT is not named/.test(r);
+  },
+  () => classifyBlocker({ what: "`#Section/UsrApplicants_ListPage` fails to load" }, [OWN_ROUTE]).reason);
+check("ENG-96147: the exemption is case-insensitive and tolerates the `{ route, schemaName }` record the state file stores, not only a bare string",
+  () => classifyBlocker({ what: "`#section/usrapplicants_listpage` does not load" },
+    [{ route: OWN_ROUTE, schemaName: "UsrApplicants_ListPage" }]).class === "unknown",
+  () => JSON.stringify(classifyBlocker({ what: "`#section/usrapplicants_listpage` does not load" }, [{ route: OWN_ROUTE }])));
+check("ENG-96147: a SOURCE WORD still decides on its own — the own-route exemption removes the `#Section/` signal, it does not make the text un-classifiable",
+  () => clsOwn("the Classic original at `#Section/UsrApplicants_ListPage` fails to render") === "source",
+  () => JSON.stringify(classifyBlocker({ what: "the Classic original at `#Section/UsrApplicants_ListPage` fails to render" }, [OWN_ROUTE])));
+
+/* The ENG-94859 benefit the exemption must NOT cost: a GENUINE Classic-source blocker names the section being
+   migrated FROM, which is a DIFFERENT `#Section/<code>` than the one the run built, so it still parks once. */
+check("ENG-96147: the reference is recognised when written WITHOUT backticks and followed by a colon or a query string — ordinary agent phrasing, and folding the punctuation into the code would make the run's own route stop matching itself",
+  () => clsOwn("opening #Section/UsrApplicants_ListPage: the render check could not be performed") === "unknown"
+    && clsOwn("#Section/UsrApplicants_ListPage?mode=list fails to load") === "unknown",
+  () => JSON.stringify([classifyBlocker({ what: "opening #Section/UsrApplicants_ListPage: the render check could not be performed" }, [OWN_ROUTE]),
+    classifyBlocker({ what: "#Section/UsrApplicants_ListPage?mode=list fails to load" }, [OWN_ROUTE])]));
+check("ENG-96147: a BARE `#Section/` with no code after it — the \"no published route was available\" report the policy doc asks agents to write — is UNKNOWN, and its reason does NOT claim the run recorded that route",
+  () => {
+    const v = classifyBlocker({ unit: "list", what: "render check could not be performed", why: "no `#Section/` route was on file to open" }, [OWN_ROUTE]);
+    return v.class === "unknown" && !/THIS RUN recorded/.test(v.reason);
+  },
+  () => JSON.stringify(classifyBlocker({ unit: "list", what: "render check could not be performed", why: "no `#Section/` route was on file to open" }, [OWN_ROUTE])));
+
+check("ENG-94859 kept: a DIFFERENT `#Section/<code>` — the Classic section being migrated FROM — is still SOURCE even while a route of the run's own is recorded",
+  () => clsOwn("the render check could not be performed", "`#Section/Applicant` errors at runtime") === "source",
+  () => JSON.stringify(classifyBlocker({ what: "the render check could not be performed", why: "`#Section/Applicant` errors at runtime" }, [OWN_ROUTE])));
+check("ENG-94859 kept: the exemption is PER REFERENCE, not per text — a Classic surface quoted ALONGSIDE the run's own route still parks on the other reference",
+  () => clsOwn("`#Section/UsrApplicants_ListPage` was built, but `#Section/Applicant` does not load") === "source",
+  () => JSON.stringify(classifyBlocker({ what: "`#Section/UsrApplicants_ListPage` was built, but `#Section/Applicant` does not load" }, [OWN_ROUTE])));
+check("ENG-94859 kept: the MEASURED Applicant blocker still parks with the run's own route on file — its `#Section/Applicant` is not that route, and its `Script error for \"<schema>\"` names the source side anyway",
+  () => classifyBlocker(APPLICANT_LIST_BLOCKER, [OWN_ROUTE]).class === "source",
+  () => JSON.stringify(classifyBlocker(APPLICANT_LIST_BLOCKER, [OWN_ROUTE])));
+check("ENG-96147: a `#Section/<guess>` that merely RESEMBLES the recorded route (the ST_2 incident's composed URL, missing the real `_ListPage` suffix) is still SOURCE — the match is exact by design, because a Classic surface is routinely a PREFIX of the Freedom route built from it, so a prefix rule would stop the measured ENG-94859 blocker from parking",
+  () => clsOwn("`#Section/UsrApplicants` errors at runtime") === "source",
+  () => JSON.stringify(classifyBlocker({ what: "`#Section/UsrApplicants` errors at runtime" }, [OWN_ROUTE])));
+
+/* NO ROUTE RECORDED — the residual gap, stated as behaviour rather than glossed over. Before a `sectionRegistered`
+   reach unit reports one (and on the `pages-only-no-menu` plans that register no section at all), the run holds no
+   route, so it can vouch AGAINST nothing: a `#Section/<code>` is then indistinguishable from a Classic identifier.
+   The classifier keeps the pre-ENG-96147 answer — SOURCE — because that is the reading the measured ENG-94859
+   blocker needs, and because the goldens above show the exemption only ever narrows what parks. */
+check("no route recorded (nothing in state yet, or a plan that registers no section): a `#Section/<code>` failure-mode blocker is still SOURCE — with no recorded route the run cannot tell its own surface from a Classic one, and this is the reading ENG-94859 needs; the exemption narrows parking only once a route exists",
+  () => classifyBlocker({ what: "render check could not be performed — `#Section/UsrApplicants_ListPage` does not open" }).class === "source"
+    && classifyBlocker({ what: "render check could not be performed — `#Section/UsrApplicants_ListPage` does not open" }, []).class === "source",
+  () => JSON.stringify(classifyBlocker({ what: "render check could not be performed — `#Section/UsrApplicants_ListPage` does not open" })));
+check("no route recorded: blank / malformed route entries are dropped rather than read as an empty code that would exempt every reference",
+  () => classifyBlocker({ what: "`#Section/UsrApplicants_ListPage` fails to load" }, [null, undefined, "", "   ", "#Section/", {}]).class === "source",
+  () => JSON.stringify(classifyBlocker({ what: "`#Section/UsrApplicants_ListPage` fails to load" }, [null, "", "#Section/", {}])));
+
+check("ENG-96147: `sourceBlockerParks` threads the recorded route through, so the own-route blocker produces NO park record at all",
+  () => sourceBlockerParks([{ unit: "list", what: "the render check could not be performed", why: "`#Section/UsrApplicants_ListPage` errors at runtime" }], [OWN_ROUTE]).length === 0
+    && sourceBlockerParks([{ unit: "list", what: "the render check could not be performed", why: "`#Section/UsrApplicants_ListPage` errors at runtime" }]).length === 1,
+  () => JSON.stringify(sourceBlockerParks([{ unit: "list", what: "the render check could not be performed", why: "`#Section/UsrApplicants_ListPage` errors at runtime" }], [OWN_ROUTE])));
+
 /* --------------------------------------------------------------------------- */
 console.log(`\n=================\nGATE GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
