@@ -47,6 +47,15 @@ PINNED = (MIGRATION_SKILL, EXECUTOR_SKILL, BUILD_RECIPE, MIGRATION_DOCS)
 # so a sixth mode added to the engine and never mentioned here is a red test, not a silent gap.
 MODES = ("auto", "checkpoints", "guided", "round1", "layout-first")
 
+# The subset an operator is actually SHOWN (DR-6). `MODES` above is what the run ACCEPTS; this is what
+# the menu renders. The gap is deliberate and is the whole of DR-6: `auto` answers a different question
+# ("nobody is watching this run", declared through `defaultMode`) and `checkpoints` is an inherited mode
+# ENG-96204 does not specify, so neither is offered — while both stay legal when passed on purpose.
+# PR review (thread on `tests/test_control_mode_docs.py:48`): this file pinned `MODES` against the
+# shipped `buildModes()` but never pinned the OFFERED set against `offeredModes()`, so a regression that
+# put `auto` back on the menu — re-opening exactly what DR-6 closed — was invisible from the doc side.
+OFFERED_MODES = ("guided", "round1", "layout-first")
+
 
 def read_text(path):
     return path.read_text(encoding="utf-8").replace("’", "'")
@@ -116,6 +125,75 @@ class ControlModeDocTests(unittest.TestCase):
             missing,
             f"buildModes() ships a mode the launcher skill never offers as `mode`; missing {missing}",
         )
+
+    def test_offered_mode_list_matches_the_shipped_offeredModes(self):
+        """`offeredModes()` is what the menu renders, so pin it the way `buildModes()` is pinned.
+
+        Same technique as the test above -- read the shipped bundle, extract the array literal, and
+        fail loudly if the regex and the generated source have drifted rather than letting the
+        assertion pass on nothing. Three things are checked, because they fail in different ways: the
+        shipped offered set equals this file's, the offered set is a strict subset of the accepted
+        set, and the difference is exactly ``auto`` and ``checkpoints`` -- so a mode added to one list
+        and forgotten in the other is red either way round.
+        """
+        bundle_text = read_text(WORKFLOW_BUNDLE)
+        match = re.search(
+            r"function\s+offeredModes\s*\(\s*\)\s*\{\s*return\s*\[(?P<items>[^\]]*)\]\s*\}",
+            bundle_text,
+        )
+        self.assertIsNotNone(
+            match,
+            "could not find `function offeredModes() { return [...] }` in the shipped bundle "
+            f"({WORKFLOW_BUNDLE}) -- the extraction regex and the generated source have drifted, "
+            "and this must fail loudly rather than let the pins below pass vacuously",
+        )
+        item_pattern = re.compile(r"""['\"]([^'\"]+)['\"]""")
+        shipped_offered = tuple(item_pattern.findall(match.group("items")))
+        self.assertTrue(
+            shipped_offered,
+            f"`offeredModes()` matched but no string literals were extracted: {match.group('items')!r}",
+        )
+        self.assertEqual(
+            set(shipped_offered),
+            set(OFFERED_MODES),
+            "the DOC-side OFFERED_MODES and the engine's own offeredModes() have diverged -- either a "
+            "mode is on the operator's menu that this file does not document, or one is documented as "
+            "offered and is not",
+        )
+        self.assertTrue(
+            set(OFFERED_MODES) < set(MODES),
+            "the offered set must be a STRICT subset of the accepted set: an offered mode the run "
+            "would refuse is a menu entry that cannot be chosen",
+        )
+        self.assertEqual(
+            set(MODES) - set(OFFERED_MODES),
+            {"auto", "checkpoints"},
+            "DR-6 fixes the difference at exactly `auto` (the unattended path, declared through "
+            "`defaultMode`) and `checkpoints` (inherited, not specified by ENG-96204). A change to "
+            "that difference is a change to DR-6 and must be made deliberately, not by drift",
+        )
+
+    def test_launcher_offers_exactly_the_offered_modes_and_no_others(self):
+        """Mentioning a mode is not offering it.
+
+        ``test_launcher_offers_every_mode_the_run_accepts`` checks all five modes are *mentioned* in
+        the launcher, which a launcher that put `auto` on the menu would also satisfy -- the earlier
+        pins on that are prose markers. This one counts the option rows: exactly the offered modes get
+        one, and neither unoffered mode does.
+        """
+        content = flat(read_text(MIGRATION_SKILL))
+        for label, token in (("Guided", "guided"), ("Round by round", "round1"),
+                             ("Layout first", "layout-first")):
+            self.assertIn(
+                f"| **{label}** | `{token}` |", content,
+                f"`{token}` is in offeredModes() but the launcher's option table has no row for it",
+            )
+        for token in set(MODES) - set(OFFERED_MODES):
+            self.assertNotIn(
+                f"| `{token}` |", content,
+                f"`{token}` is NOT offered (DR-6) but appears as a row in the launcher's option "
+                f"table -- that table is the menu, so a row there is an offer",
+            )
 
     def test_launcher_presents_the_mode_as_required(self):
         content = read_text(MIGRATION_SKILL)
