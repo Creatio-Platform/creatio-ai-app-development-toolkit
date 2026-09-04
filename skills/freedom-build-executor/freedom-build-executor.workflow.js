@@ -2844,7 +2844,9 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   packageState = state.packageState || null
   const roundRecord = roundStateOf(state)
   layoutPassDone = roundRecord.layoutPassDone
-  roundsBefore = Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0)
+  const roundsSpentSoFar = () => Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0)
+
+  roundsBefore = roundsSpentSoFar()
   consumedRoundAnswers = mergeConsumed([], roundRecord.consumedRoundAnswers)
   if (isLayoutPassMode(mode)) {
     log(layoutPassDone
@@ -4129,7 +4131,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       next: nextForOperator,
     })
   }
-  const roundsSpentNow = () => Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0, roundsBefore + round)
+  const roundsSpentNow = () => Math.max(roundsSpentSoFar(), roundsBefore + round)
   const nextRoundNo = () => roundsSpentNow() + 1
 
   function roundStopNext(nextRound, layoutPass) {

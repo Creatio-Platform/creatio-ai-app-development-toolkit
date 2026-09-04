@@ -2430,27 +2430,51 @@ check("ENG-95930: the shape check ACCEPTS the digest the engine actually publish
   // downstream and would re-open settled units. So the honest contract is measured here with localized (Cyrillic)
   // page keys, the expensive case on the wire: a large real plan fits with headroom, and a plan past the ceiling is
   // CAUGHT by the size fault — named, retried, and stopped honestly — never silently truncated in flight.
-  const atScale = (count) => {
+  // `severitySplit` models the ENG-96204 (AC 2) fields, which EVERY real verdict now carries — the tally stamps
+  // them on every page it opens. It is a parameter only so the two shapes can be measured against each other and
+  // the cost of the axis stated as a number; `true` is the shipped reality and the default.
+  const atScale = (count, { severitySplit = true } = {}) => {
     const pages = {};
     for (let i = 1; i <= count; i += 1) {
       // Complete pages carry openRows in the rich verdict too (rows closed late stay listed); the projection must
       // strip rows from EVERY page, not only incomplete ones.
       const done = i % 3 === 0;
+      // `openCorrectness + openFidelity === missing + unverified` by construction (see `verifyTally`), so the
+      // fixture keeps that invariant rather than inventing a split the engine could never produce.
+      const split = severitySplit ? { openCorrectness: done ? 0 : 2, openFidelity: 1 } : {};
       pages[`child:Сторінка-${i}`] = { complete: done, buildComplete: done, buildMissing: done ? 0 : 2,
-        missing: done ? 0 : 2, unverified: 1, builderOpen: done ? 0 : 1,
+        missing: done ? 0 : 2, unverified: 1, builderOpen: done ? 0 : 1, ...split,
         openRows: [{ n: 1, deliverable: "Поле Сума", status: "❌ MISSING", evidence: "0/7 полів", outcome: "missing", owner: "builder" }] };
     }
     const s = verifySummary({}, { complete: false, missing: count, unverified: count, buildMissing: count, pages });
     return { summary: s, answer: { ...goodDigest, verify: s } };
   };
-  const eighty = atScale(80);
-  check("ENG-95930 (review round 14): 80 localized pages — complete ones included, all still carrying rows in the verdict — project to a rows-free summary with EVERY page kept, pass the checker, and the whole answer encodes under the 16000-byte wire ceiling (measured ~73% of it on these keys; heavier localized keys spend the rest)",
-    !JSON.stringify(eighty.summary).includes("openRows")
-      && Object.keys(eighty.summary.pages).length === 80
-      && eighty.summary.pages["child:Сторінка-3"].complete === true
-      && wf.reconcileShapeErrors?.(eighty.answer).length === 0
-      && wf.encodedAsciiBytes?.(JSON.stringify(eighty.answer)) < 16000,
-    () => `pages=${Object.keys(eighty.summary.pages).length} encoded=${wf.encodedAsciiBytes?.(JSON.stringify(eighty.answer))} B faults=${JSON.stringify(wf.reconcileShapeErrors?.(eighty.answer).slice(0, 1))}`);
+  // ENG-96204 (PR review, minor 3) — THE CEILING MOVED, AND THIS IS WHERE IT IS NOW. This block used to measure 80
+  // pages at ~73% of the ceiling and call it headroom. It was measuring a shape that no longer exists: the fixture
+  // carried no `openCorrectness`/`openFidelity`, while every verdict the engine writes now stamps both on every open
+  // page. With them the SAME 80 pages encode 16356 B and are over the 16000-byte ceiling — so the old check passed
+  // only because its fixture predated the field it was supposed to be sizing. The real boundary is 78 pages.
+  const fits = atScale(78);
+  check("ENG-95930 (review round 14) + ENG-96204 (PR review, minor 3): 78 localized pages — complete ones included, all still carrying rows in the verdict — project to a rows-free summary with EVERY page kept, pass the checker, and encode under the 16000-byte wire ceiling. Measured WITH the AC 2 severity split every real verdict now carries: 15960 B, 99.8% of the ceiling. This is the LAST page count that fits, so the check is deliberately a CANARY — the next per-page field fails here, in a suite, instead of on a live run against a customer stand",
+    !JSON.stringify(fits.summary).includes("openRows")
+      && Object.keys(fits.summary.pages).length === 78
+      && fits.summary.pages["child:Сторінка-3"].complete === true
+      && fits.summary.pages["child:Сторінка-1"].openCorrectness === 2
+      && fits.summary.pages["child:Сторінка-1"].openFidelity === 1
+      && wf.reconcileShapeErrors?.(fits.answer).length === 0
+      && wf.encodedAsciiBytes?.(JSON.stringify(fits.answer)) < 16000,
+    () => `pages=${Object.keys(fits.summary.pages).length} encoded=${wf.encodedAsciiBytes?.(JSON.stringify(fits.answer))} B faults=${JSON.stringify(wf.reconcileShapeErrors?.(fits.answer).slice(0, 1))}`);
+  // WHAT THE SEVERITY AXIS COST, AS A NUMBER, and pinned as a PAIR in one check — because either half alone is a
+  // fact without a cause. 79 pages is over the ceiling and faulted by size; the SAME 79 pages without the split
+  // still fit. So a future reader knows the lost pages went to AC 2's two integers and not to page-key growth,
+  // and ENG-96071 (answer slimming) has a measured target rather than an impression.
+  const over = atScale(79);
+  const overBare = atScale(79, { severitySplit: false });
+  check("ENG-96204 (PR review, minor 3): the AC 2 severity split costs 18 pages of Reconcile-answer headroom — the largest plan that fits falls from 96 pages to 78. Pinned at the boundary: 79 localized pages exceed the 16000-byte ceiling and are FAULTED by size naming `verify`, while the same 79 pages WITHOUT `openCorrectness`/`openFidelity` still encode under it. Two integers per page are the whole difference",
+    wf.encodedAsciiBytes?.(JSON.stringify(over.answer)) > 16000
+      && wf.reconcileShapeErrors?.(over.answer).some((f) => /encodes to \d+ ASCII bytes/.test(f) && /verify/.test(f))
+      && wf.encodedAsciiBytes?.(JSON.stringify(overBare.answer)) < 16000,
+    () => `79 with split=${wf.encodedAsciiBytes?.(JSON.stringify(over.answer))} B, 79 without=${wf.encodedAsciiBytes?.(JSON.stringify(overBare.answer))} B, ceiling 16000`);
   const twoHundred = atScale(200);
   check("ENG-95930 (review round 14): 200 localized pages push the SAME projection past the ceiling, and the checker FAULTS it by size naming `verify` — the linear growth is caught and spoken, not hidden by dropping pages (the engine warns at 3/4 of this number when writing the summary, and the slimming lives in ENG-96071)",
     Object.keys(twoHundred.summary.pages).length === 200

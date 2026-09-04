@@ -56,6 +56,17 @@ expensive direction is not a safe default.
 A caller that does none of these gets `stopped: 'mode-not-chosen'` with `validModes` and builds
 nothing — a stop that names its own fix, not a crash.
 
+**Where this sits against the versioning policy (PR review, minor 5).** `AGENTS.md` §Versioning
+Policy makes "breaking change in workflow contracts" a **MAJOR** bump, and an omitted `mode` no
+longer resolving to `auto` is exactly that class of change. It does **not** trigger a MAJOR bump
+now: this contract has never shipped on `main`. The base is the unreleased `ENG-94529-migration-stage-2-poc`
+epic branch, `mode` was introduced on that same unreleased branch, and no released CAADT version
+exposes a `freedom-build-executor` launch without a required mode — so there is no published
+contract to break. The obligation is deferred, not waived: **whoever merges this epic to `main` owns
+the MAJOR bump for the epic as a whole**, and this DR is the record that the mode gate is one of the
+breaking changes that bump covers. If the epic were ever released in pieces, this change would have
+to lead one of them.
+
 **Compatibility evidence, and its limit.** No in-repo caller launches this workflow with a
 constructed argument list: the only launcher is the migration skill (`../../
 classic-to-freedom-migration/SKILL.md`), which is agent-driven and now presents the mode as

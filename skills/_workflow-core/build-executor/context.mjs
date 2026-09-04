@@ -231,7 +231,8 @@ export function makeContext(input, selfPath) {
   // therefore return structured records; the existing Judge/Reconcile sequence performs the single sequential write.
   // THE STATUS DOCUMENT (ENG-96204, AC 5). A stop's payload reaches whoever launched the run and nobody else; the
   // operator who comes back to this folder later — or the next session, on the other route — has only the files.
-  // So a stop writes the same four facts down here: what was built, what is open (ranked), what is parked and
+  // So a stop writes the same four facts down here: what was built, what is open (per-unit and total severity
+  // COUNTS, with a pointer to the engine-written verify table for the rows themselves — DR-4), what is parked and
   // why, and the one next step. Overwritten at each stop, deliberately: it is the CURRENT status, and the history
   // is `worklog.md` plus the per-unit files.
   const RUN_STATUS_FILE = `${input.outDir}/run-status.md`

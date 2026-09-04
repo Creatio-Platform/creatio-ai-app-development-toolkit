@@ -1324,6 +1324,13 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // a folder as never having been built in — the exact defect F2/F4 fixed, re-introduced by a wire change.
   const roundRecord = roundStateOf(state)
   layoutPassDone = roundRecord.layoutPassDone
+  // THE FOLDER'S RECORD OF HOW MANY ROUNDS IT HAS SPENT — the root `roundsSpent`, or the per-unit repair counters
+  // for a folder written before that key existed, with a RECORDED LAYOUT PASS folded in: a layout pass IS a round
+  // whichever of the two records survived, and it is folded HERE, once, rather than at each site that needs the
+  // number (PR review, minor 1). `roundsSpentNow()` and the `roundsBefore` seed both read it, so the stop's number
+  // and the gate's number cannot drift apart by one site being updated and the other not.
+  const roundsSpentSoFar = () => Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0)
+
   // THE FOLDER'S OWN COUNT, and it must be the SAME number `roundsSpentNow()` computes — `roundsSpentOnFile`, not
   // `roundsOnFile`. Seeding this from the per-unit repair counters alone dropped the root `roundsSpent` key, which
   // is the very record added to stop a `layout-first` folder reading as fresh: the layout pass charges no per-unit
@@ -1333,7 +1340,7 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // lowered the number by hand. `layoutPassDone` is folded in for the same reason it is an input to
   // `roundsSpentNow`: a layout pass IS a round whichever record survived. With this seed
   // `roundsBefore + round === roundsSpentNow()` by construction, which is what the F4 comment below claims.
-  roundsBefore = Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0)
+  roundsBefore = roundsSpentSoFar()
   consumedRoundAnswers = mergeConsumed([], roundRecord.consumedRoundAnswers)
   if (isLayoutPassMode(mode)) {
     log(layoutPassDone
@@ -3501,13 +3508,16 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // THREE INPUTS, AND THE HIGHEST WINS — the same `Math.max` discipline `roundsRun` applies, because a record
   // that has not landed yet must never walk the count backwards and make the run re-ask for a round the operator
   // has already authorised. One answer authorises exactly one round.
-  //   `roundsSpentOnFile(state)` — the folder's own record: the root `roundsSpent`, or the per-unit repair
-  //                               counters for a folder written before that key existed.
-  //   `layoutPassDone ? 1 : 0`   — a layout pass on record IS a round, whichever record survived. It is the
-  //                               third input and not a special case in the gate, because a gate that adjusted
-  //                               its own `spent` would once again be computing a number the stop does not.
-  //   `roundsBefore + round`     — what THIS invocation knows first-hand.
-  const roundsSpentNow = () => Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0, roundsBefore + round)
+  //   `roundsSpentSoFar()`   — what the FOLDER records: the root `roundsSpent` (or the per-unit repair counters
+  //                            for a folder written before that key existed), with a recorded layout pass folded
+  //                            in, because a layout pass IS a round whichever record survived.
+  //   `roundsBefore + round` — what THIS invocation knows first-hand.
+  //
+  // `roundsSpentSoFar` is the SEED of `roundsBefore` as well (PR review, minor 1). The layout-pass fold used to be
+  // spelled out at both sites, which is the very shape — one number, two formulas — that this comment blames for
+  // the authorisation drift above. Two copies agreed today only because the third `Math.max` argument dominated;
+  // folding once means they cannot disagree tomorrow.
+  const roundsSpentNow = () => Math.max(roundsSpentSoFar(), roundsBefore + round)
   const nextRoundNo = () => roundsSpentNow() + 1
 
   // THE ONE NEXT STEP the operator takes, as a sentence naming the exact edit. Its own function because the
@@ -3552,7 +3562,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // `run-status.md`, and it used to write none — so the file they were sent to was the PREVIOUS stop's, which
   // says "paused-at-round" and knows nothing about the answer that was just declined or misread. AC 5 makes the
   // status document the durable record of a stop, and this stop holds all four facts it needs (nothing built,
-  // the ranked open list, the parks, the next step), so it costs one persistence dispatch — the same one every
+  // the open COUNTS and where the rows are, the parks, the next step), so it costs one persistence dispatch — the same one every
   // other stop in this file already pays — to make the file describe the stop the operator is actually looking at.
   function* roundDecisionStop() {
     if (!stopsAtRoundBoundary(mode)) return null
