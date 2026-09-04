@@ -3240,7 +3240,7 @@ const hasPairKey = (r) => !blankStr(r.kind) && !blankStr(r.item);
 // `--verify-json` publishes it, never a hand-built one. That is the same `kind`+`item` pair
 // every other resolution uses, so it is NORMALISED here rather than given a second index: one key form, one
 // matcher, one duplicate check. Written as `item` it also works — the alias is a convenience, not a dialect.
-const withRowAlias = (r) => (r && r.kind === ACCEPTED_KIND && blankStr(r.item) && !blankStr(r.row) ? { ...r, item: r.row } : r);
+const withRowAlias = (r) => (r?.kind === ACCEPTED_KIND && blankStr(r.item) && !blankStr(r.row) ? { ...r, item: r.row } : r);
 export const ACCEPTED_KIND = "accepted";
 // ENG-96458 D3, PR #157 review (Major) — AN ACCEPTANCE MUST NAME ITS DECIDER. Every other resolution kind is an
 // INPUT to the build; `accepted` is the one kind that OVERRIDES a completeness gate and turns a red row green, so
@@ -3887,7 +3887,9 @@ function resolveFeatureVk(vk, ctx) {
 // match below is a substring: `ProcessListeners` is a real read-only field on the very page this defect came from,
 // and `"processlisteners".includes("process")` is true. Without a type gate the Process row would have closed ✅ on
 // a field, which is the same false positive in a new costume.
-const CARD_ACTION_TYPES = ["crt.Button", "crt.MenuItem"];
+// A `Set` and not an array: this is only ever asked "is this type one of them?", never iterated (`.has` also says
+// so at the call site below, which an `.includes` over two strings does not).
+const CARD_ACTION_TYPES = new Set(["crt.Button", "crt.MenuItem"]);
 // PR #157 review (Minor) — BOTH SIDES NORMALIZED, or the `names` half of the match is inert. A stand-reported
 // printable/process name is a human caption ("Business rule report"); a Freedom element name is identifier-shaped
 // (`PrintButton`). `"printbutton".includes("business rule report")` is false for every pair of those, so the row
@@ -3899,7 +3901,7 @@ const alnum = (v) => String(v).toLowerCase().replace(/[^a-z0-9]+/g, "");
 const GENERIC_ACTION_WORDS = new Set(["print", "process"]);
 function resolveCardVk(vk, ctx) {
   const action = String(vk.action || "the card action");
-  const isAction = (o) => o.name && CARD_ACTION_TYPES.includes(o.type || "");
+  const isAction = (o) => o.name && CARD_ACTION_TYPES.has(o.type || "");
   // TWO STRENGTHS OF SIGNAL, and they must not resolve to the same mark. A component whose name carries the
   // reported printable/process IDENTITY is proof the action is wired → ✅. A component whose name merely carries
   // the bare action WORD ("print", "process") is a candidate, not proof — any `crt.Button`/`crt.MenuItem` named
@@ -4654,7 +4656,13 @@ function planGapBanner(result) {
 //      `Handler — \`<method>\`` row collapsed to `handler`. The backticks are now stripped and their content KEPT;
 //   3. the 48-char truncation collapsed long Layout/Tab labels. The cap is 96, and `dedupeRowKey` below is the
 //      backstop for whatever still lands twice — a suffix is a last resort, never the primary identity.
-const rowSlug = (label) => String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+// The edge trim is TWO SINGLE-CHARACTER replaces and not `/^-+|-+$/g` (Sonar S8786). The rule reads the pattern
+// on its own, where the unanchored `-+$` alternative is quadratic: on a long run of dashes that does not reach the
+// end of the string it re-scans the run from every position. In THIS pipeline the `+` was already inert — the
+// global `[^a-z0-9]+` above collapses every run of non-alphanumerics into ONE `-`, so the intermediate string can
+// never hold two adjacent dashes. Which is also why dropping it is not a weaker trim: there is at most one dash to
+// strip at each end.
+const rowSlug = (label) => String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, "").slice(0, 96);
 function verifyRowKey(r, pageKey) {
   // `part` (PR #157 review, Blocker 1): the quality-gate deliverable is TWO rows on ONE evidence id — the record was
   // FILED, and it was independently JUDGED — so the id alone names both. The part is the row's own identity within
@@ -4744,6 +4752,26 @@ export function verifyRowKeys(result, opts = {}) {
   for (const g of groups) for (const r of g.rows) keys.push(dedupeRowKey(seen, verifyRowKey(r, r.pageKey || g.pageKey || "main")));
   return keys;
 }
+// THE THREE CELLS THE READER SEES FOR ONE ROW, plus its owner — the row's own verdict, or the acceptance that
+// overrides it. ENG-96458 D3 — an acceptance only ever OVERRIDES AN OPEN ROW: never an ✅ (nothing to accept) and
+// never an N/A (not a deliverable), so the index is not even consulted for those two outcomes and a stale entry for
+// a row that has since gone green cannot mask a later regression on it.
+function acceptedCells(resolved, accIndex, rowKey) {
+  const accepted = resolved[2] === "ok" || resolved[2] === "skip" ? null : acceptedFor(accIndex, rowKey);
+  return accepted ? acceptedRow(accepted, rowKey, resolved) : resolved;
+}
+
+// THE OPEN-ROW RECORD, carrying the SAME three cells the reader sees plus the row number and the evidence id when
+// the row has one — so a caller repairing from the JSON and a human reading the table are looking at one text, not
+// a paraphrase of it. `owner` rides along so a caller needs not re-derive the classification the engine already
+// made, and `severity` (ENG-96204) answers a DIFFERENT question: `owner` says WHO closes the row, `severity` says
+// whether it is worth closing FIRST. A checkpoint stop ranks on it, so it is published as data rather than
+// re-derived by whoever renders the status.
+function openRowRecord(r, rowKey, rowNo, [mark, ev, outcome, owner]) {
+  return { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, rowKey,
+    owner: owner === "verifier" ? "verifier" : "builder", severity: rowSeverity(r.vk), ...(r.id ? { id: r.id } : {}) };
+}
+
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
@@ -4775,22 +4803,12 @@ export function renderVerify(result, opts = {}, built = {}) {
       const resolved = resolveRow(r, ctxFor(key));
       // ENG-96458 D3 — a row the operator ACCEPTED by decision is not a build gap. The measured case: `create-app`
       // always registers into `My applications`, so a section deliberately kept in two workplaces held a fully
-      // built migration at ⛔ INCOMPLETE with no way to say "yes, on purpose (D6)". An acceptance only ever
-      // OVERRIDES an open row — never an ✅ (nothing to accept) and never an N/A (not a deliverable) — so a stale
-      // entry for a row that has since gone green cannot mask a later regression on it.
-      const accepted = resolved[2] === "ok" || resolved[2] === "skip" ? null : acceptedFor(accIndex, rowKey);
-      const [mark, ev, outcome, owner] = accepted ? acceptedRow(accepted, rowKey, resolved) : resolved;
-      // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
-      // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
-      // one text, not a paraphrase of it.
+      // built migration at ⛔ INCOMPLETE with no way to say "yes, on purpose (D6)". `acceptedCells` is the one
+      // place that decides between the row's own verdict and the acceptance that overrides it.
+      const cells = acceptedCells(resolved, accIndex, rowKey);
+      const [mark, ev, outcome, owner] = cells;
       const rowNo = ++n;
-      // `owner` rides along on the open row too: a caller repairing from the JSON needs to know which rows are
-      // its own without re-deriving the classification the engine already made.
-      // `severity` (ENG-96204) rides along for the same reason and answers a DIFFERENT question: `owner` says WHO
-      // closes the row, `severity` says whether it is worth closing FIRST. A checkpoint stop ranks on it, so it is
-      // published as data here rather than re-derived by whoever renders the status.
-      tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, rowKey,
-        owner: owner === "verifier" ? "verifier" : "builder", severity: rowSeverity(r.vk), ...(r.id ? { id: r.id } : {}) }, owner);
+      tally.add(key, outcome, openRowRecord(r, rowKey, rowNo, cells), owner);
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }

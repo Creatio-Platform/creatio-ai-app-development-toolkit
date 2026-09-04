@@ -621,7 +621,7 @@ check("D6 (PR #157): the record LANDS on the PARTIAL/blocked branch — the run 
   () => JSON.stringify(scaffoldFromPrompt(twoReports.dispatched.slice(0, twoReports.dispatched.findIndex((d) => d.phase === "Verify") + 1))));
 check("D6 (PR #157): the two reports MERGE by path — `starterPages`, `details` and `removed` are the de-duplicated union of both, read off `standWrites.appScaffold` as an object rather than grepped out of a stringified run file",
   () => !!merged
-    && JSON.stringify([...(merged.starterPages || [])].sort()) === JSON.stringify(["UsrBusinessRule_FormPage", "UsrBusinessRule_ListPage"])
+    && JSON.stringify([...(merged.starterPages || [])].sort((a, b) => a.localeCompare(b, "en"))) === JSON.stringify(["UsrBusinessRule_FormPage", "UsrBusinessRule_ListPage"])
     && JSON.stringify(merged.details) === JSON.stringify(["UsrBusinessRule_Detail"])
     && JSON.stringify(merged.removed) === JSON.stringify(["Business rules Freedom"]),
   () => JSON.stringify(merged));

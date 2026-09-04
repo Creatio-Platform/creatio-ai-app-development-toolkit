@@ -2427,7 +2427,7 @@ const missingPending = wf.reconcileShapeErrors
   ? wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pages: {} } })
   : [];
 check("PR #157 review: the shipped shape check REFUSES a verify object with no `pending`, and the fault NAMES the key — an omitted count would leave the D4 confirmations hold inert, the gate silently off on the run that needs it",
-  () => missingPending.some((m) => /^verify\.pending: required/.test(m)),
+  () => missingPending.some((m) => m.startsWith("verify.pending: required")),
   () => missingPending);
 check("PR #157 review: and `pending: 0` is a legal answer — the hold is opt-in on a COUNT, so a run with nothing pending must pass the same check unchanged",
   () => (wf.reconcileShapeErrors({ verify: { complete: true, missing: 0, buildMissing: 0, unverified: 0, pending: 0, pages: {} } }) || []).length === 0,

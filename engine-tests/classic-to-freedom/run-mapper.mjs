@@ -11881,6 +11881,21 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   check("PR #157 review (Blocker 1): each ported handler keeps its own key — `rowSlug` KEEPS the backticked method name instead of deleting it, so `Handler — \`onLoad\`` no longer collapses onto its siblings",
     ["onsaveclick", "oncancelclick", "onload"].every((m) => injKeys.includes(`main#confirm:handler-${m}`)),
     () => injKeys.filter((k) => k.startsWith("main#confirm:handler")));
+  // PR #157 (S8786) — `rowSlug`'s EDGE TRIM, on a label and an `about` that are punctuation at both ends and carry
+  // internal runs of it. It was the one half of the slug with no direct test, and the trim was rewritten from
+  // `/^-+|-+$/g` (whose unanchored `-+$` alternative is quadratic read on its own) to two single-character
+  // replaces, which is only equivalent because the `[^a-z0-9]+` collapse above it leaves no adjacent dashes. This
+  // pins the RESULT — no leading or trailing dash in any key segment, and the runs collapsed to one `-` each — so
+  // the equivalence is asserted rather than argued.
+  const edgeSlugResult = { ...injResult,
+    changeSet: { ...injResult.changeSet, handlerStubs: [{ sourceMethod: "on Save --- Click!" }] },
+    typedPages: [{ schema: "!!UsrEdge", type: "Edge!!" }], childPages: [] };
+  const edgeSlugKeys = verifyRowKeys(edgeSlugResult, brOpts());
+  check("PR #157 (S8786): `rowSlug` still trims BOTH edges and collapses internal punctuation runs — an `about` of `!!UsrEdge|Edge!!` and a `Handler — \\`on Save --- Click!\\`` label yield dash-free edges and single dashes inside, so the linear rewrite of the edge trim is behaviour-identical",
+    edgeSlugKeys.includes("main#onstand:typedFormsBuilt:usredge-edge")
+    && edgeSlugKeys.includes("main#confirm:handler-on-save-click")
+    && edgeSlugKeys.every((k) => !/(^|[#:])-|-($|[#:])|--/.test(k)),
+    () => edgeSlugKeys.filter((k) => /typedFormsBuilt|handler|-{2}/.test(k)));
   check("PR #157 review (Blocker 1): the quality-gate deliverable's TWO rows share one evidence id and are still distinct — the `part` (filed / judged) is the row's identity inside the id",
     injKeys.includes("main#quality-gates:filed") && injKeys.includes("main#quality-gates:judged"),
     () => injKeys.filter((k) => k.includes("quality-gates")));

@@ -779,10 +779,13 @@ export const PENDING_CONTRADICTION_STOP_AT = 2
 // that is not an integer (nothing to contradict), or a count that already covers the rows.
 // Keyed on `rowKey` — the engine's own injective row identity (ENG-96458) — and only then on `n`/`deliverable`,
 // so the signature survives a re-publication that renumbers the rows. Sorted, so row ORDER is not a difference.
+// The comparator is `localeCompare` PINNED TO `'en'` (Sonar S2871 asks for one; the fixed locale is this file's
+// own requirement): the signature is PERSISTED into the queue file and compared against the next invocation's, so
+// an ordering that varied with the host's locale would read as a different contradiction on the same rows.
 export function pendingContradictionSignature(rows, count) {
   if (!Array.isArray(rows) || !rows.length) return null
   if (!Number.isInteger(count) || count >= rows.length) return null
-  const ids = rows.map((r) => `${r?.unit ?? ''}#${r?.rowKey ?? r?.n ?? r?.deliverable ?? ''}`).sort()
+  const ids = rows.map((r) => `${r?.unit ?? ''}#${r?.rowKey ?? r?.n ?? r?.deliverable ?? ''}`).sort((a, b) => a.localeCompare(b, 'en'))
   return `${count}|${ids.join(',')}`
 }
 

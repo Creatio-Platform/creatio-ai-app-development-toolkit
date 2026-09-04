@@ -2111,58 +2111,52 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
   const base = { round: 2, missing: 0, buildMissing: 0, unverified: 0, parkedCount: 0, unconsumedCount: 0 };
   check("PR #157 review: `completionLine(true, …)` is the plain COMPLETE line — nothing about confirmations, because a complete run has none open",
     () => { const l = completionLine(true, { ...base, pendingCount: 0, buildComplete: true });
-      return /^COMPLETE after 2 round\(s\)/.test(l) && !/PENDING/.test(l) && !/☐/.test(l); },
+      return l.startsWith("COMPLETE after 2 round(s)") && !/PENDING/.test(l) && !/☐/.test(l); },
     () => completionLine(true, { ...base, pendingCount: 0, buildComplete: true }));
   check("PR #157 review: not-complete + build-green + N pending is the COMPLETE PENDING branch — it names N, says the build is done, and carries the remediation route (an `accepted` resolution) the zero-work copy had dropped",
     () => { const l = completionLine(false, { ...base, pendingCount: 5, buildComplete: true });
-      return /^COMPLETE PENDING 5 CONFIRMATION\(S\)/.test(l) && /the build is done/.test(l)
+      return l.startsWith("COMPLETE PENDING 5 CONFIRMATION(S)") && /the build is done/.test(l)
         && /kind: "accepted"/.test(l) && /after 2 round\(s\)/.test(l); },
     () => completionLine(false, { ...base, pendingCount: 5, buildComplete: true }));
   check("PR #157 review: the same counts with `buildComplete: false` fall through to NOT COMPLETE — the branch fires on the CALLER'S verdict, so a run whose build is not green cannot read as merely awaiting a human",
     () => { const parked = completionLine(false, { ...base, parkedCount: 1, pendingCount: 5, buildComplete: false });
       const short = completionLine(false, { ...base, missing: 1, buildMissing: 1, pendingCount: 5, buildComplete: false });
       const held = completionLine(false, { ...base, unconsumedCount: 1, pendingCount: 5, buildComplete: false });
-      return [parked, short, held].every((l) => /^NOT COMPLETE/.test(l) && !/PENDING/.test(l)); },
+      return [parked, short, held].every((l) => l.startsWith("NOT COMPLETE") && !/PENDING/.test(l)); },
     () => [completionLine(false, { ...base, parkedCount: 1, pendingCount: 5, buildComplete: false }),
       completionLine(false, { ...base, missing: 1, buildMissing: 1, pendingCount: 5, buildComplete: false })]);
   check("PR #157 review: build-green with NOTHING pending is unchanged — `pendingCount: 0` never produces the pending sentence, so a plain green close reads exactly as it did before D4",
-    () => /^NOT COMPLETE/.test(completionLine(false, { ...base, pendingCount: 0, buildComplete: true })),
+    () => completionLine(false, { ...base, pendingCount: 0, buildComplete: true }).startsWith("NOT COMPLETE"),
     () => completionLine(false, { ...base, pendingCount: 0, buildComplete: true }));
   check("PR #157 review: an UNMEASURED run never reads COMPLETE PENDING — no counts and no `buildComplete` means the build was not proven done, and the old branch called exactly that round complete-pending",
     () => { const l = completionLine(false, { round: 1, pendingCount: 3 });
-      return /^NOT COMPLETE/.test(l) && /\? \+ \? unconfirmed/.test(l); },
+      return l.startsWith("NOT COMPLETE") && /\? \+ \? unconfirmed/.test(l); },
     () => completionLine(false, { round: 1, pendingCount: 3 }));
   // THE CONTRADICTION, ENUMERATED. `complete` is derived exactly as both closes in `core.mjs` derive it
   // (`buildGreen && !pendingHold`), so this walks every combination the run can actually present and asserts the
   // "0 MISSING but not complete" output is unreachable — the shape the review named.
+  // THE TUPLES THE RUN CAN REACH, enumerated FLAT (one level per axis, no nested statement blocks) so the check
+  // below is a single pass over them. `core.mjs` computes build-green as
+  // `runComplete(verify.complete, parked, unconsumed)`, and a green gate means no shortfall. So `buildComplete` is
+  // not a free axis — it is a function of the other three, and enumerating it freely would test a state no close
+  // can be in (build-green `false` beside 0 missing / 0 parked / 0 unconsumed), which is not a defect in the line
+  // but an impossible input.
+  const reachableCloses = [0, 1, 5].flatMap((pendingCount) => [0, 1].flatMap((parkedCount) =>
+    [0, 1].flatMap((unconsumedCount) => [0, 1].map((missing) => {
+      const buildComplete = missing === 0 && parkedCount === 0 && unconsumedCount === 0;
+      return { complete: buildComplete && pendingCount === 0,
+        counts: { round: 2, missing, buildMissing: missing, unverified: 0, parkedCount, unconsumedCount, pendingCount, buildComplete } };
+    }))));
+  // THE SELF-CONTRADICTORY SHAPE, named once: NOT COMPLETE over an all-zero tally. Returns the offending line so
+  // the failure detail shows WHICH close produced it instead of only that one did.
+  const contradictoryClose = (c) => {
+    const line = completionLine(c.complete, c.counts);
+    return line.startsWith("NOT COMPLETE")
+      && /0 MISSING \+ 0 unconfirmed · 0 parked unit\(s\) · 0 unconsumed/.test(line) ? line : null;
+  };
   check("PR #157 review: over every state the run can actually PRESENT (build-green consistent with its own counts), no input renders `NOT COMPLETE … 0 MISSING + 0 unconfirmed · 0 parked · 0 unconsumed` — the self-contradictory line the two derivations could produce",
-    () => {
-      const bad = [];
-      for (const pendingCount of [0, 1, 5]) {
-        for (const parkedCount of [0, 1]) {
-          for (const unconsumedCount of [0, 1]) {
-            for (const missing of [0, 1]) {
-              {
-                // The tuples the run can REACH: `core.mjs` computes build-green as
-                // `runComplete(verify.complete, parked, unconsumed)`, and a green gate means no shortfall. So
-                // `buildComplete` is not a free axis — it is a function of the other three, and enumerating it
-                // freely would test a state no close can be in (build-green `false` beside 0 missing / 0 parked /
-                // 0 unconsumed), which is not a defect in the line but an impossible input.
-                const buildComplete = missing === 0 && parkedCount === 0 && unconsumedCount === 0;
-                const complete = buildComplete && pendingCount === 0;
-                const line = completionLine(complete, { round: 2, missing, buildMissing: missing, unverified: 0,
-                  parkedCount, unconsumedCount, pendingCount, buildComplete });
-                if (/^NOT COMPLETE/.test(line) && /0 MISSING \+ 0 unconfirmed · 0 parked unit\(s\) · 0 unconsumed/.test(line)) {
-                  bad.push({ buildComplete, pendingCount, parkedCount, unconsumedCount, missing, line });
-                }
-              }
-            }
-          }
-        }
-      }
-      return bad.length === 0;
-    },
-    () => "at least one combination rendered the contradictory line");
+    () => reachableCloses.every((c) => !contradictoryClose(c)),
+    () => reachableCloses.filter((c) => contradictoryClose(c)).map((c) => ({ ...c.counts, line: contradictoryClose(c) })));
   // PR #157 review (Tetiana, Minor 1) — the zero-work early return in `core.mjs` used to hand-spell this sentence
   // and had already dropped the remediation tail. One renderer, composed into `completionLine`, so the two spellings
   // cannot drift again. The `run-infra.mjs` guard that counts `log(completionLine(complete` call sites therefore
