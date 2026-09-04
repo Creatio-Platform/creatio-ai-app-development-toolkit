@@ -201,14 +201,18 @@ background will be generated or not.
   clio's branding guidance (`get-guidance name="branding"`), which sets the file as the shell
   background.
 
-## Fonts — after the background
+## Fonts — after the background — follow clio's theming guidance
 
 Optional. Ask whether to change the font (default is Montserrat), then whether to use one
-family for everything or separate families for headings and body. Fonts come from Google Fonts.
-Confirm the chosen font actually exists in Google Fonts before using it; if it does not, suggest
-a similar Google font or ask the user for another. (If you cannot verify existence, a wrong name
-is not fatal — the app falls back to a plain system font and the theme still works — but prefer
-to resolve it now rather than ship the wrong font silently.)
+family for everything or separate families for headings and body.
+
+A family that is not published on Google Fonts takes its own explicit confirmation before you build
+with it. That is a deliberate exception to "font steps are not approval gates" (see Conversation
+rules) — its own, earlier gate, which the single pre-build confirmation does not stand in for. Do not
+decide it for the user, and do not guess when the availability check comes back inconclusive: ask.
+
+Report the font outcome from clio's warnings, in the terms its guidance gives them. Never tell the
+user a font shipped a particular way without a warning that says so.
 
 ## Theme name — after fonts
 
@@ -226,7 +230,10 @@ hard limit and returns a clear error if the name is too long, which you relay.
 - Intake, palette, logo, background, and font steps are not approval gates. The logo-extraction
   and background questions are in-flow choices like any color choice; there is one confirmation
   before building the theme (see below). That build confirmation covers the theme, which is a
-  per-user change — it does **not** stand in for the environment-wide apply gate below.
+  per-user change — it does **not** stand in for the environment-wide apply gate below. One
+  exception inside the Fonts step: building with a family that is not on Google Fonts requires its
+  own explicit confirmation there (see Fonts) — a separate, earlier gate that the single pre-build
+  confirmation does not replace.
 - Logo and background writes are environment-wide (they change the look for every user, including
   pre-login surfaces), so they get their own explicit confirmation, distinct from the per-user
   theme build. Do not fold them into the theme's single pre-build confirmation. See the
