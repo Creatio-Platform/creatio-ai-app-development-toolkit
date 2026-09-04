@@ -533,6 +533,17 @@ Details of the record shapes, the ids and the judge tri-state:
   reading that as a confirmation is the defect. `resolvedFrom` is REQUIRED on every entry, enforced by the
   response-shape check rather than the byte-capped output schema, so it cannot be dropped to switch the gate off
   (ENG-95468).
+  Three details a reader will otherwise get wrong (all from the PR #159 review):
+  the value is matched **case-insensitively**, so a capitalisation variant cannot hard-stop a healthy round, while a
+  word neither literal names still gates (fail-closed);
+  a **blank** `resolvedFrom`, and a sweep that resolves **none** of the plan's published types, are both **shape
+  faults** rather than verdicts — the answer is refused and the informed retry names the field, so a transport
+  artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated
+  round (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round);
+  and the stop **carries the other three axes** — an unresolved component type the stand DID answer, an unresolvable
+  template, the app/package identity — as `ALSO —` clauses and structured fields, exactly as the package
+  precondition stop does, so a mixed round yields every fix in one pass. The component axis is scoped to
+  stand-answered entries there, which is what keeps a catalog `resolved: false` out of a re-plan instruction.
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.

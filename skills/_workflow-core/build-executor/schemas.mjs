@@ -167,7 +167,7 @@ export const RECONCILE_SCHEMA = {
     // narrower: nothing here confirms the `id` is the RIGHT package for the type — that needs the engine's
     // `gateForComponentType` table, unreachable from a module inlined into the workflow script (see `helpers.mjs`
     // `gatedComposite`). Absent or malformed ⇒ the generic clause stands, so an older plan behaves as it did.
-    // One `{ type, resolved, note }` per entry, `type`/`resolved` required, plus ENG-95683's OPTIONAL typed gate on a
+    // One `{ type, resolved, resolvedFrom, note }` per entry, `type`/`resolved`/`resolvedFrom` required, plus ENG-95683's OPTIONAL typed gate on a
     // gated composite: `kind` ('composite'), the gating package `id`, and the gating `feature` when there is one.
     // ENG-95468 (residual) — `resolvedFrom` says WHERE the answer came from: `'stand'` (this environment answered)
     // or `'catalog'` (it did not — `get-component-info` could not probe the environment and answered from its

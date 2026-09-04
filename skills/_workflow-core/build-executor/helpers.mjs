@@ -788,26 +788,47 @@ export const planInvalidNext = (mismatches, tail) => {
 // reproduce the same unstopped round with a log line in place of the `resolved: true`. It takes a VALUE.
 export const RESOLVED_FROM_STAND = 'stand'
 export const RESOLVED_FROM_CATALOG = 'catalog'
+// CASE-FOLDED, and that is a review finding rather than a preference (PR #159, Major 1). Nothing upstream
+// constrains this value: it has no `properties` entry in `RECONCILE_SCHEMA` (deliberately, for the 4096-byte cap)
+// and `RECONCILE_SHAPE` types it as bare `string`, so `SHAPE_TYPES` has no enum token to reject a variant with.
+// An exact compare therefore made `'Stand'` on a perfectly healthy round a TERMINAL stop whose `next` sends the
+// operator to fix DNS and credentials that are fine — a false positive strictly worse than the defect this axis
+// exists to close, and unrecoverable, because the stop deliberately offers no override. Folding case costs nothing
+// (both literals are lower-case) and leaves the fail-closed rule below untouched for a genuinely unknown word.
+const isStandProvenance = (v) => typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_STAND
+// A STATED provenance that is not this stand. `undefined` is NOT one — absence is handled where it belongs, by the
+// shape check (`componentSweepFaults`), not by inventing a verdict here.
+const statedNotStand = (c) => typeof c?.resolvedFrom === 'string' && !isStandProvenance(c.resolvedFrom)
+// WHAT GETS RENDERED for an operator, as one of two fixed words rather than the agent's own string (PR #159 review,
+// Minor). `resolvedFrom` is a one-word enum, and `standUnconfirmedDetail` renders it inside an inline-code span, so
+// an agent-supplied backtick could escape that span and forge instruction-shaped prose in the text an operator acts
+// on. That is the exposure `GATE_NAME_SHAPE` already answers for `id`/`feature`; `note` stays exempt because it is
+// deliberately prose. The raw (flattened, capped) value still travels on the structured entry, where it is JSON and
+// cannot escape anything, so nothing an operator might need to see is lost.
+const provenanceToken = (v) => (typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_CATALOG
+  ? RESOLVED_FROM_CATALOG
+  : 'unrecognised')
 // The published types whose answer did NOT come from this stand. Read exactly like `componentTypeMismatches`
 // otherwise: scoped to what the PLAN published (a sweep cannot invent a stop over a type no plan names), and a
 // stated value is the only thing that gates — an entry with NO `resolvedFrom` is left alone, so a state injected by
-// another producer, or one written before this field existed, behaves exactly as it did. That drop path is closed
-// where it belongs instead: `RECONCILE_SHAPE` makes `resolvedFrom` REQUIRED on every entry, so an agent answer
-// missing it is refused and retried rather than quietly reaching this arithmetic without provenance.
+// another producer, or one written before this field existed, behaves exactly as it did. The drop paths are closed
+// where they belong instead: `RECONCILE_SHAPE` makes `resolvedFrom` REQUIRED on every entry, and
+// `componentSweepFaults` refuses an answer that reports the field on no entry at all — both spend a Reconcile
+// attempt with an informed retry rather than reaching this arithmetic without provenance.
 // `resolved` rides along because the stop's text has to say something honest about a catalog `resolved: false` too:
 // it is not evidence about this stand, and it must not be handed to an operator as a re-plan.
 export function standUnconfirmedComponents(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
-    .filter((c) => c && typeof c.type === 'string' && typeof c.resolvedFrom === 'string')
-    .filter((c) => c.resolvedFrom.trim() !== RESOLVED_FROM_STAND)
+    .filter((c) => c && typeof c.type === 'string' && statedNotStand(c))
     .filter((c) => published.size === 0 || published.has(c.type))
     // FAIL-CLOSED on an unrecognised value: anything that is not `'stand'` is treated as "not a confirmation",
     // including a value neither literal names. An agent that invents a third word is telling us it did not answer
-    // from the stand, and reading an unknown token as a pass is the exact class of defect this closes.
-    // `capNote` on the provenance for the reason it is used on `note`: both are AGENT-SUPPLIED and both are
-    // rendered into the operator-facing `next`, so a newline or a wall of text in either could forge a line or bury
-    // the fix instruction. It flattens whitespace runs and caps the length; the value it should carry is one word.
+    // from the stand, and reading an unknown token as a pass is the exact class of defect this closes. A BLANK
+    // value is the one exception, and it is not handled here: it is a transport artefact this repo has already
+    // measured on this very answer, so `componentSweepFaults` faults it and the informed retry names it.
+    // `capNote` on the provenance for the reason it is used on `note`: both are AGENT-SUPPLIED, so a newline or a
+    // wall of text could forge a line or bury the fix instruction. It flattens whitespace runs and caps the length.
     .map((c) => ({
       type: c.type,
       resolvedFrom: capNote(c.resolvedFrom),
@@ -815,9 +836,16 @@ export function standUnconfirmedComponents(componentResolution, publishedTypes) 
       note: (typeof c.note === 'string' && c.note.trim()) ? capNote(c.note) : 'answered without reaching this stand',
     }))
 }
+// The resolutions this stand actually answered — everything except a STATED non-stand provenance. What it exists
+// for (PR #159, Major 2): a catalog `resolved: false` is no more evidence about this stand than a catalog
+// `resolved: true`, so it must never reach `componentTypeMismatches` and become a re-plan instruction. An entry
+// with no provenance at all IS included, which is what keeps a plan/state predating the field behaving exactly as
+// it did. On a healthy round every entry is stand-sourced and this is the identity function.
+export const standAnsweredResolutions = (componentResolution) =>
+  (componentResolution || []).filter((c) => !statedNotStand(c))
 export const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
 const standUnconfirmedDetail = (entries) => (entries || [])
-  .map((c) => '`' + c.type + '` (from `' + c.resolvedFrom + '`: ' + c.note + ')').join('; ')
+  .map((c) => '`' + c.type + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
 // The operator's next move, and it is NOT a re-plan: the plan is not implicated by an answer nobody got from the
 // stand. ONE home for the wording, like `componentReplanClause`, so the pre-build and mid-run stops cannot drift.
 export const standUnvalidatedNext = (entries, tail) => {
@@ -837,7 +865,21 @@ export const standUnvalidatedNext = (entries, tail) => {
     + 'while it is otherwise up fails this the same way, and the fix is the same: make the environment answerable. '
     + tail
 }
-
+// THE OTHER AXES, CARRIED ONTO A STOP THAT IS PRIMARILY ABOUT SOMETHING ELSE — one home for the three `ALSO —`
+// clauses, shared by the package-precondition stop and the unvalidated-stand stop (PR #159, Major 2). Both stop
+// points read the SAME baseline Reconcile facts, and the rule this file states twice in prose is that a re-plan
+// must see every axis at once: the Applicant run stopped on placement in round 1 and only met the fabricated
+// component type rounds later, one repair round each. A second copy of this wording is how the two stops drift, so
+// there is one.
+export const alsoAxesClauses = (componentMismatches, templateMismatchesNow, appIdentity) => [
+  componentMismatches?.length
+    ? 'ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: ' + componentReplanClause(componentMismatches)
+    : '',
+  templateMismatchesNow?.length
+    ? 'ALSO — ' + templateMismatchesNow.length + ' plan page template(s) do not resolve on the stand: ' + templateReplanClause(templateMismatchesNow)
+    : '',
+  appIdentity ? 'ALSO — ' + appIdentityClause(appIdentity) : '',
+].filter(Boolean)
 // --- THE OTHER TWO AXES OF "the plan asserts something untrue of the stand" (ENG-95468) --------------------
 // A plan asserts three kinds of thing about the target stand, and until now only ONE of them was checked before the
 // first write. Components were (above). These two were not, and the third Applicant run failed on both:
@@ -1516,6 +1558,35 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
 // is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
 // instead of every index of a 200-row array.
+// THE COMPONENT SWEEP'S OWN TWO FAULTS (ENG-95468 residual; PR #159 review, Majors 1 and 3). Both live HERE and
+// not in `RECONCILE_SCHEMA` for the reason the whole provenance field does: this checker is not bounded by the
+// host's 4096-byte classifier cap, so a fault costs zero schema bytes, and a faulted answer spends ONE attempt and
+// comes back with the informed retry naming the exact field — which is the cheap outcome. Neither is expressible as
+// a per-field table row: one is a value contradiction, the other is about the set as a whole.
+// FAULT 1 — a BLANK `resolvedFrom`. `shapeRequiredErrors` rejects only `undefined` and the typed check only a
+// non-string, so `''` used to pass arrival and then gate, hard-stopping a healthy run with a DNS remedy. A bare
+// `""` is the token this repo has already MEASURED being dropped in transit from this very answer (the reason
+// `schemaNamePrefixEmpty` exists), so a blank is a transport artefact, not an agent telling us it did not reach the
+// stand — it is refused and retried, never resolved into either answer.
+// FAULT 2 — a sweep that reports NOTHING for a plan that published types. `componentResolution` is not in
+// `RECONCILE_SCHEMA.required`, and an omitted or empty array clears the provenance gate by absence — the ST_2
+// round through the neighbouring door. The generic retry advice ("leave the object it belongs to out entirely") is
+// itself an invitation to that door, so the answer is faulted here and `reconcileAttempt` sends the sweep's own
+// rule back instead. Scoped to a COMPLETELY blank sweep on purpose: a PARTIAL sweep stays non-gating and un-faulted
+// exactly as documented (`absence is not evidence`), so one flaky `get-component-info` call cannot cost the round.
+function componentSweepFaults(state, out) {
+  const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
+  for (const c of rows) {
+    if (c && typeof c.resolvedFrom === 'string' && c.resolvedFrom.trim() === '') {
+      out.push('componentResolution[' + (typeof c.type === 'string' ? c.type : '?') + '].resolvedFrom: BLANK. Report `stand` when this environment answered or `catalog` when it did not — an empty string is the token observed dropped in transit on this answer, so it is refused rather than read as "did not reach the stand"')
+    }
+  }
+  const published = (Array.isArray(state.componentTypes) ? state.componentTypes : []).filter((t) => typeof t === 'string')
+  if (!published.length) return
+  const swept = new Set(rows.filter((c) => c && typeof c.type === 'string').map((c) => c.type))
+  if (published.some((t) => swept.has(t))) return
+  out.push('componentResolution: the plan publishes ' + published.length + ' component type(s) and this answer resolves NONE of them. Return one entry per published type with `resolvedFrom` — `catalog` on every entry if the whole sweep fell back to the bundled catalog. Do NOT omit the entries: an omitted entry reads as un-swept, and this run would then build on a round that checked nothing about the stand')
+}
 export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) {
     return [`the answer is not an object (got ${describeValue(state)})`]
@@ -1531,6 +1602,7 @@ export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12,
   if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
     out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
   }
+  componentSweepFaults(state, out)
   const size = encodedAsciiBytes(JSON.stringify(state))
   if (size > maxBytes) {
     const worst = Object.keys(state)

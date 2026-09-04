@@ -994,11 +994,15 @@ const planInvalidNext = (mismatches, tail) => {
 
 const RESOLVED_FROM_STAND = 'stand'
 const RESOLVED_FROM_CATALOG = 'catalog'
+const isStandProvenance = (v) => typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_STAND
+const statedNotStand = (c) => typeof c?.resolvedFrom === 'string' && !isStandProvenance(c.resolvedFrom)
+const provenanceToken = (v) => (typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_CATALOG
+  ? RESOLVED_FROM_CATALOG
+  : 'unrecognised')
 function standUnconfirmedComponents(componentResolution, publishedTypes) {
   const published = new Set((publishedTypes || []).filter((t) => typeof t === 'string'))
   return (componentResolution || [])
-    .filter((c) => c && typeof c.type === 'string' && typeof c.resolvedFrom === 'string')
-    .filter((c) => c.resolvedFrom.trim() !== RESOLVED_FROM_STAND)
+    .filter((c) => c && typeof c.type === 'string' && statedNotStand(c))
     .filter((c) => published.size === 0 || published.has(c.type))
     .map((c) => ({
       type: c.type,
@@ -1007,9 +1011,11 @@ function standUnconfirmedComponents(componentResolution, publishedTypes) {
       note: (typeof c.note === 'string' && c.note.trim()) ? capNote(c.note) : 'answered without reaching this stand',
     }))
 }
+const standAnsweredResolutions = (componentResolution) =>
+  (componentResolution || []).filter((c) => !statedNotStand(c))
 const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
 const standUnconfirmedDetail = (entries) => (entries || [])
-  .map((c) => '`' + c.type + '` (from `' + c.resolvedFrom + '`: ' + c.note + ')').join('; ')
+  .map((c) => '`' + c.type + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
 const standUnvalidatedNext = (entries, tail) => {
   const list = entries || []
   const falseFromCatalog = list.filter((c) => !c.resolved).length
@@ -1027,7 +1033,15 @@ const standUnvalidatedNext = (entries, tail) => {
     + 'while it is otherwise up fails this the same way, and the fix is the same: make the environment answerable. '
     + tail
 }
-
+const alsoAxesClauses = (componentMismatches, templateMismatchesNow, appIdentity) => [
+  componentMismatches?.length
+    ? 'ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: ' + componentReplanClause(componentMismatches)
+    : '',
+  templateMismatchesNow?.length
+    ? 'ALSO — ' + templateMismatchesNow.length + ' plan page template(s) do not resolve on the stand: ' + templateReplanClause(templateMismatchesNow)
+    : '',
+  appIdentity ? 'ALSO — ' + appIdentityClause(appIdentity) : '',
+].filter(Boolean)
 
 function templateMismatches(templateResolution, publishedNames) {
   const published = new Set((publishedNames || []).filter((t) => typeof t === 'string'))
@@ -1457,6 +1471,19 @@ function shapeValueErrors(where, value, spec, out) {
 
 const RECONCILE_ANSWER_MAX_BYTES = 16000
 
+function componentSweepFaults(state, out) {
+  const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
+  for (const c of rows) {
+    if (c && typeof c.resolvedFrom === 'string' && c.resolvedFrom.trim() === '') {
+      out.push('componentResolution[' + (typeof c.type === 'string' ? c.type : '?') + '].resolvedFrom: BLANK. Report `stand` when this environment answered or `catalog` when it did not — an empty string is the token observed dropped in transit on this answer, so it is refused rather than read as "did not reach the stand"')
+    }
+  }
+  const published = (Array.isArray(state.componentTypes) ? state.componentTypes : []).filter((t) => typeof t === 'string')
+  if (!published.length) return
+  const swept = new Set(rows.filter((c) => c && typeof c.type === 'string').map((c) => c.type))
+  if (published.some((t) => swept.has(t))) return
+  out.push('componentResolution: the plan publishes ' + published.length + ' component type(s) and this answer resolves NONE of them. Return one entry per published type with `resolvedFrom` — `catalog` on every entry if the whole sweep fell back to the bundled catalog. Do NOT omit the entries: an omitted entry reads as un-swept, and this run would then build on a round that checked nothing about the stand')
+}
 function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) {
     return [`the answer is not an object (got ${describeValue(state)})`]
@@ -1465,6 +1492,7 @@ function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxByt
   if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
     out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
   }
+  componentSweepFaults(state, out)
   const size = encodedAsciiBytes(JSON.stringify(state))
   if (size > maxBytes) {
     const worst = Object.keys(state)
@@ -2241,8 +2269,12 @@ const resolutionsReopened = new Set()
     const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
     const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
     let prompt = base
+    const sweepFaulted = lastShapeFaults.some((f) => /componentResolution/.test(f))
+    const sweepRule = sweepFaulted
+      ? ' **This does NOT apply to `componentResolution`:** do not drop those entries. Return one entry per published component type, with `resolvedFrom` on every one — `catalog` on every entry if the whole sweep fell back to the bundled catalog. An omitted entry is read as un-swept and this run would then build on a round it never validated, which is the failure this field exists to prevent.'
+      : ''
     if (lastShapeFaults.length) {
-      prompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.`
+      prompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.${sweepRule}`
     } else if (lastHostRejection) {
       prompt = `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.`
     }
@@ -2361,16 +2393,7 @@ Return the schema. Nothing else.`
     appIdentityMismatch: appIdentity,
     packageCreatedByRun: ownPackageNow(),
     packageRecordUnread,
-    next: [
-      packageNext,
-      componentMismatches.length
-        ? 'ALSO — ' + componentMismatches.length + ' plan component type(s) do not resolve on the stand: ' + componentReplanClause(componentMismatches)
-        : '',
-      templateMismatchesNow.length
-        ? 'ALSO — ' + templateMismatchesNow.length + ' plan page template(s) do not resolve on the stand: ' + templateReplanClause(templateMismatchesNow)
-        : '',
-      appIdentity ? 'ALSO — ' + appIdentityClause(appIdentity) : '',
-    ].filter(Boolean).join(' '),
+    next: [packageNext, ...alsoAxesClauses(componentMismatches, templateMismatchesNow, appIdentity)].filter(Boolean).join(' '),
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -2393,12 +2416,18 @@ Return the schema. Nothing else.`
   return packageStopReturn(stopOnPackage, packageRecordUnread, componentMismatches, templateMismatchesNow, appIdentity)
   }
 
-  function planUnvalidatedAgainstStandStop(unconfirmed) {
+  function planUnvalidatedAgainstStandStop(unconfirmed, componentMismatches, templateMismatchesNow, appIdentity) {
   if (!unconfirmed.length) return null
-  log(`STOP — the plan was NOT validated against this stand this round: ${unconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(unconfirmed)}`)
+  const alsoTypes = componentMismatches.length ? ` — ALSO ${componentMismatches.length} unresolved component type(s): ${componentTypeList(componentMismatches)}` : ''
+  const alsoTemplates = templateMismatchesNow.length ? ` — ALSO ${templateMismatchesNow.length} unresolved template(s): ${templateNameList(templateMismatchesNow)}` : ''
+  const alsoIdentity = appIdentity ? ` — ALSO the app/package identity (${appIdentity.kind})` : ''
+  log(`STOP — the plan was NOT validated against this stand this round: ${unconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(unconfirmed)}${alsoTypes}${alsoTemplates}${alsoIdentity}`)
   return runReturn({
     stopped: 'plan-unvalidated-against-stand',
     standUnconfirmedComponents: unconfirmed,
+    componentMismatches,
+    templateMismatches: templateMismatchesNow,
+    appIdentityMismatch: appIdentity,
     targetPackage: state.targetPackage || null,
     packageState: state.packageState || null,
     approval,
@@ -2406,7 +2435,8 @@ Return the schema. Nothing else.`
     verdict: verdictOf(state.verify),
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
-    next: standUnvalidatedNext(unconfirmed, 'Nothing was built.'),
+    next: [standUnvalidatedNext(unconfirmed, 'Nothing was built.'),
+      ...alsoAxesClauses(componentMismatches, templateMismatchesNow, appIdentity)].join(' '),
   })
   }
 
@@ -2437,9 +2467,7 @@ Return the schema. Nothing else.`
   }
 
   function* placementAndComponentStop() {
-  const unvalidated = planUnvalidatedAgainstStandStop(standUnconfirmedComponents(state.componentResolution, state.componentTypes))
-  if (unvalidated) return unvalidated
-  const componentMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
+  const componentMismatches = componentTypeMismatches(standAnsweredResolutions(state.componentResolution), state.componentTypes)
   const sweptTypes = new Set((state.componentResolution || []).filter((c) => c && typeof c.type === 'string').map((c) => c.type))
   const unsweptTypes = [...new Set(state.componentTypes || [])].filter((t) => typeof t === 'string' && !sweptTypes.has(t))
   if (unsweptTypes.length) log(`NOTE — ${unsweptTypes.length} published component type(s) have no resolution entry (NOT gated — absence is not evidence; a builder would still meet an un-swept bad type mid-Build): ${unsweptTypes.join(', ')}`)
@@ -2451,6 +2479,10 @@ Return the schema. Nothing else.`
   if (state.sectionHost === 'new-app' && typeof state.schemaNamePrefix !== 'string') {
     log('NOTE — no `schemaNamePrefix` was reported, so the app/package identity check did NOT run (NOT gated — absence is not evidence). The `app` unit will read the prefix off the stand itself and its package read-back stays the backstop.')
   }
+  const unvalidated = planUnvalidatedAgainstStandStop(
+    standUnconfirmedComponents(state.componentResolution, state.componentTypes),
+    componentMismatches, templateMismatchesNow, appIdentity)
+  if (unvalidated) return unvalidated
   const packageStop = yield* hardStopOnPackage(componentMismatches, templateMismatchesNow, appIdentity)
   if (packageStop) return packageStop
   return planInvalidAgainstStandStop(componentMismatches, templateMismatchesNow, appIdentity)
@@ -3447,17 +3479,29 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       log(`STOP after ${whereFrom} — the approval no longer authorises this plan (${stopApproval.stopped}): approved=${(state.approval || approval)?.version || '(none)'} plan=${state.planVersion || '(unversioned)'}`)
       return { ...stopApproval, approval: state.approval || approval, planVersion: state.planVersion || null }
     }
+    const midRunMismatches = componentTypeMismatches(standAnsweredResolutions(state.componentResolution), state.componentTypes)
+    const midRunTemplates = templateMismatches(state.templateResolution, state.templateNames)
+    const midRunIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode, appUnitDone())
     const midRunUnconfirmed = standUnconfirmedComponents(state.componentResolution, state.componentTypes)
     if (midRunUnconfirmed.length) {
-      log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}`)
+      const alsoMid = [
+        midRunMismatches.length ? ` — ALSO ${midRunMismatches.length} unresolved component type(s): ${componentTypeList(midRunMismatches)}` : '',
+        midRunTemplates.length ? ` — ALSO ${midRunTemplates.length} unresolved template(s): ${templateNameList(midRunTemplates)}` : '',
+        midRunIdentity ? ` — ALSO the app/package identity (${midRunIdentity.kind})` : '',
+      ].join('')
+      log(`STOP after ${whereFrom} — the plan was NOT validated against this stand this round: ${midRunUnconfirmed.length} component type(s) answered without reaching it — ${standUnconfirmedList(midRunUnconfirmed)}${alsoMid}`)
       return {
         stopped: 'plan-unvalidated-against-stand',
         standUnconfirmedComponents: midRunUnconfirmed,
+        componentMismatches: midRunMismatches,
+        templateMismatches: midRunTemplates,
+        appIdentityMismatch: midRunIdentity,
         targetPackage: state.targetPackage || null,
         packageState: state.packageState || null,
         approval: state.approval || approval,
         planVersion: state.planVersion || null,
-        next: standUnvalidatedNext(midRunUnconfirmed, 'Anything already built this run is on disk.'),
+        next: [standUnvalidatedNext(midRunUnconfirmed, 'Anything already built this run is on disk.'),
+          ...alsoAxesClauses(midRunMismatches, midRunTemplates, midRunIdentity)].join(' '),
       }
     }
     let stopPkg = packagePreconditionStop(state.targetPackage, state.packageState, state.sectionHost, ownPackageNow())
@@ -3479,9 +3523,6 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
           : stopPkg.next,
       }
     }
-    const midRunMismatches = componentTypeMismatches(state.componentResolution, state.componentTypes)
-    const midRunTemplates = templateMismatches(state.templateResolution, state.templateNames)
-    const midRunIdentity = appIdentityMismatch(state.targetPackage, state.sectionHost, state.schemaNamePrefix, state.applicationCode, appUnitDone())
     if (midRunMismatches.length || midRunTemplates.length || midRunIdentity) {
       const parts = [
         midRunMismatches.length ? `${midRunMismatches.length} component type(s): ${componentTypeList(midRunMismatches)}` : '',
