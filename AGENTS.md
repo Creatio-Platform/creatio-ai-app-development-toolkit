@@ -87,6 +87,14 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 
 For CAADT product telemetry, read and follow `context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-telemetry` payload shape.
 
+**One stage vocabulary, plus a `workflow` field — and no skill is exempt.** Telemetry applies to every workflow, not only app creation. Event names are flow-agnostic stages and **which** flow it was travels in the `workflow` field: `app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or `app-maintenance`. Do not invent per-flow event names — clio rejects them, and they would encode the flow dimension into the enum instead of the field, multiplying names by flows.
+
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow; it is owned by clio, which also owns the allow-list that validates it. `context/product-telemetry.md` owns only the other half: which gate of which CAADT flow emits which stage. Do not spell a stage from memory — a near-miss is rejected at runtime.
+
+This rule is stated here, outside the gate flow below, because that is exactly where it used to fail: the app-creation event checkpoints in the UX Contract hang off Gate P and Gate R, and this document exempts the `classic-to-freedom-migration` skill, the `creatio-mobile-page-conversion` skill, and branding runs from those gates — so those flows reported nothing at all, no matter how the instructions were worded. Being exempt from Gate P/R does **not** mean being exempt from telemetry; it means the same stages land on that flow's own gates instead (the engine gates and the verbatim migration plan, Gate M / Gate S, the single branding confirmation). The rule applies to targeted changes, autonomous runs, and pre-approved runs exactly as it applies to full app generation.
+
+Telemetry stays non-blocking everywhere: it must never gate or delay the developer's task, and a clio too old to accept the stage names is a stop-emitting-and-continue, never a blocker.
+
 ## Task Classification
 
 Classify each request before choosing the workflow.
@@ -146,9 +154,11 @@ The default user-facing flow is:
 
 Product telemetry is woven through this flow as a non-blocking, cross-cutting concern. `context/product-telemetry.md` is the source of truth for consent handling and the exact per-event emission points; the touchpoints below are the minimum the agent must not skip, and they never gate the flow (if consent is denied or telemetry is unavailable, continue normally):
 
-- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and emit `session_started` per the consent table in `context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
-- **During discovery (steps 2-4):** emit `pre_plan_clarification_requested`, `pre_plan_user_input_received`, `business_plan_generated` / `business_plan_regenerated` (or `business_plan_generation_skipped` when Business Plan generation is intentionally skipped), and `business_plan_feedback_received` at the points the contract lists.
-- **At Gate R and implementation (steps 6-7):** emit `business_plan_approved`, then `implementation_started` before the first implementation action, and the terminal `implementation_completed` or `implementation_failed` when the run ends.
+- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and open the run per the consent table in `context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
+- **During discovery (steps 2-4):** report the clarification and input stages, and the plan stage once the Business Plan is presented, at the points the contract lists.
+- **At Gate R and implementation (steps 6-7):** report the approval stage at Gate R, the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends.
+
+Stage NAMES are deliberately not written here. They live in `get-guidance name=product-telemetry`, and `context/product-telemetry.md` maps them to these gates — a list copied into this file would outlive the release that changed it, which is exactly how a measured run came to report an entire funnel under names the current vocabulary no longer counts.
 
 First-turn latency rule:
 
@@ -166,7 +176,7 @@ First-turn latency rule:
 - Prefer to cover the full critical set in the first batch (up to the 10-question ceiling); ask a follow-up batch only if something critical genuinely remains, since a second round often does not happen.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
 - Do not read large repository files before the first clarification turn (routing + initial discovery batch) is completed for the current request.
-- First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and `session_started` is emitted silently at workflow start.
+- First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and the run's opening stage is emitted silently at workflow start.
 
 Business discovery must follow a Business Analyst style:
 
@@ -297,10 +307,10 @@ Approval-ready vs delivery-ready rule:
 
 ## Orchestration Checklist
 
-0. At workflow start, establish telemetry consent and emit `session_started` per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
-1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Emit the `pre_plan_*` events as you ask for and receive pre-plan input.
-2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan emit `business_plan_generated` (and `business_plan_regenerated` on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; emit `business_plan_approved` then.
-3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
+0. At workflow start, establish telemetry consent and open the run per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
+1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Report the clarification and input stages as you ask for and receive pre-plan input.
+2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan report the plan stage (and again on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; report the approval stage then — and only for an approval the developer actually gave.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Report the build stage before the first implementation action, one work-item stage per unit actually applied, and the matching terminal stage when the run ends. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.

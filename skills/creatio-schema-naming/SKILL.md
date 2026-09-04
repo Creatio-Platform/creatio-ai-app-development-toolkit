@@ -5,6 +5,18 @@ description: 'Creatio data-model naming assistant for creating names for Creatio
 
 # Creatio Schema Naming
 
+## Product telemetry — this skill has no workflow of its own
+
+This is an **overlay**: it supplies naming/design rules to whichever flow is running, and it never owns a
+run. Do **not** emit a separate telemetry session for it — the enclosing flow (app creation, migration,
+mobile conversion, branding) already reports its own stages, and a second session would double-count.
+
+The one exception is running **standalone**: if the developer invoked this skill directly and no other
+CAADT flow is active, yet the run goes on to change the environment, that run is a targeted edit — emit
+the `app-maintenance` stages from `../../context/product-telemetry.md` (`workflow_started`,
+`plan_skipped`, `work_item_completed`, `workflow_completed` / `workflow_failed`) so the change is not
+invisible. Telemetry is non-blocking and never gates the review or the edit.
+
 ## Purpose
 
 Use this skill to create names for Creatio data-model elements before schemas, columns, lookups, or relation objects are implemented.
