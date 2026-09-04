@@ -2815,7 +2815,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // therefore deliberately absent from the positional-argument exclusion above: adding it there would make
   // `--units <manifest>` lose its manifest and die with a misleading JSON error.
   else if (unitsMode) {
-    const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: readResolutions(resolutionsFile, fail) });
+    // ENG-95857 — `planCompleteness: true` HERE, at the one site that publishes a machine-readable plan-gap set.
+    // The plan-completeness checks (`planMetaMissing` / `signalsMissing` / `placementBlockers`) are computed on
+    // EVERY run by `checklistOpts`, so whether they may be REPORTED has to be stated by the caller that knows the
+    // mode; emptiness cannot stand in for it (an absent `planMeta` is what a legitimate `--spec` run looks like AND
+    // what an unfilled `--plan` run looks like). It is a literal rather than a shared `planMode || unitsMode`
+    // constant because this branch is already `unitsMode`, so the `planMode` half could never contribute: `--plan`
+    // publishes no machine set at all (its ⛔ banners are rendered directly by `renderPlan`, and its own exit-2
+    // gate is the `planMode`-only `planIncomplete` below). A shared constant implied a pairing the code does not
+    // have — unlike `--resolved-gates`, whose guard genuinely reads both modes.
+    const units = pageUnits(result, { ...checklistOpts(manifest), planCompleteness: true, resolutions: readResolutions(resolutionsFile, fail) });
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
     const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
@@ -2939,11 +2948,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
-  // D12 — the `--verify` leg of exit 2, stated apart from the three above. `gate`/`structure`/`coverage` fire in
-  // EVERY mode and describe the PLAN: an executor cannot build its way out of them, so "loop until --verify is
-  // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS
-  // repairable on-stand. Until now `--verify` exited 2 with no stderr line at all, so the two were indistinguishable.
+  // D12 — the `--verify` leg of exit 2, stated apart from the PLAN-level ones. There are FOUR of those, not three:
+  // `gate`/`structure`/`coverage` fire in EVERY mode, and plan COMPLETENESS (the three `PLAN INCOMPLETE` lines
+  // below) fires in the plan-governed modes. All four describe the PLAN: an executor cannot build its way out of
+  // them, so "loop until --verify is green" against one of them never converges. THIS line is the other condition
+  // — MY BUILD is short — and it IS repairable on-stand. Until now `--verify` exited 2 with no stderr line at all,
+  // so the two were indistinguishable.
   if (verifyIncomplete) {
+    // Per page, the same distinction as the headline: `missing` folds the judge-rejected rows in, so a page whose
+    // build is whole but whose evidence was rejected read "3 missing" and sent a reader hunting for absent fields.
+    const pageShortfall = (p) => {
+      // PR review — `?? p.missing` and not `?? 0`, matching `shortfallOf` (`helpers.mjs`), whose comment states the
+      // rule this copy has to follow too: an absent `buildMissing` OVER-reports the build axis, never a false zero.
+      // With `?? 0` a page entry that predates the field read `rejected = missing`, i.e. "0 missing" on a page whose
+      // build really is short. Unreachable today (the object is the in-process tally), but this is the copy a future
+      // reader imitates.
+      const buildMissing = p.buildMissing ?? p.missing ?? 0;
+      const rejected = (p.missing ?? 0) - buildMissing;
+      return rejected > 0 ? `${buildMissing} missing + ${rejected} judge-rejected` : `${p.missing ?? 0} missing`;
+    };
     // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
     // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
     // breakdown, and the repair advice — must talk about the builder's own rows for that caller. Surfacing the
@@ -2956,7 +2979,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // narrows.
     const pageGaps = pageArg
       ? Object.entries(verifyRes.pages).filter(([, p]) => p.buildComplete !== true).map(([k, p]) => `${k}: ${p.builderOpen} open`)
-      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
+      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${pageShortfall(p)} / ${p.unverified} unconfirmed`);
     // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
     // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
     let overflow = "";
@@ -2964,17 +2987,51 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const where = verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict";
       overflow = ` | …and ${pageGaps.length - 6} more (${where})`;
     }
-    const repairAdvice = pageArg ? "build / complete the pieces named in the rows, then re-verify" : "build the missing pieces / file the on-stand evidence, then re-verify";
+    // ENG-95901 (reopened) — the UNSCOPED headline said "YOUR BUILD is incomplete: N MISSING" while every one of
+    // those N was an evidence row the judge rejected, i.e. a record filed unconvincingly by a SEPARATE read-only
+    // agent and not one deliverable short on the page. The exit code and the gating predicate are untouched (AC7/AC8
+    // — for a human, a rejected record is still a reason not to call it done); what changes is that the line names
+    // WHICH of the two it hit, so the close report and a reader stop calling a re-filing job a build gap.
+    const rejectedNote = verifyRes.rejected > 0
+      ? ` + ${verifyRes.rejected} evidence row(s) REJECTED by the judge (re-FILE the record — not a build gap)`
+      : "";
+    // The BANNER and the advice follow the same number. Leaving them fixed would have the line say "YOUR BUILD is
+    // incomplete … build the missing pieces" on a run whose build is whole and whose only ❌ rows are records the
+    // judge rejected — the very sentence the reopened ticket quotes as what sent a reader hunting for absent fields.
+    // PR review — the claim keys on `builderOpen`, NOT on `buildMissing`. `buildMissing` is `missing` narrowed by
+    // owner, so it inherits `missing`'s blind spot: a partially built page resolves `unverified`
+    // (`resolveFieldsByIdentity` returns it for ANY field count below expected, including `0/N`; `resolveCountVk` for
+    // any partial component count; "no `--built.pages` entry" too), which leaves `buildMissing === 0` on the most
+    // common intermediate state of a run — and the line then read "YOUR BUILD is not short … nothing here is built"
+    // while fields were genuinely absent, routing a repair round away from real build work. `builderOpen ===
+    // buildMissing + builder-owned unverified` covers BOTH halves of the builder's own work, so the pure-rejection
+    // case this ticket targets still yields `builderOpen === 0` and keeps its new banner.
+    const buildIsShort = pageArg || (verifyRes.builderOpen ?? 0) > 0;
+    const banner = buildIsShort ? "YOUR BUILD is incomplete" : "the RUN is not done — but YOUR BUILD is not short";
+    let repairAdvice = "build the missing pieces / file the on-stand evidence, then re-verify";
+    if (pageArg) repairAdvice = "build / complete the pieces named in the rows, then re-verify";
+    else if (!buildIsShort) repairAdvice = "the open rows are the read-only verifier's / judge's to file or re-file — re-run the evidence pass, then re-verify; nothing here is built";
     const headline = pageArg
       ? `${verifyRes.builderOpen} open deliverable(s) YOU OWN across ${pageGaps.length} page(s)`
-      : `${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
-    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
+      : `${verifyRes.buildMissing} MISSING from the build${rejectedNote} + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
+    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — ${banner}: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  // PR review — the four kinds were ASYMMETRIC on this channel. `gate`/`structure`/`coverage` write their line in
+  // every mode (above) and fold into `notReady`; the three plan-completeness lines are `--plan`-only, so a `--units`
+  // run published the fourth kind in `units.planGaps` and said nothing on stderr at all — an integrator watching
+  // the signal the other three kinds already use IN THIS MODE learned nothing. This line closes that asymmetry and
+  // is INFORMATIONAL: the exit code stays 0 by design (see the engine README, "read the array, not the exit code"
+  // — exit 2 here would conflate the plan-level kinds with `verifyIncomplete`, which IS repairable by building).
+  // It reports the entries the artifact carries, not a second wording of them, so the two channels cannot disagree.
+  if (unitsMode && !planMode) {
+    const planLegs = planGaps(result, { planCompleteness: true }).filter((g) => g.startsWith("plan INCOMPLETE"));
+    if (planLegs.length) process.stderr.write(`migrate.mjs: ℹ this run publishes ${planLegs.length} plan-completeness gap(s) — carried in \`units.planGaps\` alongside any gate/structure/coverage gaps reported above, NOT buildable-out-of, and NOT reflected in this exit code: ${planLegs.join(" · ")}. Fix the manifest and re-plan; the build executor stops on them before its first stand write.\n`);
+  }
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse

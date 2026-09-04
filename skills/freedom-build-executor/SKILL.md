@@ -66,9 +66,14 @@ Eight rules. Everything else here serves them.
    one migration folder must agree about what has been done to that stand, and the only thing that can
    make them agree is the file. This is why a **stand WRITE** goes in it too, not just bookkeeping —
    at the root, under `standWrites`, because a package is not a page and the next run's placement gate
-   looks for it before any unit exists. Today it carries one fact,
-   `standWrites.packageCreated = { package, appUnitComplete, planVersion, sectionPage }`: the
-   application and package the app unit created, and whether that unit met its FULL deliverable.
+   looks for it before any unit exists. It carries three facts:
+   `standWrites.packageCreated = { package, appUnitComplete, planVersion, sectionPage }` (the
+   application and package the app unit created, and whether that unit met its FULL deliverable);
+   `standWrites.orphanedPages` (pages a re-bind left pointing at nothing); and
+   `standWrites.sectionRoute = { route, schemaName, sectionHost, planVersion }` (ENG-96147 — the
+   `#Section/...` URL the built section actually opens at, so nothing that needs to open it has to
+   compose one — see `./references/02-queue-and-built-files.md` for why a guessed route once cost a
+   database flush and a compile on a shared stand).
 
    **What it buys, and it is not bookkeeping.** From the stand, a package this migration created and a
    package a stranger owns are the same fact — `list-packages` says a package exists and no stand read
@@ -486,10 +491,18 @@ Details of the record shapes, the ids and the judge tri-state:
   track; asked once, with five named units and what each is missing, a caller can answer. A park is
   written to the queue file and **read back at the head of the next run**: a park is terminal, and a
   resumed run must not spend a stand-writing round on a unit its predecessor already gave up on.
-- A **plan-level** exit 2 (`GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE`)
-  **stops the run** — no repair round closes a plan gap, and re-running buys a guaranteed identical
-  answer. Only `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is repairable. (`⛔ PLAN INCOMPLETE`
-  is a `--plan`-mode line only; it cannot appear on a `--verify` run.)
+- A **plan-level gap** — all FOUR kinds: `gate BLOCKED` / `structure INCOMPLETE` /
+  `coverage INCOMPLETE` / `plan INCOMPLETE` (plan completeness: unfilled `planMeta`, unresolved
+  on-stand `signals`, unsettled `placement`) — **stops the run** before the first stand write. It is
+  read from the published `--units.planGaps` array, NOT from an exit code: the first three also exit 2
+  in every mode, while plan completeness exits 2 in `--plan` mode only and reaches this run purely as
+  a published gap. No
+  repair round closes a plan gap, and re-running buys a guaranteed identical answer. Only
+  `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is repairable. The stop names WHICH kind fired,
+  because the remedy differs: `GATE BLOCKED` is fixed in the stand or the input schemas, the other
+  three in the manifest. The set is `--units.planGaps` copied verbatim (ENG-95857) — the engine's
+  own machine-readable verdict, never stderr text an agent retyped, and never the narrower
+  `planGaps` in the `--verify` files, which are the BUILD verdict.
 - A **plan assertion untrue of the STAND**, caught at the BASELINE Reconcile **before the first build unit** and
   **re-applied at every in-run Reconcile** (via the shared acceptance path, `acceptReconciled`): a named component
   type that does not resolve on the target stand (Reconcile's read-only `get-component-info` sweep →

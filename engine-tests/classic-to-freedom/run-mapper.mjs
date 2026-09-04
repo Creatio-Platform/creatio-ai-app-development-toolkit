@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -2684,6 +2684,102 @@ check("placement: `--units` publishes the approved applicationCode for `existing
   && unitsFor(pagesOnlyPlacement).applicationCode === null
   && unitsFor(undefined).applicationCode === null,
   () => ({ existing: unitsFor(FULL_PLACEMENT).applicationCode, newApp: unitsFor(newAppPlacement).applicationCode }));
+
+/* ---- ENG-95857 — the PUBLISHED plan-gap set covers ALL FOUR plan-level checks -------------------------------
+   `planGaps()` is the engine's OWN classification of "the PLAN is short, and no amount of building clears it".
+   It named three checks — a blocked correctness gate, incomplete structure, unaccounted coverage — and silently
+   omitted the fourth the CLI already gates `--plan` on: plan COMPLETENESS (unfilled required planMeta,
+   unresolved on-stand signals, unsettled placement). The build executor's HARD STOP 2 reads this set, so the
+   omission is what let a build start on a plan `--plan` had already refused.
+   Applicability is carried EXPLICITLY (`planCompleteness`), never inferred from whether the fields are empty: an
+   absent `planMeta` is exactly what a legitimate `--spec` run looks like AND what an unfilled `--plan` run looks
+   like, so emptiness cannot tell them apart. `--plan` / `--units` are the plan-governed modes — the same pair
+   `--resolved-gates` rides, for the same reason: this is a PLAN/RUN-time fact about the manifest, not a
+   `--verify` verdict — and `--spec` / `--verify` are deliberately left exactly as they were. */
+const gapsOf = (manifest, opts) => planGaps(runMigration(manifest, { baseDir: FIX }), opts);
+// The gate-clean, structure-complete, coverage-complete SU manifest of the `--plan` golden above, so the ONLY
+// variable below is which plan-completeness leg is left unanswered.
+const pgBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU" };
+// T1 — the planMeta leg reaches the published set.
+const pgNoPlanMeta = gapsOf({ ...pgBase, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }, { planCompleteness: true });
+check("ENG-95857 T1: an unfilled required planMeta key reaches the PUBLISHED plan-gap set as its own `plan INCOMPLETE` kind, naming the check that fired",
+  pgNoPlanMeta.length === 1 && /^plan INCOMPLETE/.test(pgNoPlanMeta[0]) && /planMeta/.test(pgNoPlanMeta[0]) && /scope/.test(pgNoPlanMeta[0]),
+  () => pgNoPlanMeta);
+// T2 — the other two legs, each on its own.
+const pgNoSignals = gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, placement: FULL_PLACEMENT }, { planCompleteness: true });
+check("ENG-95857 T2: an unresolved on-stand signal key reaches the published set, naming `signals` (the remedy is a stand check recorded in the manifest, not a rebuild)",
+  pgNoSignals.length === 1 && /^plan INCOMPLETE/.test(pgNoSignals[0]) && /signals/.test(pgNoSignals[0]) && /dcm/.test(pgNoSignals[0]),
+  () => pgNoSignals);
+const pgNoPlacement = gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS }, { planCompleteness: true });
+check("ENG-95857 T2: a placement blocker reaches the published set, naming `placement`",
+  pgNoPlacement.length === 1 && /^plan INCOMPLETE/.test(pgNoPlacement[0]) && /placement/.test(pgNoPlacement[0]),
+  () => pgNoPlacement);
+const pgLockedTarget = gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  placement: { ...FULL_PLACEMENT, targetPackageEditable: { resolved: true, value: false, evidence: "InstallType 1" }, sectionHost: { resolved: true, mode: "pages-only-no-menu" } } }, { planCompleteness: true });
+check("ENG-95857 T2: a LOCKED target package (a resolved placement that still blocks) reaches the published set — the gate is on the blockers, not on the keys being present",
+  pgLockedTarget.length === 1 && /placement/.test(pgLockedTarget[0]), () => pgLockedTarget);
+// All four clear ⇒ still empty. A widened classification that fired on a clean plan would stop every build.
+check("ENG-95857 T1: a plan with all four checks clear publishes an EMPTY set even with the plan-completeness legs applicable",
+  gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }, { planCompleteness: true }).length === 0,
+  () => gapsOf({ ...pgBase, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }, { planCompleteness: true }));
+// T4 — THE NEGATIVE CONTROL, and the whole reason applicability is carried rather than inferred. `checklistOpts`
+// computes planMetaMissing / signalsMissing / placementBlockers on EVERY run, so an ungated widening would report
+// all three on a `--spec` run that was never asked to satisfy them — newly stopping runs that pass today.
+check("ENG-95857 T4: the same manifest with NOTHING answered publishes an EMPTY set when the plan-completeness legs do not apply (a `--spec`/`--verify` run)",
+  gapsOf(pgBase, {}).length === 0 && gapsOf(pgBase, undefined).length === 0, () => gapsOf(pgBase, {}));
+const pgSpecRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
+  input: JSON.stringify(pgBase), encoding: "utf8" });
+check("ENG-95857 T4: a `--spec` run over a manifest with no planMeta / signals / placement still exits 0 and says nothing about plan gaps",
+  pgSpecRun.status === 0 && !/PLAN INCOMPLETE/.test(pgSpecRun.stderr || "") && !/plan INCOMPLETE/.test(pgSpecRun.stdout || ""),
+  () => ({ status: pgSpecRun.status, stderr: (pgSpecRun.stderr || "").slice(0, 200) }));
+// …and the `--verify` verdict files the executor also copies stay untouched: they are the BUILD verdict, and a
+// `--verify` run over a manifest that legitimately carries no planMeta must not newly stop a run (R3).
+check("ENG-95857 T4: the `--verify` summary/report keep publishing an EMPTY plan-gap set for a planMeta-less manifest — the build verdict is not where plan completeness is decided",
+  () => { const r = runMigration(pgBase, { baseDir: FIX });
+    const v = { complete: true, missing: 0, unverified: 0, builderOpen: 0, pages: {} };
+    return verifySummary(r, v).planGaps.length === 0 && verifyReport(r, v).planGaps.length === 0 },
+  () => verifySummary(runMigration(pgBase, { baseDir: FIX }), { complete: true, missing: 0, unverified: 0, builderOpen: 0, pages: {} }).planGaps);
+// The MACHINE-READABLE publication the build executor reads. `--units` is the plan-governed run the executor
+// makes before its first stand write, so this — not a stderr line an agent retypes — is where its HARD STOP 2
+// gets the classification from.
+check("ENG-95857 R1/R2: `--units` PUBLISHES the plan-gap set, so the executor's stop reads the engine's own verdict instead of transcribed stderr",
+  () => { const u = unitsFor(undefined); return Array.isArray(u.planGaps) && u.planGaps.length === 1 && /placement/.test(u.planGaps[0]) },
+  () => unitsFor(undefined).planGaps);
+check("ENG-95857 R1: `--units` publishes `[]` for a clean plan — REQUIRED and never omitted, so a reader can tell a clean plan from an engine that publishes nothing",
+  () => { const u = unitsFor(FULL_PLACEMENT); return Array.isArray(u.planGaps) && u.planGaps.length === 0 },
+  () => unitsFor(FULL_PLACEMENT).planGaps);
+// PR review (F5) — the four kinds were asymmetric on stderr IN THIS MODE: `gate`/`structure`/`coverage` write
+// their ⛔ line in every mode, while the three plan-completeness lines are `--plan`-only, so a `--units` run
+// published the fourth kind in the artifact and said nothing on the channel the other three already use. The line
+// added for it is INFORMATIONAL — the exit code stays 0 by design ("read the array, not the exit code") — and it
+// reports the entries the artifact carries, so the two channels cannot disagree about the same run.
+const unitsGapRun = runWithPlacement(undefined, "--units");
+check("ENG-95857 F5: a `--units` run over a plan-incomplete manifest ALSO reports the gap on stderr, naming the published set, while the exit code deliberately stays 0",
+  unitsGapRun.status === 0 && /plan-completeness gap\(s\) — carried in `units.planGaps`/.test(unitsGapRun.stderr || "")
+  && /placement/.test(unitsGapRun.stderr || ""),
+  () => ({ status: unitsGapRun.status, stderr: (unitsGapRun.stderr || "").slice(0, 300) }));
+const unitsCleanRun = runWithPlacement(FULL_PLACEMENT, "--units");
+check("ENG-95857 F5: a `--units` run over a CLEAN plan says nothing on stderr — the line reports the PUBLISHED set, so silence and `[]` can never disagree",
+  unitsCleanRun.status === 0 && !/plan-completeness gap/.test(unitsCleanRun.stderr || ""),
+  () => (unitsCleanRun.stderr || "").slice(0, 300));
+// PR review — THE SLICE'S OMISSION IS AN INVARIANT, so it is pinned rather than only asserted in a comment.
+// `pageUnitsSlice` carries every OTHER run-level field (`planVersion`, `sectionHost`, `applicationCode`) and
+// deliberately leaves `planGaps` out: a slice reaches a builder only after the run-level plan-gap stop has passed,
+// so carrying it would hand a build agent a plan gap it cannot close. Nothing made that fail if someone added it
+// "for symmetry" — the very thing the comment above `pageUnitsSlice` tells the next reader not to do.
+const sliceGapUnits = unitsFor(undefined);
+check("ENG-95857 PR review: the `--units --page` SLICE carries NO `planGaps` own-property even when the run-level set is non-empty — a builder is never handed a plan gap it cannot close",
+  () => { const slice = pageUnitsSlice(sliceGapUnits, "main");
+    return sliceGapUnits.planGaps.length > 0 && slice !== null && !Object.hasOwn(slice, "planGaps")
+      && Object.hasOwn(slice, "planVersion") && Object.hasOwn(slice, "sectionHost") },
+  () => ({ runLevel: sliceGapUnits.planGaps, sliceKeys: Object.keys(pageUnitsSlice(sliceGapUnits, "main") || {}) }));
+
+// R1 AC5 — the plan document a human approves against names the SAME kind the machine set does, so the two can
+// never be read as disagreeing.
+check("ENG-95857 R1: the plan document's ⛔ banner names the plan-completeness kind whenever the published set does",
+  /PLAN INCOMPLETE — placement not settled/.test(planWithPlacement(undefined).stdout || ""),
+  () => (planWithPlacement(undefined).stdout || "").split("\n").filter((l) => /INCOMPLETE/.test(l)).join("\n"));
+
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -2754,7 +2850,7 @@ try {
   // matters as much as the presence — a run that shouted both would send the executor into the loop D12 forbids.
   check("ENG-94975 D12: a short BUILD on a gate-clean plan → stderr says `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` (repairable) and carries NO plan-level banner — the two exit-2 conditions are told apart",
     vIncomplete.status === 2
-    && /⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: \d+ MISSING \+ \d+ unconfirmed/.test(vIncomplete.stderr || "")
+    && /⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: \d+ MISSING from the build \+ \d+ unconfirmed/.test(vIncomplete.stderr || "")
     && /This is repairable/.test(vIncomplete.stderr || "")
     && !/PLAN-level gaps/.test(vIncomplete.stderr || "")
     && !/⛔ (GATE BLOCKED|STRUCTURE INCOMPLETE|COVERAGE INCOMPLETE)/.test(vIncomplete.stderr || ""),
@@ -2874,6 +2970,83 @@ try {
         () => ({ status: vScopedShort.status, stderr: vScopedShort.stderr }));
     } finally {
       fs.rmSync(bareBuiltShortPath, { force: true });
+    }
+    // ENG-95901 (REOPENED) — THE RUN-LEVEL CLI PROOF, on the state the 2026-09-02 paired run actually hit: the build
+    // is whole and the judge REJECTED the filed record. The unscoped sweep must still exit 2 (AC7/AC8 — a human does
+    // not call that done), but its stderr must no longer call it a BUILD gap: `0 MISSING from the build`, with the
+    // rejection named separately and pointed at re-FILING. Before the fix this same run printed "3 MISSING" with
+    // nothing absent from the page and sent the reader hunting for fields that were all present.
+    const bareBuiltRejectedPath = path.join(os.tmpdir(), `c2f_bare_built_rejected_${process.pid}.json`);
+    fs.writeFileSync(bareBuiltRejectedPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+      evidence: { "main#quality-gates": { referencePage: "an existing Freedom page reviewed for parity", components: ["crt.Input"] } },
+      judge: { "main#quality-gates": { convincing: false, why: "the record names containers, not the caption text and its binding" } },
+    }));
+    try {
+      const vRejFull = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltRejectedPath, "--verify-json", bareFullVerdictPath], { input: bareManifest, encoding: "utf8" });
+      const rejVerdict = JSON.parse(fs.readFileSync(bareFullVerdictPath, "utf8"));
+      check("ENG-95901 (reopened): the UNSCOPED run-level verdict separates the axes — `missing > 0` (unchanged, so exit 2 still stands) while `buildMissing: 0` and `rejected > 0` say the build is whole and a record needs re-filing",
+        vRejFull.status === 2 && rejVerdict.missing > 0 && rejVerdict.buildMissing === 0 && rejVerdict.rejected > 0
+        && rejVerdict.missing === rejVerdict.buildMissing + rejVerdict.rejected,
+        () => ({ status: vRejFull.status, missing: rejVerdict.missing, buildMissing: rejVerdict.buildMissing, rejected: rejVerdict.rejected }));
+      check("ENG-95901 (reopened): the run-level STDERR no longer calls a rejected record a build gap — it reads `0 MISSING from the build` and names the rejection as a re-FILE, which is the line the 2026-09-02 close report got wrong",
+        /0 MISSING from the build/.test(vRejFull.stderr || "")
+        && /evidence row\(s\) REJECTED by the judge \(re-FILE the record — not a build gap\)/.test(vRejFull.stderr || ""),
+        () => vRejFull.stderr);
+      check("ENG-95901 (reopened): the BANNER and the repair advice follow the same axis — a run whose build is whole no longer opens with `YOUR BUILD is incomplete` and no longer tells the reader to build anything",
+        /⛔ VERIFY INCOMPLETE — the RUN is not done — but YOUR BUILD is not short/.test(vRejFull.stderr || "")
+        && /the read-only verifier's \/ judge's to file or re-file/.test(vRejFull.stderr || "")
+        && !/build the missing pieces/.test(vRejFull.stderr || ""),
+        () => vRejFull.stderr);
+      const vRejScoped = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltRejectedPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
+      check("ENG-95901 (reopened): the SAME rejected-record payload through the SCOPED in-context gate exits 0 — the builder is not dispatched to repair a record only the verifier/judge may file",
+        vRejScoped.status === 0 && JSON.parse(fs.readFileSync(bareUnitVerdictPath, "utf8")).buildComplete === true,
+        () => ({ status: vRejScoped.status, stderr: vRejScoped.stderr }));
+    } finally {
+      fs.rmSync(bareBuiltRejectedPath, { force: true });
+    }
+    // PR REVIEW — THE CLI PROOF FOR THE STATE EVERY NEW CASE ABOVE MISSES: `buildMissing === 0 && builderOpen > 0`.
+    // Each new case has `builderOpen === 0`, which is exactly why the suites were green while the banner was wrong. A
+    // partially built page resolves `unverified`, never `missing` (`resolveFieldsByIdentity` returns `unverified` for
+    // ANY count below expected, `0/N` included), so `buildMissing` cannot see it — and the run then announced "YOUR
+    // BUILD is not short … nothing here is built" over a page with fields genuinely absent, routing a repair round
+    // away from real build work. Two expected fields, one built, is the smallest payload that produces it.
+    const twoFieldManifest = JSON.stringify({
+      entity: "Bare",
+      entityColumns: { Name: { dataValueType: 1, caption: "Name" }, Amount: { dataValueType: 1, caption: "Amount" } },
+      schemas: [{ pkg: "Bare", body: 'define("Bare",[],function(){return{entitySchemaName:"Bare",diff:[{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:0,colSpan:12},bindTo:"Name",contentType:0,caption:"Name"}},{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{layout:{column:0,row:1,colSpan:12},bindTo:"Amount",contentType:0,caption:"Amount"}}]};});' }],
+      seed: CLEAN_SEED,
+      detailSchemas: {},
+      planMeta: { scope: "single-section", environment: "test", package: "X → Y", approach: "Parallel rebuild", whatItDoes: "bare test.", sectionSchema: "BareSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" },
+      signals: FULL_SIGNALS,
+    });
+    const barePartialPath = path.join(os.tmpdir(), `c2f_bare_built_partial_${process.pid}.json`);
+    fs.writeFileSync(barePartialPath, JSON.stringify({
+      pages: {
+        main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
+        list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
+      },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+    }));
+    try {
+      const vPartial = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", barePartialPath, "--verify-json", bareFullVerdictPath], { input: twoFieldManifest, encoding: "utf8" });
+      const pv = JSON.parse(fs.readFileSync(bareFullVerdictPath, "utf8"));
+      const builderOpen = pv.pages?.main?.builderOpen ?? 0;
+      check("PR review: the CLI reproduces the missed state — a partially built page puts builder-owned rows in `unverified`, so `builderOpen > 0` while `buildMissing === 0`; this is the most common intermediate state of any run, and no case above produced it",
+        vPartial.status === 2 && pv.buildMissing === 0 && builderOpen > 0,
+        () => ({ status: vPartial.status, buildMissing: pv.buildMissing, builderOpen, unverified: pv.unverified, rows: pv.pages?.main?.openRows?.map((r) => [r.owner, r.evidence]) }));
+      check("PR review: on that state the banner and the repair advice point at the BUILD — `buildIsShort` keys on `builderOpen`, so the run no longer says 'YOUR BUILD is not short' or 'nothing here is built' while deliverables are genuinely absent",
+        /⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete/.test(vPartial.stderr || "")
+        && !/YOUR BUILD is not short/.test(vPartial.stderr || "")
+        && !/nothing here is built/.test(vPartial.stderr || "")
+        && /build the missing pieces/.test(vPartial.stderr || ""),
+        () => vPartial.stderr);
+    } finally {
+      fs.rmSync(barePartialPath, { force: true });
     }
   } finally {
     fs.rmSync(bareBuiltPath, { force: true });
@@ -7524,7 +7697,11 @@ const PG_MANIFEST = {
   signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } },
 };
 const pgRun = runMigration(PG_MANIFEST, { baseDir: FIX });
-const pgOpts = checklistOpts(PG_MANIFEST);
+// `planCompleteness: true` mirrors what the `--units` CLI passes (the literal in migrate.mjs's `--units` branch,
+// which is where the reasoning for it being a literal rather than a shared constant lives) — `--units` is a
+// plan-governed run, and the byte-identity check below compares this object against that CLI's output, so the two
+// callers must supply the same opts or the drift detector fires on the opts rather than on the producer.
+const pgOpts = { ...checklistOpts(PG_MANIFEST), planCompleteness: true };
 const pgUnits = pageUnits(pgRun, pgOpts);
 // The page keys the ROWS are stamped with — derived, never hardcoded, so this stays honest under a key-format change.
 const pgRowKeys = [];
@@ -10942,6 +11119,125 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     check("ENG-95901: `buildComplete` is exposed on the post-hoc sweep's per-page tally too (renderVerify(...).pages.main) — one detector, two call sites, and now two axes, still byte-for-byte identical between them",
       sweepPage.buildComplete === true && sweepPage.missing === 0 && sweepPage.unverified > 0,
       () => sweepPage);
+  }
+
+  // ===== ENG-95901 (REOPENED 2026-09-03) — the same conflation, one level up: the RUN-LEVEL `missing` ==============
+  // The 2026-09-02 paired run (ENG-96445, section `BusinessRule1Section`) closed `⛔ INCOMPLETE, missing: 3` where all
+  // three rows were evidence REJECTIONS — the judge ruled the filed record unconvincing — and NOT ONE deliverable was
+  // absent from the build. A rejected record is re-FILED by the separate read-only verifier/judge, exactly like an
+  // unfiled one; the builder may not touch either. So the ❌ label was right and its OWNER was wrong.
+  //
+  // These fixtures deliberately do NOT pre-supply a convincing judge verdict (the immunisation the first round's own
+  // scope note warned about): each one supplies the REJECTION, which is the state that produced the bug.
+  {
+    const body = { pages: { main: { viewConfig: a3Body(4), businessRules: a3Rules } } };
+    // (1) The judge REJECTED a filed record. ❌ on the label axis, verifier-owned on the ownership axis.
+    const rejected = { ...body,
+      evidence: { "main#quality-gates": { referencePage: "an existing Freedom page reviewed for parity", components: ["crt.Input"] } },
+      judge: { "main#quality-gates": { convincing: false, why: "the record names containers, not the caption text and its binding" } } };
+    const u1 = verifyUnit(applicantR1, {}, rejected, "main");
+    check("ENG-95901 (reopened): a judge-REJECTED evidence row counts in `missing` but NOT in `buildMissing` — the build is not short, a record was filed unconvincingly, and the two are no longer one number",
+      u1.missing === 1 && u1.buildMissing === 0 && u1.buildComplete === true && u1.builderOpen === 0,
+      () => u1);
+    check("ENG-95901 (reopened): the run-level tally splits the same way — `rejected` carries it and the combined `missing` still counts it, so no open row is dropped from the totals",
+      (() => { const v = renderVerify(applicantR1, {}, rejected); return v.missing === 1 && v.buildMissing === 0 && v.rejected === 1 && v.missing === v.buildMissing + v.rejected; })(),
+      () => renderVerify(applicantR1, {}, rejected));
+    check("ENG-95901 (reopened): AC7/AC8 UNCHANGED on a rejected row — the post-hoc `complete` is still false, because for a human an unconvincing record IS a reason not to call it done",
+      u1.complete === false, () => u1);
+
+    // (2) The VERIFIER filed the record as `false` — 'the deliverable is genuinely absent'.
+    //
+    // PR REVIEW REVERSED THIS GOLDEN, deliberately. The first round tagged it `"verifier"` on the reasoning that the
+    // verifier WROTE it, so a builder "fixing" it would be writing an evidence record it is forbidden to write. But
+    // the tag decides the OWNERSHIP axis, and that axis feeds `buildComplete`, which the scoped in-context gate exits
+    // on. Tagged, a page whose deliverable is genuinely ABSENT reported `buildComplete: true` and the scoped gate went
+    // from exit 2 to exit 0: the build agent self-certified, no repair round was dispatched, and the run could not
+    // converge — the verifier cannot honestly re-file `true` for something that does not exist, and the builder was
+    // never sent to build it. The run-level strings then blamed "REJECTED by the judge" with no judge involved.
+    // So the tag follows who can REMEDY the row, not who wrote it: `judged === false` is verifier-owned (only the
+    // verifier can re-file a record a judge ruled on), `rec === false` is builder-owned (build the deliverable).
+    const filedFalse = { ...body, evidence: { "main#quality-gates": false } };
+    const u2 = verifyUnit(applicantR1, {}, filedFalse, "main");
+    check("PR review: a record the verifier filed as `false` is BUILDER-owned — it asserts the deliverable is genuinely absent, so `buildMissing > 0`, `buildComplete: false`, and the scoped gate keeps exiting 2 instead of letting the build self-certify",
+      // BOTH halves of the split quality-gates row fire here (nothing was filed, so nothing can be judged either),
+      // hence `missing === 2` — the count is not the point; the OWNER of both rows is.
+      u2.missing === 2 && u2.buildMissing === 2 && u2.buildComplete === false
+      && u2.openRows.every((r) => r.owner === "builder"),
+      () => u2);
+    // The exit code itself, not only `verifyUnit`'s view of it — the finding was about the CLI gate, and the first
+    // round's `filedFalse` case pinned `buildComplete` through `verifyUnit` alone.
+    check("PR review: the SCOPED CLI gate still exits 2 on a `rec === false` page — `buildComplete` is its input, so pinning the flag without pinning the gate is what let the exit code flip unnoticed",
+      (() => { const v = renderVerify(applicantR1, { scopePageKey: "main" }, filedFalse); return v.pages.main.buildComplete === false && v.pages.main.builderOpen === 2; })(),
+      () => renderVerify(applicantR1, { scopePageKey: "main" }, filedFalse).pages.main);
+
+    // (2b) PR REVIEW — the case none of the new suites reached: a judge rejection PLUS a builder-owned partial page,
+    // i.e. `buildMissing === 0 && rejected > 0 && builderOpen > 0`. Every new CLI/Markdown case had `builderOpen === 0`,
+    // which is why the "YOUR BUILD is NOT short … nothing here is built" sentence went out over a table whose own body
+    // read `1/3 expected fields present`. A partial page resolves `unverified`, never `missing`, so `buildMissing`
+    // cannot see it and `builderOpen` is the only counter that can.
+    {
+      const partialPlusRejected = { pages: { main: { viewConfig: a3Body(2), businessRules: a3Rules } },
+        evidence: { "main#quality-gates": { referencePage: "an existing Freedom page reviewed for parity", components: ["crt.Input"] } },
+        judge: { "main#quality-gates": { convincing: false, why: "the record names containers, not the caption text and its binding" } } };
+      const v = renderVerify(applicantR1, {}, partialPlusRejected);
+      check("PR review: on a judge rejection over a PARTIALLY BUILT page the counters are `rejected > 0`, `buildMissing === 0` and `builderOpen > 0` — the state the new cases never produced, and the one the wrong axis mis-reported",
+        v.rejected > 0 && v.buildMissing === 0 && v.builderOpen > 0, () => v);
+      check("PR review: the Markdown verdict the close report presents VERBATIM no longer claims 'YOUR BUILD is NOT short' over a page with open build rows — it names both halves, so the header stops contradicting its own table",
+        !/YOUR BUILD is NOT short/.test(v.markdown) && /open row\(s\) YOUR BUILD owns/.test(v.markdown), () => v.markdown.split("\n").filter((l) => /INCOMPLETE|NOT DONE/.test(l)));
+      check("PR review: the pure-rejection case this ticket targets KEEPS its new sentence — `builderOpen === 0` there, so guarding on it narrows the claim without undoing the fix",
+        /YOUR BUILD is NOT short/.test(renderVerify(applicantR1, {}, rejected).markdown), () => renderVerify(applicantR1, {}, rejected).markdown.split("\n").filter((l) => /NOT DONE/.test(l)));
+    }
+
+    // (3) The other direction — the axis must still FIRE on a genuinely short build. Same manifest, an EMPTY page.
+    const short = { pages: { main: { viewConfig: [] } } };
+    const u3 = verifyUnit(applicantR1, {}, short, "main");
+    check("ENG-95901 (reopened): a genuinely short build still fails on the build axis — `buildMissing > 0`, `buildComplete: false`; the split narrows what counts, it does not silence the counter",
+      u3.buildMissing > 0 && u3.buildComplete === false,
+      () => u3);
+
+    // (4) THE INVARIANT, on a page carrying BOTH kinds at once: nothing is double-counted and nothing is lost.
+    const mixed = { pages: { main: { viewConfig: [] } },
+      evidence: { "main#quality-gates": { referencePage: "p", components: ["crt.Input"] } },
+      judge: { "main#quality-gates": { convincing: false, why: "not convincing" } } };
+    const v4 = renderVerify(applicantR1, {}, mixed);
+    check("ENG-95901 (reopened) THE INVARIANT: on a page with a short build AND a rejected record, `missing === buildMissing + rejected` and every open row is still counted exactly once",
+      v4.missing === v4.buildMissing + v4.rejected && v4.buildMissing > 0 && v4.rejected === 1
+      && v4.pages.main.missing === v4.pages.main.buildMissing + 1,
+      () => ({ missing: v4.missing, buildMissing: v4.buildMissing, rejected: v4.rejected, page: v4.pages.main }));
+    // THE HUMAN-FACING SENTENCE — the one the 2026-09-03 comment quotes and the one the close report presents
+    // verbatim out of `verify.md`. A right number under a wrong claim is still what an operator reads.
+    check("ENG-95901 (reopened): the MARKDOWN verdict on a rejected-record page no longer claims a deliverable is MISSING from the build — it says the build is NOT short and points at re-FILING the record",
+      (() => { const md = renderVerify(applicantR1, {}, rejected).markdown;
+               return /YOUR BUILD is NOT short/.test(md) && /re-FILE the record/.test(md)
+                 && !/MISSING from YOUR BUILD/.test(md); })(),
+      () => renderVerify(applicantR1, {}, rejected).markdown.split("\n").filter((l) => /Verdict:/.test(l)).join(" | "));
+    check("ENG-95901 (reopened): a page carrying BOTH kinds names BOTH numbers in the verdict — neither the build gap nor the rejection is folded into the other",
+      (() => { const md = renderVerify(applicantR1, {}, mixed).markdown;
+               return /MISSING from YOUR BUILD, and 1 evidence row\(s\) REJECTED by the judge/.test(md); })(),
+      () => renderVerify(applicantR1, {}, mixed).markdown.split("\n").filter((l) => /Verdict:/.test(l)).join(" | "));
+    check("ENG-95901 (reopened): a GENUINELY short build keeps the original sentence, word for word — the split must not churn the verdict every reader already knows",
+      /⛔ \*\*INCOMPLETE — \d+ machine-checked deliverable\(s\) MISSING from YOUR BUILD\*\* \(build them \/ file the evidence, then re-verify\)/.test(renderVerify(applicantR1, {}, short).markdown),
+      () => renderVerify(applicantR1, {}, short).markdown.split("\n").filter((l) => /Verdict:/.test(l)).join(" | "));
+    // The DIGEST's complete-page branch is a hand-written literal (see the guard at the `verifyDigest` golden
+    // below): a field added to the tally but forgotten there reads as `undefined` on exactly the pages a scheduler
+    // skips, which is how `buildComplete` nearly regressed once already.
+    check("ENG-95901 (reopened): `verifyDigest`'s COMPLETE-page compaction keeps `buildMissing` — the hand-written literal must carry every counter the open-page branch does, or a finished page reports `undefined` to whatever schedules on it",
+      (() => { const v = renderVerify(applicantR1, {}, { ...body, ...QG_EVIDENCE });
+               const d = verifyDigest(applicantR1, v);
+               return Object.values(d.pages).every((pg) => typeof pg.buildMissing === "number")
+                 && d.buildMissing === 0 && d.rejected === 0; })(),
+      () => verifyDigest(applicantR1, renderVerify(applicantR1, {}, { ...body, ...QG_EVIDENCE })));
+    check("ENG-95901 (reopened): `unfiled` is its OWN counter and is NOT the same as `unverified` — `unverified` also folds in a partially-built page, which is the builder's own work however the row is labelled",
+      (() => { const v = renderVerify(applicantR1, {}, { pages: { main: { viewConfig: a3Body(2), businessRules: a3Rules } } });
+               return v.unverified > v.unfiled && v.unfiled >= 1 && v.builderOpen >= 1; })(),
+      () => renderVerify(applicantR1, {}, { pages: { main: { viewConfig: a3Body(2), businessRules: a3Rules } } }));
+    check("ENG-95901 (reopened) THE SECOND INVARIANT: `unfiled === unverified - (builderOpen - buildMissing)` — the ⚠ rows split by owner exactly the way the ❌ rows do, so the four cells of {builder,verifier}×{missing,unverified} account for every open row and none twice",
+      (() => [{ pages: { main: { viewConfig: a3Body(2), businessRules: a3Rules } } }, rejected, filedFalse, short, mixed]
+        .every((b) => { const v = renderVerify(applicantR1, {}, b);
+                        return v.unfiled === v.unverified - (v.builderOpen - v.buildMissing)
+                          && v.missing === v.buildMissing + v.rejected; }))(),
+      () => [rejected, filedFalse, short, mixed].map((b) => { const v = renderVerify(applicantR1, {}, b);
+        return { missing: v.missing, buildMissing: v.buildMissing, rejected: v.rejected, unverified: v.unverified, unfiled: v.unfiled, builderOpen: v.builderOpen }; }));
   }
 }
 

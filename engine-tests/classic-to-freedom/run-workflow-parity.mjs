@@ -247,7 +247,9 @@ function buildScenarios() {
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
   // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
   // and a realistic fixture should look like the real answer, not because the checker demands it.
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [], pages, ...extra });
+  // PR review — `buildMissing` at the TOP LEVEL as well as per page: it is `required` by `RECONCILE_SHAPE` now (the
+  // close line reads exactly that field), so an answer without it is refused and the run stops at `reconcile-failed`.
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -265,12 +267,12 @@ function buildScenarios() {
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
     staleQueueKeys: [], newKeys: [],
-    verify: verify({ "child:Documents": { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true }, main: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
+    verify: verify({ "child:Documents": { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
     exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
+    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({
@@ -308,7 +310,11 @@ function buildScenarios() {
     { name: "no approval recorded — hard stop 1", args: ARGS, answer: host({ reconciles: [RECONCILE({ approval: { found: false } })] }) },
     { name: "approval names no version — hard stop 1", args: ARGS, answer: host({ reconciles: [RECONCILE({ approval: { found: true, version: "" } })] }) },
     { name: "approval version mismatch — hard stop 1", args: ARGS, answer: host({ reconciles: [RECONCILE({ approval: { ...APPROVED, version: "plan-old" } })] }) },
-    { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["COVERAGE INCOMPLETE"] })] }) },
+    // The gap strings are the engine's OWN published forms (`planGaps()` in designspec.mjs), not the uppercase
+    // stderr headlines: `planGapNext` classifies the KIND out of these, and a fixture in the wrong vocabulary meant
+    // the only blocked-gate scenario in this file silently took the MANIFEST remedy branch and nothing tested the
+    // stand one. Both sides share the fixture, so parity passed either way — the bug was invisible here by design.
+    { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["coverage INCOMPLETE (4 unaccounted member(s))"] })] }) },
     { name: "package state unknown — hard stop 3", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "unknown" })] }) },
     { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "not a component type" }] })] }) },
     { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "install CrtCustomer360App" }] })] }) },
@@ -344,7 +350,7 @@ function buildScenarios() {
     { name: "a park already in the queue file is carried over", args: ARGS, answer: host({ reconciles: [RECONCILE({ parkedUnits: [{ key: "child:Documents", parkedWhy: "gave up last session", rounds: 3 }] }), GREEN] }) },
     { name: "the app unit builds the package the plan targets", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), GREEN], build: (unit) => (unit === "app" ? { unit: "app", packageName: "DealPkg", appName: "Deals", starterFormPage: "DealFormPage", starterListPage: "DealListPage", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
     { name: "the app unit produces a DIFFERENT package — it stays open", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), RECONCILE({ packageState: "absent" })], build: (unit) => (unit === "app" ? { unit: "app", packageName: "OtherPkg", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
-    { name: "a plan gap that appears mid-run stops the run", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ planGaps: ["GATE BLOCKED"] })] }) },
+    { name: "a plan gap that appears mid-run stops the run", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ planGaps: ["gate BLOCKED (1 correctness signal(s))"] })] }) },
     { name: "a guidelines record that is not fileable is reported, not filed", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], build: (unit) => ({ ...BUILT(unit), guidelines: { evidenceId: `${unit}#quality-gates`, ran: true, referencePage: "", componentsDiffed: [] } }) }) },
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },

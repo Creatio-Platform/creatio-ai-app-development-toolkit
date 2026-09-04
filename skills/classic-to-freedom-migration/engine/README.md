@@ -42,6 +42,41 @@ machine-readable copy of every gated composite the run emits, as `[{ componentTy
 plan's Overview; the JSON is the full record. A run that gates no type writes `[]`. Like `--out`, the path must be a
 real file path, not another flag.
 
+**`--units.planGaps` — the PLAN-level verdict, machine-readable (ENG-95857).** A root-level array on the build
+queue, carrying every plan-level check that fired, one entry each, `[]` when the plan is clean (published even then,
+so a clean plan is distinguishable from an engine that publishes nothing). There are FOUR kinds, and the remedy is
+not the same for all of them:
+
+| Kind | Remedy |
+|---|---|
+| `gate BLOCKED (N correctness signal(s))` | the **stand or the input schemas** — resolve what the gate reasons name |
+| `structure INCOMPLETE (N missing input(s))` | the **manifest** — supply the named detail / profile / child-page schemas |
+| `coverage INCOMPLETE (N unaccounted member(s))` | the **manifest** — map each member or record its disposition |
+| `plan INCOMPLETE — required planMeta unfilled / on-stand signals not resolved / placement not settled` | the **manifest** (a `signals` answer after a read-only stand check) |
+
+None of the four is buildable-out-of, which is why this is the set the build executor's hard stop reads before its
+first stand write, rather than plan-level stderr lines an agent transcribes.
+
+**A placement-less plan is now a RE-PLAN.** Every route to an unsettled `placement` also produces a
+`placementIssues` blocker, so a manifest written before placement was gated publishes a non-empty `planGaps` and
+the build executor stops on it before its first stand write. That is a deliberate change of behaviour for such a
+plan (it used to proceed with `--units.sectionHost: null`), and it is not suppressible by inference: an absent
+`placement` is indistinguishable from a forgotten one, which is the whole reason applicability is carried
+explicitly rather than guessed. Re-record `manifest.placement` and re-plan.
+
+**Read the array, not the exit code.** Exit codes are unchanged: `--plan` exits 2 on a plan-completeness gap, and
+`--units` exits 0 while publishing a non-empty `planGaps` — it is a build-queue read, and exit 2 there would also
+conflate the plan-level kinds with `verifyIncomplete`, which IS repairable by building and must not stop a run. A
+caller that gates on the exit code alone therefore learns nothing about the plan; gate on `planGaps.length`.
+`--units` does also say it on **stderr**, as one INFORMATIONAL, non-gating
+`ℹ … plan-completeness gap(s) … carried in units.planGaps` line naming the same entries the artifact carries — PR review: the
+other three kinds write their ⛔ line in EVERY mode, so silence on this one made stderr coverage look uniform
+across the four when it was not. That line is a courtesy for whoever is watching the run; the array is the
+contract. The plan-completeness legs are reported
+in the **plan-governed modes only** — `--plan` and `--units`, the same pair `--resolved-gates` rides, because plan
+completeness is a PLAN/RUN-time fact about the manifest and not a `--verify` verdict. A `--spec` or default run
+legitimately carries no `planMeta`, no `signals` and no `placement`, and reports none of them.
+
 **`--verify --page <key>` alone is a pure READ** (this page's row of the built file, exit 0, gates nothing). **Adding
 `--verify-json <file>` turns it into the IN-CONTEXT SINGLE-UNIT GATE** (ENG-95469): it runs the SAME detector the
 full sweep does, SCOPED to that one page, writes the per-unit verdict `{ pageKey, complete, buildComplete, missing,
@@ -72,19 +107,36 @@ string the `decisions.md` approval entry names, and the string the delegated bui
 `plan.md` is engine-WRITTEN, so nothing else can put a version in it and survive the next `--plan --out`.
 
 `--verify-json <file>` (only with `--verify`) writes the verdict a CALLER computes on:
-`{ complete, missing, unverified, planGaps, pages: { "<key>": { missing, unverified, complete, buildComplete,
+`{ complete, missing, buildMissing, rejected, unfiled, unverified, planGaps, pages: { "<key>": { missing,
+buildMissing, unverified, complete, buildComplete,
 openRows: [ { n, deliverable, status, evidence, outcome, id? } ] } } }`. It is ADDITIVE — stdout and `--out` still
 carry the Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at
 all, and the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open
 rows). `planGaps` is the other half of exit 2 (D12): non-empty means the PLAN is short — not buildable-out-of —
-and it is independent of `complete`, so a run can have nothing left to build and still exit 2. ENG-95901 —
+and it is independent of `complete`, so a run can have nothing left to build and still exit 2. **Here it is the
+BUILD verdict's narrower set** (gate / structure / coverage): a `--verify` run legitimately happens over a manifest
+that carries no `planMeta`, so plan completeness is not reported on this channel. The full four-kind set is
+`--units.planGaps`, above — that is what a caller stops on. ENG-95901 —
 `complete` here is the COMBINED axis (`missing === 0 && unverified === 0`), unchanged: the whole-tree `--verify`
 still treats an unconfirmed evidence row as a reason not to call the run done. `buildComplete` (no open row the
 BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate above reads for ITS exit code — the
 two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
 each row's `owner` (`"builder"` / `"verifier"`), NOT on its `missing`/`unverified` label: `unverified` is also what a
 PARTIAL or unread build resolves to (`0/N expected fields`, `k/N components`, "no `--built.pages` entry"), all of
-them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
+them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports.
+
+ENG-95901 (reopened 2026-09-03) — the SAME split now applies to the ❌ rows, because `missing` folds two states
+together as well. A row the JUDGE rejected (`judge[id].convincing === false`), or one the verifier filed as `false`,
+is `❌ MISSING` and is **not** a deliverable short on the page: it is a record filed unconvincingly by the separate
+read-only verifier/judge, and re-filing it is their work, not the builder's. So `missing` keeps its old meaning
+(every ❌ row, and it is still what the human-facing verdict and the CLI exit code read), and three counters ride
+alongside it: `buildMissing` — the ❌ rows the BUILDER owns, the honest "my build is short" number; `rejected` — the
+❌ rows the verifier/judge owns; `unfiled` — the ⚠ rows the verifier owns (note that `unverified` is NOT the same
+number, since it also counts a partially-built page). `missing === buildMissing + rejected` always holds, so nothing
+is dropped from the totals. Per page only `buildMissing` is published alongside `missing` — the other two are
+derivable (`rejected = missing - buildMissing`) and every per-page field costs bytes on every page of the plan in
+the `--verify-summary` answer. The unscoped `⛔ VERIFY INCOMPLETE` stderr line now reads
+`N MISSING from the build + M evidence row(s) REJECTED by the judge (re-FILE the record — not a build gap)`. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
 creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each with its expected template, target
 package and `expect` counts (including
 `expect.fieldNames`, the element names the fields check matches on), plus the five reachability keys with

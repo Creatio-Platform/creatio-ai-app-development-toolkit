@@ -184,6 +184,7 @@ A task may only move to `VALIDATED` after runtime read-back is recorded in `work
 - localizable resources present
 - page schema validation passed
 - no route/section-code collision introduced (Classic route still resolves where intended; no duplicate Freedom section)
+- the Freedom section's navigation route is the RECORDED fact (`standWrites.sectionRoute`), not re-derived or guessed — ENG-96147; a route this run cannot point to a record for is an open item, not a confirmed one
 
 If any item cannot be verified, the task stays `DONE` and the gap is logged as a risk.
 
@@ -263,7 +264,7 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 ## <date> — <session summary>
 - Scope: <what this session covered>
 - Actions: <operations/tools used>
-- Read-back evidence: <schema UId, package, SCHEMA_DEPS, handlers, resources, validation>
+- Read-back evidence: <schema UId, package, SCHEMA_DEPS, handlers, resources, validation, section navigation route>
 - Roadmap changes: <ID: old -> new status>
 - Open issues: <carried forward>
 ```

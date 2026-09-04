@@ -73,6 +73,23 @@ export function unitStem(unit, pageNo) {
 }
 export const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
+// ENG-95901 (reopened) — the shortfall split behind every "N MISSING" line. Rationale: designspec.mjs `verifyTally`.
+// A verdict predating `buildMissing` falls back to `missing` — over-report, never a false zero.
+export function shortfallOf(st) {
+  const missing = st?.missing ?? 0
+  const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
+  return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
+}
+// PR review — an UNMEASURED run reads `?`, never `0 MISSING`. `shortfallOf(undefined)` legitimately returns zeros
+// (its callers need arithmetic), but rendering those zeros as prose put a false zero on the one axis this helper's own
+// comment forbids one on: the close line could read `NOT COMPLETE after 3 round(s): 0 MISSING + ? unconfirmed`, the
+// `?` beside it proving no verdict had been read. `parkWhy` already guards `!st` first; these two call sites did not.
+export function shortfallText(st) {
+  if (st == null) return '? MISSING'
+  const { buildMissing, rejected } = shortfallOf(st)
+  return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
+}
+
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:
 // a key ABSENT from the verdict is open, because absent means nothing confirmed it — most often that
 // `--verify` never ran (the baseline round, before a built file exists) or that the page could not be
@@ -406,6 +423,66 @@ export function approvalStop(app, planVersion, ctx = {}) {
   }
   return null
 }
+// --- HARD STOP 2's REPORT: which plan-level check fired, and where the operator goes (ENG-95857) -------------
+// The engine publishes FOUR plan-level kinds and this is the whole vocabulary. Recognition is by CONTAINMENT and
+// case-INSENSITIVE, not by reading the first two tokens: the entry is meant to be `--units.planGaps` copied
+// verbatim, but the field is typed only as `string[]`, so nothing structurally stops a paraphrase or a pasted
+// stderr line (`migrate.mjs: ⛔ GATE BLOCKED — do NOT build. …`) arriving here. A leading-token parse read that
+// line's kind as `migrate.mjs: ⛔` and sent a BLOCKED correctness gate to the manifest remedy — confidently
+// wrong, which is the exact misdirection this stop exists to remove. An unrecognised entry now yields NO kind,
+// and `planGapNext` falls back to a kind-agnostic instruction rather than guessing one.
+const PLAN_GAP_KINDS = ['gate BLOCKED', 'structure INCOMPLETE', 'coverage INCOMPLETE', 'plan INCOMPLETE']
+// EVERY kind the entry names, not the first one found. The engine itself publishes joined single strings on this
+// same vocabulary — `planGapBanner` and the `verifyIncomplete` stderr line both join the active gaps with ` · `
+// into ONE sentence — so an entry that quotes such a line names two kinds at once. A first-match parse collapsed it
+// to whichever word sits earliest in the list above and then printed ONE remedy while BOTH halves were broken:
+// the same confidently-wrong misdirection this stop exists to remove. The fallback below covers an entry matching
+// NO kind; this covers one matching SEVERAL (PR review).
+const gapKindsOf = (g) => {
+  const u = String(g).toUpperCase()
+  return PLAN_GAP_KINDS.filter((k) => u.includes(k.toUpperCase()))
+}
+export const planGapKinds = (planGaps) => [...new Set((planGaps || []).flatMap(gapKindsOf))]
+
+// THE KIND LIST AS A LOG LABEL, with a word for the empty case. `planGapKinds(...).join(' · ')` is empty exactly
+// when nothing classified, and both STOP lines interpolate it inside brackets — so the one run whose
+// classification failed printed a bare `[]`, which reads as "there are no kinds" rather than "this script could
+// not name them". One helper rather than the fallback string typed at each site, because the two stop sites and
+// the parity baseline have to say the same word (PR review).
+export const planGapKindLabel = (planGaps) => planGapKinds(planGaps).join(' · ') || 'unclassified'
+
+// The remedy differs by kind, and this stop used to give one answer for all four: "fix it in the manifest". That
+// is wrong for a blocked correctness GATE — a broken merge, or an effect the mapper cannot represent, is a fact
+// about the STAND or the input schemas that no manifest edit clears. Naming which fired is the difference between
+// an operator editing a file and an operator going to the stand — so when nothing classifies, say BOTH remedies
+// and hand back the engine's own text, never one half of the answer picked at random.
+const MANIFEST_REMEDY = 'in the manifest (\`planMeta\` / \`signals\`, after the read-only stand check / \`placement\`, or the structure/coverage inputs named)'
+const GATE_REMEDY = 'a BLOCKED gate is fixed in the stand or the input schemas, NOT the manifest — resolve what its reasons name'
+export function planGapNext(planGaps, tail = 'then re-run this build') {
+  // COUNT THE ENTRIES AS PUBLISHED, quote the text that is actually there. Both STOP log lines count
+  // `state.planGaps.length`, so counting the post-filter list here made a blank-but-present entry read as
+  // `1 PLAN-level gap(s)` in the log and `0` in this sentence — one run described two ways (PR review). `list`
+  // still drops the blank entries from the QUOTED text, because quoting whitespace tells nobody anything; when
+  // that leaves nothing to quote, say so rather than trailing off after a colon.
+  const all = (planGaps || []).map(String)
+  const list = all.filter((s) => s.trim())
+  const kinds = planGapKinds(list)
+  const reported = list.length ? list.join(' · ') : '(the entries carry no text)'
+  const replan = `Then re-run \`--plan --out\`, get the NEW plan version approved, ${tail}`
+  if (!kinds.length)
+    return `${all.length} PLAN-level gap(s) this script could not classify — act on the engine's own text: ${reported} (a BLOCKED correctness gate is fixed in the stand or the input schemas; anything else ${MANIFEST_REMEDY}). ${replan}`
+  const parts = []
+  const gated = kinds.includes('gate BLOCKED')
+  if (gated) parts.push(GATE_REMEDY)
+  // `the rest` only when a gate clause precedes it: on a plan-completeness-only stop there is no "rest", and the
+  // phrase read as a reference to something the operator had not been told.
+  if (kinds.some((k) => k !== 'gate BLOCKED')) parts.push(`${gated ? 'the rest are' : 'answered'} ${MANIFEST_REMEDY}`)
+  // THE ENGINE'S OWN ENTRIES, on the classified path too (PR review). The kind names WHICH check fired and the
+  // remedy names WHERE to go, but only the entry text says WHAT to fix — `plan INCOMPLETE — required planMeta
+  // unfilled (2): scope, formTemplate` names the two keys, and dropping it left the operator to open `planGaps` in
+  // the return to learn them. The unclassified branch above always quoted the text; this one threw it away.
+  return `${kinds.join(' · ')} — ${parts.join('; ')}. The engine reported: ${reported}. ${replan}`
+}
 // THE THREE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode
 // THROWS instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the
 // failure the mode exists to prevent — the operator asked to be stopped and would not have been.
@@ -571,6 +648,19 @@ export function packagePreconditionStop(targetPackage, packageState, sectionHost
     return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
   }
   return null
+}
+
+// ENG-96147 — THE SECTION'S NAVIGATION ROUTE, assembled in exactly ONE place. A guessed `#Section/<schema>` URL
+// cost a database flush and a `compile-creatio` on a shared stand: an agent retyped a section's code from memory,
+// dropped the `_ListPage` suffix, got `Script error`, and reported a working page as broken. The fix is not a
+// smarter guess — it is that nothing guesses: `create-app-section`/`list-app-sections` already return the list
+// page's own schema name, and this is the only function that turns that VERBATIM string into a route. Pure, so
+// the composition is testable on its own and no second writer in the run can independently invent a different
+// prefix. `null` in ⇒ `null` out: an empty/missing schema name is never padded into a route that looks real.
+export function sectionRouteFrom(schemaName) {
+  const name = String(schemaName ?? '').trim()
+  if (!name) return null
+  return { route: `#Section/${name}`, schemaName: name }
 }
 
 // THE COMPONENT-TYPE PRE-BUILD GATE (ENG-95468). Every `crt.*` type the plan names must resolve on the TARGET
@@ -2024,10 +2114,13 @@ export function unconsumedNextClause(entries) {
 // lives here rather than in a second, near-duplicate `log(...)` call beside it — two verdict lines let a log-scraper
 // read the one without the count and miss it. `complete` implies zero unconsumed (`runComplete` gates on it), so the
 // count is stated only on the NOT COMPLETE branch, where it can be non-zero.
-export function completionLine(complete, { round, missing, unverified, parkedCount, unconsumedCount } = {}) {
+export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount } = {}) {
+  // ENG-95901 — the shortfall half of the line goes through `shortfallText`, so a judge-rejected record is named as
+  // such instead of being folded into one "N MISSING" count. A caller that knows only `missing` still reads the same.
+  const shortfall = missing == null && buildMissing == null ? '?' : shortfallText({ missing, buildMissing })
   return complete
     ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${missing ?? '?'} MISSING + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
+    : `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }
 
 // ENG-95503 — THE ACCOUNTABILITY OBLIGATION IS CONDITIONAL, so it is ADDED to the schema rather than baked into it.
