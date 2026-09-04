@@ -87,7 +87,11 @@ export const INDEX_ENTRY = {
   // `from` is REQUIRED the moment `trigger` is present — an origin-less reported trigger answers nothing. Stated
   // in the schema for hosts that honour `dependentRequired`, and re-checked arithmetically in the core for the
   // ones that do not.
-  dependentRequired: { trigger: ['from'] },
+  // AND THE REVERSE: `trigger` is required the moment `from` is present. An entry carrying only `from` used to be
+  // accepted, and the engine recorded `{kind:'reported', reportedKind:null}` for it — the row counted as resolved
+  // while nothing said what kind of origin was named. Both directions are re-checked in
+  // `validateReportedTrigger`, for the same reason.
+  dependentRequired: { trigger: ['from'], from: ['trigger'] },
 }
 
 export const DESCRIBE_SCHEMA = {

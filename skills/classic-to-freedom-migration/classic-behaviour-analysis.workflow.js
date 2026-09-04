@@ -454,7 +454,7 @@ function attachOverrideOnly(batches, empty) {
 
 const overrideKey = (schema, method) => `${schema}::override:${method}`
 
-const OVERRIDE_KEY_RX = /(^|::)override:/
+const OVERRIDE_KEY_RX = /^[^:]+::override:/
 function overrideEntries(results) {
   return (results || []).flatMap((r) => r?.indexEntries || []).filter((e) => e?.key && OVERRIDE_KEY_RX.test(e.key))
 }
@@ -472,11 +472,15 @@ const DECLARATION_PATH_RX = /^(attributes|details)\.[A-Za-z0-9_$]+(\.[A-Za-z0-9_
 const DECLARATION_KINDS = new Set(['attribute', 'detail', 'entity-filter'])
 
 function validateReportedTrigger({ trigger, from, methodName } = {}) {
-  if (trigger === null || trigger === undefined || trigger === '') return null
+  const declaredFrom = typeof from === 'string' ? from.trim() : ''
+  if (trigger === null || trigger === undefined || trigger === '') {
+    if (!declaredFrom) return null
+    return `\`from\` names '${declaredFrom}' but no \`trigger\` says what kind of origin that is — half an answer resolves nothing`
+  }
   if (typeof trigger !== 'string' || !REPORTED_TRIGGERS.includes(trigger)) {
     return `trigger '${String(trigger)}' is not one of ${REPORTED_TRIGGERS.join(', ')}`
   }
-  const origin = typeof from === 'string' ? from.trim() : ''
+  const origin = declaredFrom
   if (!origin) return `trigger '${trigger}' names no \`from\` — a reported trigger without its origin answers nothing`
   if (methodName && origin === methodName) return `\`from\` is the row itself ('${origin}') — a row cannot be its own origin`
   if (DECLARATION_KINDS.has(trigger) && !DECLARATION_PATH_RX.test(origin)) {
@@ -549,7 +553,7 @@ const INDEX_ENTRY = {
     note: { type: 'string' },
     behaviourEstablished: { type: 'boolean' },
   },
-  dependentRequired: { trigger: ['from'] },
+  dependentRequired: { trigger: ['from'], from: ['trigger'] },
 }
 
 const DESCRIBE_SCHEMA = {
@@ -788,12 +792,13 @@ function assertInput(input) {
 const noop = () => {}
 
 const NOTHING_TO_DESCRIBE = 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply'
-function skippedReturn(surface, extra = {}) {
+const ledgerOf = (totals) => (typeof totals?.ledgerMembers === 'number' ? totals.ledgerMembers : null)
+function skippedReturn(surface, totals, extra = {}) {
   return {
     surface,
     skipped: true,
     reason: NOTHING_TO_DESCRIBE,
-    coverage: { described: 0, digestRows: 0, total: 0, ledgerMembers: null, complete: true, uncovered: [], wiringOnly: [] },
+    coverage: { described: 0, digestRows: 0, total: 0, ledgerMembers: ledgerOf(totals), complete: true, uncovered: [], wiringOnly: [] },
     describeAgents: 0,
     ...extra,
   }
@@ -848,7 +853,7 @@ function* run(rawInput, io = {}) {
 
   if (declaredNothingToDo(input.totals)) {
     log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE)
+    return skippedReturn(SURFACE, input.totals)
   }
 
   const RULES = rules({ surface: SURFACE, environment: input.environment, outDir: input.outDir, digest: input.digest, manifest: input.manifest })
@@ -889,7 +894,7 @@ function* run(rawInput, io = {}) {
 
   if (!worked.length) {
     log(`no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE, {
+    return skippedReturn(SURFACE, input.totals, {
       scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: 0 })),
       censusNote: ctx.censusNote || null,
       refusals: ctx.refusals || [],
@@ -1034,7 +1039,7 @@ function* run(rawInput, io = {}) {
     ? `complete: ${covered.size}/${allKeys.size} rows described`
     : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
   log(verdictLine)
-  const ledger = typeof input.totals?.ledgerMembers === 'number' ? input.totals.ledgerMembers : null
+  const ledger = ledgerOf(input.totals)
   log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
   if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
 
@@ -1046,7 +1051,7 @@ function* run(rawInput, io = {}) {
       described: covered.size,
       digestRows: allKeys.size,
       total: allKeys.size,
-      ledgerMembers: typeof input.totals?.ledgerMembers === 'number' ? input.totals.ledgerMembers : null,
+      ledgerMembers: ledgerOf(input.totals),
       complete, uncovered: uncoveredKeys, wiringOnly,
     },
     rejectedTriggers,

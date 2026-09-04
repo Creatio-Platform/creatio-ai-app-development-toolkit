@@ -1811,8 +1811,15 @@ function conditionGap(r) {
   const sane = r.conditions || [];
   if (declared <= 0) return false;
   if (!sane.length) return true;
+  // ENG-96571 (review 1, G) — and a condition whose RIGHT side says nothing is degenerate too. `right` now
+  // carries an attribute reference as well as a constant (Classic's `{type:1, attribute:"OtherStage"}`), so a
+  // right side with neither a value nor an attribute names nothing to compare against: the rule renders as
+  // "when Stage" and reads as "Stage is set", which is not what the classic page evaluated.
+  const rightSaysNothing = (c) => (c?.right?.value === null || c?.right?.value === undefined)
+    && !c?.right?.attribute && !c?.right?.attributePath;
   const degenerate = (c) => c?.comparison === null || c?.comparison === undefined
-    || (!c?.left?.attribute && !c?.left?.path);
+    || (!c?.left?.attribute && !c?.left?.path)
+    || rightSaysNothing(c);
   // `every` missed every PARTIAL gap: two declared conditions of which one sanitized away, or three declared and
   // two readable, left `sane` non-empty with at least one readable entry and reported the rule as fully read. The
   // rendered cell then stated a condition that is only half of what the classic page evaluated — the same class of
@@ -1832,9 +1839,19 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
     // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
     // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
     const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
+    // ENG-96571 (review 1, S-i) — THE SAME CONDITION GAP APPLIES HERE. A FILTRATION rule carries `conditions`
+    // exactly like a BINDPARAMETER one (it is the WHEN of the filter, separate from the filter's own column and
+    // value), and only the BINDPARAMETER branch read them: a FILTRATION that DECLARED a condition the parser
+    // could not read was emitted with `conditions: []` and nothing said so, so a conditional filter shipped as an
+    // unconditional one. Nothing new is RENDERED — the flag and the ⚠ Confirm row are what the reader needs, and
+    // the entity-filter row's own "⚠ dynamic — resolve value" wording is about the filter VALUE, a different gap.
+    const condGap = conditionGap(r);
     entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-      conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+      conditions: r.conditions,
+      ...(condGap ? { conditionsIncomplete: true } : {}),
+      note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
       provenance: r.provenance });
+    if (condGap) needsDecision.push({ kind: "rule-condition", item: r.attr, reason: CONDITION_GAP_REASON(r.attr) });
     // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
     // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
   } else if (r.ruleType === "BINDPARAMETER") {

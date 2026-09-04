@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -11898,6 +11898,319 @@ check("ENG-96571 B1: the rendered cell is UNCHANGED by the rename — `<hook> (p
   () => renderPlan(b1Life, {}).split("\n").filter((l) => /warmCache/.test(l)));
 check("ENG-96571 B1: a lifecycle-answered row is NOT counted as `internalCallOnly` — the platform starting the chain IS the answer",
   b1Life.stubIndex[0].counts.internalCallOnly === 0, () => JSON.stringify(b1Life.stubIndex[0].counts));
+
+/* ================================================================================================
+   ENG-96571 review 1 — the engine-side findings (A, E, F, G, I, S-i, S-iv)
+   ================================================================================================ */
+
+/* ---- A: `applyConfirmDispositions` used to run BEFORE six kinds of row were pushed ---- */
+// `parse-gap:*` (reportRemainingDiagnostics), `enum-drift-advisory`, `registry-*` (reportRegistryFindings) and
+// `typed-page:*` (normalizeTypedPages) are all pushed AFTER the old call site, so their rows printed in the ⚠
+// Confirm worklist as questions no manifest answer could close — and the key was reported in none of
+// closed/invalid/notApplicable, so nothing said why.
+const R1_A_BODY = `define("R1APage",[],function(){return{entitySchemaName:"HRRequest",
+  attributes:{Stage:{dataValueType:someUnknownEnumVar}},
+  diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+const r1aRun = (dispositions) => runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1APage", body: R1_A_BODY }],
+  typedPages: ["HRRequestICPage"],
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r1aOpen = r1aRun(null);
+const r1aKinds = (r1aOpen.changeSet.needsDecision || []).map((n) => `${n.kind}:${n.item}`);
+const r1aTyped = r1aKinds.find((k) => k.startsWith("typed-page:"));
+const r1aParseGap = r1aKinds.find((k) => k.startsWith("parse-gap:"));
+check("ENG-96571 (review 1, A) SETUP: the fixture really raises BOTH a `typed-page:*` row (normalizeTypedPages) and a `parse-gap:*` row (reportRemainingDiagnostics) — the two producers that ran AFTER the disposition pass",
+  typeof r1aTyped === "string" && typeof r1aParseGap === "string",
+  () => r1aKinds);
+const r1aClosed = r1aRun({
+  [r1aTyped]: { resolved: true, disposition: "accepted", note: "the typed page is out of this wave" },
+  [r1aParseGap]: { resolved: true, disposition: "resolved-on-stand", note: "read the real enum member on-stand" } });
+check("ENG-96571 (review 1, A) BLOCKER: a `typed-page:*` disposition now CLOSES its row — the pass used to run before `normalizeTypedPages` pushed it, so the row printed as open forever and the key appeared in none of closed/invalid/notApplicable",
+  r1aClosed.confirmDispositions.closed.includes(r1aTyped)
+  && /the typed page is out of this wave/.test(r1aClosed.designSpec),
+  () => JSON.stringify({ reported: r1aClosed.confirmDispositions, want: r1aTyped }));
+check("ENG-96571 (review 1, A) BLOCKER: a `parse-gap:*` disposition now CLOSES its row too — same defect, a different producer downstream of the old call site",
+  r1aClosed.confirmDispositions.closed.includes(r1aParseGap)
+  && /read the real enum member on-stand/.test(r1aClosed.designSpec),
+  () => JSON.stringify({ reported: r1aClosed.confirmDispositions, want: r1aParseGap }));
+check("ENG-96571 (review 1, A): the header counts them as CLOSED rather than open — the whole point of the answer is that the remaining count is the work actually left",
+  /\(\d+ open, 2 closed\)/.test(r1aClosed.designSpec),
+  () => (r1aClosed.designSpec || "").split("\n").filter((l) => /Confirm before/.test(l)));
+check("ENG-96571 (review 1, A) ANTI-VACUITY: with no dispositions those same two rows are OPEN and nothing is reported closed",
+  r1aOpen.confirmDispositions.closed.length === 0
+  && (r1aOpen.designSpec || "").includes("⚠ Confirm before I build"),
+  () => JSON.stringify(r1aOpen.confirmDispositions));
+
+/* ---- B (the consequence, end to end): an unresolvable `itemType` renders exactly like a MISSING one ---- */
+// The premise of finding B is "Classic treats a missing `itemType` as a field", so refusing to resolve
+// `ViewItemType.Grid` is only an improvement if the item still lands as a FIELD. If the mapper dropped items
+// with an unresolved `itemType`, a wrong mapping would have been traded for a MISSING element — worse, not
+// better. `Grid` is a new input to this path, so the mapper suite's other numbers do not cover it.
+const R1_B_BODY = (itemType) => `define("R1BPage",[],function(){return{entitySchemaName:"HRRequest",
+  diff:[{operation:"insert",name:"Thing",parentName:"Header",propertyName:"items",values:{bindTo:"Thing"${itemType}}}]};});`;
+const r1bType = (itemType) => ((runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1BPage", body: R1_B_BODY(itemType) }] }).changeSet.viewConfigDiff || [])
+  .find((o) => o.name === "Thing")?.values?.type) || "(absent)";
+check("ENG-96571 (review 1, B): a diff item whose `itemType` cannot be read is still BUILT, as a field — the same thing Classic does with a missing `itemType`, so the honest null did not trade a wrong mapping for a missing element",
+  r1bType(",itemType:Terrasoft.ViewItemType.Grid") === "crt.Input"
+  && r1bType(",itemType:Terrasoft.ViewItemType.Grid") === r1bType(""),
+  () => ({ grid: r1bType(",itemType:Terrasoft.ViewItemType.Grid"), missing: r1bType("") }));
+check("ENG-96571 (review 1, B) ANTI-VACUITY: the EXACT-case `ViewItemType.GRID` is a resolved read — the two spellings reach the mapper differently even though this particular item renders the same either way",
+  r1bType(",itemType:Terrasoft.ViewItemType.GRID") === "crt.Input"
+  && !runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R1BPage", body: R1_B_BODY(",itemType:Terrasoft.ViewItemType.GRID") }] })
+    .parseDiagnostics.some((d) => d.kind === "unknown-enum-member")
+  && runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R1BPage", body: R1_B_BODY(",itemType:Terrasoft.ViewItemType.Grid") }] })
+    .parseDiagnostics.some((d) => d.kind === "unknown-enum-member" && d.detail === "ViewItemType.Grid"),
+  () => JSON.stringify(runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R1BPage", body: R1_B_BODY(",itemType:Terrasoft.ViewItemType.Grid") }] }).parseDiagnostics));
+
+/* ---- A (the invariant behind it): EVERY row is accounted for, or the pass ran too early ---- */
+// The two checks above name the two producers the finding named. The GUARANTEE is positional and covers all six
+// kinds: `applyConfirmDispositions` must run after the LAST producer of `needsDecision` rows. Asserted as an
+// invariant rather than kind by kind — supply a valid disposition for every row a run raises, and every key must
+// come back in exactly ONE of `closed` / `invalid` / `notApplicable`. A key in NONE of the three is precisely the
+// old defect: the row existed, the operator answered it, and nothing anywhere said what happened to the answer.
+const R1_AINV = { entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1AinvPage", body: `define("R1AinvPage",[],function(){return{entitySchemaName:"HRRequest",
+    attributes:{Stage:{dataValueType:someUnknownEnumVar}},
+    messages:{Refresh:{mode:0,direction:1}},
+    mixins:{StepOne:"Terrasoft.UsrExternalMixin"},
+    methods:{onSaved:function(){return 1;}},
+    details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}},
+    diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  detailSchemas: { D1: { entity: "Shared" } },
+  typedPages: ["HRRequestICPage"],
+  enumVocabulary: { DataValueType: { Guid: 5 } } };
+const r1ainvKeys = (runMigration(R1_AINV).changeSet.needsDecision || []).map((n) => `${n.kind}:${n.item}`);
+const r1ainvKinds = [...new Set(r1ainvKeys.map((k) => k.split(":")[0]))];
+check("ENG-96571 (review 1, A) SETUP: the invariant fixture raises rows from EVERY late producer — `parse-gap` (reportRemainingDiagnostics), `enum-drift-advisory`, `registry-*`/`typed-page` (normalizeTypedPages) — plus the early mapper kinds, so the invariant below has a real subject",
+  r1ainvKinds.includes("parse-gap") && r1ainvKinds.includes("enum-drift-advisory") && r1ainvKinds.includes("typed-page")
+  && r1ainvKeys.length >= 8,
+  () => r1ainvKinds);
+const r1ainvAll = runMigration({ ...R1_AINV,
+  confirmDispositions: Object.fromEntries(r1ainvKeys.map((k) => [k, { resolved: true, disposition: "accepted", note: "answered" }])) });
+const r1ainvSeen = new Map(r1ainvKeys.map((k) => [k, 0]));
+for (const list of ["closed", "invalid", "notApplicable"]) {
+  for (const k of r1ainvAll.confirmDispositions[list]) r1ainvSeen.set(k, (r1ainvSeen.get(k) ?? 0) + 1);
+}
+check("ENG-96571 (review 1, A) INVARIANT: with a valid disposition recorded for EVERY row the run raises, every key comes back in exactly ONE of closed / invalid / notApplicable — a key in none of the three is a question the operator answered and the run never reported on, which is what the old call-site ordering produced for six kinds",
+  [...r1ainvSeen.values()].every((n) => n === 1),
+  () => JSON.stringify({ unaccounted: [...r1ainvSeen].filter(([, n]) => n !== 1), reported: r1ainvAll.confirmDispositions }));
+check("ENG-96571 (review 1, A) INVARIANT: and the split is not degenerate — some rows really CLOSE (the ⚠ Confirm kinds) while the kinds another worklist carries land in `notApplicable`",
+  r1ainvAll.confirmDispositions.closed.length > 0 && r1ainvAll.confirmDispositions.notApplicable.length > 0,
+  () => JSON.stringify(r1ainvAll.confirmDispositions));
+
+/* ---- K: the RENDERED `enum-drift-advisory` reason, per category ---- */
+// A row an operator can now CLOSE with a recorded disposition (finding A) is a row whose text they read to
+// decide. `newMembers` and the cross-spelling list have DIFFERENT remedies, and the one shared sentence
+// ("…has no numeric value, so add the member(s) to the pinned table") is false in every clause for a
+// cross-spelling row: the engine DOES pin the member (under the other spelling) and DOES have a number for it.
+const R1_K_BODY = `define("R1KPage",[],function(){return{entitySchemaName:"HRRequest",
+  diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+const r1kReason = (vocab) => ((runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1KPage", body: R1_K_BODY }], enumVocabulary: vocab }).changeSet.needsDecision || [])
+  .find((n) => n.kind === "enum-drift-advisory")?.reason) || "";
+const r1kSpelling = r1kReason({ DataValueType: { Guid: 5 } });
+check("ENG-96571 (review 1, K): a CROSS-SPELLING drift row is REASONED as one — it names both spellings, says outright not to add the stand's spelling, and points the repair at the value the engine pins for its OWN spelling",
+  /stand Guid \(engine GUID\): engine 0, stand 5/.test(r1kSpelling)
+  && /Do NOT add the stand's spelling to the pinned table/.test(r1kSpelling)
+  && /whether the number the engine pins for its OWN spelling is right/.test(r1kSpelling),
+  () => r1kSpelling);
+check("ENG-96571 (review 1, K): and it does NOT carry the stand-only-member remedy — 'has no numeric value, so add the member(s) to the pinned table' is false in every clause for this row, and the operator reads this text to pick a disposition",
+  !/has no numeric value/.test(r1kSpelling) && !/add the member\(s\) to the pinned table/.test(r1kSpelling),
+  () => r1kSpelling);
+const r1kNew = r1kReason({ DataValueType: { SOME_FUTURE_MEMBER: 99 } });
+check("ENG-96571 (review 1, K) ANTI-VACUITY: a genuinely stand-only member still gets the ADD-IT remedy — the split gave each category its own sentence, it did not delete one",
+  /does not pin: DataValueType\.SOME_FUTURE_MEMBER \(99\)/.test(r1kNew)
+  && /add the member\(s\) to the pinned table in engine\.mjs/.test(r1kNew)
+  && !/Do NOT add the stand's spelling/.test(r1kNew),
+  () => r1kNew);
+const r1kBoth = r1kReason({ DataValueType: { Guid: 5, SOME_FUTURE_MEMBER: 99 } });
+check("ENG-96571 (review 1, K): with BOTH categories present the row carries BOTH clauses — one row, two remedies, neither standing in for the other",
+  /add the member\(s\) to the pinned table in engine\.mjs/.test(r1kBoth)
+  && /Do NOT add the stand's spelling to the pinned table/.test(r1kBoth)
+  && /— and separately: /.test(r1kBoth),
+  () => r1kBoth);
+check("ENG-96571 (review 1, K): an `enum-drift-advisory` row is CLOSEABLE — it is pushed before the disposition pass (finding A), so a recorded answer stops it coming back",
+  (() => {
+    const r = runMigration({ entity: "HRRequest", noParentTemplate: true,
+      schemas: [{ pkg: "R1KPage", body: R1_K_BODY }], enumVocabulary: { DataValueType: { Guid: 5 } },
+      confirmDispositions: { "enum-drift-advisory:enumVocabulary": { resolved: true, disposition: "resolved-on-stand", note: "GUID is still 0 on this stand" } } });
+    return r.confirmDispositions.closed.includes("enum-drift-advisory:enumVocabulary")
+      && /GUID is still 0 on this stand/.test(r.designSpec);
+  })(),
+  () => JSON.stringify(runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R1KPage", body: R1_K_BODY }], enumVocabulary: { DataValueType: { Guid: 5 } },
+    confirmDispositions: { "enum-drift-advisory:enumVocabulary": { resolved: true, disposition: "resolved-on-stand" } } }).confirmDispositions));
+
+/* ---- E: `<schema>::override:<method>` keys are NOT `behaviourIndex.unmatched` ---- */
+// `prompts.mjs` MANDATES that key shape precisely so it matches no digest row: a replacing layer in a zero-row
+// scope has none. Reading them as unmatched printed "⚠ N behaviourIndex key(s) matched no imperative row" about
+// keys the contract requires to match none, on every run that found an override.
+const R1_E_BUNDLE = (index) => ({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1EPage", body: `define("R1EPage",[],function(){return{entitySchemaName:"HRRequest",
+    methods:{onSaved:function(){return 1;}},
+    diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  behaviourIndex: index });
+const r1eOverride = runMigration(R1_E_BUNDLE({
+  "R1ESection::override:rowSelected": { card: "R1ESection/C01", ac: ["AC-1"] } }));
+check("ENG-96571 (review 1, E): a `<schema>::override:<method>` behaviourIndex key is NOT reported as `behaviourIndex.unmatched` — the key shape is MANDATED to match no digest row, so calling it unmatched was a banner that fired on every run that found an override",
+  (r1eOverride.behaviourIndex?.unmatched || []).length === 0,
+  () => JSON.stringify(r1eOverride.behaviourIndex));
+const r1eBare = runMigration(R1_E_BUNDLE({ "definitelyNotARow": { card: "X/C01" } }));
+check("ENG-96571 (review 1, E) ANTI-VACUITY: a genuinely unmatched key is STILL reported — the filter is scoped to the override key shape, it did not silence the banner",
+  (r1eBare.behaviourIndex?.unmatched || []).join(",") === "definitelyNotARow",
+  () => JSON.stringify(r1eBare.behaviourIndex));
+
+/* ---- F: an entry with `from` and NO `trigger` leaves the row UNRESOLVED ---- */
+// It used to be accepted: the engine wrote `{kind:"reported", reportedKind:null}` and the row counted as resolved
+// while nothing said what KIND of origin `from` named.
+const R1_F_BUNDLE = (entry) => ({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1FPage", body: `define("R1FPage",[],function(){return{entitySchemaName:"HRRequest",
+    methods:{orphanHandler:function(){return 1;}},
+    diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  behaviourIndex: { orphanHandler: { card: "R1F/C01", ...entry } } });
+const r1fHalf = runMigration(R1_F_BUNDLE({ from: "attributes.Stage.changeMethod" }));
+const r1fStub = (r) => (r.changeSet.handlerStubs || []).find((h) => h.sourceMethod === "orphanHandler");
+check("ENG-96571 (review 1, F): an index entry carrying `from` but NO `trigger` leaves the row UNRESOLVED — the engine used to record `{kind:'reported', reportedKind:null}` and count the row as answered on half an answer",
+  (r1fStub(r1fHalf)?.triggers || []).length === 0
+  && (r1fHalf.behaviourIndex?.rejectedTriggers || []).some((x) => x.key === "orphanHandler" && /half an answer/.test(x.why)),
+  () => JSON.stringify({ triggers: r1fStub(r1fHalf)?.triggers, rejected: r1fHalf.behaviourIndex?.rejectedTriggers }));
+const r1fWhole = runMigration(R1_F_BUNDLE({ trigger: "attribute", from: "attributes.Stage.changeMethod" }));
+check("ENG-96571 (review 1, F) ANTI-VACUITY: the COMPLETE entry (both halves) still fills the row's trigger — the rejection is scoped to the half answer",
+  (r1fStub(r1fWhole)?.triggers || [])[0]?.reportedKind === "attribute"
+  && (r1fWhole.behaviourIndex?.rejectedTriggers || []).length === 0,
+  () => JSON.stringify({ triggers: r1fStub(r1fWhole)?.triggers, rejected: r1fWhole.behaviourIndex?.rejectedTriggers }));
+
+/* ---- G: an ATTRIBUTE on the right side of a condition survives, and is named ---- */
+// Classic writes `rightExpression: { type: 1, attribute: "OtherStage" }` for a column-to-column comparison.
+// `sanitizeConditions` dropped it to `{value:null, dataValueType:null}`, so the Trigger cell read `when Stage` —
+// which a builder reads as "Stage is set", not as a comparison against another column.
+const R1_G_RULE = (right) => `define("R1GPage", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: { "Job": { "JobVisible": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.VISIBLE,
+    "conditions": [{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": ${right} }] } } },
+  diff: [{ "operation": "insert", "name": "Job", "parentName": "Header", "propertyName": "items", "values": { "bindTo": "Job" } }]
+}; });`;
+const r1gRun = (right) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "R1GPage", body: R1_G_RULE(right) }] });
+const r1gRule = (r) => (r.changeSet.pageBusinessRules || []).find((x) => x.element === "Job");
+const r1gRow = (r) => (r.designSpec || "").split("\n").find((l) => /^\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
+const r1gAttr = r1gRun('{ "type": 1, "attribute": "OtherStage" }');
+check("ENG-96571 (review 1, G): an ATTRIBUTE on the right side of a condition SURVIVES sanitizeConditions — it used to collapse to `{value:null, dataValueType:null}` and the comparison was gone from the ChangeSet entirely",
+  r1gRule(r1gAttr)?.conditions?.[0]?.right?.attribute === "OtherStage",
+  () => JSON.stringify(r1gRule(r1gAttr)?.conditions));
+check("ENG-96571 (review 1, G): the Trigger cell NAMES the right attribute — `when Stage = OtherStage`, not the bare `when Stage` a builder reads as 'Stage is set'",
+  /when Stage = OtherStage/.test(r1gRow(r1gAttr)),
+  () => r1gRow(r1gAttr));
+check("ENG-96571 (review 1, G): a column-to-column comparison is NOT a condition gap — the condition is fully read, so no `rule-condition` row and no `conditionsIncomplete`",
+  r1gRule(r1gAttr)?.conditionsIncomplete === undefined
+  && !(r1gAttr.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job"),
+  () => JSON.stringify((r1gAttr.changeSet.needsDecision || []).filter((n) => n.kind === "rule-condition")));
+const r1gConst = r1gRun('{ "type": 0, "value": "New" }');
+check("ENG-96571 (review 1, G) ANTI-VACUITY: a comparison against a CONSTANT keeps the existing bare `when Stage` phrasing — this cell has never printed the constant, and nothing about that case changed",
+  /when Stage \|/.test(r1gRow(r1gConst)) && !/when Stage =/.test(r1gRow(r1gConst)),
+  () => r1gRow(r1gConst));
+const r1gNothing = r1gRun('{ "type": 0 }');
+check("ENG-96571 (review 1, G): a right side with NEITHER a value NOR an attribute is DEGENERATE — it names nothing to compare against, so the rule is a parse gap rather than rendering as a readable condition",
+  r1gRule(r1gNothing)?.conditionsIncomplete === true
+  && (r1gNothing.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job"),
+  () => JSON.stringify({ rule: r1gRule(r1gNothing), gaps: (r1gNothing.changeSet.needsDecision || []).filter((n) => n.kind === "rule-condition") }));
+
+/* ---- S-i: a FILTRATION rule's condition gap is reported too ---- */
+// A FILTRATION carries `conditions` exactly like a BINDPARAMETER (the WHEN of the filter, separate from the
+// filter's own column and value), and only the BINDPARAMETER branch read them — so a conditional filter shipped
+// as an unconditional one with nothing saying so.
+const R1_S1 = (conds) => `define("R1SPage", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: { "Job": { "FiltIt": { "ruleType": BusinessRuleModule.enums.RuleType.FILTRATION,
+    "autocomplete": true, "autoClean": false, "baseAttributePatch": "Id",
+    "comparisonType": 3, "type": 1, "attributePath": "Owner",
+    "conditions": ${conds} } } },
+  diff: [{ "operation": "insert", "name": "Job", "parentName": "Header", "propertyName": "items", "values": { "bindTo": "Job" } }]
+}; });`;
+const r1sRun = (conds) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "R1SPage", body: R1_S1(conds) }] });
+const r1sEntityRule = (r) => (r.changeSet.entityBusinessRules || []).find((x) => x.targetAttribute === "Job");
+const r1sBad = r1sRun('[{ "leftExpression": { "type": 0, "value": true }, "comparisonType": 3, "rightExpression": { "type": 0, "value": true } }]');
+check("ENG-96571 (review 1, S-i) SETUP: the fixture's FILTRATION rule really reaches the entity-rule list, so the flag below is about a rule that exists",
+  !!r1sEntityRule(r1sBad), () => JSON.stringify(r1sBad.changeSet.entityBusinessRules));
+check("ENG-96571 (review 1, S-i): a FILTRATION rule whose DECLARED condition could not be read carries `conditionsIncomplete` and raises its own `rule-condition` row — only the BINDPARAMETER branch used to read `conditions`, so a conditional filter shipped as unconditional with nothing saying so",
+  r1sEntityRule(r1sBad)?.conditionsIncomplete === true
+  && (r1sBad.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job"),
+  () => JSON.stringify({ rule: r1sEntityRule(r1sBad), gaps: (r1sBad.changeSet.needsDecision || []).filter((n) => n.kind === "rule-condition") }));
+const r1sGood = r1sRun('[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }]');
+check("ENG-96571 (review 1, S-i) ANTI-VACUITY: a FILTRATION whose condition IS readable carries no flag and raises no row",
+  r1sGood.changeSet.entityBusinessRules?.[0]?.conditionsIncomplete === undefined
+  && !(r1sGood.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition"),
+  () => JSON.stringify(r1sGood.changeSet.entityBusinessRules));
+const r1sNone = r1sRun('[]');
+check("ENG-96571 (review 1, S-i): a FILTRATION that declares NO condition is unconditional, not a gap — the same rule the BINDPARAMETER branch follows",
+  r1sNone.changeSet.entityBusinessRules?.[0]?.conditionsIncomplete === undefined
+  && !(r1sNone.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition"),
+  () => JSON.stringify(r1sNone.changeSet.entityBusinessRules));
+
+/* ---- I: the not-applicable advice is PER KIND ---- */
+// Every `SHOWN_ELSEWHERE` kind used to be told to record the answer in `manifest.memberDispositions`. That is
+// right for the member and method rows and WRONG for `detail-editpage`: no disposition map closes that row at
+// all, so the operator wrote an entry that closed nothing and got the row back on the next regenerate.
+const r1iRun = (dispositions) => runMigration({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "R1IPage", body: `define("R1IPage",[],function(){return{entitySchemaName:"PE",
+    diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}],
+    details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared" } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r1iKeys = (r1iRun(null).changeSet.needsDecision || []).map((n) => `${n.kind}:${n.item}`);
+const r1iDetailKey = r1iKeys.find((k) => k.startsWith("detail-editpage:"));
+check("ENG-96571 (review 1, I) SETUP: the fixture raises a `detail-editpage` row, the kind whose channel the shared advice named wrongly",
+  typeof r1iDetailKey === "string", () => r1iKeys);
+const r1iDetail = r1iRun({ [r1iDetailKey]: { resolved: true, disposition: "accepted", note: "thought this closed it" } });
+check("ENG-96571 (review 1, I): a `detail-editpage` not-applicable key is advised through the DETAIL channel — `childPageSchemas` / `reuseFreedomPage` / `opensClassicPage` / `editPage: false` — and NOT sent to `memberDispositions`, which has no key for it",
+  /detail-editpage` row asks which page a detail's related list opens/.test(r1iDetail.designSpec)
+  && /manifest\.childPageSchemas/.test(r1iDetail.designSpec)
+  && /opensClassicPage/.test(r1iDetail.designSpec)
+  && /reuseFreedomPage/.test(r1iDetail.designSpec)
+  // …and it says outright that `memberDispositions` is NOT the channel, rather than sending the operator there.
+  && /not `confirmDispositions` and not `memberDispositions`/.test(r1iDetail.designSpec)
+  && !/Record them in `manifest\.memberDispositions` instead/.test(r1iDetail.designSpec),
+  () => (r1iDetail.designSpec || "").split("\n").filter((l) => /does not print/.test(l)));
+check("ENG-96571 (review 1, I) ANTI-VACUITY: a MEMBER-level not-applicable key still gets the `memberDispositions` advice — the split is per kind, it did not replace the advice for every kind",
+  /manifest\.memberDispositions/.test(c1Na.designSpec),
+  () => (c1Na.designSpec || "").split("\n").filter((l) => /does not print/.test(l)));
+
+/* ---- S-iv: plan.notes.md discusses only blocks plan.md actually printed ---- */
+// `renderChild` embeds grandchildren in the `c.spec` arm ALONE: under a reused Freedom page, a section boundary,
+// a cycle, a parse error or a recorded `editPage: false`, the child's own sub-tree is never rendered in `plan.md`.
+// `noChildPageNodes` recursed unconditionally, so `plan.notes.md` told the agent to confirm a "no child page"
+// answer for a grandchild that appears NOWHERE in the plan the note is about. Driven through the renderers
+// directly with hand-built `childPages` records — the shape goldens and direct API callers pass.
+const R1_SIV = (parent) => ({ childPages: [{ ...parent, entity: parent.entity, via: "D1",
+  childPages: [{ entity: "GrandKid", via: "GD", editPage: false }] }] });
+const r1sivHidden = renderPlanNotes(R1_SIV({ entity: "Shared", reuseFreedomPage: "UsrSharedFormPage" }));
+check("ENG-96571 (review 1, S-iv): a grandchild under a REUSED-Freedom-page parent gets NO plan-note — `renderChild` never prints that sub-tree, so a note about it points at a block the approver cannot find",
+  !/GrandKid/.test(r1sivHidden),
+  () => r1sivHidden.split("\n").filter((l) => /GrandKid|Child-page answers/.test(l)));
+for (const [label, parent] of [
+  ["a section BOUNDARY", { entity: "Shared", opensClassicPage: true, ownSection: "SharedSection" }],
+  ["a CYCLE", { entity: "Shared", cyclic: true }],
+  ["a recorded `editPage: false`", { entity: "Shared", editPage: false }],
+  ["a child schema that FAILED to parse", { entity: "Shared", specError: "Unexpected token" }],
+]) {
+  const notes = renderPlanNotes(R1_SIV(parent));
+  check(`ENG-96571 (review 1, S-iv): …and the same for ${label} — every arm \`renderChild\` does not recurse into`,
+    !/GrandKid/.test(notes),
+    () => notes.split("\n").filter((l) => /GrandKid|Child-page answers/.test(l)));
+}
+// ANTI-VACUITY, both halves: the grandchild IS noted under a parent whose spec `renderChild` DOES print and
+// recurse into, and the note is the "no child page" one the walk exists to produce.
+const r1sivShown = renderPlanNotes(R1_SIV({ entity: "Shared", spec: "#### Child page: Shared\n" }));
+check("ENG-96571 (review 1, S-iv) ANTI-VACUITY: under a parent with its OWN spec — the one arm `renderChild` recurses into — the grandchild's note IS produced, so the fix narrowed the walk rather than emptying it",
+  /GrandKid/.test(r1sivShown) && /confirm the "no child page" answer/.test(r1sivShown),
+  () => r1sivShown.split("\n").filter((l) => /GrandKid|Child-page answers/.test(l)));
+check("ENG-96571 (review 1, S-iv) ANTI-VACUITY: a TOP-LEVEL `editPage: false` child is still noted — the change is about recursion into arms the plan does not print, not about the note itself",
+  /Shared/.test(renderPlanNotes({ childPages: [{ entity: "Shared", via: "D1", editPage: false }] })),
+  () => renderPlanNotes({ childPages: [{ entity: "Shared", via: "D1", editPage: false }] }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

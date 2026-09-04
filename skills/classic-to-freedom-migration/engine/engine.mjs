@@ -253,15 +253,19 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 // The tables above are a snapshot of core, so they can drift from the target platform. `manifest.enumVocabulary`
 // is the stand's own echo of these enums (`{ ViewItemType: {…}, ContentType: {…}, DataValueType: {…} }`).
 // Severities are deliberately unequal:
-//  • MISMATCH on a member both sides carry ⇒ blocking. The engine's number is wrong for this stand, so every
-//    element of that kind is mis-read and there is no safe partial reading.
+//  • MISMATCH on a member both sides carry UNDER THE SAME NAME ⇒ blocking. The engine's number is wrong for this
+//    stand, so every element of that kind is mis-read and there is no safe partial reading.
+//  • A disagreement on a member that resolved only by ALIAS or by CASE (`Guid` against pinned `GUID`) ⇒ advisory.
+//    The engine reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has
+//    no element it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
+//    see the reasoning at the comparison itself.
 //  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
 //    stop every migration on the day a release adds a member.
 //  • A member only the ENGINE carries ⇒ not a finding: an older stand legitimately predates it.
 const DRIFT_TABLES = { ViewItemType: AST_VIEW_ITEM_TYPE, ContentType: CONTENT_TYPE, DataValueType: DATA_VALUE_TYPE };
 export function enumDriftIssues(vocabulary) {
   const live = plainObj(vocabulary);
-  const mismatches = [], newMembers = [];
+  const mismatches = [], newMembers = [], spellingDrift = [];
   for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
     const standTable = plainObj(live[enumName]);
     if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
@@ -273,12 +277,33 @@ export function enumDriftIssues(vocabulary) {
       // it also protects against `toString`/`constructor`/`valueOf` prototype-chain collisions via Object.hasOwn).
       const resolved = resolveEnumMember(pinned, member, aliases);
       if (!resolved.found) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
-      if (resolved.value !== standValue) mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+      if (resolved.value === standValue) continue;               // same member, same number — nothing to report
+      // ENG-96571 (review 1, K) — BLOCK ONLY ON ONE SPELLING. The comment above promises blocking for "a member
+      // both sides carry", and it must mean under the SAME NAME: the engine reads a body by exact property name,
+      // so `resolved.key === member` is what makes the engine's number the number this stand will use for the
+      // member the body names. Two defects came from ignoring that:
+      //   • The message named a member the pinned table does not carry — "DataValueType.STRING: engine 1" reads
+      //     as a pinned `STRING` whose value is 1; there is no pinned `STRING`, the 1 is `TEXT`'s, and an
+      //     operator sent to `engine.mjs` to fix `STRING` finds nothing to fix.
+      //   • A stand key that resolved only by ALIAS or by CASE was made BLOCKING. `Guid: 5` blocked the whole
+      //     migration although the engine never reads `Guid` — it reads `GUID` — so there was no page the wrong
+      //     number could be applied to. Blocking on it stops every migration for a fact that cannot bite.
+      // A cross-spelling disagreement is still worth saying out loud, so it joins the ADVISORY arm, and its text
+      // names BOTH spellings: which key the stand sent, which pinned member it resolved to, and both numbers.
+      if (resolved.key === member) mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+      // Its OWN list, not `newMembers`. `newMembers` has one remedy sentence — "add the member to the pinned
+      // table" — and every clause of it is false for a cross-spelling row: the engine DOES pin the member (under
+      // the other spelling), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
+      // repair. The real question is whether THIS stand's `GUID` is 5. Since an `enum-drift-advisory` row can now
+      // be CLOSED by a recorded disposition, the operator reads that sentence to decide — so it has to be true,
+      // which means the two categories cannot share one line.
+      else spellingDrift.push(`${enumName}: stand ${member} (engine ${resolved.key}): engine ${resolved.value}, stand ${standValue}`);
     }
   }
   mismatches.sort(byLocale);
   newMembers.sort(byLocale);
-  return { mismatches, newMembers };
+  spellingDrift.sort(byLocale);
+  return { mismatches, newMembers, spellingDrift };
 }
 
 // Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
@@ -378,13 +403,23 @@ function walkTagAutomaton(tag, path) {
     if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) {                                             // terminal: the next key indexes the enum table
-      // Case-insensitive, alias-aware lookup via `resolveEnumMember` (same helper the drift guard uses): a body
-      // naming `Terrasoft.DataValueType.STRING` or `DataValueType.Guid` resolves to TEXT/GUID rather than
-      // raising a false `unknown-enum-member` — `resolveEnumMember` still uses Object.hasOwn internally, so a
-      // member naming `constructor`/`toString`/`valueOf` still cannot resolve to a native function.
+      // EXACT CASE. This is not a vocabulary comparison — it MODELS a JavaScript property read the browser will
+      // perform at runtime, and JS property access is case-sensitive: `Terrasoft.ViewItemType.Grid` evaluates to
+      // `undefined` on a real stand (the member is `GRID`), and `Terrasoft.DataValueType.Guid` to `undefined`
+      // (the member is `GUID`). A case-insensitive resolve made the engine map those CONFIDENTLY — an itemType
+      // of `Grid` became a grid, when Classic reads a missing `itemType` as a FIELD, and `Guid` became 0 instead
+      // of staying unresolved. So a case variant is reported as `unknown-enum-member` (an advisory ⚠ with a null
+      // value), which is exactly what the runtime does with it. `resolveEnumMember` stays case-insensitive for
+      // `enumDriftIssues` alone, where the two sides really are two spellings of one vocabulary.
+      //
+      // ONE exception, and it is exact-case too: `DATA_VALUE_TYPE_ALIASES`. `Terrasoft.DataValueType.STRING` IS a
+      // real member on a real stand (an alias core defines for `TEXT`), so the runtime read succeeds — the alias
+      // map is what the pinned table is missing, not a case difference. `Object.hasOwn` on both lookups, so a
+      // member naming `constructor` / `toString` / `valueOf` cannot resolve to a native function.
       const aliases = tag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
-      const resolved = resolveEnumMember(enumTable, k, aliases);
-      if (resolved.found) return { value: resolved.value };
+      if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
+      const alias = aliases && Object.hasOwn(aliases, k) ? aliases[k] : null;
+      if (alias !== null && Object.hasOwn(enumTable, alias)) return { value: enumTable[alias] };
       return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
     }
     const next = TAG_TRANSITIONS[tag];
@@ -1201,14 +1236,38 @@ const isFnPlaceholder = (v) => v === AST_FN;
 // trigger from a method's name (`04-units.md`), so guessing which method an inline `filter: function(){…}` calls
 // would be exactly the inference that rule exists to prevent. Such a slot stays in `fnKeys` instead, which
 // already reports "imperative logic on the attribute the engine cannot evaluate".
+// ENG-96571 (review 1, J) — EVERY SLOT KEEPS ITS OWN NAME AND ITS OWN PATH.
+//
+// Two defects, one shape. (1) The returned object carried only method NAMES, so the trigger builder had to
+// hard-code `"onChange"` and `"filter"` in the `from` path: a method declared as `changeMethod` was reported as
+// `attributes.Stage.onChange` and one declared in `lookupListConfig.filters[2].method` as
+// `attributes.Contact.lookupListConfig.filter` — paths that name a slot the body does not have, so the one thing
+// `from` exists for (look it up in the schema) fails. (2) `.find(isStr)` kept the FIRST string method in
+// `filters[]` and silently dropped the rest: `filters: [{method:"a"}, {method:"b"}]` traced `a` and left `b`
+// reading `⚠ unresolved` beside the declaration that calls it.
+//
+// So each slot is returned as `{ name, slot }` where `slot` is the path UNDER `attributes.<Col>` — the real slot,
+// verbatim — and the lookup filters are a LIST. Every `slot` produced here is expressible in the
+// `DECLARATION_PATH_RX` grammar `validateReportedTrigger` enforces (`[A-Za-z0-9_$]+` per segment already admits
+// the numeric index `filters.0.method`), so no regex change is needed on either mirrored copy.
+//
+// A FUNCTION-valued slot is still deliberately NOT read: it has no name to carry, and `04-units.md` forbids
+// deriving a trigger from a method's name. It stays in `fnKeys`.
 function attributeHandlerMethods(d) {
   const llc = plainObj(d.lookupListConfig);
   const filters = Array.isArray(llc.filters) ? llc.filters : [];
-  const onChange = strOrNull(d.onChange) ?? strOrNull(d.changeMethod);
-  const lookupFilter = strOrNull(llc.filter)
-    ?? filters.map((f) => strOrNull(plainObj(f).method)).find(isStr) ?? null;
-  if (!onChange && !lookupFilter) return null;
-  return { onChange, lookupFilter };
+  // `onChange` first, `changeMethod` as the alternative spelling — and the slot records WHICH one was written.
+  const onChangeSlot = isStr(d.onChange) ? "onChange" : (isStr(d.changeMethod) ? "changeMethod" : null);
+  const onChange = onChangeSlot ? { name: d[onChangeSlot], slot: onChangeSlot } : null;
+  const lookupFilters = [];
+  if (isStr(llc.filter)) lookupFilters.push({ name: llc.filter, slot: "lookupListConfig.filter" });
+  // EVERY string-valued `method` in `filters[]`, each with its own index — not just the first.
+  filters.forEach((f, i) => {
+    const m = plainObj(f).method;
+    if (isStr(m)) lookupFilters.push({ name: m, slot: `lookupListConfig.filters.${i}.method` });
+  });
+  if (!onChange && !lookupFilters.length) return null;
+  return { onChange, lookupFilters };
 }
 
 function attributeFact(name, def) {
@@ -1230,7 +1289,8 @@ function attributeFact(name, def) {
     // path — the name of the method it calls is NOT inferred (see attributeHandlerMethods).
     fnKeys: [...Object.keys(d).filter((k) => isFnPlaceholder(d[k])),
       ...["filter"].filter((k) => isFnPlaceholder(llc[k])).map((k) => `lookupListConfig.${k}`)],
-    // string-valued handler declarations: `{ onChange, lookupFilter }`, or null when the entry declares none
+    // string-valued handler declarations: `{ onChange: {name,slot}|null, lookupFilters: [{name,slot}] }`, or null
+    // when the entry declares none. `slot` is the real path under `attributes.<name>` — see attributeHandlerMethods.
     handlerMethods: attributeHandlerMethods(d),
     lookupFilters: filters.length,
     // each filter object's own keys — enough for the plan to say WHAT is filtered without reading a function
@@ -1536,8 +1596,16 @@ function sanitizeConditions(conds) {
     return {
       comparison: typeof c.comparisonType === "number" ? c.comparisonType : null,
       left: { attribute: isStr(l.attribute) ? l.attribute : null, path: isStr(l.attributePath) ? l.attributePath : null },
+      // ENG-96571 (review 1, G) — THE RIGHT SIDE MAY BE AN ATTRIBUTE REFERENCE, not a constant. Classic writes
+      // `rightExpression: { type: 1, attribute: "OtherStage" }` for a column-to-column comparison, and keeping
+      // only `value`/`dataValueType` collapsed it to `{value:null, dataValueType:null}`: the rule then rendered as
+      // "when Stage" with the whole comparison gone, so a builder read it as "Stage is set" and wrote a rule the
+      // classic page never had. The attribute half is kept under the SAME two field names the left side uses
+      // (`attribute` / `path`), so a reader of one side reads the other the same way.
       right: { value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
-               dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null },
+               dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null,
+               attribute: isStr(r.attribute) ? r.attribute : null,
+               attributePath: isStr(r.attributePath) ? r.attributePath : null },
     };
   });
 }
@@ -1949,9 +2017,14 @@ function attributeDeclarationTriggers(name, attributes) {
   for (const a of attributes.values()) {
     if (!DECLARATION_NAME_RX.test(String(a.name))) continue;
     const h = a.handlerMethods;
-    if (h?.onChange === name) out.push(declTrigger("attribute", { attribute: a.name }, "attributes", a.name, "onChange"));
-    if (h?.lookupFilter === name)
-      out.push(declTrigger("entity-filter", { attribute: a.name }, "attributes", `${a.name}.lookupListConfig`, "filter"));
+    // ONE TRIGGER PER DECLARATION, each naming its own slot (review 1, J). `from` is the path an operator (or a
+    // behaviour-analysis run) has to be able to look up, so it names the slot the body actually wrote —
+    // `changeMethod` when that is what was written, `lookupListConfig.filters.2.method` for the third filter —
+    // and every string method in `filters[]` gets a trigger, not only the first.
+    if (h?.onChange?.name === name) out.push(declTrigger("attribute", { attribute: a.name }, "attributes", a.name, h.onChange.slot));
+    for (const f of h?.lookupFilters || []) {
+      if (f.name === name) out.push(declTrigger("entity-filter", { attribute: a.name }, "attributes", a.name, f.slot));
+    }
   }
   return out;
 }

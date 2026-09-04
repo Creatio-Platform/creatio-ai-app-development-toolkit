@@ -7888,6 +7888,54 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
         bundleWarningDispositions: { m1: { resolved: true, disposition: "accepted" } } })));
   }
 
+  /* ---- ENG-96571 (review 1, D + S-ii): a typo'd disposition word, and an unrecognised warning shape ---- */
+  {
+    // D — `resolved: true` with a word outside the vocabulary landed in `open` INDISTINGUISHABLY from a warning
+    // nobody had answered: the operator had written an answer, the engine kept blocking, and nothing said which
+    // word was wrong.
+    const typo = mg.bundleWarningState({ bundleWarnings: ["lookup truncated"],
+      bundleWarningDispositions: { "lookup truncated": { resolved: true, disposition: "resolved-manualy", note: "did the lookup by hand" } } });
+    check("ENG-96571 (review 1, D): a disposition with `resolved: true` and a TYPO'D word stays OPEN but carries `dispositionInvalid` — it used to be indistinguishable from a warning nobody had answered",
+      () => typo.open.length === 1 && typo.closed.length === 0 && typo.open[0].dispositionInvalid === "resolved-manualy",
+      () => JSON.stringify(typo));
+    const typoIssue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
+      schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+      bundleWarnings: ["lookup truncated"],
+      bundleWarningDispositions: { "lookup truncated": { resolved: true, disposition: "resolved-manualy" } },
+    }).structure.issues || []).find((i) => /lookup truncated/.test(i));
+    check("ENG-96571 (review 1, D): the blocking issue NAMES the invalid word FIRST and recites the three accepted ones from the SET — the answer exists and the word is what stopped it, so re-doing the lookup would be wasted work",
+      () => !!typoIssue && /^a disposition was recorded with the word "resolved-manualy"/.test(typoIssue)
+        && typoIssue.includes('"resolved-manually" | "accepted" | "n/a"'),
+      () => String(typoIssue));
+    const cleanIssue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
+      schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+      bundleWarnings: ["lookup truncated"],
+    }).structure.issues || []).find((i) => /lookup truncated/.test(i));
+    check("ENG-96571 (review 1, D) ANTI-VACUITY: a warning with NO recorded disposition carries NO such prefix — the sentence fires on the recorded-but-invalid case alone",
+      () => !!cleanIssue && /^bundle warning from/.test(cleanIssue),
+      () => String(cleanIssue));
+
+    // S-ii — an entry carrying neither `code` nor `message` used to be DROPPED with no trace at all: the bundle
+    // said one of its lookups did not complete and the plan reported `structure.complete: true` anyway.
+    const odd = mg.bundleWarningState({ bundleWarnings: [{ warning: "the child-page lookup hit the rowCount cap" }] });
+    check("ENG-96571 (review 1, S-ii): a bundle-warning object with neither `code` nor `message` falls back to its JSON and BLOCKS — it used to be dropped silently, so the plan reported a complete structure the bundle itself denied",
+      () => odd.open.length === 1 && odd.open[0].text === JSON.stringify({ warning: "the child-page lookup hit the rowCount cap" })
+        && odd.open[0].key === odd.open[0].text,
+      () => JSON.stringify(odd));
+    check("ENG-96571 (review 1, S-ii): a genuinely EMPTY entry still names no fact and is still skipped — `\"\"`, `null` and `{}` are neither a gap nor an answer",
+      () => mg.bundleWarningState({ bundleWarnings: ["", null, {}, "   "] }).open.length === 0,
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: ["", null, {}, "   "] })));
+    check("ENG-96571 (review 1, S-ii): the JSON fallback is ANSWERABLE — a disposition written against that exact JSON string closes it, so the fallback is not a warning nobody can clear",
+      () => {
+        const key = JSON.stringify({ warning: "capped" });
+        const st = mg.bundleWarningState({ bundleWarnings: [{ warning: "capped" }],
+          bundleWarningDispositions: { [key]: { resolved: true, disposition: "accepted", note: "re-fetched" } } });
+        return st.open.length === 0 && st.closed.length === 1 && st.closed[0].disposition === "accepted";
+      },
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: [{ warning: "capped" }],
+        bundleWarningDispositions: { [JSON.stringify({ warning: "capped" })]: { resolved: true, disposition: "accepted" } } })));
+  }
+
   /* ---- A5 (review): the key is WHITESPACE-NORMALIZED on both sides ---- */
   // A bundle warning's key is, in its string form, the warning's own MESSAGE — text that travels through a tool
   // response, a manifest and a hand copy-paste, any of which can double a space or leave a trailing one. An answer

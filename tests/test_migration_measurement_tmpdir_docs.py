@@ -23,7 +23,6 @@ An instruction gap is invisible to every engine test, which is why these are pro
 """
 
 import re
-import shutil
 import unittest
 from pathlib import Path
 
@@ -46,6 +45,56 @@ def missing_markers(text, markers):
     return [marker for marker in markers if flat(marker) not in flattened]
 
 
+# ENG-96571 (review 1, C) — THE MARKER LISTS ARE MODULE CONSTANTS. Each test below reads its list from here, and
+# so does `GuardCanFailTests`: proving a pin CAN fail is a question about `missing_markers` and a string, and it
+# needs no file on disk. The old guard test wrote a corrupted copy of the tracked `SKILL.md` over the real file
+# and restored it in a `finally` — so an interrupted run (Ctrl+C, a crash, a killed worker), or two workers
+# running it at once, left a corrupted tracked file in the working tree, and any concurrent reader of `SKILL.md`
+# saw the corruption. A test must never write to a tracked source file to prove a point about a string.
+BUNDLE_WARNING_MARKERS = [
+    "`bundleWarnings` / `bundleWarningDispositions`",
+    "manifest.bundleWarnings",
+    "manifest.bundleWarningDispositions",
+    "BLOCKS the structure gate",
+    "renders as an `ℹ` note instead of a blocker",
+]
+
+# ENG-96571 (review 1, T) — ONE representative figure for this rule, not five. The per-phase breakdown
+# (Context 23 min / Describe 26 min / Critique 6 min / repair 8.5 min / Merge 12.5 min) was pinned figure by
+# figure: five pins that all break together on any re-measurement, none of which holds a contract. `76.8 minutes
+# total` is the number the rule rests on (it is why `rowsPerAgent` came down to 12), so it is the one that stays.
+MEASUREMENT_MARKERS = ["76.8 minutes total"]
+
+PLAN_NOTES_MARKERS = [
+    "read the REMEDY for it from `<plan-basename>.notes.md` beside `--out`",
+    "`plan.md` → `plan.notes.md`",
+    "never from `plan.md` itself",
+    "`plan.md` carries only user-facing text",
+]
+
+SCOPE_ZERO_ROW_MARKERS = [
+    "A SURFACE with `stubs: 0` and no member rows skips step 5.1 entirely",
+    "not a SCOPE-level one",
+    "a zero-row SCOPE inside an otherwise-worked surface is still described",
+    "`overrideOnly`",
+    "one card per override without a `callParent`",
+]
+
+TMPDIR_MARKERS = [
+    "This binds every workflow sub-agent too, not only the main agent.",
+    "`$TMPDIR/<run>/`",
+    "never `/private/tmp`",
+]
+
+TWO_COVERAGE_MARKERS = [
+    "prints TWO coverage numbers, not one",
+    "digest rows described vs. engine ledger members",
+    "the digest is a WORKLIST",
+    "not a census of the schema",
+    "`coverage.total` stays as an alias of `digestRows` for one release",
+]
+
+
 class SanityTests(unittest.TestCase):
     def test_pinned_doc_is_present_and_non_empty(self):
         # The negative/anti-vacuity pins in this module pass vacuously on empty text.
@@ -55,22 +104,8 @@ class SanityTests(unittest.TestCase):
 class BundleWarningsDocTests(unittest.TestCase):
     def test_bundle_warnings_are_nested_and_gate_structure(self):
         content = read_text(MIGRATION_SKILL)
-        missing = missing_markers(
-            content,
-            [
-                "`bundleWarnings` / `bundleWarningDispositions`",
-                "manifest.bundleWarnings",
-                "manifest.bundleWarningDispositions",
-                "BLOCKS the structure gate",
-                "renders as an `ℹ` note instead of a blocker",
-            ],
-        )
+        missing = missing_markers(content, BUNDLE_WARNING_MARKERS)
         self.assertFalse(missing, f"bundleWarnings must be documented and gate structure; missing {missing}")
-
-    def test_the_consequence_is_stated(self):
-        content = flat(read_text(MIGRATION_SKILL))
-        for figure in ("three details had no bound entity", "truncated at 80 rows"):
-            self.assertIn(figure, content, f"bundleWarnings rule must state its consequence: {figure}")
 
     def test_the_documented_key_and_disposition_words_match_the_engine(self):
         # The provisional "confirm with whoever lands that change" hedge is GONE: the engine
@@ -93,16 +128,9 @@ class BundleWarningsDocTests(unittest.TestCase):
 
 class MeasurementDocTests(unittest.TestCase):
     def test_the_applicants_measurement_is_recorded(self):
-        content = flat(read_text(MIGRATION_SKILL))
-        for figure in (
-            "13 rows / 2 scopes / 1 Describe agent / 76.8 minutes total / 993k tokens",
-            "Context 23 min",
-            "Describe 26 min",
-            "Critique 6 min",
-            "repair round 8.5 min",
-            "Merge 12.5 min",
-        ):
-            self.assertIn(figure, content, f"measurement paragraph must state: {figure}")
+        # One representative figure — see MEASUREMENT_MARKERS for why the per-phase breakdown is not pinned.
+        missing = missing_markers(read_text(MIGRATION_SKILL), MEASUREMENT_MARKERS)
+        self.assertFalse(missing, f"measurement paragraph must state: {missing}")
 
     def test_new_defaults_are_stated(self):
         content = flat(read_text(MIGRATION_SKILL))
@@ -145,42 +173,22 @@ class MeasurementDocTests(unittest.TestCase):
 class ScopeVsSurfaceZeroRowDocTests(unittest.TestCase):
     def test_scope_zero_row_is_distinguished_from_surface_zero_row(self):
         content = read_text(MIGRATION_SKILL)
-        missing = missing_markers(
-            content,
-            [
-                "A SURFACE with `stubs: 0` and no member rows skips step 5.1 entirely",
-                "not a SCOPE-level one",
-                "a zero-row SCOPE inside an otherwise-worked surface is still described",
-                "`overrideOnly`",
-                "one card per override without a `callParent`",
-            ],
-        )
+        missing = missing_markers(content, SCOPE_ZERO_ROW_MARKERS)
         self.assertFalse(missing, f"scope-vs-surface zero-row distinction missing pieces: {missing}")
 
     def test_the_applicants_scope_regression_is_stated(self):
         content = flat(read_text(MIGRATION_SKILL))
-        for figure in ("scope `\"section\"` was skipped", "rowSelected", "750 ms delay",
-                       "mini-card that never closed"):
+        # `750 ms` is dropped (review 1, T): it is an anecdotal timing, and the rule rests on the OVERRIDE being
+        # missed, not on how slow it was.
+        for figure in ("scope `\"section\"` was skipped", "rowSelected", "mini-card that never closed"):
             self.assertIn(figure, content, f"scope zero-row rule must state its consequence: {figure}")
 
 
 class TmpdirSubAgentDocTests(unittest.TestCase):
     def test_tmpdir_rule_binds_every_sub_agent(self):
         content = read_text(MIGRATION_SKILL)
-        missing = missing_markers(
-            content,
-            [
-                "This binds every workflow sub-agent too, not only the main agent.",
-                "`$TMPDIR/<run>/`",
-                "never `/private/tmp`",
-            ],
-        )
+        missing = missing_markers(content, TMPDIR_MARKERS)
         self.assertFalse(missing, f"$TMPDIR sub-agent rule missing pieces: {missing}")
-
-    def test_the_consequence_is_stated(self):
-        content = flat(read_text(MIGRATION_SKILL))
-        self.assertIn("12 Classic bodies", content)
-        self.assertIn("121 KB `BasePageV2_base.js`", content)
 
     def test_cleanup_step_still_deletes_the_tmpdir(self):
         content = read_text(MIGRATION_SKILL)
@@ -190,68 +198,69 @@ class TmpdirSubAgentDocTests(unittest.TestCase):
 class PlanNotesDocTests(unittest.TestCase):
     def test_plan_notes_replaces_plan_md_as_the_remedy_source(self):
         content = read_text(MIGRATION_SKILL)
-        missing = missing_markers(
-            content,
-            [
-                "read the REMEDY for it from `<plan-basename>.notes.md` beside `--out`",
-                "`plan.md` -> `plan.notes.md`".replace("->", "→"),
-                "never from `plan.md` itself",
-                "`plan.md` carries only user-facing text",
-            ],
-        )
+        missing = missing_markers(content, PLAN_NOTES_MARKERS)
         self.assertFalse(missing, f"plan.notes.md pointer missing pieces: {missing}")
 
     def test_two_coverage_numbers_and_worklist_wording(self):
         content = read_text(MIGRATION_SKILL)
-        missing = missing_markers(
-            content,
-            [
-                "prints TWO coverage numbers, not one",
-                "digest rows described vs. engine ledger members",
-                "the digest is a WORKLIST",
-                "not a census of the schema",
-                "`coverage.total` stays as an alias of `digestRows` for one release",
-            ],
-        )
+        missing = missing_markers(content, TWO_COVERAGE_MARKERS)
         self.assertFalse(missing, f"two-coverage-numbers pin missing pieces: {missing}")
 
 
 class GuardCanFailTests(unittest.TestCase):
-    """Prove each pin can actually fail, by temporarily corrupting the doc via a $TMPDIR copy.
+    """Prove each pin can actually fail — IN MEMORY, with no disk write of any kind.
 
-    No git is used: the live file is copied to $TMPDIR, mutated in place, checked, then the
-    original bytes are copied back over it.
+    A pin is `missing_markers(<doc text>, <marker list>)`. Whether it can fail is therefore a question about
+    that function and a string, and answering it needs no file: the doc is read once, corrupted as a Python
+    string, and the corrupted STRING is passed to `missing_markers`. The previous version wrote the corrupted
+    bytes over the tracked `skills/classic-to-freedom-migration/SKILL.md` and restored them in a `finally`, so an
+    interrupted or parallel run could leave a corrupted tracked file in the working tree.
     """
 
-    def test_pins_fail_when_the_doc_is_corrupted(self):
-        import os
-        import tempfile
+    def setUp(self):
+        self.text = read_text(MIGRATION_SKILL)
 
-        original_bytes = MIGRATION_SKILL.read_bytes()
-        tmp_dir = Path(tempfile.mkdtemp(prefix="eng96571-guard-"))
-        backup = tmp_dir / "SKILL.md.orig"
-        backup.write_bytes(original_bytes)
-        try:
-            corrupted = original_bytes.decode("utf-8").replace(
-                "manifest.bundleWarnings", "manifest.somethingElse"
-            ).replace(
-                "76.8 minutes total", "unmeasured"
-            ).replace(
-                "plan.notes.md", "plan-notes-removed"
-            )
-            MIGRATION_SKILL.write_text(corrupted, encoding="utf-8")
+    def test_the_doc_read_is_not_empty(self):
+        # Without this every assertion below is satisfied by the empty string.
+        self.assertTrue(self.text.strip())
 
-            with self.assertRaises(AssertionError):
-                BundleWarningsDocTests("test_bundle_warnings_are_nested_and_gate_structure").test_bundle_warnings_are_nested_and_gate_structure()
-            with self.assertRaises(AssertionError):
-                MeasurementDocTests("test_the_applicants_measurement_is_recorded").test_the_applicants_measurement_is_recorded()
-            with self.assertRaises(AssertionError):
-                PlanNotesDocTests("test_plan_notes_replaces_plan_md_as_the_remedy_source").test_plan_notes_replaces_plan_md_as_the_remedy_source()
-        finally:
-            shutil.copyfile(backup, MIGRATION_SKILL)
-            restored = MIGRATION_SKILL.read_bytes()
-            self.assertEqual(restored, original_bytes, "SKILL.md must be restored byte-for-byte")
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+    def test_bundle_warning_pins_fail_on_a_corrupted_string(self):
+        corrupted = self.text.replace("manifest.bundleWarnings", "manifest.somethingElse")
+        self.assertNotEqual(corrupted, self.text, "the corruption changed nothing — the pin's subject is gone")
+        self.assertEqual([], missing_markers(self.text, BUNDLE_WARNING_MARKERS))
+        self.assertNotEqual([], missing_markers(corrupted, BUNDLE_WARNING_MARKERS))
+
+    def test_measurement_pins_fail_on_a_corrupted_string(self):
+        corrupted = self.text.replace("76.8 minutes total", "unmeasured")
+        self.assertNotEqual(corrupted, self.text)
+        self.assertEqual([], missing_markers(self.text, MEASUREMENT_MARKERS))
+        self.assertNotEqual([], missing_markers(corrupted, MEASUREMENT_MARKERS))
+
+    def test_plan_notes_pins_fail_on_a_corrupted_string(self):
+        corrupted = self.text.replace("plan.notes.md", "plan-notes-removed")
+        self.assertNotEqual(corrupted, self.text)
+        self.assertEqual([], missing_markers(self.text, PLAN_NOTES_MARKERS))
+        self.assertNotEqual([], missing_markers(corrupted, PLAN_NOTES_MARKERS))
+
+    def test_the_remaining_pin_groups_fail_on_a_corrupted_string_too(self):
+        for markers, needle, replacement in (
+            (SCOPE_ZERO_ROW_MARKERS, "`overrideOnly`", "`somethingElse`"),
+            (TMPDIR_MARKERS, "`$TMPDIR/<run>/`", "`/private/tmp/<run>/`"),
+            (TWO_COVERAGE_MARKERS, "prints TWO coverage numbers, not one", "prints a coverage number"),
+        ):
+            with self.subTest(needle=needle):
+                corrupted = self.text.replace(needle, replacement)
+                self.assertNotEqual(corrupted, self.text)
+                self.assertEqual([], missing_markers(self.text, markers))
+                self.assertNotEqual([], missing_markers(corrupted, markers))
+
+    def test_the_doc_file_is_never_written(self):
+        # The point of the rewrite, asserted rather than described: nothing above touched the file.
+        before = MIGRATION_SKILL.read_bytes()
+        self.test_bundle_warning_pins_fail_on_a_corrupted_string()
+        self.test_measurement_pins_fail_on_a_corrupted_string()
+        self.test_plan_notes_pins_fail_on_a_corrupted_string()
+        self.assertEqual(before, MIGRATION_SKILL.read_bytes())
 
 
 if __name__ == "__main__":

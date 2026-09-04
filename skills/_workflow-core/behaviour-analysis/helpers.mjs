@@ -288,7 +288,12 @@ export const overrideKey = (schema, method) => `${schema}::override:${method}`
 // Deliberately NOT filtered through `behaviourEstablished`: an override the agent
 // could not fully establish is still a finding worth printing, and it counts
 // towards nothing.
-const OVERRIDE_KEY_RX = /(^|::)override:/
+// SCHEMA-QUALIFIED, not the bare `override:<method>` form. `overrideKey` and `prompts.mjs`'s `overrideOnlyBlock`
+// both mandate `<schema>::override:<method>` verbatim, and the qualification is the whole reason the key is safe:
+// a bare `override:rowSelected` carries no scope, so nothing downstream can say WHICH replacing layer it came
+// from, and the engine's mirror leg (`unmatchedIndexKeys` in engine/migrate.mjs) filters on the same form. The
+// old `(^|::)` alternative accepted a key no producer is allowed to write.
+const OVERRIDE_KEY_RX = /^[^:]+::override:/
 export function overrideEntries(results) {
   return (results || []).flatMap((r) => r?.indexEntries || []).filter((e) => e?.key && OVERRIDE_KEY_RX.test(e.key))
 }
@@ -320,16 +325,28 @@ const DECLARATION_KINDS = new Set(['attribute', 'detail', 'entity-filter'])
 
 // Returns `null` when the reported trigger is usable, otherwise the REASON, as one short string. The reason text
 // is part of the contract: the engine carries its own mirrored copy of this function (`validateReportedTrigger`
-// in engine/migrate.mjs, beside `describedInOf`) and a table-driven parity test compares the two byte-for-byte,
-// so the two rejections can never diverge into "the workflow dropped it, the engine filled it".
+// in engine/migrate.mjs, beside `describedInOf`), and run-workflow-core.mjs checks the two on BOTH axes — a
+// table-driven parity test comparing the returned reason strings row by row, and a NORMALISED SOURCE-TEXT
+// comparison of the two function bodies (quote style, semicolons, line comments and whitespace normalised away,
+// everything else required to match). The table alone left a branch no row reached free to diverge; the text
+// comparison is what makes "byte-for-byte apart from house style" a checked claim rather than a promise. So the
+// two rejections cannot diverge into "the workflow dropped it, the engine filled it".
 // EDIT ONE, LOOK AT THE OTHER — the workflow script is evaluated as a function body and may not `import`, which
 // is why there are two copies at all (same reason `wiringOnlyMixinKeys` and `wiringOnlyKeys` are separate).
 export function validateReportedTrigger({ trigger, from, methodName } = {}) {
-  if (trigger === null || trigger === undefined || trigger === '') return null   // no trigger reported: nothing to validate
+  const declaredFrom = typeof from === 'string' ? from.trim() : ''
+  if (trigger === null || trigger === undefined || trigger === '') {
+    // A `from` WITHOUT a `trigger` is not "no trigger reported" — it is half an answer, and the half that is
+    // missing is the only part the engine renders as a kind. The engine's `applyBehaviourIndex` recorded
+    // `{kind:"reported", reportedKind:null}` for it and the row counted as RESOLVED, so an entry naming an origin
+    // and never saying what kind of origin it is cleared the plan header's "no trigger yet" count on nothing.
+    if (!declaredFrom) return null   // neither half reported: nothing to validate
+    return `\`from\` names '${declaredFrom}' but no \`trigger\` says what kind of origin that is — half an answer resolves nothing`
+  }
   if (typeof trigger !== 'string' || !REPORTED_TRIGGERS.includes(trigger)) {
     return `trigger '${String(trigger)}' is not one of ${REPORTED_TRIGGERS.join(', ')}`
   }
-  const origin = typeof from === 'string' ? from.trim() : ''
+  const origin = declaredFrom
   if (!origin) return `trigger '${trigger}' names no \`from\` — a reported trigger without its origin answers nothing`
   if (methodName && origin === methodName) return `\`from\` is the row itself ('${origin}') — a row cannot be its own origin`
   if (DECLARATION_KINDS.has(trigger) && !DECLARATION_PATH_RX.test(origin)) {

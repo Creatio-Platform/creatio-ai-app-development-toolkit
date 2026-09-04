@@ -62,11 +62,14 @@ class WorkflowNoPollingDocTests(unittest.TestCase):
         self.assertFalse(missing, f"route 1 must carry the no-polling rule; missing {missing}")
 
     def test_the_measured_cost_of_polling_is_stated(self):
-        # A rule with no consequence gets read as advice. These are the run's own figures.
+        # A rule with no consequence gets read as advice, so ONE figure stays. ENG-96571 (review 1, T): the other
+        # four (72 minutes / 27 turns / 8.09M cache-read tokens / 17% of the session) were anecdote from one run —
+        # five pins that break together on any re-measurement, none of which holds a contract. `600 s` is the
+        # exception: it is the Bash tool's own hard limit, so it is a FACT about the harness the rule rests on,
+        # not a measurement of one session.
         content = flat(read_text(MIGRATION_SKILL))
-        for figure in ("72 minutes", "27 turns", "8.09M cache-read tokens", "17% of the session",
-                       "killed by the 600 s limit"):
-            self.assertIn(figure, content, f"the no-polling rule must state its measured cost: {figure}")
+        self.assertIn("killed by the 600 s limit", content,
+                      "the no-polling rule must state its measured cost")
 
     def test_no_polling_pins_are_not_satisfied_by_pre_existing_text(self):
         """Anti-vacuity: each phrase this ticket introduced must occur EXACTLY ONCE.
@@ -77,7 +80,7 @@ class WorkflowNoPollingDocTests(unittest.TestCase):
         doc = read_text(MIGRATION_SKILL).replace("**", "")
         for phrase in ("NEVER poll a running workflow.",
                        "journal.jsonl",
-                       "8.09M cache-read tokens"):
+                       "killed by the 600 s limit"):
             self.assertEqual(doc.count(phrase), 1, f"expected exactly one occurrence of {phrase!r}")
 
 
@@ -214,10 +217,11 @@ class ClioArgFactsDocTests(unittest.TestCase):
                 "**Take the output path from `echo $TMPDIR`**",
                 "accepts only the workspace or the directory `$TMPDIR` reports",
                 "`resolves outside the allowed locations`",
-                "measured 55 s lost",
+                # ENG-96571 (review 1, T): `measured 55 s lost` is dropped. The rule rests on clio REFUSING the
+                # path (the error string above), not on how many seconds one run lost to it.
             ],
         )
-        self.assertFalse(missing, f"the $TMPDIR rule must state the rejection and its cost; missing {missing}")
+        self.assertFalse(missing, f"the $TMPDIR rule must state the rejection; missing {missing}")
 
     def test_the_superseded_scratch_dir_wording_is_gone(self):
         # The exact instruction that sent a run at an agent scratch dir clio refuses.

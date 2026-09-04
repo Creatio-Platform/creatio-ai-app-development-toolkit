@@ -310,11 +310,30 @@ function ruleTriggerCell(r, attrs) {
   return (r.conditions || []).length ? "conditional" : "always";
 }
 
+// ENG-96571 (review 1, G) — ONE condition, as the Trigger cell names it. A column-to-column comparison
+// (Classic's `rightExpression: { type: 1, attribute: "OtherStage" }`) rendered as bare `when Stage`, which reads
+// as "Stage is set" and lost the comparison entirely; the right attribute is now named. A comparison against a
+// CONSTANT keeps the existing bare `when <left>` phrasing — the constant is already carried in the emitted rule
+// and this cell has never printed it, so nothing about that case changes.
+const condLeftName = (c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute || null;
+const condRightAttr = (c) => c?.right?.attribute || c?.right?.attributePath || null;
+// RAW, not escaped: `ruleTriggerCell` runs `esc` over each phrase it prints, so escaping here too would
+// double-escape a stand-derived attribute name.
+const condPhrase = (c) => {
+  const left = condLeftName(c);
+  if (!left) return null;
+  const right = condRightAttr(c);
+  return right ? `${left} = ${right}` : left;
+};
+
 // Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
 function pageRuleRows(cs) {
-  const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
+  // The Trigger cell's phrases, one per readable condition — `Stage` for a constant comparison, `Stage = OtherStage`
+  // for a column-to-column one. Deduplicated for the same reason the old left-only list was: two conditions on the
+  // same pair say the same thing in this cell.
+  const condPhrases = (conds) => [...new Set((conds || []).map(condPhrase).filter(Boolean))];
   return (cs.pageBusinessRules || []).map((r) => {
-    const trigger = ruleTriggerCell(r, condAttrs(r.conditions));
+    const trigger = ruleTriggerCell(r, condPhrases(r.conditions));
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
     return [esc(r.element), trigger, effect, "page business rule"];
   });
@@ -668,6 +687,65 @@ export const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "w
   // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Imperative members
   // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
   "attribute-dependency"]);
+// THE KEY A `confirmDispositions` ENTRY IS WRITTEN UNDER — one definition, two readers. `migrate.mjs`'s
+// `applyConfirmDispositions` computes the same key to look an answer up, and this renderer names it back to the
+// operator when the answer was not applied; a re-typed second copy would let the two spell the same row
+// differently, which is the one thing that must not happen to a key the operator hand-writes. It used to be
+// duplicated here with a comment claiming an import cycle: there is none — `designspec.mjs` imports nothing from
+// `migrate.mjs`, and `migrate.mjs` already imports this module.
+export const confirmKeyOf = (n) => `${n.kind}:${n.item}`;
+
+// THE ONLY WORDS a `confirmDispositions` entry may carry — one list, and both the validator that ENFORCES it
+// (`applyConfirmDispositions` in migrate.mjs, which imports this) and the advisory line that RECITES it to the
+// operator read it from here. The recital used to be a hand-typed string inside the line below, so adding a fifth
+// word would have left the plan telling the operator to use four.
+//   accepted            — read, understood, and it does not change the Freedom mapping
+//   reproduced-manually — it DOES change it, and the build reproduces the effect by hand (the note says how)
+//   n/a                 — the element this question is about is not being migrated
+//   resolved-on-stand   — the fact was looked up on the stand and the answer is in the note / this manifest
+export const CONFIRM_DISPOSITION_WORDS = ["accepted", "reproduced-manually", "n/a", "resolved-on-stand"];
+export const CONFIRM_DISPOSITIONS = new Set(CONFIRM_DISPOSITION_WORDS);
+// …and the exact rendering of that list the advisory line uses: `` `a` | `b` | … ``.
+const confirmWordList = () => CONFIRM_DISPOSITION_WORDS.map((w) => `\`${w}\``).join(" | ");
+
+// ENG-96571 (review 1, I) — WHERE A NOT-APPLICABLE ANSWER ACTUALLY BELONGS, per kind. Every `SHOWN_ELSEWHERE`
+// kind used to be told to record the answer in `manifest.memberDispositions`, which is right for the member and
+// method rows and WRONG for `detail-editpage`: that row is not a member at all, it asks which page a detail's
+// related list opens, and `memberDispositions` has no key for it. An operator following the advice wrote an entry
+// that closed nothing and got the same row back on the next regenerate — the same silent no-op the
+// `notApplicable` list exists to stop, one level down.
+//
+// Three channels, so the sentence names the ONE place that closes the row:
+const NA_CHANNEL_MEMBER = "member";
+const NA_CHANNEL_DETAIL = "detail";
+const NA_CHANNEL_OTHER = "other";
+// The member/method rows: carried by ⚠ Imperative logic / ⚠ Imperative members, closed via `memberDispositions`.
+const NA_MEMBER_KINDS = new Set(["method", ...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
+const naChannelOf = (kind) => {
+  if (kind === "detail-editpage") return NA_CHANNEL_DETAIL;
+  return NA_MEMBER_KINDS.has(kind) ? NA_CHANNEL_MEMBER : NA_CHANNEL_OTHER;
+};
+const NA_ADVICE = {
+  [NA_CHANNEL_MEMBER]: "those kinds are carried by the ⚠ Imperative logic / ⚠ Imperative members worklists, so a `confirmDispositions` answer closes NOTHING there. Record them in `manifest.memberDispositions` instead — the coverage gate's issue text gives the exact key.",
+  [NA_CHANNEL_DETAIL]: "a `detail-editpage` row asks which page a detail's related list opens, and NO disposition map closes it — not `confirmDispositions` and not `memberDispositions`. Answer it on the detail itself in the manifest: supply the child page's schema under `manifest.childPageSchemas` (keyed by its `editPage` name or child entity), or record the decision on the detail as `reuseFreedomPage: \"<FreedomPage>\"`, `opensClassicPage: true` (the section boundary — the child keeps its Classic card) or `editPage: false` (verified: no Classic *Page exists). `manifest.detailSchemas` is what makes the row answerable at all.",
+  [NA_CHANNEL_OTHER]: "those rows are carried by the Layout / Child-pages / standard-feature tables, not by this worklist, so a `confirmDispositions` answer closes NOTHING. Answer them where the table that prints them says to.",
+};
+// The kind half of a `<kind>:<item>` disposition key. No kind carries a colon, so the first segment is the kind
+// even when the item does (`typed-page:Usr::Something`).
+const naKindOf = (key) => String(key).split(":")[0];
+// The advisory lines themselves, grouped by channel. Own fn so `renderConfirmWorklist` keeps its Sonar CC 15
+// headroom — the grouping is a loop and a map lookup, and it was the third loop in that function.
+function notApplicableLines(notApplicable) {
+  const byChannel = new Map();
+  for (const k of notApplicable) {
+    const ch = naChannelOf(naKindOf(k));
+    if (!byChannel.has(ch)) byChannel.set(ch, []);
+    byChannel.get(ch).push(k);
+  }
+  return [...byChannel].map(([ch, keys]) =>
+    `> ⚠ ${keys.length} recorded \`confirmDispositions\` key(s) address rows this worklist does not print — ${keys.map((k) => `\`${esc(k)}\``).join(", ")}: ${NA_ADVICE[ch]}`);
+}
+
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
 function renderConfirmWorklist(cs) {
@@ -710,16 +788,15 @@ function renderConfirmWorklist(cs) {
   // An INVALID disposition word is named, not swallowed: the operator believes the question is answered, the engine
   // does not, and the row above still says it is open. Naming the word is what makes that discrepancy fixable.
   if (invalid.length) {
-    L.push("", `> ⛔ ${invalid.length} recorded disposition(s) were NOT applied — ${invalid.map((d) => `\`${esc(confirmKeyOf(d))}\` → \`${esc(d.dispositionInvalid)}\``).join(", ")}: that word is not one of \`accepted\` | \`reproduced-manually\` | \`n/a\` | \`resolved-on-stand\`, so the row stays OPEN. Fix the word in \`manifest.confirmDispositions\` and re-run.`);
+    L.push("", `> ⛔ ${invalid.length} recorded disposition(s) were NOT applied — ${invalid.map((d) => `\`${esc(confirmKeyOf(d))}\` → \`${esc(d.dispositionInvalid)}\``).join(", ")}: that word is not one of ${confirmWordList()}, so the row stays OPEN. Fix the word in \`manifest.confirmDispositions\` and re-run.`);
   }
   if (notApplicable.length) {
-    L.push("", `> ⚠ ${notApplicable.length} recorded \`confirmDispositions\` key(s) address rows this worklist does not print — ${notApplicable.map((k) => `\`${esc(k)}\``).join(", ")}: those kinds are carried by the ⚠ Imperative logic / ⚠ Imperative members worklists (or the Layout / Child-pages tables), so a \`confirmDispositions\` answer closes NOTHING there. Record them in \`manifest.memberDispositions\` instead — the coverage gate's issue text gives the exact key.`);
+    // ONE LINE PER CHANNEL. A single shared sentence sent every kind to `memberDispositions`, which is the wrong
+    // channel for `detail-editpage` — see `NA_ADVICE`.
+    L.push("", ...notApplicableLines(notApplicable));
   }
   return [...L, ""];
 }
-// The key a `confirmDispositions` entry is written under, for the advisory line above. Spelled here rather than
-// imported so the renderer has no import cycle with migrate.mjs; the shape is asserted by a test on both sides.
-const confirmKeyOf = (n) => `${n.kind}:${n.item}`;
 
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -1538,7 +1615,13 @@ function noChildPageNodes(childs, out = []) {
     // agent to confirm an answer the plan never claimed. (`childPages` records are built by hand too — goldens,
     // direct API callers — which is why every arm is checked rather than inferred from `editPage` alone.)
     if (c.editPage === false && !c.reuseFreedomPage && !boundaryChild(c) && !c.cyclic && !c.spec && !c.specError) out.push(c);
-    noChildPageNodes(c.childPages || [], out);
+    // ENG-96571 (review 1, S-iv) — RECURSE ONLY INTO THE ARM `renderChild` RECURSES INTO. `renderChild` embeds
+    // grandchildren in the `c.spec` arm ALONE: under a reused Freedom page, a section boundary, a cycle, a parse
+    // error or a recorded `editPage: false`, the child's own sub-tree is never rendered in `plan.md` at all. This
+    // walk recursed unconditionally, so `plan.notes.md` told the agent to confirm the "no child page" answer for a
+    // grandchild that appears nowhere in the plan the note is about — a note pointing at a block the approver
+    // cannot find. Same arm, same condition: what the notes discuss is exactly what the plan printed.
+    if (c.spec) noChildPageNodes(c.childPages || [], out);
   }
   return out;
 }

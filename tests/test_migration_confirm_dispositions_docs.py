@@ -58,15 +58,31 @@ class ConfirmDispositionsDocTests(unittest.TestCase):
         self.assertEqual([], missing, f"{MIGRATION_DOCS} no longer documents the confirmDispositions channel: {missing}")
 
     def test_the_four_disposition_words_are_named_and_a_wrong_word_leaves_the_row_open(self):
+        # ENG-96571 (review 1, R) — the WHOLE rendered enumeration, exactly as the doc writes it. Pinning the
+        # words one at a time named only three of the four (`n/a` was missing entirely, so a doc that dropped it
+        # stayed green), and `"accepted"` alone is a substring of `resolved-on-stand`-adjacent prose and of
+        # `accepted` in any other sentence — it was near-vacuous. One pin over the full list is what actually
+        # holds the vocabulary, and it fails if any word is dropped, renamed, or reordered.
         text = read_text(MIGRATION_DOCS)
         missing = missing_markers(text, [
-            "accepted",
-            "reproduced-manually",
-            "resolved-on-stand",
+            "`disposition` must be one of `accepted` · `reproduced-manually` · `n/a` · `resolved-on-stand`",
             # the validated-enum rule: a typo must not clear a question nobody answered
             "leaves the row OPEN and the plan names the word that was rejected",
         ])
         self.assertEqual([], missing, f"{MIGRATION_DOCS} no longer states the disposition enum rule: {missing}")
+
+    def test_the_pinned_enumeration_matches_the_engine_s_own_word_list(self):
+        # …and the pin is not merely self-consistent: the four words are read out of `designspec.mjs`'s
+        # `CONFIRM_DISPOSITION_WORDS`, the one list the validator and the plan's advisory line both use. A word
+        # added there and not documented (or the reverse) fails HERE rather than shipping as a doc that tells the
+        # operator to use a vocabulary the engine does not accept.
+        designspec = read_text(ROOT / "skills/classic-to-freedom-migration/engine/designspec.mjs")
+        match = re.search(r"export const CONFIRM_DISPOSITION_WORDS = \[(.*?)\]", designspec, re.S)
+        self.assertIsNotNone(match, "designspec.mjs no longer exports CONFIRM_DISPOSITION_WORDS")
+        words = re.findall(r'"([^"]+)"', match.group(1))
+        self.assertEqual(["accepted", "reproduced-manually", "n/a", "resolved-on-stand"], words)
+        rendered = " · ".join(f"`{word}`" for word in words)
+        self.assertIn(f"`disposition` must be one of {rendered}", flat(read_text(MIGRATION_DOCS)))
 
     def test_a_closed_row_stays_auditable_rather_than_vanishing(self):
         text = read_text(MIGRATION_DOCS)

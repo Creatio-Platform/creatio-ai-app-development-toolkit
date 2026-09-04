@@ -49,6 +49,11 @@ import * as prompts from "../../skills/_workflow-core/behaviour-analysis/prompts
 // `overrideKey` rather than re-typed, which is a fact about the source text, not about the rendered output (the
 // rendered output is byte-identical either way, which is exactly why the drift went unnoticed).
 const promptsSrc = readFileSync(fileURLToPath(new URL("../../skills/_workflow-core/behaviour-analysis/prompts.mjs", import.meta.url)), "utf8");
+// The two files that carry the MIRRORED `validateReportedTrigger`. Read as text (the same way `promptsSrc` is)
+// because the parity claim in both copies' comments is about the SOURCE, not only about a table of return
+// values — see the ENG-96571 (review 1, P) block below.
+const helpersSrc = readFileSync(fileURLToPath(new URL("../../skills/_workflow-core/behaviour-analysis/helpers.mjs", import.meta.url)), "utf8");
+const migrateSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/migrate.mjs", import.meta.url)), "utf8");
 // The ENGINE's own producer of the plan-gap entries. This suite otherwise knows the engine only by path, but
 // the plan-gap vocabulary is a string-typed contract BETWEEN the two modules (PR review, F1): the engine writes
 // the entries and `planGapKinds` above re-derives their taxonomy by containment. Asserting each side against
@@ -477,8 +482,15 @@ console.log("\n===== behaviour-analysis: override-only scopes, $TMPDIR, fan-out 
     describes.some((i) => /OVERRIDE-ONLY SCOPES/.test(i.prompt) && /callParent/.test(i.prompt))
       && logs.some((l) => /OVERRIDE-ONLY scopes/.test(l) && /DealSectionV2/.test(l)),
     () => JSON.stringify(logs.filter((l) => /OVERRIDE/.test(l))));
+  // `some(A && B)`, never `every(!A || B)`. The implicative form passed VACUOUSLY on a run where no prompt
+  // carried an OVERRIDE-ONLY SCOPES block at all — which is precisely the regression (the scope filtered out
+  // again) this check exists to catch. The count is asserted too, so one block cannot stand in for two scopes.
+  const overrideBlocks = describes.filter((i) => /OVERRIDE-ONLY SCOPES/.test(i.prompt));
   check("core C4: the override-only scope names the SCHEMA-QUALIFIED key form in the prompt — a bare `rowSelected` would suffix-match the digest key `DealPage::rowSelected` and be counted as coverage of a row nobody described",
-    describes.every((i) => !/OVERRIDE-ONLY SCOPES/.test(i.prompt) || /<schema>::override:<method>/.test(i.prompt)));
+    overrideBlocks.length === 1
+    && overrideBlocks.every((i) => /<schema>::override:<method>/.test(i.prompt))
+    && describes.some((i) => /OVERRIDE-ONLY SCOPES/.test(i.prompt) && /<schema>::override:<method>/.test(i.prompt)),
+    () => `${overrideBlocks.length} prompt(s) carry an OVERRIDE-ONLY SCOPES block, of ${describes.length} describe item(s)`);
   check("core C4: ARITHMETIC UNCHANGED — the zero-row scope adds no keys, so `allKeys` is the one worked row and the override entry is not coverage of anything",
     result.coverage.digestRows === 1 && result.coverage.described === 1 && result.coverage.complete === true
       && result.coverage.uncovered.length === 0,
@@ -862,6 +874,11 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
     { trigger: "attribute-onchange", from: "attributes.Thing", methodName: "reload" }, // outside the vocabulary
     { trigger: "should-not-replace", from: "nowhere", methodName: "reload" },
     { trigger: 7, from: "attributes.Thing", methodName: "reload" },         // not even a string
+    // ENG-96571 (review 1, F) — HALF AN ANSWER. `from` present, `trigger` absent or blank. This used to fall
+    // through the "nothing reported" exit, and the engine then wrote `{kind:"reported", reportedKind:null}` for
+    // it: the row counted as RESOLVED while nothing said what kind of origin `from` named.
+    { from: "attributes.Stage.onChange", methodName: "reload" },
+    { trigger: "", from: "onEntityInitialized", methodName: "reload" },
     // ACCEPTED rows — the table must prove the validator is not simply refusing everything
     { trigger: "attribute", from: "attributes.Contact.onChange", methodName: "reload" },
     { trigger: "detail", from: "details.Orders", methodName: "reload" },
@@ -881,9 +898,17 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
   check("ENG-96571 A2 PARITY: both copies publish the SAME vocabulary, in the same order",
     helpers.REPORTED_TRIGGERS.join(",") === ENGINE_REPORTED_TRIGGERS.join(","),
     () => `${helpers.REPORTED_TRIGGERS.join(",")} vs ${ENGINE_REPORTED_TRIGGERS.join(",")}`);
-  check("ENG-96571 A2 ANTI-VACUITY: the table really splits — the first nine rows are REJECTED with a reason, the last nine ACCEPTED",
-    wf.slice(0, 9).every((r) => typeof r === "string" && r.length > 0) && wf.slice(9).every((r) => r === null),
+  check("ENG-96571 A2 ANTI-VACUITY: the table really splits — the first eleven rows are REJECTED with a reason, the last nine ACCEPTED",
+    wf.slice(0, 11).every((r) => typeof r === "string" && r.length > 0) && wf.slice(11).every((r) => r === null),
     () => JSON.stringify(wf));
+  check("ENG-96571 (review 1, F): a `from` with NO `trigger` is rejected on ITS OWN reason — half an answer, not 'nothing reported'",
+    /half an answer/.test(String(helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })))
+    && helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })
+       === engineValidateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" }),
+    () => String(helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })));
+  check("ENG-96571 (review 1, F): the JSON schema states the reverse dependency too — `from` present REQUIRES `trigger`, for hosts that honour `dependentRequired`",
+    JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired) === JSON.stringify({ trigger: ["from"], from: ["trigger"] }),
+    () => JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired));
   check("ENG-96571 A2: the measured Applicants row (`init` reporting itself as its own origin) is rejected on THAT reason, not on a generic one",
     /row itself/.test(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })),
     () => String(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })));
@@ -916,6 +941,124 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
     attached.length === 1 && attached[0].overrideOnly === true
     && batches[0].scopes.length === 2 && batches[0].scopes[1].label === "DealSectionV2",
     () => JSON.stringify({ attached, batchScopes: batches[0].scopes }));
+}
+{
+  // ENG-96571 (review 1, Q) — THE ROUND-ROBIN ITSELF. `attachOverrideOnly` distributes the zero-row scopes over
+  // the batches by array position (`i % batches.length`), and the comment promises "two runs of the same input
+  // attach identically". Neither the distribution nor its determinism was ever executed: every existing test
+  // attaches exactly ONE scope onto exactly ONE batch, where any distribution rule looks the same.
+  const mkBatches = () => [
+    { scopes: [{ role: "main page", label: "DealPage" }], rows: 5 },
+    { scopes: [{ role: "edit page", label: "DealEditPage" }], rows: 3 },
+  ];
+  const mkEmpty = () => [
+    { role: "section", label: "S0", rows: 0 },
+    { role: "mini page", label: "S1", rows: 0 },
+    { role: "detail", label: "S2", rows: 0 },
+  ];
+  const runOnce = () => {
+    const b = mkBatches();
+    const got = helpers.attachOverrideOnly(b, mkEmpty());
+    return { landed: b.map((x) => x.scopes.map((sc) => sc.label).join("+")), got: got.map((x) => x.label) };
+  };
+  const first = runOnce(), second = runOnce();
+  check("ENG-96571 (review 1, Q): THREE override-only scopes over TWO batches land by array position — batch 0 takes scopes 0 and 2, batch 1 takes scope 1; a Set-backed or length-sorted distribution would not produce this split",
+    first.landed[0] === "DealPage+S0+S2" && first.landed[1] === "DealEditPage+S1",
+    () => JSON.stringify(first.landed));
+  check("ENG-96571 (review 1, Q): the attachment is DETERMINISTIC — two runs of the same input attach identically, which is what the journal's replay-by-id rests on",
+    JSON.stringify(first) === JSON.stringify(second),
+    () => `${JSON.stringify(first)}\n         vs ${JSON.stringify(second)}`);
+  check("ENG-96571 (review 1, Q): every attached scope is flagged `overrideOnly` and a WORKED scope still holds position 0 of each batch — `batch.scopes[0].label` names the part file and the work-item id",
+    helpers.attachOverrideOnly(mkBatches(), mkEmpty()).every((sc) => sc.overrideOnly === true)
+    && first.landed.every((l) => /^Deal/.test(l)),
+    () => JSON.stringify(first.landed));
+}
+{
+  // ENG-96571 (review 1, E) — THE OVERRIDE KEY IS SCHEMA-QUALIFIED, and the recogniser now says so. The old
+  // `/(^|::)override:/` accepted a bare `override:rowSelected`, a key no producer is allowed to write:
+  // `overrideKey` and `prompts.mjs` both mandate `<schema>::override:<method>` verbatim, and the qualification is
+  // the whole reason the key cannot be read as a digest row.
+  const picked = (keys) => helpers.overrideEntries([{ indexEntries: keys.map((k) => ({ key: k, card: "x/C01" })) }])
+    .map((e) => e.key);
+  check("ENG-96571 (review 1, E): the qualified form is still recognised as an override finding",
+    JSON.stringify(picked(["DealSectionV2::override:rowSelected"])) === JSON.stringify(["DealSectionV2::override:rowSelected"]),
+    () => JSON.stringify(picked(["DealSectionV2::override:rowSelected"])));
+  check("ENG-96571 (review 1, E): the BARE `override:<method>` form is REJECTED — it names no scope, so nothing downstream could say which replacing layer it came from, and no producer is allowed to write it",
+    JSON.stringify(picked(["override:rowSelected"])) === JSON.stringify([]),
+    () => JSON.stringify(picked(["override:rowSelected"])));
+  check("ENG-96571 (review 1, E) ANTI-VACUITY: a plain digest key is still not an override finding, so the tightened regex did not simply stop matching everything",
+    JSON.stringify(picked(["DealPage::onSaved", "DealPage::override:onSaved"])) === JSON.stringify(["DealPage::override:onSaved"]),
+    () => JSON.stringify(picked(["DealPage::onSaved", "DealPage::override:onSaved"])));
+  // …and the two COPIES of the recogniser agree. `OVERRIDE_KEY_RX` is hand-written in `helpers.mjs` (the
+  // workflow's `overrideEntries`) and in `engine/migrate.mjs` (`unmatchedIndexKeys`), for the same reason
+  // `validateReportedTrigger` is duplicated — a workflow script may not `import`. Both carry an "edit one, look
+  // at the other" comment, which is exactly the promise finding P exists to stop relying on, so the two are
+  // compared over a table instead: same source, same verdicts.
+  const rxOf = (src) => {
+    const m = /const OVERRIDE_KEY_RX = (\/[^\n]*?\/)[;\n]/.exec(src);
+    return m ? new RegExp(m[1].slice(1, -1)) : null;
+  };
+  const wfRx = rxOf(helpersSrc), engRx = rxOf(migrateSrc);
+  const KEY_TABLE = ["DealSectionV2::override:rowSelected", "override:rowSelected", "DealPage::onSaved",
+    "rowSelected", "A::B::override:x", "::override:x", "overrideish:rowSelected"];
+  check("ENG-96571 (review 1, E) PARITY: the workflow's `OVERRIDE_KEY_RX` and the ENGINE's mirrored copy are the SAME pattern and give identical verdicts over a key table — the two are hand-kept copies, so 'edit one, look at the other' is checked rather than promised",
+    !!wfRx && !!engRx && wfRx.source === engRx.source
+    && JSON.stringify(KEY_TABLE.map((k) => wfRx.test(k))) === JSON.stringify(KEY_TABLE.map((k) => engRx.test(k))),
+    () => `wf: ${wfRx?.source} / eng: ${engRx?.source}\n         ${KEY_TABLE.map((k) => `${k} → wf ${wfRx?.test(k)} / eng ${engRx?.test(k)}`).join("\n         ")}`);
+  check("ENG-96571 (review 1, E) PARITY ANTI-VACUITY: the table really splits — the qualified form matches and the bare form does not, so the parity above is not two regexes agreeing on nothing",
+    !!wfRx && wfRx.test("DealSectionV2::override:rowSelected") && !wfRx.test("override:rowSelected")
+    && !wfRx.test("DealPage::onSaved"),
+    () => JSON.stringify(KEY_TABLE.map((k) => [k, wfRx?.test(k)])));
+}
+{
+  // ENG-96571 (review 1, H) — `ledgerMembers` SURVIVES THE SKIP. The number is the engine's own member ledger for
+  // the surface, supplied BY the caller in `totals`; the skip path hard-coded `null`, so a run that had been told
+  // 88 reported "unknown" the moment the surface skipped. The skip itself is unchanged — an all-zero surface
+  // still skips by design.
+  const skipInput = { ...INPUT, totals: { stubs: 0, members: 0, ledgerMembers: 88 } };
+  const skipped = (await runCba(skipInput, happyAnswer)).result;
+  check("ENG-96571 (review 1, H): a surface that SKIPS still reports the `ledgerMembers` the caller supplied — the coverage object no longer erases a number the run was given",
+    skipped.skipped === true && skipped.coverage.ledgerMembers === 88,
+    () => JSON.stringify(skipped.coverage));
+  const skippedNoLedger = (await runCba({ ...INPUT, totals: { stubs: 0, members: 0 } }, happyAnswer)).result;
+  check("ENG-96571 (review 1, H): with no `ledgerMembers` in `totals` the skip still reports `null`, never a guess — and the skip decision itself is untouched",
+    skippedNoLedger.skipped === true && skippedNoLedger.coverage.ledgerMembers === null
+    && skippedNoLedger.coverage.digestRows === 0 && skippedNoLedger.coverage.complete === true,
+    () => JSON.stringify(skippedNoLedger.coverage));
+}
+{
+  // ENG-96571 (review 1, P) — "BYTE-FOR-BYTE" MADE TRUE. Both copies' comments claimed a byte-for-byte source
+  // comparison; the parity check above compares RETURN VALUES over a table, which is a different (and weaker on
+  // one axis) claim: a branch neither copy's table row reaches could diverge silently. So the two function
+  // BODIES are compared as normalised source text — quote style, semicolons, line comments and whitespace
+  // differ between the two files by house style and are normalised away; everything else must match.
+  const normalizeBody = (src) => {
+    const at = src.indexOf("function validateReportedTrigger");
+    if (at < 0) return null;
+    // From the brace that opens the BODY, not the one that opens the destructured parameter — the signature is
+    // `validateReportedTrigger({ trigger, from, methodName } = {}) {`, so a naive `indexOf("{")` extracts the
+    // parameter list and both sides compare equal on it while every branch below goes unread.
+    const sig = src.indexOf(") {", at);
+    let i = sig + 2, depth = 0, end = -1;
+    for (let j = i; j < src.length; j++) {
+      if (src[j] === "{") depth++;
+      else if (src[j] === "}" && --depth === 0) { end = j + 1; break; }
+    }
+    return src.slice(i, end)
+      .replace(/\/\/[^\n]*/g, " ")     // line comments — house style, not behaviour
+      .replace(/"/g, "'")             // quote style
+      .replace(/;/g, " ")             // semicolons
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+  const wfBody = normalizeBody(helpersSrc), engBody = normalizeBody(migrateSrc);
+  check("ENG-96571 (review 1, P): the two `validateReportedTrigger` copies are IDENTICAL as normalised source text, not merely equal on a table of rows — this is what makes the 'edit one, look at the other' comment's byte-for-byte claim true",
+    !!wfBody && !!engBody && wfBody === engBody,
+    () => `wf : ${wfBody}\n         eng: ${engBody}`);
+  check("ENG-96571 (review 1, P) ANTI-VACUITY: the normalisation is not collapsing both sides to the same blob — the body still carries every rejection branch, and a one-token edit DIVERGES",
+    /REPORTED_TRIGGERS.includes/.test(wfBody) && /half an answer/.test(wfBody) && /row cannot be its own origin/.test(wfBody)
+    && wfBody !== normalizeBody(migrateSrc.replace("DECLARATION_KINDS.has(trigger)", "DECLARATION_KINDS.has(from)")),
+    () => wfBody);
 }
 {
   // ENG-96571 (review) — the PROMPT's example key is BUILT from the machine constant. The prompt used to re-type

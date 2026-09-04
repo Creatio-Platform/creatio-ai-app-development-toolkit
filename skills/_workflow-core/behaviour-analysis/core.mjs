@@ -78,12 +78,17 @@ const noop = () => {}
 // the same thing about the same surface, so they compose it in one place: an empty worklist is DONE, not
 // incomplete, and the two must never drift into disagreeing about that.
 const NOTHING_TO_DESCRIBE = 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply'
-function skippedReturn(surface, extra = {}) {
+// `ledgerMembers` is a fact the CALLER supplied (the engine's own member ledger for the surface it mapped), not
+// something this run computes — so a skip must pass it THROUGH. It used to be hard-coded `null`, which read as
+// "the ledger is unknown" on a run that had been told the number, and the worked path (see `ledger` below) then
+// reported a figure the skip path erased. The skip itself is unchanged: an all-zero surface still skips.
+const ledgerOf = (totals) => (typeof totals?.ledgerMembers === 'number' ? totals.ledgerMembers : null)
+function skippedReturn(surface, totals, extra = {}) {
   return {
     surface,
     skipped: true,
     reason: NOTHING_TO_DESCRIBE,
-    coverage: { described: 0, digestRows: 0, total: 0, ledgerMembers: null, complete: true, uncovered: [], wiringOnly: [] },
+    coverage: { described: 0, digestRows: 0, total: 0, ledgerMembers: ledgerOf(totals), complete: true, uncovered: [], wiringOnly: [] },
     describeAgents: 0,
     ...extra,
   }
@@ -177,7 +182,7 @@ export function* run(rawInput, io = {}) {
   // The same check runs again after Context for a caller that did not pass `totals`.
   if (declaredNothingToDo(input.totals)) {
     log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE)
+    return skippedReturn(SURFACE, input.totals)
   }
 
   const RULES = rules({ surface: SURFACE, environment: input.environment, outDir: input.outDir, digest: input.digest, manifest: input.manifest })
@@ -223,7 +228,7 @@ export function* run(rawInput, io = {}) {
   // DONE. Reached only when Context has already run, so its census and shared-core reading are still reported back.
   if (!worked.length) {
     log(`no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE, {
+    return skippedReturn(SURFACE, input.totals, {
       scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: 0 })),
       censusNote: ctx.censusNote || null,
       refusals: ctx.refusals || [],
@@ -426,7 +431,7 @@ export function* run(rawInput, io = {}) {
   // THE TWO NUMBERS, SIDE BY SIDE — and the sentence that says why they differ. The verdict above counts DIGEST
   // rows; the engine's ledger for the scope it mapped is a larger population, and a plan header that printed one
   // of them as "N of M" read as a surface census it never was.
-  const ledger = typeof input.totals?.ledgerMembers === 'number' ? input.totals.ledgerMembers : null
+  const ledger = ledgerOf(input.totals)
   log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
   if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
 
@@ -443,7 +448,7 @@ export function* run(rawInput, io = {}) {
       described: covered.size,
       digestRows: allKeys.size,
       total: allKeys.size,
-      ledgerMembers: typeof input.totals?.ledgerMembers === 'number' ? input.totals.ledgerMembers : null,
+      ledgerMembers: ledgerOf(input.totals),
       complete, uncovered: uncoveredKeys, wiringOnly,
     },
     rejectedTriggers,
