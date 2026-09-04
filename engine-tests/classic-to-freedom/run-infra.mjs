@@ -777,7 +777,7 @@ check("ENG-96204 (DR-6): `offeredModes` is a STRICT SUBSET of `buildModes`, and 
   () => { const valid = wf.buildModes(), offered = wf.offeredModes();
     const notOffered = valid.filter((m) => !offered.includes(m));
     return offered.every((m) => valid.includes(m))
-      && JSON.stringify([...notOffered].sort()) === JSON.stringify(["auto", "checkpoints"])
+      && JSON.stringify([...notOffered].sort(byCodeUnit)) === JSON.stringify(["auto", "checkpoints"])
       && offered.length === valid.length - 2; },
   () => ({ valid: wf.buildModes(), offered: wf.offeredModes() }));
 check("ENG-96204 (DR-6): and every value `buildModes` accepts is still ACCEPTED — being left off the menu is not being removed, so a caller that deliberately passes `auto` or `checkpoints` is honoured, not refused",
