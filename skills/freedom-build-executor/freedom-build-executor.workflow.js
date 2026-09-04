@@ -946,7 +946,10 @@ function roundAnswerVocabulary() {
 }
 function roundAuthorised(answer) {
   const { affirmative, negative } = roundAnswerVocabulary()
-  const a = String(answer ?? '').trim().toLowerCase().replace(/[.!?]+$/, '').trim()
+  const TRAILING = '.!?'
+  let a = String(answer ?? '').trim().toLowerCase()
+  while (a.length && TRAILING.includes(a[a.length - 1])) a = a.slice(0, -1)
+  a = a.trim()
   if (!a) return { verdict: 'absent', answer: null }
   if (affirmative.includes(a)) return { verdict: 'authorised', answer: a }
   if (negative.includes(a)) return { verdict: 'refused', answer: a }
@@ -1046,7 +1049,8 @@ function runStatusDoc(status = {}) {
   const json = status.verifyJson || 'verify.json'
   const unitLine = (u) => {
     const head = `- \`${u.unit}\``
-    if (u.why) return `${head} — ${u.open} open item(s)${u.severity ? ` [${u.severity}]` : ''} — ${cell(u.why)}`
+    const band = u.severity ? ` [${u.severity}]` : ''
+    if (u.why) return `${head} — ${u.open} open item(s)${band} — ${cell(u.why)}`
     if (!Number.isInteger(u.missing) && !Number.isInteger(u.unverified)) {
       return `${head} — open, and the machine verdict carries no entry for this unit`
     }
@@ -1054,34 +1058,47 @@ function runStatusDoc(status = {}) {
     const split = stamped ? ` · ${u.correctness ?? 0} correctness / ${u.fidelity ?? 0} fidelity` : ''
     return `${head} — ${u.open} open row(s): ${u.missing ?? 0} MISSING + ${u.unverified ?? 0} unconfirmed${split}`
   }
-  L.push('# Build run status', '')
-  L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)
-  L.push(`- **Stopped at:** ${status.stopped || '(not stopped)'}${Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''}`)
+  const modeFrom = status.modeSource ? ` (from ${status.modeSource})` : ''
+  const afterRound = Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''
+  L.push(
+    '# Build run status', '',
+    `- **Mode:** \`${status.mode || '(none)'}\`${modeFrom}`,
+    `- **Stopped at:** ${status.stopped || '(not stopped)'}${afterRound}`,
+  )
   if (status.pausedAfter) L.push(`- **Paused after step:** \`${status.pausedAfter}\``)
-  L.push('', '## Built this round', '')
-  L.push(...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'))
-  L.push('', '## Open — counts, and where the rows are', '')
-  L.push(...cappedList(openUnits, unitLine, 'nothing is open',
-    `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`))
+  L.push(
+    '', '## Built this round', '',
+    ...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'),
+    '', '## Open — counts, and where the rows are', '',
+    ...cappedList(openUnits, unitLine, 'nothing is open',
+      `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`),
+  )
   if (openUnits.length) {
-    L.push(`- **Total:** ${openUnits.length} step(s) still open · ${counts.open ?? 0} open row(s)`
-      + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
-      + `${counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''}`)
-    L.push(`- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
-      + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.')
+    const unstamped = counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''
+    L.push(
+      `- **Total:** ${openUnits.length} step(s) still open · ${counts.open ?? 0} open row(s)`
+        + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
+        + unstamped,
+      `- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
+        + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.',
+    )
   }
   if (status.awaitingRound || (status.consumedRoundAnswers || []).length) {
-    L.push('', '## Round answers', '')
-    L.push(...list(status.consumedRoundAnswers, (a) => `- spent: \`${a}\` — authorised its round already; recorded in the queue file, never in your answer file`,
-      'nothing spent yet — no round after the first has been authorised in this folder'))
+    L.push(
+      '', '## Round answers', '',
+      ...list(status.consumedRoundAnswers, (a) => `- spent: \`${a}\` — authorised its round already; recorded in the queue file, never in your answer file`,
+        'nothing spent yet — no round after the first has been authorised in this folder'),
+    )
     if (status.awaitingRound) L.push(`- awaiting: \`${status.awaitingRound}\` — the entry to record next (its answer is checked, and a spent entry is never read as consent)`)
   }
-  L.push('', '## Parked, and why', '')
-  L.push(...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
-    'nothing is parked', 'parked unit(s) — the full list is in the queue file'))
-  L.push('', '## Still open (steps)', '')
-  L.push(...list(openUnits, (u) => `- \`${u.unit}\``, 'no step is still open'))
-  L.push('', '## Next step', '', status.next || '(none recorded)', '')
+  L.push(
+    '', '## Parked, and why', '',
+    ...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
+      'nothing is parked', 'parked unit(s) — the full list is in the queue file'),
+    '', '## Still open (steps)', '',
+    ...list(openUnits, (u) => `- \`${u.unit}\``, 'no step is still open'),
+    '', '## Next step', '', status.next || '(none recorded)', '',
+  )
   return L.join('\n')
 }
 function buildVerificationSurface(raw) {
@@ -2711,6 +2728,8 @@ Return the schema. Nothing else.`
     return null
   }
 
+  const modeMenuLines = () => buildModeMenu().map((l) => `  - ${l}`).join('\n')
+
   function modeNotChosenStop() {
     if (mode) return null
     log('STOP — no control mode was chosen. Pick one and re-run; nothing has been built.')
@@ -2721,7 +2740,7 @@ Return the schema. Nothing else.`
       planVersion: state.planVersion || null,
       verdict: verdictOf(state.verify),
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `choose how closely you want to follow this build, then re-run. The choices are:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
+      next: `choose how closely you want to follow this build, then re-run. The choices are:\n${modeMenuLines()}\n` +
         `Pass the choice as \`mode\`, or record it in \`${RESOLUTIONS_FILE}\` as \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":"<mode>"}\` — that entry is the one that survives across invocations, and the one a driving skill writes after asking you. ` +
         'For a run NOBODY IS WATCHING there is `auto`. It is not one of the choices above and is not picked from this list: pass it as `defaultMode` and the run proceeds without asking. ' +
         '`auto` and `checkpoints` are both still accepted when a caller passes them deliberately — they are just not offered here. ' +
@@ -2740,7 +2759,7 @@ Return the schema. Nothing else.`
       planVersion: state.planVersion || null,
       verdict: verdictOf(state.verify),
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `the run-level answer recorded in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":${JSON.stringify(modeInvalidAnswer)}}\` — names no mode this run has. It was NOT corrected and it was NOT read as \`auto\`: an answer this script rewrote would be the operator's decision silently replaced by its own guess. This run accepts ${buildModes().join(', ')}. These ${offeredModes().length} are the ones to choose between here:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
+      next: `the run-level answer recorded in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":${JSON.stringify(modeInvalidAnswer)}}\` — names no mode this run has. It was NOT corrected and it was NOT read as \`auto\`: an answer this script rewrote would be the operator's decision silently replaced by its own guess. This run accepts ${buildModes().join(', ')}. These ${offeredModes().length} are the ones to choose between here:\n${modeMenuLines()}\n` +
         'The other two, `auto` and `checkpoints`, are accepted when passed deliberately but are not offered here — `auto` means nobody is watching the run, and is passed as `defaultMode` rather than recorded as an answer. Fix the entry, then re-run. Nothing has been built and nothing on the stand was touched.',
     })
   }
@@ -3983,14 +4002,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         log(`PARKED after ${MAX_ROUNDS} round(s): ${newlyParked.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence), the rest continue`)
       }
 
-      const layoutPagesBuilt = layoutPass ? builtThisRound.filter((k) => unitOf(k).kind === 'page') : []
-      if (layoutPass && layoutPagesBuilt.length) {
-        layoutPassDone = true
-        log(`layout pass complete after round ${round} — ${layoutPagesBuilt.length} page unit(s) built (${layoutPagesBuilt.join(', ')}), recorded as \`layoutPassDone\` in the queue file; the next invocation ports the business logic`)
-      }
-      else if (layoutPass) {
-        log(`layout pass produced NO page build in round ${round} — \`layoutPassDone\` is NOT recorded, so the next invocation runs the LAYOUT pass again rather than porting business logic onto a layout that was never built`)
-      }
+      recordLayoutPass(layoutPass, builtThisRound, round)
 
       const pauseReturn = checkpointPauseReturn(pausedAfter, checkFirst, deferred)
       if (pauseReturn) return pauseReturn
@@ -3999,6 +4011,17 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       if (roundReturn) return roundReturn
 
     return null
+  }
+
+  function recordLayoutPass(layoutPass, builtThisRound, round) {
+    if (!layoutPass) return
+    const layoutPagesBuilt = builtThisRound.filter((k) => unitOf(k).kind === 'page')
+    if (layoutPagesBuilt.length) {
+      layoutPassDone = true
+      log(`layout pass complete after round ${round} — ${layoutPagesBuilt.length} page unit(s) built (${layoutPagesBuilt.join(', ')}), recorded as \`layoutPassDone\` in the queue file; the next invocation ports the business logic`)
+      return
+    }
+    log(`layout pass produced NO page build in round ${round} — \`layoutPassDone\` is NOT recorded, so the next invocation runs the LAYOUT pass again rather than porting business logic onto a layout that was never built`)
   }
 
   function checkpointPauseReturn(pausedAfter, checkFirst, deferred) {
@@ -4034,9 +4057,14 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     })
   }
 
-  const nonPageOpenWhy = (u) => (u.kind === 'app'
-    ? `Application / package \`${u.package || '(unnamed)'}\`${u.entity ? ` bound to \`${u.entity}\`` : ''} is not confirmed on this stand (packageState: ${packageState || 'unknown'}) — this unit creates it, and no page can be placed until it exists`
-    : `${u.what || `the on-stand wiring \`${u.key}\` names`} is not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`)
+  const nonPageOpenWhy = (u) => {
+    if (u.kind === 'app') {
+      const bound = u.entity ? ` bound to \`${u.entity}\`` : ''
+      return `Application / package \`${u.package || '(unnamed)'}\`${bound} is not confirmed on this stand (packageState: ${packageState || 'unknown'}) — this unit creates it, and no page can be placed until it exists`
+    }
+    const names = u.what || `the on-stand wiring \`${u.key}\` names`
+    return `${names} is not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
+  }
   const openCountsNow = (stillOpen) => openCountsOf(stillOpen.map((u) => {
     if (u.kind !== 'page') {
       return { unit: u.key, kind: u.kind, open: 1, missing: null, unverified: null, severity: 'correctness', why: nonPageOpenWhy(u) }
@@ -4106,7 +4134,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
 
   function roundStopNext(nextRound, layoutPass) {
     const { affirmative, negative } = roundAnswerVocabulary()
-    const authorise = `record \`{"kind":"run","item":"${roundDecisionItem(nextRound)}","answer":"go"}\` in \`${RESOLUTIONS_FILE}\` and re-run this workflow with the SAME args — that entry is what authorises round ${nextRound}, and without it the re-run stops again rather than building. The answer is CHECKED, not merely read: \`${affirmative.join('\` / \`')}\` authorise the round, \`${negative.join('\` / \`')}\` decline it and stop, and ANYTHING ELSE (including a typo or "maybe later") is read as NOT authorised — this run refuses rather than guesses, because the round it would guess its way into writes to a live stand`
+    const authorise = `record \`{"kind":"run","item":"${roundDecisionItem(nextRound)}","answer":"go"}\` in \`${RESOLUTIONS_FILE}\` and re-run this workflow with the SAME args — that entry is what authorises round ${nextRound}, and without it the re-run stops again rather than building. The answer is CHECKED, not merely read: \`${affirmative.join('` / `')}\` authorise the round, \`${negative.join('` / `')}\` decline it and stop, and ANYTHING ELSE (including a typo or "maybe later") is read as NOT authorised — this run refuses rather than guesses, because the round it would guess its way into writes to a live stand`
     const layoutNote = layoutPass
       ? ' Round 1 built LAYOUT ONLY: the business-rules and handler rows counted above are SCHEDULED for the logic pass, not a shortfall of this round — do not repair them by hand, and do not read them as work this round failed to do. The next round ports them. The rows themselves are in the verify table, not in this message.'
       : ''

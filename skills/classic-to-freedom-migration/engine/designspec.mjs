@@ -3440,12 +3440,12 @@ const VK_EVIDENCE = new Set(["evidence"]);
 // (`child:Education · Form — Logic`), so matching on them would classify `main`'s rows one way and a child's the
 // other. Layout rows carry NO `vk` at all — they resolve `skip` and never reach an open row — so there is nothing
 // for this to say about them; the fidelity side is reachable only through the quality-gate rows today.
-const QUALITY_GATE_ID = /#quality-gates$/;
+const QUALITY_GATE_SUFFIX = "#quality-gates";
 export function rowSeverity(vk) {
   // The mandatory `creatio-ui-guidelines` design pass — the one open row that is about presentation rather than
   // about a missing deliverable. Discriminated by the evidence ID and not by `vk.type`: a `#confirm:` / `#childpage`
   // / `#listpage:` record proves something was BUILT, and those stay correctness.
-  if (vk?.type === "evidence" && QUALITY_GATE_ID.test(String(vk.id ?? ""))) return SEVERITY.FIDELITY;
+  if (vk?.type === "evidence" && String(vk.id ?? "").endsWith(QUALITY_GATE_SUFFIX)) return SEVERITY.FIDELITY;
   return SEVERITY.CORRECTNESS;
 }
 // EVERY correctness item before ANY fidelity one, and the engine's own row order kept INSIDE each band — a stable

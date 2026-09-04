@@ -160,8 +160,9 @@ class ControlModeDocTests(unittest.TestCase):
             "mode is on the operator's menu that this file does not document, or one is documented as "
             "offered and is not",
         )
-        self.assertTrue(
-            set(OFFERED_MODES) < set(MODES),
+        self.assertLess(
+            set(OFFERED_MODES),
+            set(MODES),
             "the offered set must be a STRICT subset of the accepted set: an offered mode the run "
             "would refuse is a menu entry that cannot be chosen",
         )

@@ -1163,7 +1163,8 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
        halves matter separately — a gate that fired but let the round run would pass a `stopped` assertion. */
     {
       const noModeInput = path.join(tmp, "no-mode.json");
-      const { mode: _dropped, ...noMode } = BEX_INPUT;
+      const noMode = { ...BEX_INPUT };
+      delete noMode.mode;
       writeFileSync(noModeInput, JSON.stringify(noMode));
       const noModeRun = path.join(tmp, "no-mode-run.json");
       cli("start", noModeRun, "--workflow", "freedom-build-executor", "--input", noModeInput, "--host", "codex");

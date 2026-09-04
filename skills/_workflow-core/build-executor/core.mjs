@@ -1122,6 +1122,11 @@ Return the schema. Nothing else.`
     return null
   }
 
+  // The offered menu AS IT APPEARS IN A `next`: one indented line per mode `offeredModes()` presents. Named
+  // rather than inlined because BOTH mode stops render it and they must render it the same way — a menu that
+  // differed between "you chose nothing" and "I cannot read what you chose" would read as two different sets.
+  const modeMenuLines = () => buildModeMenu().map((l) => `  - ${l}`).join('\n')
+
   // --- HARD STOP 0: NO CONTROL MODE WAS CHOSEN (ENG-96204, AC 1) --------------
   // The FIRST gate, ahead of the approval and the plan/stand checks, and deliberately so: this is the one refusal
   // an operator answers without leaving the terminal — it is a choice, not an investigation — so resolving it
@@ -1140,7 +1145,7 @@ Return the schema. Nothing else.`
       planVersion: state.planVersion || null,
       verdict: verdictOf(state.verify),
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `choose how closely you want to follow this build, then re-run. The choices are:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
+      next: `choose how closely you want to follow this build, then re-run. The choices are:\n${modeMenuLines()}\n` +
         `Pass the choice as \`mode\`, or record it in \`${RESOLUTIONS_FILE}\` as \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":"<mode>"}\` — that entry is the one that survives across invocations, and the one a driving skill writes after asking you. ` +
         'For a run NOBODY IS WATCHING there is `auto`. It is not one of the choices above and is not picked from this list: pass it as `defaultMode` and the run proceeds without asking. ' +
         '`auto` and `checkpoints` are both still accepted when a caller passes them deliberately — they are just not offered here. ' +
@@ -1168,7 +1173,7 @@ Return the schema. Nothing else.`
       planVersion: state.planVersion || null,
       verdict: verdictOf(state.verify),
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
-      next: `the run-level answer recorded in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":${JSON.stringify(modeInvalidAnswer)}}\` — names no mode this run has. It was NOT corrected and it was NOT read as \`auto\`: an answer this script rewrote would be the operator's decision silently replaced by its own guess. This run accepts ${buildModes().join(', ')}. These ${offeredModes().length} are the ones to choose between here:\n${buildModeMenu().map((l) => `  - ${l}`).join('\n')}\n` +
+      next: `the run-level answer recorded in \`${RESOLUTIONS_FILE}\` — \`{"kind":"run","item":"${CONTROL_MODE_ITEM}","answer":${JSON.stringify(modeInvalidAnswer)}}\` — names no mode this run has. It was NOT corrected and it was NOT read as \`auto\`: an answer this script rewrote would be the operator's decision silently replaced by its own guess. This run accepts ${buildModes().join(', ')}. These ${offeredModes().length} are the ones to choose between here:\n${modeMenuLines()}\n` +
         'The other two, `auto` and `checkpoints`, are accepted when passed deliberately but are not offered here — `auto` means nobody is watching the run, and is passed as `defaultMode` rather than recorded as an answer. Fix the entry, then re-run. Nothing has been built and nothing on the stand was touched.',
     })
   }
@@ -3275,29 +3280,11 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         log(`PARKED after ${MAX_ROUNDS} round(s): ${newlyParked.map((p) => p.key).join(', ')} — ${blockedSet.size} unit(s) blocked behind them (${independence} branch independence), the rest continue`)
       }
 
-      // ENG-96204 — THE LAYOUT PASS IS NOW ON RECORD. Set here, AFTER both park paths have run (so the exemption
-      // above saw the round as the layout pass it was) and BEFORE the stop returns, so the same
-      // `persistPending` that writes this stop's queue file and status document carries the marker with it. It is
-      // the only thing that can tell the resumed run to port the logic instead of building the layout again —
-      // both invocations see the same open logic rows, so nothing else distinguishes them.
-      //
-      // AND ONLY IF THE PASS ACTUALLY DELIVERED SOMETHING (PR review F5). It used to be set on the mere fact
-      // that the round was a layout pass, whatever came back — so a round whose builders all returned nothing
-      // (a usage limit, a dispatch that died, every unit blocked before it started) recorded a layout pass that
-      // never happened. The next invocation then read the marker, ran `passScopeText`'s LOGIC-pass prompt, and
-      // told a builder its layout was already on the page and not to rebuild it. That is worse than a repeated
-      // layout pass: the logic pass is instructed to add behaviour to a page that does not exist yet, and the
-      // marker is write-once, so nothing later re-opens the question. Keyed on a PAGE build specifically —
-      // pages are the only units the pass narrows, so a round that built only the app unit has not done the
-      // layout pass either.
-      const layoutPagesBuilt = layoutPass ? builtThisRound.filter((k) => unitOf(k).kind === 'page') : []
-      if (layoutPass && layoutPagesBuilt.length) {
-        layoutPassDone = true
-        log(`layout pass complete after round ${round} — ${layoutPagesBuilt.length} page unit(s) built (${layoutPagesBuilt.join(', ')}), recorded as \`layoutPassDone\` in the queue file; the next invocation ports the business logic`)
-      }
-      else if (layoutPass) {
-        log(`layout pass produced NO page build in round ${round} — \`layoutPassDone\` is NOT recorded, so the next invocation runs the LAYOUT pass again rather than porting business logic onto a layout that was never built`)
-      }
+      // ENG-96204 — THE LAYOUT PASS GOES ON RECORD HERE, at the BOTTOM of the round and AFTER both park paths
+      // have run, so the exemption above saw the round as the layout pass it was and the same `persistPending`
+      // that writes this stop's queue file carries the marker with it. Split out of `oneRound` for the same
+      // reason the checkpoint return below is — see `recordLayoutPass` for what it will and will not record.
+      recordLayoutPass(layoutPass, builtThisRound, round)
 
       // THE CHECKPOINT RETURN, split out of `oneRound` (Sonar cognitive complexity). Taken here, at the BOTTOM of
       // the round, so everything it reports is current — see `checkpointPauseReturn`.
@@ -3313,6 +3300,29 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       if (roundReturn) return roundReturn
 
     return null
+  }
+
+  // THE LAYOUT-PASS MARKER, pulled out of `oneRound` (Sonar cognitive complexity) exactly as the checkpoint
+  // return below is. It is the only thing that can tell the resumed run to port the logic instead of building
+  // the layout again — both invocations see the same open logic rows, so nothing else distinguishes them.
+  //
+  // AND IT RECORDS ONLY IF THE PASS ACTUALLY DELIVERED SOMETHING (PR review F5). It used to be set on the mere
+  // fact that the round was a layout pass, whatever came back — so a round whose builders all returned nothing
+  // (a usage limit, a dispatch that died, every unit blocked before it started) recorded a layout pass that
+  // never happened. The next invocation then read the marker, ran `passScopeText`'s LOGIC-pass prompt, and told
+  // a builder its layout was already on the page and not to rebuild it. That is worse than a repeated layout
+  // pass: the logic pass is instructed to add behaviour to a page that does not exist yet, and the marker is
+  // write-once, so nothing later re-opens the question. Keyed on a PAGE build specifically — pages are the only
+  // units the pass narrows, so a round that built only the app unit has not done the layout pass either.
+  function recordLayoutPass(layoutPass, builtThisRound, round) {
+    if (!layoutPass) return
+    const layoutPagesBuilt = builtThisRound.filter((k) => unitOf(k).kind === 'page')
+    if (layoutPagesBuilt.length) {
+      layoutPassDone = true
+      log(`layout pass complete after round ${round} — ${layoutPagesBuilt.length} page unit(s) built (${layoutPagesBuilt.join(', ')}), recorded as \`layoutPassDone\` in the queue file; the next invocation ports the business logic`)
+      return
+    }
+    log(`layout pass produced NO page build in round ${round} — \`layoutPassDone\` is NOT recorded, so the next invocation runs the LAYOUT pass again rather than porting business logic onto a layout that was never built`)
   }
 
   // THE CHECKPOINT RETURN itself, pulled out of `oneRound`: everything it reports is current, the verifier has
@@ -3364,9 +3374,14 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // "nothing is open" while stopping precisely because something was. Such a unit contributes ONE classified
   // correctness item with the reason `parkWhy` already composes for it, which is where the wording is proven.
   // Correctness, never fidelity: an unreachable section and a missing package are not polish.
-  const nonPageOpenWhy = (u) => (u.kind === 'app'
-    ? `Application / package \`${u.package || '(unnamed)'}\`${u.entity ? ` bound to \`${u.entity}\`` : ''} is not confirmed on this stand (packageState: ${packageState || 'unknown'}) — this unit creates it, and no page can be placed until it exists`
-    : `${u.what || `the on-stand wiring \`${u.key}\` names`} is not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`)
+  const nonPageOpenWhy = (u) => {
+    if (u.kind === 'app') {
+      const bound = u.entity ? ` bound to \`${u.entity}\`` : ''
+      return `Application / package \`${u.package || '(unnamed)'}\`${bound} is not confirmed on this stand (packageState: ${packageState || 'unknown'}) — this unit creates it, and no page can be placed until it exists`
+    }
+    const names = u.what || `the on-stand wiring \`${u.key}\` names`
+    return `${names} is not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
+  }
   const openCountsNow = (stillOpen) => openCountsOf(stillOpen.map((u) => {
     if (u.kind !== 'page') {
       return { unit: u.key, kind: u.kind, open: 1, missing: null, unverified: null, severity: 'correctness', why: nonPageOpenWhy(u) }
@@ -3504,7 +3519,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     // to "record your answer" who records `"not yet"` gets a stop they cannot explain, and one who records
     // `"no"` used to get the round they were declining.
     const { affirmative, negative } = roundAnswerVocabulary()
-    const authorise = `record \`{"kind":"run","item":"${roundDecisionItem(nextRound)}","answer":"go"}\` in \`${RESOLUTIONS_FILE}\` and re-run this workflow with the SAME args — that entry is what authorises round ${nextRound}, and without it the re-run stops again rather than building. The answer is CHECKED, not merely read: \`${affirmative.join('\` / \`')}\` authorise the round, \`${negative.join('\` / \`')}\` decline it and stop, and ANYTHING ELSE (including a typo or "maybe later") is read as NOT authorised — this run refuses rather than guesses, because the round it would guess its way into writes to a live stand`
+    const authorise = `record \`{"kind":"run","item":"${roundDecisionItem(nextRound)}","answer":"go"}\` in \`${RESOLUTIONS_FILE}\` and re-run this workflow with the SAME args — that entry is what authorises round ${nextRound}, and without it the re-run stops again rather than building. The answer is CHECKED, not merely read: \`${affirmative.join('` / `')}\` authorise the round, \`${negative.join('` / `')}\` decline it and stop, and ANYTHING ELSE (including a typo or "maybe later") is read as NOT authorised — this run refuses rather than guesses, because the round it would guess its way into writes to a live stand`
     const layoutNote = layoutPass
       ? ' Round 1 built LAYOUT ONLY: the business-rules and handler rows counted above are SCHEDULED for the logic pass, not a shortfall of this round — do not repair them by hand, and do not read them as work this round failed to do. The next round ports them. The rows themselves are in the verify table, not in this message.'
       : ''

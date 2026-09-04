@@ -604,7 +604,10 @@ export function roundAuthorised(answer) {
   // else is normalised away, and in particular nothing is matched on a SUBSTRING — an answer that merely
   // contains an affirmative ("do not go yet") is deliberately `unrecognised`, because substring matching is
   // exactly how "not yet" becomes "yes".
-  const a = String(answer ?? '').trim().toLowerCase().replace(/[.!?]+$/, '').trim()
+  const TRAILING = '.!?'
+  let a = String(answer ?? '').trim().toLowerCase()
+  while (a.length && TRAILING.includes(a[a.length - 1])) a = a.slice(0, -1)
+  a = a.trim()
   if (!a) return { verdict: 'absent', answer: null }
   if (affirmative.includes(a)) return { verdict: 'authorised', answer: a }
   if (negative.includes(a)) return { verdict: 'refused', answer: a }
@@ -846,7 +849,8 @@ export function runStatusDoc(status = {}) {
   // to count for it and never was.
   const unitLine = (u) => {
     const head = `- \`${u.unit}\``
-    if (u.why) return `${head} — ${u.open} open item(s)${u.severity ? ` [${u.severity}]` : ''} — ${cell(u.why)}`
+    const band = u.severity ? ` [${u.severity}]` : ''
+    if (u.why) return `${head} — ${u.open} open item(s)${band} — ${cell(u.why)}`
     if (!Number.isInteger(u.missing) && !Number.isInteger(u.unverified)) {
       return `${head} — open, and the machine verdict carries no entry for this unit`
     }
@@ -856,37 +860,50 @@ export function runStatusDoc(status = {}) {
     const split = stamped ? ` · ${u.correctness ?? 0} correctness / ${u.fidelity ?? 0} fidelity` : ''
     return `${head} — ${u.open} open row(s): ${u.missing ?? 0} MISSING + ${u.unverified ?? 0} unconfirmed${split}`
   }
-  L.push('# Build run status', '')
-  L.push(`- **Mode:** \`${status.mode || '(none)'}\`${status.modeSource ? ` (from ${status.modeSource})` : ''}`)
-  L.push(`- **Stopped at:** ${status.stopped || '(not stopped)'}${Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''}`)
+  const modeFrom = status.modeSource ? ` (from ${status.modeSource})` : ''
+  const afterRound = Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''
+  L.push(
+    '# Build run status', '',
+    `- **Mode:** \`${status.mode || '(none)'}\`${modeFrom}`,
+    `- **Stopped at:** ${status.stopped || '(not stopped)'}${afterRound}`,
+  )
   if (status.pausedAfter) L.push(`- **Paused after step:** \`${status.pausedAfter}\``)
-  L.push('', '## Built this round', '')
-  L.push(...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'))
-  L.push('', '## Open — counts, and where the rows are', '')
-  L.push(...cappedList(openUnits, unitLine, 'nothing is open',
-    `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`))
+  L.push(
+    '', '## Built this round', '',
+    ...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'),
+    '', '## Open — counts, and where the rows are', '',
+    ...cappedList(openUnits, unitLine, 'nothing is open',
+      `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`),
+  )
   if (openUnits.length) {
-    L.push(`- **Total:** ${openUnits.length} step(s) still open · ${counts.open ?? 0} open row(s)`
-      + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
-      + `${counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''}`)
-    L.push(`- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
-      + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.')
+    const unstamped = counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''
+    L.push(
+      `- **Total:** ${openUnits.length} step(s) still open · ${counts.open ?? 0} open row(s)`
+        + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
+        + unstamped,
+      `- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
+        + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.',
+    )
   }
   // ENG-96204 (ENG-96474) — WHICH ANSWERS ARE USED UP, AND WHICH ONE IS WAITED FOR. The operator's `resolutions.json`
   // is append-only input the run never writes into, so this is the one place they SEE consumption: an entry listed
   // as spent authorised its round already and will be refused if the count is ever walked back to it.
   if (status.awaitingRound || (status.consumedRoundAnswers || []).length) {
-    L.push('', '## Round answers', '')
-    L.push(...list(status.consumedRoundAnswers, (a) => `- spent: \`${a}\` — authorised its round already; recorded in the queue file, never in your answer file`,
-      'nothing spent yet — no round after the first has been authorised in this folder'))
+    L.push(
+      '', '## Round answers', '',
+      ...list(status.consumedRoundAnswers, (a) => `- spent: \`${a}\` — authorised its round already; recorded in the queue file, never in your answer file`,
+        'nothing spent yet — no round after the first has been authorised in this folder'),
+    )
     if (status.awaitingRound) L.push(`- awaiting: \`${status.awaitingRound}\` — the entry to record next (its answer is checked, and a spent entry is never read as consent)`)
   }
-  L.push('', '## Parked, and why', '')
-  L.push(...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
-    'nothing is parked', 'parked unit(s) — the full list is in the queue file'))
-  L.push('', '## Still open (steps)', '')
-  L.push(...list(openUnits, (u) => `- \`${u.unit}\``, 'no step is still open'))
-  L.push('', '## Next step', '', status.next || '(none recorded)', '')
+  L.push(
+    '', '## Parked, and why', '',
+    ...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
+      'nothing is parked', 'parked unit(s) — the full list is in the queue file'),
+    '', '## Still open (steps)', '',
+    ...list(openUnits, (u) => `- \`${u.unit}\``, 'no step is still open'),
+    '', '## Next step', '', status.next || '(none recorded)', '',
+  )
   return L.join('\n')
 }
 // THE VERIFICATION SURFACE the migration skill's preflight resolved for this section BEFORE the first stand
