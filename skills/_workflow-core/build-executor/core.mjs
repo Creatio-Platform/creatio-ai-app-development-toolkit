@@ -1483,9 +1483,14 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
     // the candidate list; the rest fall through to the ordinary decision below.
     let candidates = selfCheckShort || []
     if (layoutPassNow()) {
-      const exempt = candidates.filter((s) => s?.key && unitOf(s.key).kind === 'page').map((s) => s.key)
+      // PR review (thread on `core.mjs:1485`) — `layoutPassFor`, not a second spelling of it. This filter used to
+      // test `layoutPassNow()` and `kind === 'page'` separately, which is the same conjunction written twice: the
+      // exemption rule then lived in two places, and the `core.mjs:1022` bug was precisely that rule drifting when
+      // one copy was keyed on mode alone. Two call sites is where that starts, so both now ask the one predicate.
+      const isExempt = (s) => !!s?.key && layoutPassFor(unitOf(s.key).kind)
+      const exempt = candidates.filter(isExempt).map((s) => s.key)
       if (exempt.length) log(`layout pass: ${exempt.length} page unit(s) report their own gate short (${exempt.join(', ')}) — NOT parked and NOT charged: their logic rows are scheduled for the logic pass, not a shortfall of this pass`)
-      candidates = candidates.filter((s) => !(s?.key && unitOf(s.key).kind === 'page'))
+      candidates = candidates.filter((s) => !isExempt(s))
       if (!candidates.length) return []
       log(`layout pass: ${candidates.length} NON-page unit(s) also report short (${candidates.map((s) => s.key).join(', ')}) — those get NO layout exemption: they were asked for their whole deliverable this pass, so a shortfall is a shortfall and the ordinary park decision applies`)
     }

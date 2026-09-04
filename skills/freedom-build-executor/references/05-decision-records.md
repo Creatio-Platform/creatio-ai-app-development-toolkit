@@ -59,11 +59,19 @@ nothing — a stop that names its own fix, not a crash.
 **Compatibility evidence, and its limit.** No in-repo caller launches this workflow with a
 constructed argument list: the only launcher is the migration skill (`../../
 classic-to-freedom-migration/SKILL.md`), which is agent-driven and now presents the mode as
-required, and the engine tests pass `mode` explicitly. **External callers were not verified from
-this repository** — `creatio-adaclio-testing` (the E2E harness that drives CAADT through a coding
-agent) is a separate repository and is not part of this checkout, so "no external caller launches
-without a mode" is an expectation here and not a measurement. If such a caller exists, option 3
-above is a one-line, behaviour-preserving fix on its side.
+required, and the engine tests pass `mode` explicitly. **External callers were verified on 2026-09-04, and the
+expectation held.** `creatio-adaclio-testing` (the E2E harness that drives CAADT through a coding
+agent) was cloned and searched: it contains **no reference to `freedom-build-executor` or
+`classic-to-freedom` at all**. It invokes exactly one skill — `creatio-app-orchestrator`
+(`scripts/lib/orchestrator.py`, `_skill_request()`) — which is the natural-language app-generation
+path, not the migration path. Its four `mode` occurrences are unrelated (`install_baseline`, a
+Teams notification mode, `clio-mcp-only` vs `standard` workspace status, and a literal string in a
+guardrail test). So the harness cannot reach this workflow, with or without a `mode`.
+
+This paragraph previously recorded the opposite — that the claim was an expectation and not a
+measurement — and is corrected rather than deleted, because the limit was real for the two review
+rounds it stood. If some *other* external caller is found later, option 3 above is still a one-line,
+behaviour-preserving fix on its side.
 
 ---
 
@@ -209,6 +217,33 @@ stop's `next` (restore `roundsSpent` in the queue file; leave the entry alone) r
 re-asking the operator for an answer that is already on file. A Reconcile answer that omits
 `consumedRoundAnswers` is refused by the host and retried, exactly as one that omits
 `runResolutions` is.
+
+### The round NUMBER, and why it is not a per-invocation index
+
+Recorded here rather than as its own record (PR review, thread on
+`05-decision-records.md:118`): after the fix below, the derivation and the consumption above are one
+story about one counter, and the PR body's provisional "DR4" number is already taken by a different
+subject in this file.
+
+**What it is.** `roundsSpentNow()` is the count of rounds this migration FOLDER has spent, and
+`nextRoundNo()` is that plus one. It is deliberately not "the Nth round of this invocation": a
+round-boundary mode runs one round per invocation, so a per-invocation index would restart at 1 on
+every resume and the same `round-1` answer would authorise every round forever.
+
+**It was wrong, and fixing it made it simple.** `roundsBefore` was seeded from
+`roundsOnFile(state.roundOf)` — the per-unit REPAIR counters — which drops the root count. A layout
+pass charges no per-unit counter, so on the logic pass the seed fell back to 0, the carry instructed
+the count DOWN, the stop re-asked for the `round-N` just spent, and the next invocation refused it as
+consumed: `layout-first` deadlocked while telling the operator they had lowered the number by hand.
+Seeding from `roundsSpentOnFile` (with the `layoutPassDone` floor) fixed it, and has a second effect
+worth stating: `roundsBefore` is now already ≥ the other two inputs to that `Math.max`, so
+`roundsSpentNow()` reduces to `roundsBefore + round`. The max is defensive residue, not three
+competing counters.
+
+**The one surprise that remains.** An operator who runs three rounds in `auto` and then switches to
+`round1` is asked to authorise `round-4`, not `round-2`. That is correct — four rounds will have been
+spent on the folder — and it is now explainable in a sentence instead of requiring the formula. It is
+the reason the stop names the exact entry to record rather than leaving the operator to derive it.
 
 ---
 

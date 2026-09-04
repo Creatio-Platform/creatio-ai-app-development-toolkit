@@ -2896,9 +2896,10 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   function applyInContextParks(selfCheckShort) {
     let candidates = selfCheckShort || []
     if (layoutPassNow()) {
-      const exempt = candidates.filter((s) => s?.key && unitOf(s.key).kind === 'page').map((s) => s.key)
+      const isExempt = (s) => !!s?.key && layoutPassFor(unitOf(s.key).kind)
+      const exempt = candidates.filter(isExempt).map((s) => s.key)
       if (exempt.length) log(`layout pass: ${exempt.length} page unit(s) report their own gate short (${exempt.join(', ')}) — NOT parked and NOT charged: their logic rows are scheduled for the logic pass, not a shortfall of this pass`)
-      candidates = candidates.filter((s) => !(s?.key && unitOf(s.key).kind === 'page'))
+      candidates = candidates.filter((s) => !isExempt(s))
       if (!candidates.length) return []
       log(`layout pass: ${candidates.length} NON-page unit(s) also report short (${candidates.map((s) => s.key).join(', ')}) — those get NO layout exemption: they were asked for their whole deliverable this pass, so a shortfall is a shortfall and the ordinary park decision applies`)
     }

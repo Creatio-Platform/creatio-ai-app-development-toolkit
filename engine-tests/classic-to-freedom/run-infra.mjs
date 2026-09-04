@@ -6778,6 +6778,12 @@ check("ENG-95474 BUILD continuation: continuation handoff is verified but does N
     && /if \(!continuation && !layoutPassFor\(unit\.kind\)\) chargeBuildAttempt\(unit\.key\)/.test(wfSrc)
     && /const layoutPassNow = \(\) => isLayoutPassMode\(mode\) && !layoutPassDone/.test(wfSrc)
     && /const layoutPassFor = \(unitKind\) => layoutPassNow\(\) && unitKind === 'page'/.test(wfSrc)
+    // PR review (thread on core.mjs:1485) — the THIRD site. The in-context park exemption used to spell the same
+    // conjunction out again (`layoutPassNow()` plus its own `kind === 'page'` test) instead of asking the
+    // predicate, so the rule lived in two places and could drift the way core.mjs:1022 already did once. Pinned
+    // as a CALL, so re-inlining it here goes red rather than passing because the composed logic still matches.
+    && /const isExempt = \(s\) => !!s\?\.key && layoutPassFor\(unitOf\(s\.key\)\.kind\)/.test(wfSrc)
+    && !/candidates\.filter\(\(s\) => s\?\.key && unitOf\(s\.key\)\.kind === 'page'\)/.test(wfSrc)
     && /build continuation \$\{continuations\[unit\.key\]\} of \$\{MAX_CONTINUATIONS\}[\s\S]*does not consume a repair round/.test(wfSrc)
     && /CONTINUATION: \$\{r\.continued\.length\}/.test(wfSrc));
 check("ENG-95474 BUILD continuation: continuation counts are tracked and persisted separately from repair rounds",
