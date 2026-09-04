@@ -606,7 +606,7 @@ export function roundAuthorised(answer) {
   // exactly how "not yet" becomes "yes".
   const TRAILING = '.!?'
   let a = String(answer ?? '').trim().toLowerCase()
-  while (a.length && TRAILING.includes(a[a.length - 1])) a = a.slice(0, -1)
+  while (a.length && TRAILING.includes(a.at(-1))) a = a.slice(0, -1)
   a = a.trim()
   if (!a) return { verdict: 'absent', answer: null }
   if (affirmative.includes(a)) return { verdict: 'authorised', answer: a }
