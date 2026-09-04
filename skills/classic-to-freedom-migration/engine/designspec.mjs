@@ -950,7 +950,7 @@ function renderConfirmWorklist(cs, opts = {}) {
   else if (answered) head = `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`;
   const L = [head, ...confirm];
   if (closedRows.length) {
-    const closedList = closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${d.note ? ` (${esc(d.note)})` : ""}`).join(" · ");
+    const closedList = closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${noteSuffix(d.note)}`).join(" · ");
     L.push("", `> ℹ ${closedRows.length} item(s) CLOSED by a recorded disposition: ${closedList}`);
   }
   // An INVALID disposition word is named, not swallowed: the operator believes the question is answered, the engine
@@ -1651,10 +1651,16 @@ function renderFidelityWarnings(result) {
 // `manifest.bundleWarningDispositions` answer — as `ℹ`, so a cleared warning stays auditable instead of vanishing.
 // Same shape and same voice as `renderFidelityWarnings`'s closed line, and spread-pushed for the same reason: it
 // adds no branch to `renderPlanBanners`, which has no Sonar CC 15 headroom.
+// A recorded note prints in parentheses after the disposition; nothing prints when there is none. Shared by the two
+// "CLOSED by a recorded disposition" lines so the template literals above stay flat (Sonar S4624).
+function noteSuffix(note) {
+  return note ? ` (${esc(note)})` : "";
+}
+
 function renderBundleWarningNotes(result) {
   const closed = result.structure?.bundleWarningsClosed || [];
   if (!closed.length) return [];
-  const list = closed.map((w) => `**${esc(w.disposition)}** — "${esc(w.text)}"${w.note ? ` (${esc(w.note)})` : ""}`).join(" · ");
+  const list = closed.map((w) => `**${esc(w.disposition)}** — "${esc(w.text)}"${noteSuffix(w.note)}`).join(" · ");
   return [`> ℹ ${closed.length} bundle warning(s) from \`get-classic-page-sources\` CLOSED by a recorded disposition: ${list}`, ""];
 }
 
