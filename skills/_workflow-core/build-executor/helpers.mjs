@@ -73,6 +73,23 @@ export function unitStem(unit, pageNo) {
 }
 export const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
+// ENG-95901 (reopened) — the shortfall split behind every "N MISSING" line. Rationale: designspec.mjs `verifyTally`.
+// A verdict predating `buildMissing` falls back to `missing` — over-report, never a false zero.
+export function shortfallOf(st) {
+  const missing = st?.missing ?? 0
+  const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
+  return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
+}
+// PR review — an UNMEASURED run reads `?`, never `0 MISSING`. `shortfallOf(undefined)` legitimately returns zeros
+// (its callers need arithmetic), but rendering those zeros as prose put a false zero on the one axis this helper's own
+// comment forbids one on: the close line could read `NOT COMPLETE after 3 round(s): 0 MISSING + ? unconfirmed`, the
+// `?` beside it proving no verdict had been read. `parkWhy` already guards `!st` first; these two call sites did not.
+export function shortfallText(st) {
+  if (st == null) return '? MISSING'
+  const { buildMissing, rejected } = shortfallOf(st)
+  return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
+}
+
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:
 // a key ABSENT from the verdict is open, because absent means nothing confirmed it — most often that
 // `--verify` never ran (the baseline round, before a built file exists) or that the page could not be
@@ -466,9 +483,9 @@ export function planGapNext(planGaps, tail = 'then re-run this build') {
   // the return to learn them. The unclassified branch above always quoted the text; this one threw it away.
   return `${kinds.join(' · ')} — ${parts.join('; ')}. The engine reported: ${reported}. ${replan}`
 }
-// THE THREE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode
-// THROWS instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the
-// failure the mode exists to prevent — the operator asked to be stopped and would not have been.
+// THE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode THROWS
+// instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the failure
+// the mode exists to prevent — the operator asked to be stopped and would not have been.
 // Declared as a hoisted `function` (not an arrow const) because the constants near the head of the file call it —
 // and for the same reason it must reference NOTHING declared outside itself. The mode list lived here as a
 // module-level `const` and shipped broken: the function hoists, the const does not, so `buildMode('checkpoints')`
@@ -476,24 +493,429 @@ export function planGapNext(planGaps, tail = 'then re-run this build') {
 // mode failed before a single agent ran. Only the default path survived, because it returns before the reference.
 // The unit tests could not see it — the suite slices this block into its own module, where the const is
 // initialised first — so the list lives INSIDE the function now and `run-infra` pins the ordering rule directly.
+//
+// ENG-96204 — AN ABSENT MODE IS NO LONGER `auto`. THIS IS A DELIBERATE BREAKING CHANGE. It used to default, and the
+// default was the one answer nobody can un-choose: a run the operator meant to watch had already written the whole
+// section by the time they found out it never stopped. So the mode is now gated the way `buildVerificationSurface`
+// below is — absent yields `null`, the run REFUSES TO START, and the stop names the valid modes. An unattended run
+// says so explicitly through `defaultMode` (see `resolveControlMode`), which is a choice on file rather than a
+// choice nobody made. An unrecognised NON-EMPTY value still throws, exactly as before.
+//
+// FIVE MODES ON TWO MECHANISMS. `checkpoints` and `guided` stop at a UNIT boundary (`shouldPauseAfter`); `round1`
+// and `layout-first` stop at a ROUND boundary (`stopsAtRoundBoundary`); `auto` stops at neither. Adding a sixth
+// costs one entry in this list plus one entry in whichever predicate it belongs to — and nothing else, which is
+// what makes the set extensible rather than three hard-coded branches (ENG-96204, AC on Modes A/B/C).
+// THE MODE LIST ITSELF, as a hoisted FUNCTION DECLARATION and never a module-level `const` — which is the whole
+// point of the temporal-dead-zone note above, and a function satisfies it exactly the way `buildMode` does while
+// still keeping ONE copy of the set. The stop that has to list the valid modes calls this; `buildMode` binds it to
+// a local `const` inside its own body, which is where the shipped defect was.
+export function buildModes() {
+  return ['auto', 'checkpoints', 'guided', 'round1', 'layout-first']
+}
+// THE MODES OFFERED TO AN OPERATOR — a STRICT SUBSET of `buildModes()`, and what the menu renders. It is the
+// TICKET's set (ENG-96204). `auto` and `checkpoints` are legal and deliberately NOT here: a menu whose purpose is
+// operator control cannot offer "run unattended" as a choice, and `checkpoints` is an inherited mode the ticket
+// does not specify. Both stay accepted as `mode` and as `defaultMode`, so no existing caller breaks (DR-6).
+// Hoisted `function`, never a const — the TDZ note above.
+export function offeredModes() {
+  return ['guided', 'round1', 'layout-first']
+}
 export function buildMode(raw) {
-  const BUILD_MODES = ['auto', 'checkpoints', 'guided']
-  if (raw === undefined || raw === null || raw === '') return 'auto'
+  const BUILD_MODES = buildModes()
+  if (raw === undefined || raw === null || raw === '') return null
   const m = String(raw).trim().toLowerCase()
   if (!BUILD_MODES.includes(m)) {
     throw new Error(`freedom-build-executor: unknown mode ${JSON.stringify(raw)}. Use one of: ${BUILD_MODES.join(', ')}. ` +
-      '`auto` builds every unit without stopping · `checkpoints` stops after each unit named in `checkpointAfter` so the operator can check it on the stand · `guided` stops after every unit.')
+      '`auto` builds every unit without stopping · `checkpoints` stops after each unit named in `checkpointAfter` so the operator can check it on the stand · `guided` stops after every unit · ' +
+      '`round1` runs ONE round per invocation and stops at the round boundary while anything is open · `layout-first` builds layout only in round 1, stops, and ports the business logic on the next invocation.')
   }
   return m
 }
+// THE NAME A HUMAN READS for a mode. The VALUE stays the machine token (`round1`): that is what `buildMode`
+// validates, what `mode` carries, and what the `control-mode` answer records. A label is never parsed back into a
+// mode, so presentation and identity are free to differ — and they should, because `round1` reads as a version
+// number and `layout-first` as a flag. Labelled for EVERY valid mode, not only the offered three, so a log line
+// or a refusal that names `auto` still has a human word for it.
+export function modeLabel(mode) {
+  const LABEL = {
+    auto: 'Unattended',
+    checkpoints: 'Checkpoints',
+    guided: 'Guided',
+    round1: 'Round by round',
+    'layout-first': 'Layout first',
+  }
+  return LABEL[mode] || mode
+}
+// WHAT EACH OFFERED MODE DOES, one line each in a non-engineer's words — the text the refuse-to-start stop puts in
+// front of the operator, so "which of these do I want" is answered WITH the question. The user-facing word is
+// STEP; `unit` stays the internal key everywhere and is not always a page (DR-6). Driven off `offeredModes()`, so
+// a mode added there and left undescribed here renders as exactly that, loudly, instead of vanishing.
+// LABEL FIRST, token in backticks after it: the reader picks by name, and the caller still sees the exact string
+// to pass as `mode` without hunting for it — the pairing is what keeps a friendly menu machine-safe.
+export function buildModeMenu() {
+  const WHAT = {
+    guided: 'pause after every step, so you can check each page on the stand as it lands',
+    round1: 'build everything once, then pause and show what was built and what is still open, before any repair round',
+    'layout-first': 'build the page layouts first and pause; the business logic is ported on the next run',
+  }
+  return offeredModes().map((m) => `${modeLabel(m)} (\`${m}\`) — ${WHAT[m] || '(NO DESCRIPTION — this mode was added to `offeredModes` and not described in `buildModeMenu`)'}`)
+}
+// THE RUN-LEVEL QUESTION ITEMS in `resolutions.json` (engine kind `run`). Two of them, and they are the ONLY
+// channel the operator's run-level answers travel through — the ticket forbids a second one, and `findings` keeps
+// its own meaning (re-open a unit the gate called complete).
+export const CONTROL_MODE_ITEM = 'control-mode'
+export const roundDecisionItem = (roundNo) => `round-${roundNo}`
+// One run-scoped answer, read off `--units.runResolutions`. Matched on the normalised item the engine publishes;
+// a blank answer is NOT an answer (same rule the resolutions index applies to a ⚠ Confirm entry).
+export function runResolutionAnswer(runResolutions, item) {
+  const want = String(item ?? '').trim().toLowerCase()
+  if (!want) return null
+  const hit = (Array.isArray(runResolutions) ? runResolutions : [])
+    .find((r) => String(r?.item ?? '').trim().toLowerCase() === want)
+  const answer = String(hit?.answer ?? '').trim()
+  return answer || null
+}
+// THE ROUND ANSWER, AS A CHECKED VALUE AND NOT A PRESENCE TEST (ENG-96204, PR review F1). `runResolutionAnswer`
+// above answers "is there an answer at all", which is the right question for the MODE — an unrecognised mode is
+// then refused by `buildMode`, loudly — and the wrong one for a ROUND AUTHORISATION. The only privileged path in
+// this whole change is a Build against a live customer stand, and the natural way for a driving agent to record
+// the operator's decline is to record the decline: read on presence alone, `{"item":"round-2","answer":"no"}`
+// opened the gate, so the recorded refusal authorised the very round it was withholding.
+//
+// SO THE ANSWER IS A VOCABULARY, and the default is NOT authorisation. Three verdicts:
+//   `authorised`   — a recognised affirmative. The round proceeds.
+//   `refused`      — a recognised negative. The run stops, and the stop NAMES the answer it read, so an operator
+//                    who declined sees their own word quoted back rather than a generic "not authorised".
+//   `unrecognised` — anything else. FAIL CLOSED, exactly the way `buildMode` refuses an unknown mode instead of
+//                    guessing at it: "maybe later", "after the demo" and a typo are all not-yet, and the one
+//                    reading of them that must never happen is "go".
+// The words live INSIDE the function for the same temporal-dead-zone reason `buildMode`'s mode list does, and
+// `roundAnswerVocabulary` is EXPORTED because the stop text and the executor SKILL.md entry the doc test pins
+// both have to state what the operator may type — a fail-closed vocabulary nobody publishes is a guessing game.
+export function roundAnswerVocabulary() {
+  return {
+    affirmative: ['go', 'yes', 'y', 'ok', 'okay', 'continue', 'proceed', 'approved', 'authorised', 'authorized'],
+    negative: ['no', 'n', 'stop', 'halt', 'hold', 'hold off', 'not yet', 'wait', 'cancel', 'abort', 'later'],
+  }
+}
+export function roundAuthorised(answer) {
+  const { affirmative, negative } = roundAnswerVocabulary()
+  // Trailing punctuation only: an operator types `go.` or `yes!` and neither is a different decision. Nothing
+  // else is normalised away, and in particular nothing is matched on a SUBSTRING — an answer that merely
+  // contains an affirmative ("do not go yet") is deliberately `unrecognised`, because substring matching is
+  // exactly how "not yet" becomes "yes".
+  const TRAILING = '.!?'
+  let a = String(answer ?? '').trim().toLowerCase()
+  while (a.length && TRAILING.includes(a.at(-1))) a = a.slice(0, -1)
+  a = a.trim()
+  if (!a) return { verdict: 'absent', answer: null }
+  if (affirmative.includes(a)) return { verdict: 'authorised', answer: a }
+  if (negative.includes(a)) return { verdict: 'refused', answer: a }
+  return { verdict: 'unrecognised', answer: a }
+}
+// THE CONTROL MODE, and WHERE IT CAME FROM. Three inputs, in falling order of how specifically they speak about
+// THIS invocation:
+//   `mode`         — this launch's own argument. The most recent and most specific statement there is.
+//   resolutions    — the operator's standing answer for this run, recorded in the ONE answer channel
+//                    (`{"kind":"run","item":"control-mode","answer":"…"}`). This is what a driving skill writes
+//                    after asking the question, and it survives across invocations, which is the point.
+//   `defaultMode`  — the configured fallback for a NON-INTERACTIVE run. Nobody is there to be asked, so a run that
+//                    carries one proceeds; a run that carries none refuses to start.
+// `source` is REPORTED, not merely used: an operator reading a run that proceeded needs to know whether the mode
+// they think they chose is the mode that ran (ENG-96204, AC 5). `{ mode: null, source: null }` is the refusal.
+// A TYPO'D RECORDED ANSWER IS A STOP, NOT A CRASH (PR review, `helpers.mjs:463`). The two LAUNCH inputs are
+// validated when the context is built, before any agent runs, so a mode misspelled on the command line still
+// throws at launch — the right place for it. The recorded ANSWER is different in exactly one way that matters:
+// it is first seen HERE, inside `baselineGates`, after the baseline Reconcile has already spent an agent. A raw
+// throw there is an uncaught exception mid-run, and it is asymmetric with the sibling case in the most
+// embarrassing way possible — an ABSENT mode gets the structured `mode-not-chosen` stop that LISTS the valid
+// modes, while `round-1` for `round1` got a stack trace, right next to a feature whose entire purpose is
+// replacing crash-prone failure with a refusal the operator can read and act on. So an unrecognised recorded
+// answer is reported as data: `{ mode: null, source: 'resolutions', invalidAnswer: '<what they wrote>' }`, and
+// the caller renders `mode-invalid` naming the value and the valid set. It is NOT softer than the command line
+// — nothing falls back to `auto`, the run refuses to start either way — it just says so instead of throwing.
+export function resolveControlMode(ctx = {}) {
+  const explicit = buildMode(ctx.mode)
+  if (explicit) return { mode: explicit, source: 'argument' }
+  const recorded = runResolutionAnswer(ctx.runResolutions, CONTROL_MODE_ITEM)
+  if (recorded) {
+    const known = buildModes().includes(String(recorded).trim().toLowerCase())
+    if (!known) return { mode: null, source: 'resolutions', invalidAnswer: recorded }
+    return { mode: buildMode(recorded), source: 'resolutions' }
+  }
+  const configured = buildMode(ctx.defaultMode)
+  if (configured) return { mode: configured, source: 'default' }
+  return { mode: null, source: null }
+}
+// Does the run stop at the end of a ROUND in this mode? The second of the two stop mechanisms, and a separate
+// predicate from `shouldPauseAfter` because it answers a different question at a different place: that one asks
+// "stop after THIS UNIT", this one asks "stop after THIS ROUND". Hoisted and self-contained for the same
+// temporal-dead-zone reason `buildMode` is.
+export function stopsAtRoundBoundary(mode) {
+  const ROUND_BOUNDARY_MODES = ['round1', 'layout-first']
+  return ROUND_BOUNDARY_MODES.includes(mode)
+}
+// Is round 1 a LAYOUT-ONLY pass in this mode? Its own predicate rather than an inline `=== 'layout-first'` at each
+// of the three call sites (the unit prompt, the repair-budget exemption, the stop's verdict wording), so a further
+// two-pass mode is one entry here instead of three literals to find.
+export function isLayoutPassMode(mode) {
+  return mode === 'layout-first'
+}
+// THE PASS SCOPE, as prompt text (ENG-96204, Mode C). In `layout-first` the FIRST invocation builds the page's
+// layout and stops before the business logic; the next one ports it. This block is what makes that a scoped
+// instruction rather than a hope: it names the per-page recipe steps this pass owns, names the one step it does
+// not, and — most importantly — tells the builder how its OWN in-context gate will read. That gate WILL report the
+// unit short (its logic rows are open), and a builder reading its own honest verdict as a failure would spend its
+// one bounded fix inventing the very rows this pass exists not to build.
+//
+// PAGE UNITS ONLY. The `app` unit and the reachability units have no layout/logic split to make: their deliverable
+// is a package or a configuration record, and a "layout only" version of either is not a thing. Splitting the
+// run's pass at the UNIT boundary is also what preserves the invariant this whole mode rests on — no builder is
+// ever stopped in the middle of a unit; a unit simply has a smaller deliverable this pass.
+//
+// PURE, and here rather than in `core.mjs`, so the build-prompt render harness slices the SHIPPED text in instead
+// of stubbing it: a stub would let the render pass while shipping nothing.
+export function passScopeText(mode, layoutPassDone, unitKind) {
+  if (unitKind !== 'page' || !isLayoutPassMode(mode)) return ''
+  if (layoutPassDone) {
+    return `
+THIS IS THE LOGIC PASS of a \`layout-first\` build. A previous invocation built this page's LAYOUT — the template, the containers, the fields, the related lists and the localizable bindings are already on the page, and the queue file records that pass as done. YOUR deliverable this pass is STEP 6 of the per-page recipe: the BUSINESS RULES, and the handlers/converters/validators for the imperative rows, each ported against the ACCEPTANCE CRITERIA on its own card — never from a method NAME. Do NOT rebuild the layout: \`get-page\` it, confirm what is there, and add only what is missing. If a LAYOUT row is still open it IS yours to fix this pass: the layout pass is over, so nothing is scheduled for later any more.
+`
+  }
+  return `
+THIS IS THE LAYOUT PASS of a \`layout-first\` build — the operator asked to settle the layout before any behaviour is ported, so this pass DELIBERATELY delivers less than the whole unit. That is the plan, not a shortfall.
+- YOU OWN steps 1-5 and 7-11 of the per-page recipe: the template and the re-bind, the \`creatio-ui-guidelines\` pass before authoring, the layout containers and tabs, the fields, the related lists and standard features, the localizable bindings, the render check, the guidelines review, the in-context gate and the worklog.
+- YOU DO NOT OWN STEP 6 — the business rules and the handlers/converters/validators. Build NONE of them this pass. They are SCHEDULED for the next invocation, not dropped: the operator asked to settle the layout first precisely so that behaviour is ported onto a layout nobody is about to change.
+- DO NOT CLAIM A LOGIC ROW. Leave every \`Business rules\` and \`Handler — …\` row out of \`claimedBuilt\`, and file no evidence for one. A claimed row nobody built is the one failure the gate cannot catch.
+- YOUR OWN IN-CONTEXT GATE (step 10) WILL REPORT THIS UNIT SHORT, and that is the CORRECT verdict, not a defect to repair. Run it, and report \`selfCheck\` honestly with the logic rows still open. Spend your one bounded fix ONLY on a row that belongs to THIS pass — a field, a container, a component, the package, the entity binding. **Do NOT "fix" a business-rule or handler row, and do NOT report the unit blocked because of one**: this run knows those rows are scheduled, does not charge this pass a repair round for them, and will not park the unit over them.
+- If something about the LAYOUT itself cannot be built, that is an ordinary \`blocked\` entry exactly as it always was.
+`
+}
+// THE RUN-LEVEL ROUND COUNT, from the PER-UNIT counters the queue file keeps. There is no run-level round number on
+// file — `roundOf` is charged per unit, per dispatch — and the highest of them is the number of rounds this
+// migration folder has already spent, which is exactly what the round gate needs: the next round is that plus one.
+// `Math.max` over the file, never a count this process holds: a resumed run must inherit the rounds its
+// predecessor spent, or the operator authorises `round-2` forever while the run keeps calling it round 1.
+export function roundsOnFile(roundOf) {
+  const counts = Object.values(roundOf || {}).filter((n) => Number.isInteger(n) && n > 0)
+  return counts.length ? Math.max(...counts) : 0
+}
+// THE ROUNDS THIS FOLDER HAS SPENT, over BOTH records (ENG-96204, PR review F2/F4). `roundsOnFile` above reads
+// the per-unit REPAIR counters, and those are the wrong and only record the round gate used to have: the layout
+// pass of a `layout-first` run deliberately charges no repair round (a part-delivery this run asked for is not a
+// failed attempt), so it increments NO per-unit counter, the carry emits no ROUND COUNTERS block, and the queue
+// file comes back with `roundOf: {}` — which the gate then read as "no round has ever run here" and waved the
+// LOGIC pass through with no operator authorisation at all. The counters answer "how much budget has this unit
+// spent"; they were never an answer to "how many rounds has this folder been through".
+//
+// So the run now writes that second number down as its own root key, `roundsSpent`, in the SAME persist step
+// that writes the queue file — a round is on record because it happened, not because it happened to be charged.
+// The MAX of the two, for the same reason `roundsRun` takes a max: a folder written before this key existed has
+// only the counters, a lagging write must never walk the count backwards, and one answer must authorise exactly
+// one round. ONE function, called by both the stop that ASKS for the authorisation and the gate that CHECKS it —
+// two formulas for one number is how the stop came to advertise `round-3` while the gate looked for `round-2`.
+export function roundsSpentOnFile(state) {
+  const { roundsSpent } = roundStateOf(state)
+  const declared = Number.isInteger(roundsSpent) && roundsSpent > 0 ? roundsSpent : 0
+  return Math.max(declared, roundsOnFile(state?.roundOf))
+}
 
+// ENG-96204 (ENG-96455) — THE FOLDER'S ROUND RECORD, READ THROUGH ONE FUNCTION. `layoutPassDone`, `roundsSpent` and
+// `consumedRoundAnswers` used to be three ROOT properties of `RECONCILE_SCHEMA`; they travel inside ONE `roundState`
+// object now, because the merge with PR #128's answers channel put that schema 118 bytes over the host's HARD
+// 4096-byte cap and the run's FIRST agent is refused before the model runs (DR-7). The queue file follows the
+// contract, so the carry writes them under `roundState` too.
+//
+// BUT A FOLDER WRITTEN BEFORE THIS CHANGE HOLDS THEM AT THE ROOT, with no `roundState` at all, and an in-flight
+// migration must not break on the day this ships. So `roundState` is read FIRST and the ROOT key is the fallback,
+// PER KEY rather than as a whole-object either/or: a folder can legitimately carry a fresh `roundState` beside a
+// root key an older invocation wrote, and an object-level choice would then drop whichever record it did not pick.
+// ONE function, called by `roundsSpentOnFile` here and by the three seed sites in the core, because two copies of a
+// fallback rule drift — and the drift would be silent in the direction that grants a round.
+//
+// FAIL-CLOSED, unchanged from when these were root keys. `layoutPassDone` is `=== true`, so anything else reads as
+// "no layout pass on record" (which re-runs the layout rather than skipping it). `roundsSpent` is returned RAW and
+// `roundsSpentOnFile` above is what validates it — a non-integer or a negative falls through to the per-unit
+// counters via `Math.max`, so garbage can only ever leave the count where it was, never raise it. And
+// `consumedRoundAnswers` is returned raw for `mergeConsumed` to shape-filter: a non-array becomes `[]` there, which
+// REFUSES nothing and grants nothing on its own — the round gate still has to find a live answer to proceed.
+export function roundStateOf(state) {
+  const rs = state?.roundState
+  const src = rs && typeof rs === 'object' && !Array.isArray(rs) ? rs : {}
+  const pick = (k) => (src[k] !== undefined ? src[k] : state?.[k])
+  return {
+    layoutPassDone: pick('layoutPassDone') === true,
+    roundsSpent: pick('roundsSpent'),
+    consumedRoundAnswers: pick('consumedRoundAnswers'),
+  }
+}
+// THE SPENT ROUND ANSWERS AS A UNION (ENG-96204 / ENG-96474). Strings only, deduplicated, insertion order kept,
+// anything that is not a non-blank string dropped: the list is copied by an agent out of the queue file and back,
+// so it is defended the way `roundsSpentOnFile` defends its integer. A union and never a replacement — an entry is
+// never un-spent, whichever of the file and the process learned of it first.
+export function mergeConsumed(current, incoming) {
+  // SHAPE-CONSTRAINED, not merely non-blank (Fable review, Minor). The only items this list ever holds are the
+  // round-authorisation keys `roundDecisionItem` mints, so anything else arriving from the queue file is either a
+  // hand edit or a transcription slip — and an unconstrained string rides raw into the persist prompt's carry
+  // block and into `run-status.md`'s "spent" line. Dropping it is safe in the direction that matters: an item the
+  // gate would never look for cannot authorise anything, so discarding it can only ever REFUSE a round, never
+  // grant one.
+  const out = []
+  for (const x of [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const s = typeof x === 'string' ? x.trim().toLowerCase() : ''
+    if (/^round-\d+$/.test(s) && !out.includes(s)) out.push(s)
+  }
+  return out
+}
+// THE OPEN SET AS COUNTS (ENG-96204, reworked onto ENG-95930's pattern). This replaces `rankOpenItems` +
+// `openItemsFor`, a per-ROW payload the stop carried whole and inlined into `run-status.md`.
+//
+// WHY. ENG-95930 decided the opposite deliberately, about THIS boundary: the central verify is counts-only
+// (`--verify-summary`), `VERIFY_RESULT` is gone, and the answer is capped at `RECONCILE_ANSWER_MAX_BYTES` because
+// transcribing open rows across the Reconcile -> script boundary was itself a run-killer (21 KB of row prose
+// truncated the run's FIRST structured answer at the host's cap). `verify.pages[*]` therefore carries counts and
+// flags and NO `openRows` — `RECONCILE_SHAPE.verify` names none, the prompt forbids them — so the per-row read
+// this stop used to do returned nothing on a real run, while a large open set that DID carry them is refused over
+// the ceiling and dies `reconcile-failed` instead of stopping honestly.
+//
+// SO: COUNTS PLUS A POINTER, as `parkWhy`, `parkRecord.shortRows: []` and `dryRunReport` already do. One entry per
+// still-open unit — `{ unit, kind, open, missing, unverified, correctness, fidelity, severity, why }`:
+// `missing`/`unverified` are the two OUTCOME counts the boundary carries (`null` where the verdict has no entry),
+// `correctness`/`fidelity` are the two SEVERITY counts it carries for a page (ENG-96204 AC 2: the engine's
+// `verifySummary` publishes `openCorrectness` / `openFidelity` per page, each open row counted once under the band
+// `rowSeverity` stamped on it — `null` on a summary that predates the field), `why` is a one-line reason for a unit
+// whose openness is not a row count at all, and `severity` is set ONLY where the CALLER classified the WHOLE item
+// (a non-page unit is `correctness` by its own state).
+// THE SEVERITY AXIS IS STILL NOT RE-DERIVED HERE. The engine stamps `rowSeverity` on every open row into
+// `verify.json`, counts the stamps per page, and this tallies the COUNTS it published — a second copy of its
+// fidelity discrimination would be a second thing to drift, and there is none. `unstamped` is what is left for a
+// page whose summary carries no band (a folder verified by an engine older than the field): its rows are still
+// stamped per row in `verify.json`, so the status points there. Clamped at zero so a stale or inconsistent
+// summary can never print a negative count; the engine tests pin that the two integers sum to the open rows.
+export function openCountsOf(units) {
+  const list = (units || []).filter((u) => u && typeof u === 'object')
+  const num = (n) => (Number.isInteger(n) && n > 0 ? n : 0)
+  // A unit classified WHOLE (`severity`) puts every open item in that band; a page puts its two published counts
+  // in theirs. Never both: the page path leaves `severity` null, and a whole-item classification carries no counts.
+  const band = (s) => list.reduce((n, u) => n + (u.severity === s ? num(u.open) : num(u[s])), 0)
+  const open = list.reduce((n, u) => n + num(u.open), 0)
+  const correctness = band('correctness')
+  const fidelity = band('fidelity')
+  return { units: list, unitsOpen: list.length, open, correctness, fidelity, unstamped: Math.max(0, open - correctness - fidelity) }
+}
+// THE STATUS DOCUMENT (ENG-96204, AC 5). A stop's payload is a return value, and a return value reaches whoever
+// launched the run and nobody else: the operator who comes back to the migration folder an hour later — or the
+// next session, on the other route — has only the files. So the same facts the stop reports are also written
+// down: what was built, what is open (as COUNTS), what is parked and why, and the one next step. COMPOSED HERE,
+// as a pure function over the payload, and handed to the persistence agent as literal text to write — a status
+// document an agent writes in its own words is a paraphrase of the verdict, and the whole reason this run
+// computes rather than asserts is that paraphrases of verdicts drift.
+//
+// COUNTS AND A POINTER, NOT AN INLINED ROW TABLE (why: `openCountsOf`). Every byte of it is inlined into the
+// persistence prompt for verbatim transcription, so it is bounded the way `verify-summary.json` is — one
+// fixed-shape line per open unit, linear in the UNIT count and INVARIANT in the number of open rows.
+//
+// AND NO TWO SECTIONS OF IT CAN DISAGREE ABOUT WHETHER ANYTHING IS OPEN (PR review F6) — the defect the ranked
+// list had, printing "nothing is open" three lines above a "Still open (steps)" list naming one. Both sections
+// render from the SAME list (`openCounts.units`), so agreement is structural rather than a conditional
+// empty-text string somebody has to keep in step with a second field.
+export function runStatusDoc(status = {}) {
+  const L = []
+  // Declared inside the function, like every other self-contained decision in this file. `UNIT_CAP` is generous
+  // enough that an ordinary stop shows every open unit and only a pathological plan is trimmed; `CELL_CAP`
+  // bounds the free text (a park reason, a unit's own `why`), which is the only unbounded thing left in here.
+  const UNIT_CAP = 24
+  const CELL_CAP = 300
+  const cell = (s) => {
+    const flat = String(s ?? '').replace(/\s+/g, ' ').trim()
+    return flat.length <= CELL_CAP ? flat : flat.slice(0, CELL_CAP - 1).trimEnd() + '…'
+  }
+  // The capped variant of `list`: renders at most `UNIT_CAP` entries and, when it elided any, closes with the
+  // COUNT it elided and where the full set is. A silent truncation would read as a shorter open list.
+  const cappedList = (items, render, empty, more) => {
+    if (!items?.length) return [`- ${empty}`]
+    const shown = items.slice(0, UNIT_CAP).map(render)
+    if (items.length > UNIT_CAP) shown.push(`- +${items.length - UNIT_CAP} more ${more}`)
+    return shown
+  }
+  const list = (items, render, empty) => (items?.length ? items.map(render) : [`- ${empty}`])
+  const counts = status.openCounts || {}
+  const openUnits = counts.units || []
+  const table = status.verifyTable || 'verify.md'
+  const json = status.verifyJson || 'verify.json'
+  // ONE OPEN UNIT AS A LINE. A unit whose openness is a row count reads as the count on both outcome axes — the
+  // same `N MISSING + M unconfirmed` idiom `parkWhy` composes; a unit whose openness is its own state (the app
+  // unit, a reachability key) reads as its classified severity and its one-line reason, because there is no row
+  // to count for it and never was.
+  const unitLine = (u) => {
+    const head = `- \`${u.unit}\``
+    const band = u.severity ? ` [${u.severity}]` : ''
+    if (u.why) return `${head} — ${u.open} open item(s)${band} — ${cell(u.why)}`
+    if (!Number.isInteger(u.missing) && !Number.isInteger(u.unverified)) {
+      return `${head} — open, and the machine verdict carries no entry for this unit`
+    }
+    // The severity split rides on the same line when the summary published it (ENG-96204 AC 2); a page whose
+    // summary predates the field reads as before, and its band is per row in the verify JSON.
+    const stamped = Number.isInteger(u.correctness) || Number.isInteger(u.fidelity)
+    const split = stamped ? ` · ${u.correctness ?? 0} correctness / ${u.fidelity ?? 0} fidelity` : ''
+    return `${head} — ${u.open} open row(s): ${u.missing ?? 0} MISSING + ${u.unverified ?? 0} unconfirmed${split}`
+  }
+  const modeFrom = status.modeSource ? ` (from ${status.modeSource})` : ''
+  const afterRound = Number.isInteger(status.rounds) ? ` after round ${status.rounds}` : ''
+  L.push(
+    '# Build run status', '',
+    `- **Mode:** \`${status.mode || '(none)'}\`${modeFrom}`,
+    `- **Stopped at:** ${status.stopped || '(not stopped)'}${afterRound}`,
+  )
+  if (status.pausedAfter) L.push(`- **Paused after step:** \`${status.pausedAfter}\``)
+  L.push(
+    '', '## Built this round', '',
+    ...list(status.built, (k) => `- \`${k}\``, 'nothing was built in this round'),
+    '', '## Open — counts, and where the rows are', '',
+    ...cappedList(openUnits, unitLine, 'nothing is open',
+      `open unit(s) — the full set is in the engine-written verify table (\`${table}\`)`),
+  )
+  if (openUnits.length) {
+    const unstamped = counts.unstamped ? ` · ${counts.unstamped} stamped per row in \`${json}\`` : ''
+    L.push(
+      `- **Total:** ${openUnits.length} step(s) still open · ${counts.open ?? 0} open row(s)`
+        + ` — ${counts.correctness ?? 0} correctness · ${counts.fidelity ?? 0} fidelity`
+        + unstamped,
+      `- **The rows are NOT in this file.** \`${table}\` is the table; \`${json}\` is the same rows`
+        + ' machine-readable, each stamped `rowSeverity` (`correctness` / `fidelity`) — read correctness first.',
+    )
+  }
+  // ENG-96204 (ENG-96474) — WHICH ANSWERS ARE USED UP, AND WHICH ONE IS WAITED FOR. The operator's `resolutions.json`
+  // is append-only input the run never writes into, so this is the one place they SEE consumption: an entry listed
+  // as spent authorised its round already and will be refused if the count is ever walked back to it.
+  if (status.awaitingRound || (status.consumedRoundAnswers || []).length) {
+    L.push(
+      '', '## Round answers', '',
+      ...list(status.consumedRoundAnswers, (a) => `- spent: \`${a}\` — authorised its round already; recorded in the queue file, never in your answer file`,
+        'nothing spent yet — no round after the first has been authorised in this folder'),
+    )
+    if (status.awaitingRound) L.push(`- awaiting: \`${status.awaitingRound}\` — the entry to record next (its answer is checked, and a spent entry is never read as consent)`)
+  }
+  L.push(
+    '', '## Parked, and why', '',
+    ...cappedList(status.parked, (p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${cell(p.parkedWhy)}`,
+      'nothing is parked', 'parked unit(s) — the full list is in the queue file'),
+    '', '## Still open (steps)', '',
+    ...list(openUnits, (u) => `- \`${u.unit}\``, 'no step is still open'),
+    '', '## Next step', '', status.next || '(none recorded)', '',
+  )
+  return L.join('\n')
+}
 // THE VERIFICATION SURFACE the migration skill's preflight resolved for this section BEFORE the first stand
 // write (ENG-95855) — `automatic:2` (headless Playwright), `automatic:3` (real Chrome), or `manual` (no
-// automatic surface; `--verify` alone). Unlike `buildMode`, an ABSENT value is never guessed into one of the
-// three: a caller that omits it gets `null`, and the per-page recipe's render check treats `null` as "not told,
-// ask" rather than silently assuming a tier nobody resolved. An unrecognised NON-EMPTY value still throws, for
-// the same reason a typo'd mode must not fall back to a default — a mistyped tier is exactly the "preference
-// silently drifted from what was resolved" failure this ticket exists to close.
+// automatic surface; `--verify` alone). An ABSENT value is never guessed into one of the three: a caller that
+// omits it gets `null`, and the per-page recipe's render check treats `null` as "not told, ask" rather than
+// silently assuming a tier nobody resolved. An unrecognised NON-EMPTY value still throws, for the same reason a
+// typo'd mode must not fall back to a default — a mistyped tier is exactly the "preference silently drifted from
+// what was resolved" failure this ticket exists to close.
+// THIS FUNCTION WAS THE PRECEDENT `buildMode` was rewritten against in ENG-96204: a value that must be resolved
+// deliberately returns `null` when it was not, and the caller refuses to start rather than choosing for the
+// operator. The two now behave alike, which is why this comment no longer contrasts them.
 export function buildVerificationSurface(raw) {
   const SURFACES = ['automatic:2', 'automatic:3', 'manual']
   if (raw === undefined || raw === null || raw === '') return null
@@ -631,6 +1053,19 @@ export function packagePreconditionStop(targetPackage, packageState, sectionHost
     return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
   }
   return null
+}
+
+// ENG-96147 — THE SECTION'S NAVIGATION ROUTE, assembled in exactly ONE place. A guessed `#Section/<schema>` URL
+// cost a database flush and a `compile-creatio` on a shared stand: an agent retyped a section's code from memory,
+// dropped the `_ListPage` suffix, got `Script error`, and reported a working page as broken. The fix is not a
+// smarter guess — it is that nothing guesses: `create-app-section`/`list-app-sections` already return the list
+// page's own schema name, and this is the only function that turns that VERBATIM string into a route. Pure, so
+// the composition is testable on its own and no second writer in the run can independently invent a different
+// prefix. `null` in ⇒ `null` out: an empty/missing schema name is never padded into a route that looks real.
+export function sectionRouteFrom(schemaName) {
+  const name = String(schemaName ?? '').trim()
+  if (!name) return null
+  return { route: `#Section/${name}`, schemaName: name }
 }
 
 // THE COMPONENT-TYPE PRE-BUILD GATE (ENG-95468). Every `crt.*` type the plan names must resolve on the TARGET
@@ -999,13 +1434,17 @@ export const GUIDELINES_RETURN = `
 // an unknown working directory and a relative path resolves against nothing. A relative default would be a silent
 // write to the wrong file; an omitting caller instead renders `undefined`, which the suite's no-`undefined` assertion
 // over every composed prompt catches.
-export function composeBuildPrompt({ rules, behaviour, worklogPath, sharedWorklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '', gate = '' }) {
+// `pass` (ENG-96204) is the PASS SCOPE — the layout-only / logic-only half of a `layout-first` build. It sits
+// directly under the unit's own kind block and ABOVE the mandatory-while-building list, because it NARROWS that
+// list: a builder that read "build the plan EXACTLY" before being told which half of the plan this pass owns has
+// already been told the wrong thing. Empty on every other mode, which is every run before this one.
+export function composeBuildPrompt({ rules, behaviour, worklogPath, sharedWorklogPath, kindBlock, repair, resolutions, findings, checkFirst, guidelinesReturn = '', gate = '', pass = '' }) {
   return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
 
 ${rules}
 
 ${kindBlock}
-${repair}
+${pass}${repair}
 ${behaviour}
 
 MANDATORY WHILE BUILDING:
@@ -1870,6 +2309,55 @@ const RULE_SHAPED_KINDS = new Set(['lookup-value', 'rule', 'visibility-rule'])
 // Exposed as a PREDICATE rather than the Set: the offline slice suite exports the block's helpers as functions, and a
 // bare Set is data the reconcile would then have to be trusted to read the same way twice.
 export const isRuleShapedKind = (kind) => RULE_SHAPED_KINDS.has(String(kind))
+
+// The `kind` a refuted-answer discrepancy row carries. A constant so the row, the dedup and any reader match on ONE
+// literal — the same rule `RESOLUTIONS_BLOCKED_WHAT` already follows for `blockedItems`.
+export const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
+// ONE ROW PER REFUTED ANSWER, KEYED ON `(unit, id)` (PR #128 review, round 21, Major 1).
+// The dedup this replaces compared the RENDERED `claim` string, and `claim` embeds `capCarryText(c.how)` — the
+// builder's own free-form prose about what it built. So it deduped only when the builder re-worded nothing: the
+// same `(unit, id)` refuted again with different wording missed the existing row and APPENDED a second one. The
+// comment above the old site claimed "DEDUPED ON `(unit, id, kind)`" while the predicate never compared `id` at
+// all; it compared a string that merely CONTAINED it.
+// Why that is worse than untidy: `discrepancies` is re-seeded from the persisted queue file, nothing prunes it
+// (retention is deliberate), and every close prompt renders it whole via `j(carry.discrepancies)` against
+// `RECONCILE_ANSWER_MAX_BYTES`. A stubborn answer — re-claimed and re-refuted each round, as a builder that keeps
+// trying different wording does — added ~900 bytes per round until Reconcile, the run's FIRST agent, could not
+// start at all. That is a harder failure than the diagnostic this row exists to carry.
+// `id` is now a FIELD on the row rather than only text inside `claim`, and it is the identity. The discrepancy's
+// own `kind` slot is already taken by `RESOLUTION_NOT_APPLIED`, and the ANSWER's kind adds nothing to the identity
+// (it is a function of the id) — it already travels on the `unconsumed` row for the same pair.
+// `idKey` ON BOTH SIDES, like every id comparison in this file: `d.unit`/`d.id` come off an agent-transcribed queue
+// file on a resume, so a padded field must not silently start a second row. THAT ONLY WORKS BECAUSE THE FIELDS ARE
+// IN THE ROUND-TRIP CONTRACT (round 21 review, finding 2): `RECONCILE_SHAPE.discrepancies` types `id`/`kind` and
+// the Reconcile prompt's own read step names them in the row it enumerates. `schemas.mjs` states the governing
+// rule -- "an agent reproduces the fields it is told about and drops the rest" -- so an identity the prompt does
+// not name is an identity the resume does not have, and the dedup this comment promises would hold for one process
+// only. Both halves are asserted BY NAME by the suite — the tokenised prompt/shape gate cannot see these two,
+// because `id` and `kind` are already prompt tokens from `unconsumedResolutions`.
+// AN EMPTY IDENTITY MATCHES NOTHING, rather than matching every id-less row on the unit (round 21 review,
+// finding 3). `idKey` folds `undefined`, `null`, `''` and whitespace-only to the SAME empty string, so a blank
+// `row.id` would otherwise key on the unit alone and OVERWRITE the first id-less `resolution-not-applied` row it
+// found -- and a blank id is reachable, not hypothetical: `RECONCILE_SHAPE.preflightItems` requires `id` only to
+// be PRESENT and a string, so `id: ''` clears the gate and rides through to here. Appending is the fail-closed
+// direction for a list whose whole purpose is retention (`seedGrantPairs` takes the same posture with
+// `if (r?.unit && r.id)`): a duplicate diagnostic costs bytes, a silently merged one costs the operator a
+// disagreement nobody else records.
+// ROWS THIS SITE DID NOT CREATE ARE HELD OFF BY THE `kind` GUARD, and by that alone -- stated plainly because the
+// weaker argument is tempting and is now wrong. It used to be true that such a row "carries no `id`, so it cannot
+// match a real one"; typing `id` into `RECONCILE_SHAPE.discrepancies` for finding 2 makes an id-bearing verifier row
+// contract-legal, and `absorbVerifier` spreads those in unfiltered. So `kind` is what separates a
+// `component-mismatch` on the same `(unit, id)` from a refutation of it, and the suite executes exactly that case
+// rather than reasoning about it. The one row still reachable through the guard is a verifier that volunteers BOTH
+// this exact `kind` AND a matching `(unit, id)` -- i.e. a row asserting the same refutation about the same answer,
+// which is the row this site would have written itself, so refreshing it is correct and not a loss.
+export function upsertResolutionDiscrepancy(rows, row) {
+  const key = idKey(row.id)
+  const at = key ? (rows || []).findIndex((d) => d.kind === RESOLUTION_NOT_APPLIED
+    && idKey(d.unit) === idKey(row.unit) && idKey(d.id) === key) : -1
+  if (at < 0) return [...(rows || []), row]
+  return (rows || []).map((d, i) => (i === at ? row : d))
+}
 // WHICH PAIRS THIS ROUND'S VERIFIER RELEASED, and on what strength. A Map rather than a Set because the STRENGTH
 // decides what may be released: `reconcileUnconsumed` treats a positive read as outranking any source, and a
 // reasoned `unknown` as the narrow rule-shaped escape only.
@@ -2035,10 +2523,13 @@ export function unconsumedNextClause(entries) {
 // lives here rather than in a second, near-duplicate `log(...)` call beside it — two verdict lines let a log-scraper
 // read the one without the count and miss it. `complete` implies zero unconsumed (`runComplete` gates on it), so the
 // count is stated only on the NOT COMPLETE branch, where it can be non-zero.
-export function completionLine(complete, { round, missing, unverified, parkedCount, unconsumedCount } = {}) {
+export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount } = {}) {
+  // ENG-95901 — the shortfall half of the line goes through `shortfallText`, so a judge-rejected record is named as
+  // such instead of being folded into one "N MISSING" count. A caller that knows only `missing` still reads the same.
+  const shortfall = missing == null && buildMissing == null ? '?' : shortfallText({ missing, buildMissing })
   return complete
     ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${missing ?? '?'} MISSING + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
+    : `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }
 
 // ENG-95503 — THE ACCOUNTABILITY OBLIGATION IS CONDITIONAL, so it is ADDED to the schema rather than baked into it.

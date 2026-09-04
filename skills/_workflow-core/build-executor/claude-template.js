@@ -17,11 +17,22 @@ export const meta = {
   ],
 }
 
-// OPERATING MODES (`mode`): `auto` builds every unit without stopping · `checkpoints` stops after each unit named
-// in `checkpointAfter` so a human can open that page on the stand and exercise it · `guided` stops after every
-// unit. A stop is always a PAGE BOUNDARY and always returns `stopped: 'paused-at-checkpoint'` — never `complete`.
-// Re-running with the same args continues from the queue file; adding `findings: [{ unit, problem }]` re-opens a
-// unit the gate calls complete, which is the only route a defect in a ported handler has (those rows are not gated).
+// OPERATING MODES (`mode`) — FIVE, on TWO stop mechanisms, and there is NO DEFAULT (ENG-96204). A run launched
+// without a `mode` and without a `defaultMode` returns `stopped: 'mode-not-chosen'`, lists the valid modes and
+// writes nothing: `auto` used to be the default and it was the one answer an operator cannot un-choose.
+//   UNIT-boundary stops (`stopped: 'paused-at-checkpoint'`): `checkpoints` stops after each unit named in
+//   `checkpointAfter` so a human can open that page on the stand and exercise it · `guided` stops after every unit.
+//   ROUND-boundary stops (`stopped: 'paused-at-round'`): `round1` runs ONE round per invocation and stops while
+//   anything is open · `layout-first` builds LAYOUT only in round 1, stops, and ports the business logic on the
+//   next invocation. Both report `built`, `openCounts` (the open set as COUNTS per unit plus the severity tally —
+//   the rows stay in `verify.md` / `verify.json`, where the engine stamps each one's `rowSeverity`), `parked` and
+//   `next`, and write the same facts to `<outDir>/run-status.md`.
+//   `auto` stops at neither.
+// A stop is always a BOUNDARY and never `complete`. Re-running with the same args continues from the queue file;
+// in a round-boundary mode the re-run also needs `{ "kind": "run", "item": "round-<N>" }` in `resolutions.json`,
+// or it returns `stopped: 'awaiting-round-decision'` and builds nothing. Adding `findings: [{ unit, problem }]`
+// re-opens a unit the gate calls complete, which is the only route a defect in a ported handler has (those rows
+// are not gated) — and it is NOT a channel for answering a question.
 
 // ---------------------------------------------------------------------------
 // Inputs (Workflow `args`):
@@ -37,12 +48,21 @@ export const meta = {
 //                            // verification-surface preflight answer for this section (ENG-95855); absent -> null,
 //                            // never guessed. Threaded into each page unit's render-check instruction.
 //     dryRun?:     boolean,  // PREVIEW: stop before the first stand WRITE and report what would be built
-//     mode?:       string,   // 'auto' (default) | 'checkpoints' | 'guided' — how often the run stops for a human
+//     mode?:       string,   // 'auto' | 'checkpoints' | 'guided' | 'round1' | 'layout-first' — how much of the
+//                            // build the operator watches. NO DEFAULT (ENG-96204): with no `mode`, no
+//                            // `defaultMode` and no run-scoped `control-mode` answer the run stops
+//                            // `mode-not-chosen` before any stand write. An unknown value THROWS.
+//     defaultMode?: string,  // the SAME vocabulary, as the declared fallback for a NON-INTERACTIVE run: nobody is
+//                            // there to be asked, so a run that carries one proceeds and reports
+//                            // `modeSource: 'default'`. Validated at launch, so a typo fails before the run starts.
 //     checkpointAfter?: string[], // mode 'checkpoints': the PUBLISHED unit keys to stop after (unknown key ⇒ refuse)
 //     findings?:   Array<{ unit: string, problem: string }>, // what the operator saw wrong at a checkpoint;
 //                            // re-opens that unit even when the gate calls it complete, and is handed to its builder
 //     maxRounds?:  number,   // repair rounds per unit before it is PARKED (default 3)
-//     resolutionsFile?: string, // the operator's ⚠ Confirm ANSWERS (default `<outDir>/resolutions.json`; absent = none yet)
+//     resolutionsFile?: string, // the operator's ANSWERS (default `<outDir>/resolutions.json`; absent = none yet) —
+//                            // both the ⚠ Confirm answers and, under the reserved kind `run`, the RUN-level ones:
+//                            // `{ kind: 'run', item: 'control-mode' }` and `{ kind: 'run', item: 'round-<N>' }`.
+//                            // ONE channel: there is no second state file for either decision.
 //     maxPreflightAgents?: number } // cap on the read-only preflight fan-out (default 6)
 //
 // A bare string is taken as `manifest`; every other required input then has to

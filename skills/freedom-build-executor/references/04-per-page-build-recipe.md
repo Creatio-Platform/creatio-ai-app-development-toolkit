@@ -84,6 +84,18 @@ the verifier files that page's contents as this unit's evidence.
 
 ## Order inside the page
 
+> **`layout-first` runs this recipe in TWO PASSES over the same unit** (ENG-96204). On the LAYOUT pass you own
+> steps 1-5 and 7-11 and **not step 6** — no business rules, no handlers, no converters, no validators. They are
+> SCHEDULED for the next invocation, not dropped. Leave every `Business rules` and `Handler — …` row out of
+> `claimedBuilt` and file no evidence for one. **Your own step-10 gate will report the unit short, and that is the
+> correct verdict**, not a defect to repair: spend your one bounded fix only on a row that belongs to this pass (a
+> field, a container, a component, the package, the entity binding) and report `selfCheck` honestly with the logic
+> rows still open. The run knows those rows are scheduled — it charges this pass no repair round and parks nothing
+> over them. On the LOGIC pass the queue file records the layout pass as done: step 6 is your whole deliverable,
+> you `get-page` the page and add only what is missing rather than rebuilding it, and any still-open layout row is
+> yours again because nothing is scheduled for later any more. Your build prompt states which pass you are on; if
+> it says nothing about a pass, this is an ordinary single-pass unit and the whole recipe is yours.
+
 1. **Create the page on the right template** — `expectedTemplate`, confirmed against
    `list-page-templates`. Scaffolding tools register a DEFAULT page; when the template differs
    you create a new page and **re-bind the object to it, dropping the old binding**. A page built
@@ -110,7 +122,17 @@ the verifier files that page's contents as this unit's evidence.
 7. **Localizable bindings** for every user-visible string. `$Resources.Strings.<key>` normally;
    a tab / card-toggle-panel caption needs `#ResourceString(<Key>)#` instead — a
    `$Resources.Strings.*` caption there does not render.
-8. **Render check.** A `success` from `validate-page` / `update-page` is not proof the page works;
+8. **Render check.** **To OPEN the page — the section itself, or any page reached by first opening
+   its section — use the recorded route, never a composed one (ENG-96147).** Read
+   `standWrites.sectionRoute.route` from `build-queue.json` (or the run's own `sectionRouteByRun`,
+   when this unit was handed one) and navigate to that exact string. **Do NOT retype the section's
+   code or schema name into a `#Section/<guess>` URL** — on the ST_2 run that exact guess dropped
+   the page's real `_ListPage` suffix, produced `Script error`, and the run reported a working page
+   as a real defect; the recovery ran a database flush and a compile against a shared stand for
+   nothing. If no `standWrites.sectionRoute` record exists yet, do not fall back to composing one —
+   report it in `blocked[]` as an **unresolved route** (`./03-failure-and-park-policy.md`), the same
+   shape as the unachievable-surface case below, and let the section-registering unit's own record
+   catch up before this check is retried. A `success` from `validate-page` / `update-page` is not proof the page works;
    clio returns `success` for bodies that fail at runtime. Use the `verificationSurface` VALUE this
    build run was launched with (`automatic:2`, `automatic:3`, or `manual`) — never `decisions.md`:
    that file's prose does not reach the builder, only the approval entry does, so the resolved
@@ -197,7 +219,11 @@ the verifier files that page's contents as this unit's evidence.
 - `update-client-unit-schema` is for non-page schemas, or when a raw update is genuinely
   required — never as a shortcut around the page tools.
 - **Compile only** when C# / SQL / runtime-compiled artifacts changed, or Creatio reports a
-  missing runtime schema. A compile is not a way to make a page load.
+  missing runtime schema. A compile is not a way to make a page load. **Nor is a database flush.**
+  Neither is authorised by a `Script error` alone when the route that produced it was not read out
+  of `standWrites.sectionRoute` (ENG-96147) — that is an unresolved route, not a page defect, and
+  the ST_2 run's recovery is exactly the cost of skipping this check: a flush and a compile against
+  a **shared** stand, for a page that was never broken.
 - Anything that cannot be built now is a loud `TODO` / `BLOCKED` in the worklog with its reason,
   and it goes in the builder's `blocked[]`. A page that migrated fields and rules but dropped its
   details, its standard features or their edit pages is not done — silence is the one report that
