@@ -73,6 +73,23 @@ export function unitStem(unit, pageNo) {
 }
 export const pageStateOf = (verify, key) => verify?.pages?.[key] || null
 
+// ENG-95901 (reopened) — the shortfall split behind every "N MISSING" line. Rationale: designspec.mjs `verifyTally`.
+// A verdict predating `buildMissing` falls back to `missing` — over-report, never a false zero.
+export function shortfallOf(st) {
+  const missing = st?.missing ?? 0
+  const buildMissing = typeof st?.buildMissing === 'number' ? st.buildMissing : missing
+  return { missing, buildMissing, rejected: Math.max(0, missing - buildMissing) }
+}
+// PR review — an UNMEASURED run reads `?`, never `0 MISSING`. `shortfallOf(undefined)` legitimately returns zeros
+// (its callers need arithmetic), but rendering those zeros as prose put a false zero on the one axis this helper's own
+// comment forbids one on: the close line could read `NOT COMPLETE after 3 round(s): 0 MISSING + ? unconfirmed`, the
+// `?` beside it proving no verdict had been read. `parkWhy` already guards `!st` first; these two call sites did not.
+export function shortfallText(st) {
+  if (st == null) return '? MISSING'
+  const { buildMissing, rejected } = shortfallOf(st)
+  return rejected > 0 ? `${buildMissing} MISSING + ${rejected} judge-rejected` : `${buildMissing} MISSING`
+}
+
 // A unit is OPEN unless the engine says it is CLOSED. Only an explicit `complete === true` closes it:
 // a key ABSENT from the verdict is open, because absent means nothing confirmed it — most often that
 // `--verify` never ran (the baseline round, before a built file exists) or that the page could not be
@@ -631,6 +648,19 @@ export function packagePreconditionStop(targetPackage, packageState, sectionHost
     return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
   }
   return null
+}
+
+// ENG-96147 — THE SECTION'S NAVIGATION ROUTE, assembled in exactly ONE place. A guessed `#Section/<schema>` URL
+// cost a database flush and a `compile-creatio` on a shared stand: an agent retyped a section's code from memory,
+// dropped the `_ListPage` suffix, got `Script error`, and reported a working page as broken. The fix is not a
+// smarter guess — it is that nothing guesses: `create-app-section`/`list-app-sections` already return the list
+// page's own schema name, and this is the only function that turns that VERBATIM string into a route. Pure, so
+// the composition is testable on its own and no second writer in the run can independently invent a different
+// prefix. `null` in ⇒ `null` out: an empty/missing schema name is never padded into a route that looks real.
+export function sectionRouteFrom(schemaName) {
+  const name = String(schemaName ?? '').trim()
+  if (!name) return null
+  return { route: `#Section/${name}`, schemaName: name }
 }
 
 // THE COMPONENT-TYPE PRE-BUILD GATE (ENG-95468). Every `crt.*` type the plan names must resolve on the TARGET
@@ -2013,6 +2043,55 @@ const RULE_SHAPED_KINDS = new Set(['lookup-value', 'rule', 'visibility-rule'])
 // Exposed as a PREDICATE rather than the Set: the offline slice suite exports the block's helpers as functions, and a
 // bare Set is data the reconcile would then have to be trusted to read the same way twice.
 export const isRuleShapedKind = (kind) => RULE_SHAPED_KINDS.has(String(kind))
+
+// The `kind` a refuted-answer discrepancy row carries. A constant so the row, the dedup and any reader match on ONE
+// literal — the same rule `RESOLUTIONS_BLOCKED_WHAT` already follows for `blockedItems`.
+export const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
+// ONE ROW PER REFUTED ANSWER, KEYED ON `(unit, id)` (PR #128 review, round 21, Major 1).
+// The dedup this replaces compared the RENDERED `claim` string, and `claim` embeds `capCarryText(c.how)` — the
+// builder's own free-form prose about what it built. So it deduped only when the builder re-worded nothing: the
+// same `(unit, id)` refuted again with different wording missed the existing row and APPENDED a second one. The
+// comment above the old site claimed "DEDUPED ON `(unit, id, kind)`" while the predicate never compared `id` at
+// all; it compared a string that merely CONTAINED it.
+// Why that is worse than untidy: `discrepancies` is re-seeded from the persisted queue file, nothing prunes it
+// (retention is deliberate), and every close prompt renders it whole via `j(carry.discrepancies)` against
+// `RECONCILE_ANSWER_MAX_BYTES`. A stubborn answer — re-claimed and re-refuted each round, as a builder that keeps
+// trying different wording does — added ~900 bytes per round until Reconcile, the run's FIRST agent, could not
+// start at all. That is a harder failure than the diagnostic this row exists to carry.
+// `id` is now a FIELD on the row rather than only text inside `claim`, and it is the identity. The discrepancy's
+// own `kind` slot is already taken by `RESOLUTION_NOT_APPLIED`, and the ANSWER's kind adds nothing to the identity
+// (it is a function of the id) — it already travels on the `unconsumed` row for the same pair.
+// `idKey` ON BOTH SIDES, like every id comparison in this file: `d.unit`/`d.id` come off an agent-transcribed queue
+// file on a resume, so a padded field must not silently start a second row. THAT ONLY WORKS BECAUSE THE FIELDS ARE
+// IN THE ROUND-TRIP CONTRACT (round 21 review, finding 2): `RECONCILE_SHAPE.discrepancies` types `id`/`kind` and
+// the Reconcile prompt's own read step names them in the row it enumerates. `schemas.mjs` states the governing
+// rule -- "an agent reproduces the fields it is told about and drops the rest" -- so an identity the prompt does
+// not name is an identity the resume does not have, and the dedup this comment promises would hold for one process
+// only. Both halves are asserted BY NAME by the suite — the tokenised prompt/shape gate cannot see these two,
+// because `id` and `kind` are already prompt tokens from `unconsumedResolutions`.
+// AN EMPTY IDENTITY MATCHES NOTHING, rather than matching every id-less row on the unit (round 21 review,
+// finding 3). `idKey` folds `undefined`, `null`, `''` and whitespace-only to the SAME empty string, so a blank
+// `row.id` would otherwise key on the unit alone and OVERWRITE the first id-less `resolution-not-applied` row it
+// found -- and a blank id is reachable, not hypothetical: `RECONCILE_SHAPE.preflightItems` requires `id` only to
+// be PRESENT and a string, so `id: ''` clears the gate and rides through to here. Appending is the fail-closed
+// direction for a list whose whole purpose is retention (`seedGrantPairs` takes the same posture with
+// `if (r?.unit && r.id)`): a duplicate diagnostic costs bytes, a silently merged one costs the operator a
+// disagreement nobody else records.
+// ROWS THIS SITE DID NOT CREATE ARE HELD OFF BY THE `kind` GUARD, and by that alone -- stated plainly because the
+// weaker argument is tempting and is now wrong. It used to be true that such a row "carries no `id`, so it cannot
+// match a real one"; typing `id` into `RECONCILE_SHAPE.discrepancies` for finding 2 makes an id-bearing verifier row
+// contract-legal, and `absorbVerifier` spreads those in unfiltered. So `kind` is what separates a
+// `component-mismatch` on the same `(unit, id)` from a refutation of it, and the suite executes exactly that case
+// rather than reasoning about it. The one row still reachable through the guard is a verifier that volunteers BOTH
+// this exact `kind` AND a matching `(unit, id)` -- i.e. a row asserting the same refutation about the same answer,
+// which is the row this site would have written itself, so refreshing it is correct and not a loss.
+export function upsertResolutionDiscrepancy(rows, row) {
+  const key = idKey(row.id)
+  const at = key ? (rows || []).findIndex((d) => d.kind === RESOLUTION_NOT_APPLIED
+    && idKey(d.unit) === idKey(row.unit) && idKey(d.id) === key) : -1
+  if (at < 0) return [...(rows || []), row]
+  return (rows || []).map((d, i) => (i === at ? row : d))
+}
 // WHICH PAIRS THIS ROUND'S VERIFIER RELEASED, and on what strength. A Map rather than a Set because the STRENGTH
 // decides what may be released: `reconcileUnconsumed` treats a positive read as outranking any source, and a
 // reasoned `unknown` as the narrow rule-shaped escape only.
@@ -2178,10 +2257,13 @@ export function unconsumedNextClause(entries) {
 // lives here rather than in a second, near-duplicate `log(...)` call beside it — two verdict lines let a log-scraper
 // read the one without the count and miss it. `complete` implies zero unconsumed (`runComplete` gates on it), so the
 // count is stated only on the NOT COMPLETE branch, where it can be non-zero.
-export function completionLine(complete, { round, missing, unverified, parkedCount, unconsumedCount } = {}) {
+export function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount } = {}) {
+  // ENG-95901 — the shortfall half of the line goes through `shortfallText`, so a judge-rejected record is named as
+  // such instead of being folded into one "N MISSING" count. A caller that knows only `missing` still reads the same.
+  const shortfall = missing == null && buildMissing == null ? '?' : shortfallText({ missing, buildMissing })
   return complete
     ? `COMPLETE after ${round} round(s): the engine gate is green`
-    : `NOT COMPLETE after ${round} round(s): ${missing ?? '?'} MISSING + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
+    : `NOT COMPLETE after ${round} round(s): ${shortfall} + ${unverified ?? '?'} unconfirmed · ${parkedCount} parked unit(s) · ${unconsumedCount} unconsumed answer(s)`
 }
 
 // ENG-95503 — THE ACCOUNTABILITY OBLIGATION IS CONDITIONAL, so it is ADDED to the schema rather than baked into it.

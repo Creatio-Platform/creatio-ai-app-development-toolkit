@@ -36,10 +36,10 @@ import {
   earnedFrom, findingsFor,
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
-  ownPackageRecord, packagePreconditionStop, pageStateOf, parkableKeys, planGapKindLabel, planGapNext, planInvalidNextAll,
+  ownPackageRecord, packagePreconditionStop, pageStateOf, shortfallOf, shortfallText, parkableKeys, planGapKindLabel, planGapNext, planInvalidNextAll,
   preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
-  resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
-  resolvePackageState, roundsRun, scheduleUnits, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
+  RESOLUTION_NOT_APPLIED, resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
+  resolvePackageState, roundsRun, scheduleUnits, sectionRouteFrom, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
   // ENG-95468 (residual) — the provenance axis of the component sweep: the two values an answer can come from,
   // the entries that did NOT come from this stand, and the operator's next move on them (which is NOT a re-plan).
@@ -57,7 +57,7 @@ import {
   tallyResolutionChecks, unconsumedLogLine, unconsumedNextClause,
   unnamedRuleSurfaceChecks, unnamedRuleSurfaceLogLine, unsettledResolutionClaims,
   verifierSchemaWithChecks,
-  unconsumedResolutions,
+  unconsumedResolutions, upsertResolutionDiscrepancy,
   UNCONSUMED_CARRY_WARN,
 } from './helpers.mjs'
 import {
@@ -159,7 +159,7 @@ function appSectionHostNoMenuBlock(unit) {
 }
 
 function appSectionHostMigrationBlock(unit) {
-  return `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits.
+  return `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits. \`starterListPage\` becomes this section's recorded NAVIGATION ROUTE (ENG-96147) — report the exact string the tool returned, never a name you reconstruct, since this script (not you) assembles the \`#Section/...\` URL from it.
 5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
 6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, and no stub left behind.`
 }
@@ -308,6 +308,15 @@ let resolutionCheckTally = new Map()
       // and the queue file remains its home. Reading `state` in this default would be a temporal-dead-zone throw on
       // the earliest return (a Reconcile that answered nothing).
       packageCreatedByRun: standWrites.packageCreated || null,
+      // ENG-96147 — THE SECTION'S NAVIGATION ROUTE, on every return like `packageCreatedByRun`: `null` when this
+      // process recorded none, otherwise the state file's own `{ route, schemaName, sectionHost, planVersion }`.
+      // This is what stops the next reader (an orienting agent, the per-page render check) from composing a
+      // `#Section/<guess>` URL and mistaking a wrong route's `Script error` for a real page defect — the incident
+      // this field exists to prevent. The primary read path is `standWrites.sectionRoute` in the queue file
+      // itself (a fresh-context render-check agent has no access to this return value), but the field is
+      // threaded here too for parity with every other stand-write fact and for an operator reading the run's own
+      // JSON output.
+      sectionRouteByRun: standWrites.sectionRoute || null,
       // ENG-95850 (B4/C3) — pages a re-bind left behind, on every return: they are on the stand, they belong to no
       // published key, and the run does not delete them. A caller that never sees them cannot decide about them.
       orphanedPages,
@@ -355,7 +364,16 @@ let resolutionCheckTally = new Map()
       ...extra,
     }
   }
-  const verdictOf = (v) => ({ missing: v?.missing ?? 0, unverified: v?.unverified ?? 0, pages: v?.pages || {} })
+  // ENG-95901 (reopened) — the split rides on the returned verdict: a caller scheduling another build round must
+  // not read a judge-rejected evidence row as a build gap.
+  const verdictOf = (v) => {
+    const { missing, buildMissing, rejected } = shortfallOf(v)
+    // PR review — `unfiled` is not republished here: nothing in `skills/**` ever read it off the run's return, and
+    // it cannot be derived from what this channel carries (its derivation needs a top-level `builderOpen`, which the
+    // counts-only summary publishes per page only). It stays in the engine's on-disk report/digest, where it is audit
+    // material nobody has to transcribe.
+    return { missing, buildMissing, rejected: v?.rejected ?? rejected, unverified: v?.unverified ?? 0, pages: v?.pages || {} }
+  }
 
   // ---------------------------------------------------------------------------
   // Reconcile — the head of EVERY round. Read-only against the stand; its one write
@@ -480,7 +498,7 @@ DO SIX THINGS, in order:
 3. READ THE QUEUE FILE. From \`${QUEUE_FILE}\` (absent ⇒ every list below is empty and the run is starting fresh) return:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
-   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had).
+   - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim, each with the fields the file records: \`proposals\` as \`{ unit, deviation, why, applied }\` (\`deviation\` what departs from the plan, \`why\` the reason, \`applied\` whether it was), \`blocked\` as \`{ unit, what, why }\`, \`discrepancies\` as \`{ unit, id, kind, claim, found, round }\` (\`claim\` what a builder reported, \`found\` what the stand actually had). \`id\` and \`kind\` are on the rows that have them and absent from the rest — COPY BOTH VERBATIM WHEREVER THE FILE CARRIES THEM, and do NOT invent either for a row without them. They are a row's IDENTITY, not description: this run matches a repeated builder-vs-stand disagreement on \`(unit, id)\` to REFRESH the existing row, so an \`id\` dropped here comes back as a SECOND row for the same disagreement, on every resume, into a list nothing prunes.
    - \`unconsumedResolutions\` — whatever the file holds, verbatim, INCLUDING each row's \`source\`. These are operator answers an earlier session watched reach a build agent and produce nothing. Do NOT filter, re-judge or tidy them: a well-formed \`applied: false\` files no \`blocked\` row and no \`discrepancies\` row, so this list is the ONLY record that such an answer was ever lost, and this run re-checks each row against the questions the plan still asks.
    - \`resolutionsReopened\` and \`resolutionsPending\` — the two answer-channel repair-grant arrays the file holds, each copied verbatim (\`[]\` when the file has none; REQUIRED, never omitted). \`resolutionsReopened\` is a list of \`{unit, id}\` PAIRS — every ANSWER that has already spent its ONE repair round, NOT every unit (two answers on one page each get their own round) — and \`resolutionsPending\` is a list of UNIT KEYS still owed that round's dispatch. Process bookkeeping, not operator content — do NOT judge or re-derive them: dropping a \`reopened\` key re-grants a spent round on this resume, dropping a \`pending\` key strands a unit that was owed its repair.
    - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
@@ -493,7 +511,7 @@ DO SIX THINGS, in order:
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. **RETURN BOTH AS \`[]\` WHEN THERE IS NOTHING TO LIST — do not omit them.** Round 1 has nothing filed and nothing rejected, and that is the normal case, not a reason to leave the field out: both are REQUIRED, and the close row reads them to tell an id that is already earned from one that is merely unfiled. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer. Also return \`pagesRecorded\` — EVERY key whose \`pages\` entry already exists in the built file, whether that entry is a recorded object or \`false\`. That is what lets the verifier leave a page this round did not touch alone instead of re-reading the whole section every round; omit it and every page is fetched again, which is correct but wasteful.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
    - Run the gate: \`${CLI_VERIFY}\`, VERBATIM. \`--out\` writes the human table, \`--verify-json\` the full machine verdict, \`--verify-digest\` the same minus completed pages' rows, \`--verify-summary\` the COUNTS-ONLY verdict you copy below, and \`--slices\` each unit its own row of the built file — the slices are written even when the gate exits 2, which is exactly the round a builder needs its row.
-   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`unverified\`/\`builderOpen\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified }\`. NOT the summary's own \`planGaps\`: the plan-level verdict has one home, \`--units.planGaps\` in step 2. **\`buildComplete\` IS REQUIRED ON EVERY PAGE ENTRY** — it is the \`missing\`-only axis this script's park and close arithmetic reads, the combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the two are NOT interchangeable: an answer missing it is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
+   - Return \`verify\` = the CONTENTS of ${VERIFY_SUMMARY}, copied verbatim — the COUNTS-ONLY summary, NOT ${VERIFY_DIGEST} and NOT ${VERIFY_JSON}. It carries per-page counts and flags and NO open rows by construction, so your answer is small no matter how many rows are open — which is the whole point: on a fresh stand the digest is every open row of every open page (measured ~21 KB), and transcribing that into this, the run's FIRST structured answer, truncates it at the host's tool-input cap and fails the run before it builds anything. ${VERIFY_JSON} and ${VERIFY_DIGEST} are still written and are the audit/on-disk record; do not transcribe either. COPY EVERY FIELD OF THE SUMMARY, NAMED HERE because the schema no longer describes them and a field you are not told about is a field that gets dropped: at the top level \`complete\`/\`missing\`/\`buildMissing\`/\`rejected\`/\`unverified\`/\`builderOpen\`, and \`pages["<key>"] = { complete, buildComplete, builderOpen, missing, buildMissing, unverified }\`. NOT the summary's own \`planGaps\`: the plan-level verdict has one home, \`--units.planGaps\` in step 2. **\`buildComplete\` AND \`buildMissing\` ARE REQUIRED ON EVERY PAGE ENTRY, AND \`buildMissing\` IS REQUIRED AT THE TOP LEVEL TOO** — they are the builder-owned axis this script's park and close arithmetic reads. The combined \`complete\` also folds in unfiled evidence a builder cannot clear, and the combined \`missing\` also folds in evidence rows the JUDGE rejected, which are re-FILED by the read-only verifier and are not a build gap at all; neither pair is interchangeable, and an answer missing either field is rejected and retried, not quietly accepted. Do NOT read the numbers off the table, do not re-add them, and do NOT transcribe \`openRows\` — the open rows a builder needs are read fresh, per unit, by that build agent from its own scoped \`--verify --page\` gate in its own context; they never travel through this answer. \`verify.md\`/${VERIFY_DIGEST} remain the on-disk record of them. Also return \`exitCode\` and \`verifyTablePath\`.
 
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\` was ANSWERED in step 2 from \`--units.planGaps\` and is not revisited here: do not add a stderr line to it, do not re-read it from ${VERIFY_JSON}/${VERIFY_SUMMARY}, and do not edit it after seeing this run's exit code.
@@ -501,6 +519,7 @@ DO SIX THINGS, in order:
     - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` and \`continuations\` counters each unit already has. **Do NOT increment either one here.** A round is charged per ATTEMPT, and you are not the phase that attempts anything: incrementing for every open unit charges the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parks untouched pages. The counters are moved by the phase that runs straight after Build, for exactly the units it dispatched. Return \`roundOf\` = the rounds counter now on file for every key and \`continuationOf\` = the continuations counter now on file for every key. **KEEP the root \`standWrites\` key exactly as the file holds it** — it records stand writes an earlier run or the other route made, and it is not yours to recompute.
    - Return \`packageCreatedByRun\` — the file's \`standWrites.packageCreated\`, VERBATIM (\`{ package, appUnitComplete, planVersion, sectionPage }\`), or \`null\` when the file has no such record. This is the run's own memory of having created the target package, and it is the ONE thing that tells a package this migration made apart from a package somebody else owns: under \`sectionHost: new-app\` the second is a stop and the first is a resume. **Read it off the file; do NOT derive it from the stand.** \`find-app\`/\`list-packages\` can say a package EXISTS — no stand read can say WHO created it — so a record you infer would authorise building over somebody's application. No record ⇒ \`null\`: absence is the safe answer here, and the script stops on it.
    - Return \`orphanedPagesOnFile\` — the file's \`standWrites.orphanedPages\` array, VERBATIM, each entry \`{ schema, orphanedBy, at }\` (\`orphanedBy\` the run or unit that left it, \`at\` when — copy both, \`null\` included) (\`[]\` when the file has none; REQUIRED to be present, never omitted). These are pages an EARLIER run or the other route left bound to no key after a re-bind. They are read back for one reason: the failure they come from was a LATER diagnosis fetching a dead page and concluding the build was short, so a list nobody reads is a list that helps nobody. Copy it; do not recompute it from the stand, and do not drop an entry because the page looks fine — an orphan is perfectly fetchable, which is the whole problem.
+   - Return \`sectionRouteByRun\` — the file's \`standWrites.sectionRoute\`, VERBATIM (\`{ route, schemaName, sectionHost, planVersion }\`), or \`null\` when the file has no such record. This is the run's own memory of the navigation route the section it built actually opens at — the ONE thing that stops a later reader (an orienting agent, the per-page render check) from composing a \`#Section/<guess>\` URL and mistaking a wrong route's \`Script error\` for a genuine page defect (D10, ST_2 run: that exact guess cost a database flush and a compile on a shared stand). **Read it off the file; do NOT compose it, and do NOT reconstruct it from a schema-naming convention** — a route this script did not itself write is not a fact this run can vouch for. No record ⇒ \`null\`.
 
 6. REPORT QUEUE DRIFT. \`staleQueueKeys\` = keys in the queue file that \`--units\` no longer publishes (the plan was regenerated — they gate nothing now). \`newKeys\` = keys \`--units\` publishes that the queue did not have. Report both; never silently trust either.
 
@@ -784,6 +803,7 @@ Return the schema. Nothing else.`
   // which is exactly when an orphan a previous session recorded is about to be read as a live page. The refresh sites
   // go through `acceptReconciled`; the baseline assigns `state` directly, so it needs the same merge explicitly.
   mergeOrphanedPages(state.orphanedPagesOnFile)
+  mergeSectionRoute(state.sectionRouteByRun)
   // Said BEFORE any gate can stop the run: an answer that matched nothing is worth knowing about even on a run that
   // stops for an unrelated reason, because the operator will otherwise re-run believing it was applied.
   logUnmatchedResolutions('baseline reconcile')
@@ -1225,7 +1245,7 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
     const u = unitOf(key)
     if (u.kind === 'reach') return `${head} — ${u.what || 'the on-stand wiring this key names'} was not confirmed on-stand (left undone: ${u.miss || 'built pages stay unreachable'})`
     if (!st) return `${head} — the machine verdict carries no entry for this unit, so nothing confirmed it closed; the usual cause is that no Freedom schema is recorded for the key, which leaves nothing for the verifier to fetch`
-    return `${head} — ${st.missing ?? 0} MISSING + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
+    return `${head} — ${shortfallText(st)} + ${st.unverified ?? 0} unconfirmed row(s) on this unit; the rows are in ${VERIFY_TABLE}`
   }
   function parkRecord(key, why, rounds) {
     const n = typeof rounds === 'number' ? rounds : roundsRun(state.roundOf, localRounds, key)
@@ -1662,7 +1682,12 @@ ${unit.sectionHost === 'pages-only-no-menu' ? appSectionHostNoMenuBlock(unit) : 
         : ' ⚠ The queue publishes NO `applicationCode` for this run. Do NOT resolve one off the stand — report this in `blocked` and stop: registering into an application nobody approved is how a section lands in a package the migration does not own.'
     }
     const workplaceBindingsNote = unit.key !== 'sectionRegistered' ? '' : ` THEN COUNT THE WORKPLACE BINDINGS (ENG-95850 / B2): registering a section into a workplace does NOT unbind the one it was in, so after this unit the section can sit in TWO workplaces and look correct in the one you opened — that is exactly what a real run shipped. Count this section's \`SysModuleInWorkplace\` rows, report \`workplaceBindings: { count: <n>, names: [...] }\`, and if it is more than the one the plan approved, say so in \`proposals\` naming every workplace. **Do NOT unbind anything** — a workplace binding is a customer record, its removal is not this unit's decision, and the gate reports the extra binding for a human to settle. **REPORT IT EVEN WHEN IT IS 1 (ENG-95470 / defect 4):** this script carries \`workplaceBindings\` into the SAME round's Verify, which can now file \`reachability.sectionRegistered\` from it even if Verify's own independent on-stand count is skipped or missed — omitting it here because "it's just the expected 1" is exactly the gap that left the row at \`reachability: {}\` forever on a real run.`
-    return `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${VERIFICATION_SURFACE_NOTE} If that surface turns out unachievable for this wiring (a login wall, a per-action approval, a CLI that now errors), report it in \`blocked\` with \`what\` naming the verification surface as unachievable and \`why\` the reason — never silently opening the built-in pane and never closing this unit on the saved record alone.${workplaceBindingsNote}`
+    // ENG-96147 — a guessed `#Section/<code>` URL cost a database flush and a compile on a shared stand: the
+    // agent that opened it retyped the section's code from memory, dropped the `_ListPage` suffix, got `Script
+    // error`, and reported a working page as broken. `create-app-section` already returned the list page's own
+    // schema name in THIS unit's tool response — the fix is reporting that exact string, never retyping it.
+    const sectionRouteNote = unit.key !== 'sectionRegistered' ? '' : ` REPORT THE SECTION'S NAVIGATION ROUTE (ENG-96147): \`create-app-section\`'s response carries a \`pages\` array with THREE entries (a Detail, a FormPage and a ListPage) — find the ONE whose \`uId\` equals the response's OWN \`section.section-schema-u-id\` (verified on a live stand: that is the list page, every time, regardless of naming) and copy that entry's EXACT \`schema-name\` into \`sectionRoute: { schemaName: "<verbatim>" }\`. Do NOT pick it by GUESSING which of the three looks like a list page, do NOT retype it from the section's code or caption, and do NOT compose the \`#Section/...\` URL yourself — this script is the only thing that assembles that prefix, from the exact string you report here. A guessed route is indistinguishable from a correct one until someone opens it, which is exactly how the last one became an expensive false page-defect report.`
+    return `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}.${appNote} Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.${VERIFICATION_SURFACE_NOTE} If that surface turns out unachievable for this wiring (a login wall, a per-action approval, a CLI that now errors), report it in \`blocked\` with \`what\` naming the verification surface as unachievable and \`why\` the reason — never silently opening the built-in pane and never closing this unit on the saved record alone.${workplaceBindingsNote}${sectionRouteNote}`
   }
 
   function pageKindBlock(unit, known) {
@@ -1932,6 +1957,50 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     log(`state file: recording that THIS run created the package \`${pkg}\` (app unit ${complete ? 'complete' : 'INCOMPLETE'}) — the placement gate reads it as ours, on this route and the other one`)
   }
 
+  // ENG-96147 — THE SECTION'S OWN STAND WRITE, into the run's single state file, mirroring `recordPackageCreated`.
+  // ONE function so the two call sites (the `new-app` app unit, and the `existing-app` `sectionRegistered` reach
+  // unit) cannot disagree about the record's shape or independently compose a different `#Section/` prefix —
+  // `sectionRouteFrom` is the ONLY place that string is assembled, from a schema name a builder copied VERBATIM
+  // out of a tool response. `schemaName` empty/absent ⇒ no write at all: a route recorded from an unconfirmed or
+  // guessed name reproduces the exact incident this field exists to prevent, one layer deeper.
+  // RETURNS whether it actually WROTE (review, tetiana-moshon): the persist guard in `buildRound` used to read
+  // `standWrites.sectionRoute`, which stays set for the rest of the run, so every later `reach` unit — `typedFormsBuilt`,
+  // `typedRouting`, `miniPageWired` — bought its own `persist:carry` agent having written nothing. The app-unit guard
+  // beside it is safe on the same shape only because the app unit is dispatched once per run; reach units are not.
+  function recordSectionRoute(schemaName) {
+    const rec = sectionRouteFrom(schemaName)
+    if (!rec) return false
+    // ALREADY RECORDED, same route ⇒ nothing new to write. The `sectionRegistered` unit reports its route again on
+    // every round it stays open, and each re-report used to look like a fresh stand write and buy its own persist
+    // agent. A DIFFERENT route still writes: that is a real change and the run must not sit on a stale one.
+    if (standWrites.sectionRoute?.route === rec.route) return false
+    standWrites = {
+      ...standWrites,
+      sectionRoute: {
+        route: rec.route,
+        schemaName: rec.schemaName,
+        sectionHost: state?.sectionHost ?? standWrites.sectionRoute?.sectionHost ?? null,
+        planVersion: state?.planVersion ?? null,
+      },
+    }
+    log(`state file: recording the section's navigation route \`${rec.route}\` — later readers (the render check, the orienting agent) use this instead of composing one`)
+    return true
+  }
+
+  // ENG-96147 (review, tetiana-moshon) — THE ROUTE OFF THE FILE, folded back into `standWrites` exactly as
+  // `mergeOrphanedPages` folds the orphan list. Without this the record is written once and then read as absent by
+  // every later round: `standWrites.sectionRoute` is empty in a resumed process, so `sectionRouteByRun` returned
+  // `null` while `build-queue.json` held the record, and a reader applying this ticket's own rule ("no recorded route
+  // ⇒ report an UNRESOLVED ROUTE") would say that about a section whose route is on file. It also puts the record
+  // back into `carryBlock`'s `standWrites`, so the file's copy no longer depends on the persistence agent preferring
+  // "merge under the ROOT key" over "copy the JSON EXACTLY". FIRST RECORD WINS, same as the orphan merge: a route
+  // this process just wrote is the one that was confirmed against a tool response in this session.
+  function mergeSectionRoute(fromFile) {
+    if (standWrites.sectionRoute || !fromFile || typeof fromFile.route !== 'string' || !fromFile.route.trim()) return
+    standWrites = { ...standWrites, sectionRoute: fromFile }
+    log(`state file: the section's navigation route \`${fromFile.route}\` was carried over from the state file — this run reports and re-persists it rather than reading it as absent`)
+  }
+
   // ENG-95850 (B4/C3) — the orphans, NAMED to the reader of the stand. The Applicant run's four wasted diagnostic
   // rounds came from reading a dead page as if it were `main`: it was still there, still fetchable, and nothing said it
   // belonged to nobody. Empty when this run has recorded none, so it never renders a heading over an empty list.
@@ -2034,6 +2103,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       // is what makes the `new-app` placement stop read this package as ours on the next Reconcile, in the next
       // session, and on the other route — instead of as a stranger's package that stops the run.
       recordPackageCreated(got, sectionPage)
+      recordSectionRoute(res.starterListPage)
       return
     }
     // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named rather than closed on the one
@@ -2043,6 +2113,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       // reads a package this migration created as a stranger's and stops with the wrong two ways out. `false` here is
       // still a stop, but it is the stop that names what is left to finish.
       recordPackageCreated(got, sectionPage, false)
+      recordSectionRoute(res.starterListPage)
       blockedItems = [...blockedItems, { unit: unit.key,
         what: partialAppUnitWhat(got, sectionPage, unitBlocked),
         why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
@@ -2180,7 +2251,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
     reportResolutionAccounting(unit, routed, res)
     if (unit.kind === 'app') applyAppUnitResult(unit, res)
-    if (unit.kind === 'reach') applyWorkplaceBindings(unit, res)
+    if (unit.kind === 'reach') { applyWorkplaceBindings(unit, res); if (recordSectionRoute(res.sectionRoute?.schemaName)) r.sectionRouteWritten = true }
     if (unit.kind === 'page') applyReboundOrphan(unit, res)
     if (unit.kind === 'page') recordPageSchema(unit, res, r)
     proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
@@ -2206,7 +2277,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     // `selfCheckShort` / `selfChecks` are the in-context gate's output (ENG-95469): the units that spent their one
     // bounded fix and are still short, and every page's raw self-report for the cross-check against the verifier.
     const r = { built: [], claims: [], noSchema: [], continued: [], deferred: [], checkFirst: [], pausedAfter: null,
-      selfCheckShort: [], selfChecks: [] }
+      selfCheckShort: [], selfChecks: [], sectionRouteWritten: false }
     for (const unit of open) {
       // ONLY a checkpoint terminates the round. A continuation must NOT: deferring the other open units would buy a
       // full extra Verify + Judge + Reconcile cycle, `--verify` stand read included, for units that do not depend on
@@ -2221,6 +2292,19 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       // created the package and then moved on), and every build unit after this one in the round is a long, killable
       // agent. One extra small write, on runs that create an application at all, which is once.
       if (unit.kind === 'app' && standWrites.packageCreated) yield* persistPending('recording the package the app unit created')
+      // ENG-96147 — THE SAME TREATMENT, for the `existing-app` write site the app-unit guard above does not cover.
+      // `create-app-section` against an existing application is exactly as irreversible as `create-app` itself, and
+      // the `sectionRegistered` reach unit is followed by the SAME long, killable agents every other unit is — the
+      // app path already had this guard; the reach path did not, which is a gap this ticket's own fix closes rather
+      // than leaves for a later run to lose its route to.
+      // Gated on THIS unit's own write (`r.sectionRouteWritten`, set by `dispatchUnit`), not on `standWrites.sectionRoute`:
+      // the latter stays set once the route is recorded, so every later reach unit in every later round would have
+      // dispatched a persist agent for a write it never made. The flag is cleared here, so the extra write happens
+      // once — at the write site — which is what the app-unit guard beside it gets for free from being dispatched once.
+      if (unit.kind === 'reach' && r.sectionRouteWritten) {
+        r.sectionRouteWritten = false
+        yield* persistPending('recording the section\'s navigation route')
+      }
     }
     if (r.noSchema.length) log(`no Freedom schema reported for: ${r.noSchema.join(', ')} — those units cannot be verified until one is`)
     if (r.pausedAfter) {
@@ -2381,7 +2465,7 @@ Return every verdict you wrote.`,
             independence, planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
             pageSchemas, staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [] })
         }
-        log(`after preflight: ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${openNow().length} unit(s) open`)
+        log(`after preflight: ${shortfallText(state.verify)} + ${state.verify?.unverified ?? '?'} unconfirmed · ${openNow().length} unit(s) open`)
       } else {
         // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
         // have closed. Said out loud rather than retried — the round loop reconciles at its own tail either way.
@@ -2547,6 +2631,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     // orphan an earlier session recorded is still an orphan, so "this process wins" would silently drop it; and a
     // page this process orphaned is not in the file yet. Keyed on the schema name, first record kept.
     mergeOrphanedPages(state.orphanedPagesOnFile)
+    mergeSectionRoute(state.sectionRouteByRun)
     // Taken AFTER the merge: the merge can reorder keys without changing content, and a fingerprint captured before it
     // would read as "something new to write" and buy an extra agent call every round.
     carryPersisted = carryFingerprint()
@@ -2726,24 +2811,28 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // build-agent-authored — the same untrusted classes that sibling hardened to `JSON.stringify` + a 400 cap. This
       // audit `claim` only ever re-enters a prompt JSON-encoded (via `carryBlock`'s `j()`), so the fence-break is already
       // neutralised on the path that matters; the wrap keeps the treatment consistent and caps a context-flooding `how`.
-      // DEDUPED ON `(unit, id, kind)` (PR #128 review, round 19). `discrepancies` is re-seeded from the queue file
-      // and rendered into EVERY close prompt via `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention
-      // is deliberate (`helpers.mjs`: the historical row the `no` filed stays regardless). So a refutation repeated
-      // across rounds and across resumes appended a fresh ~900-byte row every time, all of them counted against
-      // `RECONCILE_ANSWER_MAX_BYTES`. Same fix, same reason, as the `blockedItems` `(unit, what)` dedup above: keep
-      // ONE row per refuted answer and REFRESH it in place, so the operator reads the CURRENT `found` rather than a
-      // stale round-1 one. The per-round history of a repeated refutation is already in the round logs and in
-      // `unconsumedResolutions`; what is lost here is presentational.
-      // `how` clause first, then a single-level claim string (S4624). Byte-identical to what it replaced, which
-      // matters here beyond tidiness: `claim` is the DEDUP KEY two lines down, so any drift in it re-appends.
+      // ONE ROW PER REFUTED ANSWER, keyed on `(unit, id)` (round 19 intent, corrected in round 21 Major 1).
+      // `discrepancies` is re-seeded from the queue file and rendered into EVERY close prompt via
+      // `j(carry.discrepancies)`, and nothing anywhere prunes it -- retention is deliberate (`helpers.mjs`: the
+      // historical row the `no` filed stays regardless). So a refutation repeated across rounds and across resumes
+      // appended a fresh ~900-byte row every time, all of them counted against `RECONCILE_ANSWER_MAX_BYTES`.
+      // ROUND 19 CLAIMED THIS FIX AND DID NOT MAKE IT: the predicate compared the rendered `claim`, which embeds
+      // `capCarryText(c.how)` -- the builder's own free-form prose -- so it deduped only while the builder re-worded
+      // nothing, and `id` was never compared at all. The identity is a FIELD on the row now and the keying lives in
+      // `upsertResolutionDiscrepancy`, which is pure and executed by the offline suite rather than pinned by regex.
+      // `claim`/`found` stay refreshed DATA, so the operator reads the CURRENT wording, not a stale round-1 one.
+      // The per-round history of a repeated refutation is already in the round logs and in `unconsumedResolutions`;
+      // what is lost here is presentational.
+      // AND ACROSS RESUMES ONLY BECAUSE THE IDENTITY ROUND-TRIPS (round 21 review, finding 2). This row is re-seeded
+      // from what the RECONCILE AGENT transcribes, not from the file directly, so `id` had to be added to
+      // `RECONCILE_SHAPE.discrepancies` and NAMED in the read step of `reconcilePrompt` above -- an agent reproduces
+      // the fields it is told about and drops the rest. Round 21 shipped the key while the prompt still enumerated
+      // the row as `{ unit, claim, found, round }`, which bounded the growth for one process and left the resume
+      // axis -- the unbounded one, since in-session repeats stop at `DEFAULT_MAX_ROUNDS` -- exactly as it was.
       const howClause = c.how ? ` — ${capCarryText(c.how)}` : ''
-      const notApplied = { round, unit: c.unit, kind: 'resolution-not-applied',
+      const notApplied = { round, unit: c.unit, id: c.id, kind: RESOLUTION_NOT_APPLIED,
         claim: `applied the answer to ${JSON.stringify(c.id)}${howClause}`, found: c.found }
-      const seenAt = discrepancies.findIndex((d) => d.kind === 'resolution-not-applied'
-        && idKey(d.unit) === idKey(c.unit) && d.claim === notApplied.claim)
-      discrepancies = seenAt >= 0
-        ? discrepancies.map((d, i) => (i === seenAt ? notApplied : d))
-        : [...discrepancies, notApplied]
+      discrepancies = upsertResolutionDiscrepancy(discrepancies, notApplied)
       if (!hasUnconsumedPair(unconsumed, c.unit, c.id)) {
         // CARRY `c.source` (PR #128 review, RC-2). `resolutionContradictions` tags every row `UNCONSUMED_FROM_VERIFIER`;
         // dropping it here left `source: undefined`, which the per-unit clear reads as dispatch-sourced — so the very
@@ -3030,7 +3119,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
   // line (PR #128 review): `completionLine` carries the unconsumed-answer count in its NOT COMPLETE branch, so there
   // is no second, near-duplicate verdict `log` beside it; the detail list above names WHICH answers, not just a count.
   log(completionLine(complete, {
-    round, missing: state.verify?.missing, unverified: state.verify?.unverified,
+    round, missing: state.verify?.missing, buildMissing: state.verify?.buildMissing, unverified: state.verify?.unverified,
     parkedCount: parked.length, unconsumedCount: unconsumed.length,
   }))
 

@@ -123,6 +123,22 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       why: "a literal `<outDir>` placeholder in a prompt is unexpandable; the run's actual migration folder is interpolated instead",
     },
   ],
+  "freedom-build-executor": [
+    {
+      // ROUND 21 REVIEW, FINDING 2 — the row's IDENTITY joins its round-trip contract. `discrepancies` is re-seeded
+      // on a resume from what the RECONCILE AGENT transcribes, and `schemas.mjs` states the rule: an agent
+      // reproduces the fields it is told about and drops the rest. Round 21 keyed the refuted-answer dedup on
+      // `(unit, id)` while this line still enumerated the row as `{ unit, claim, found, round }` — so the growth it
+      // bounded was bounded for ONE PROCESS, and the resume axis (the unbounded one: in-session repeats stop at
+      // `DEFAULT_MAX_ROUNDS`, operator-driven resumes do not) was left exactly as it was. The baseline predates the
+      // answers channel entirely and cannot carry an identity it has no rows for, so this is a one-way, intended
+      // divergence rather than baseline drift. Both halves are pinned per-substring: the enumeration is the whole
+      // change, and the prose after it rides on the same line.
+      baseline: "`discrepancies` as `{ unit, claim, found, round }`",
+      shipped: "`discrepancies` as `{ unit, id, kind, claim, found, round }`",
+      why: "the refuted-answer dedup keys on `(unit, id)`, so `id`/`kind` must be named in the read step or the identity does not survive an agent transcription and every resume re-files the row",
+    },
+  ],
 }
 
 const PAIRS = [
@@ -231,7 +247,9 @@ function buildScenarios() {
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
   // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
   // and a realistic fixture should look like the real answer, not because the checker demands it.
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, builderOpen: 1, planGaps: [], pages, ...extra });
+  // PR review — `buildMissing` at the TOP LEVEL as well as per page: it is `required` by `RECONCILE_SHAPE` now (the
+  // close line reads exactly that field), so an answer without it is refused and the run stops at `reconcile-failed`.
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -249,12 +267,12 @@ function buildScenarios() {
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
     staleQueueKeys: [], newKeys: [],
-    verify: verify({ "child:Documents": { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true }, main: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
+    verify: verify({ "child:Documents": { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
     exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
+    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({

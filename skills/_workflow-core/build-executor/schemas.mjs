@@ -55,7 +55,7 @@ export const CARRY_TEXT_CAP = 400
 // `RECONCILE_SHAPE` now carries.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
-// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3500 —
+// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 3600 —
 // it is the run's first agent, so its refusal costs the whole run.
 //
 // Nested objects are therefore declared as a bare `object` / `array of object`. Every property and the `required`
@@ -138,6 +138,16 @@ export const RECONCILE_SCHEMA = {
     // session found is still an orphan), never overwritten by it.
     // Each entry `{ schema, orphanedBy, at }`, `schema` required.
     orphanedPagesOnFile: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
+    // ENG-96147 — WHERE THE SECTION THIS RUN BUILT ACTUALLY OPENS, read off `build-queue.json`.`standWrites.sectionRoute`.
+    // NOT REQUIRED, for the same reason `packageCreatedByRun` is not: an agent that cannot read the file must be able
+    // to say nothing rather than guess, and the safe side of "nothing" is a reader falling back to reporting an
+    // unresolved route instead of composing one. `null`/absent on a folder written before this field existed, or on a
+    // run that has not yet registered a section — both read identically, and both are the correct "nothing to report".
+    // Declared bare, with its inner shape in `RECONCILE_SHAPE` — the convention this file adopted when the
+    // schema was shrunk under the host's 4096-byte refusal: no property is dropped, only its nested SHAPE
+    // description, which `reconcileShapeErrors` then checks on arrival. Spelling the four keys out here cost
+    // ~150 bytes on the run's FIRST agent's schema, whose refusal costs the whole run.
+    sectionRouteByRun: { type: ['object', 'null'], additionalProperties: { maxLength: RECONCILE_TEXT_CAP } },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -285,10 +295,11 @@ export const RECONCILE_SCHEMA = {
     staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
-    // pages["<key>"] = { complete, buildComplete, builderOpen, missing, unverified } }`, NO `openRows`. The FILE
-    // also carries its own `planGaps`; this channel deliberately does NOT transcribe it (ENG-95857 — the
-    // plan-level verdict has ONE home, `--units.planGaps` below, and this channel is the BUILD verdict), which is
-    // why `RECONCILE_SHAPE.verify` names no `planGaps` either and the step-4 prompt says so in as many words.
+    // planGaps, buildMissing, rejected, pages["<key>"] = { complete, buildComplete, builderOpen, missing,
+    // buildMissing, unverified } }`, NO `openRows`. The FILE also carries its own `planGaps`; this channel
+    // deliberately does NOT transcribe it (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`
+    // below, and this channel is the BUILD verdict), which is why `RECONCILE_SHAPE.verify` names no `planGaps`
+    // either and the step-4 prompt says so in as many words.
     // The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
     // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
     // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
@@ -330,6 +341,10 @@ export const RECONCILE_SHAPE = {
     types: { package: 'string', appUnitComplete: 'boolean', planVersion: 'string-or-null', sectionPage: 'string-or-null' } },
   orphanedPagesOnFile: { kind: 'array', required: ['schema'],
     types: { schema: 'string', orphanedBy: 'string-or-null', at: 'string-or-null' } },
+  // ENG-96147 — the route the section this run built actually opens at. `route` and `schemaName` are required
+  // because a record with neither is not a route; `sectionRouteByRun: null` is the legal "nothing to report".
+  sectionRouteByRun: { kind: 'object-or-null', required: ['route', 'schemaName'],
+    types: { route: 'string', schemaName: 'string', sectionHost: 'string-or-null', planVersion: 'string-or-null' } },
   // ENG-95683 — `kind`/`id`/`feature` are the OPTIONAL typed gate on a `resolved: false` composite; the by-kind
   // stop (`helpers.mjs` `GATE_COMPOSITE`) reads them. Declared here rather than in `RECONCILE_SCHEMA` for the mode-A
   // reason given above; absent/malformed still falls back to the generic re-plan clause.
@@ -365,8 +380,16 @@ export const RECONCILE_SHAPE = {
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
   blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
+  // `id`/`kind` are TYPED BUT NOT REQUIRED, and the asymmetry is the whole point (round 21 review, finding 2).
+  // They are the identity `upsertResolutionDiscrepancy` dedups a refuted-answer row on, so a resume that arrives
+  // without them re-files the row the previous session already refreshed — ~900 bytes per resume into a list
+  // nothing prunes, rendered whole into every close prompt. Typing them puts them in the field set this table
+  // binds, which is what obliges `reconcilePrompt` to name them (see the rule stated at the top of this file).
+  // NOT required, because two of the three sites that append to `discrepancies` legitimately carry neither: the
+  // verifier's own rows (`absorbVerifier`) and the self-check mismatches (`foldSelfCheckMismatches`) are keyed on
+  // `unit` alone. Requiring them would reject a well-formed answer over rows that never had an identity to lose.
   discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
-    types: { unit: 'string', claim: 'string', found: 'string', round: 'integer' } },
+    types: { unit: 'string', id: 'string', kind: 'string', claim: 'string', found: 'string', round: 'integer' } },
   // ENG-95503 — the answers channel's three round-trip fields. Their insides moved here with everyone else's when
   // ENG-95930 compacted the schema; the required keys and types are unchanged.
   // WHAT THIS TABLE CANNOT CARRY, stated rather than lost: `source` used to be a JSON Schema `enum` of the two
@@ -389,12 +412,32 @@ export const RECONCILE_SHAPE = {
   // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. Per
   // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
   // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
-  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'pages'],
+  // ENG-95901 (reopened) — `buildMissing` is the builder-owned half of `missing` (rationale: designspec.mjs
+  // `verifyTally`), REQUIRED per page for the same reason `buildComplete` is: an agent drops a field nothing asks
+  // for, and a dropped one sends the arithmetic back to the conflated `missing`. `rejected` stays an optional total —
+  // derivable (`missing - buildMissing`, both top-level), so an old answer degrades to arithmetic rather than to a
+  // wrong number.
+  //
+  // PR review — `buildMissing` is REQUIRED at the TOP LEVEL too, and that is the level the run's own close line reads:
+  // `shortfallText(state.verify)` feeds `completionLine` and the after-preflight log, and `verdictOf` fills the
+  // returned `buildMissing`/`rejected` from the same object. `reconcileShapeErrors` faults only on `required` and
+  // skips any key that is `undefined`, so an answer copying the summary faithfully except for this one field was
+  // ACCEPTED, `shortfallOf` fell back to `missing`, and the run closed with the conflated `3 MISSING` — the exact
+  // defect this ticket was reopened for, on the exact sentence the close report presents. This is the PR's own
+  // argument one level up: the contract only holds when the asker (the prompt) and the refuser (this shape) both
+  // carry the field. Zero wire cost — `verifySummary` already publishes it and the prompt already orders it copied.
+  //
+  // PR review — `unfiled` is gone from `types` and from the prompt's copy list. Nothing in `skills/**` read it, and
+  // the "derivable, so it degrades to arithmetic" justification that covers `rejected` does NOT cover it: its stated
+  // derivation (`unverified - (builderOpen - buildMissing)`) needs a top-level `builderOpen` that this channel
+  // deliberately does not carry. It was one more field name the Reconcile agent had to transcribe with the right type
+  // on the run's largest structured answer — a type fault away from a full retry — for a number nothing reads.
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'buildMissing', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer' },
-    map: { pages: { required: ['complete', 'buildComplete'],
-      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', unverified: 'integer' } } } },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer' },
+    map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {
@@ -451,6 +494,19 @@ export const BUILD_PROPERTIES = {
     properties: {
       count: { type: 'integer' },
       names: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  // ENG-96147 — THE SECTION'S OWN LIST-PAGE SCHEMA NAME, copied VERBATIM from `create-app-section`'s response —
+  // never retyped from the section's code/caption, never reconstructed with a guessed `_ListPage` suffix. This is
+  // the ONE fact `recordSectionRoute()` turns into `standWrites.sectionRoute`; the script — not the builder —
+  // assembles the `#Section/...` prefix from it, so no two writers can independently invent a different one. A
+  // guessed route produced exactly this incident: `Script error` on a wrong URL, misread as a real page defect,
+  // recovered with a database flush and a compile on a shared stand.
+  sectionRoute: {
+    type: 'object',
+    required: ['schemaName'],
+    properties: {
+      schemaName: { type: 'string' },
     },
   },
   // The UI-guidelines pass, as the record the verifier files from. REQUIRED on a page unit: an absent answer

@@ -104,7 +104,9 @@ there is no "resume" command: there is one command, and it does the next undone 
                         "planVersion": "plan-4f9c2ab17e03", "sectionPage": "UsrApplicants_FormPage" },
     "orphanedPages": [
       { "schema": "UsrApplicants_FormPage", "orphanedBy": "main", "at": "plan-4f9c2ab17e03" }
-    ]
+    ],
+    "sectionRoute": { "route": "#Section/UsrApplicants_ListPage", "schemaName": "UsrApplicants_ListPage",
+                      "sectionHost": "new-app", "planVersion": "plan-4f9c2ab17e03" }
   },
   "proposals": [
     { "unit": "main", "deviation": "merge two profile islands into one",
@@ -116,7 +118,11 @@ there is no "resume" command: there is one command, and it does the next undone 
   ],
   "discrepancies": [
     { "round": 2, "unit": "main", "claim": "crt.ApprovalList added",
-      "found": "get-page shows no crt.ApprovalList" }
+      "found": "get-page shows no crt.ApprovalList" },
+    { "round": 2, "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)",
+      "kind": "resolution-not-applied",
+      "claim": "applied the answer to \"main#confirm:entity-filter:(1 lookup)\" — added the filter",
+      "found": "no lookupListConfig anywhere in viewConfig" }
   ],
   "unconsumedResolutions": [
     { "unit": "main", "id": "main#confirm:entity-filter:(1 lookup)", "kind": "entity-filter",
@@ -159,6 +165,13 @@ Rules that make it trustworthy:
   are the run's answer to the caller; a usage limit, or a reconcile step that returns nothing, must not take
   them with it. They are written again when the run exits, so a park or a proposal decided after the last
   round is on disk too.
+- **A `discrepancies` row's `id` and `kind` are its IDENTITY, and both must be copied back verbatim.**
+  Rows come from three places and only one of them has an identity: a refuted operator answer carries
+  `id` plus `kind: "resolution-not-applied"`, while the verifier's own builder-vs-stand rows and the
+  in-context-gate mismatches are keyed on `unit` alone and carry neither. The run matches a repeated
+  refutation on `(unit, id)` to REFRESH the existing row rather than append beside it, so a resume that
+  drops `id` re-files the same disagreement as a second row — every resume, into a list nothing prunes,
+  rendered whole into every round-close prompt. Never invent either field for a row that has none.
 - **`rounds` is incremented BEFORE the round runs, not after.** A process killed mid-build must
   not come back with the counter reset — that is how a unit loops forever. Over-counting a round
   that never happened is the safe direction: it parks earlier, never later.
@@ -263,6 +276,25 @@ Rules that make it trustworthy:
     than merely unreported. If even that dedicated read cannot open the file, the stop text says so explicitly
     (`packageRecordUnread: true`) instead of reading like a confirmed absence: that case is not evidence of anything,
     and simply re-running retries the read at no cost.
+  - **`sectionRoute` — where the section this run built actually opens (ENG-96147).** `route` is `'#Section/'` plus
+    `schemaName`, and `schemaName` is the list page's OWN schema name, copied VERBATIM out of `create-app-section`'s
+    response — never retyped, never reconstructed with a guessed `_ListPage` suffix. **Why it has to be on disk:**
+    nothing in this toolkit composes a `#Section/...` URL (a `grep '#Section/'` across `skills/` finds no such
+    code), so before this field existed, whatever needed to OPEN the built section — an orienting agent, the
+    per-page render check — improvised one from memory. On the ST_2 run that guess dropped the `_ListPage` suffix,
+    the wrong URL produced `Script error`, and the run believed it had found a real page defect: the recovery ran a
+    database flush and a `compile-creatio` against a shared stand for a page that was never broken. Written the
+    moment either write site reports a schema name — the `new-app` app unit's `starterListPage`, or the
+    `existing-app` `sectionRegistered` reach unit's `sectionRoute.schemaName` — and persisted immediately after,
+    the same "irreversible stand write, then a long killable agent" reasoning `packageCreated` already gets.
+    **Absence is never a fallback to guessing.** A record with no `sectionRoute` — a folder written before this
+    field existed, or a `sectionHost: pages-only-no-menu` run that never registers a section at all — means the
+    reader reports the route as UNRESOLVED, distinct from a page defect and from a dependency-ordering theory (see
+    `03-failure-and-park-policy.md`), never a cue to fall back to a naming convention.
+  - **It does not go stale.** Unlike a page's binding, a section's identity IS its list-page schema — Creatio has
+    no operation that "re-points" a section at a different one while keeping the same URL; that would be a
+    different section. So there is no freshness/re-validation concern here the way `orphanedPages` has for a
+    page's own re-bind: once observed, the record is good for the life of the section.
 
 ### `verify.md` / `verify.json` are only current as of the last COMPLETED Reconcile (ENG-95850 / D)
 
@@ -342,11 +374,11 @@ report, `verify.json` is the verdict.
 
 ```json
 {
-  "complete": false, "missing": 1, "unverified": 4,
+  "complete": false, "missing": 1, "buildMissing": 1, "rejected": 0, "unfiled": 3, "unverified": 4,
   "planGaps": ["structure INCOMPLETE (2 missing input(s))"],
   "pages": {
-    "main": { "missing": 0, "unverified": 0, "complete": true, "buildComplete": true, "openRows": [] },
-    "child:Education": { "missing": 1, "unverified": 2, "complete": false, "buildComplete": false,
+    "main": { "missing": 0, "buildMissing": 0, "unverified": 0, "complete": true, "buildComplete": true, "openRows": [] },
+    "child:Education": { "missing": 1, "buildMissing": 1, "unverified": 2, "complete": false, "buildComplete": false,
       "openRows": [ { "n": 31, "deliverable": "Fields — 7 expected", "status": "⚠ verify",
                       "evidence": "5/7 expected fields present — missing: Amount, Owner",
                       "outcome": "unverified", "owner": "builder" } ] }
@@ -361,6 +393,15 @@ builder). `complete` (shown above) stays the COMBINED signal — `missing === 0 
 in-context single-unit gate (`--verify --page <key> --verify-json <file>`) and the builder's own
 `selfCheck` report gate on, so a page whose only open rows are unfiled evidence is not told its
 build is short.
+
+ENG-95901 (reopened) — the ❌ side splits the same way. `missing` still counts every ❌ row, and `buildMissing` is the
+half the BUILDER owns; the difference is `rejected` — rows where the judge ruled a filed record `convincing: false`,
+or the verifier filed it as `false`. Those are re-FILED by the verifier/judge, never built, so a page can read
+`missing: 3, buildMissing: 0, buildComplete: true` and that is not a contradiction. Top-level the summary also
+carries `unfiled` (the ⚠ rows waiting on the verifier), which is smaller than `unverified` because `unverified` also
+counts a partially-built page. **`buildMissing` is REQUIRED on every page entry of the Reconcile answer**, for the
+same reason `buildComplete` is: dropped, the arithmetic falls back to the conflated `missing` and a re-filing job is
+reported as a build gap.
 
 Read this file — never the table — for anything you compute on: which units are open, how many
 rounds are left, what a repair round is handed. The table has no per-page counts at all, and the
